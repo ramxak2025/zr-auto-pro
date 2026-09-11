@@ -16,13 +16,19 @@ import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
 import { KeyboardAwareView } from '../components/KeyboardAware';
 import RegistrationRequestSheet from './RegistrationRequestSheet';
+import LoginPointSelect from './LoginPointSelect';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
+import type { LoginStepResult } from '../contexts/AuthContext';
 import { getPalette } from '../theme/palette';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { formatPhone } from '../../../shared/validation/phone';
 import { diagnoseConnectivity } from '../utils/networkDiagnosis';
+import { isSelectTokenExpired, resolveSelectPointFailure, SELECT_TOKEN_EXPIRED } from './loginPointSelection';
+
+/** Ожидающий выбор филиала — второй шаг входа (163). */
+type PendingPointSelection = Extract<LoginStepResult, { status: 'point-required' }>;
 
 /**
  * Бюджет на ступень диагноза после сетевого отказа входа. Мёртвый DNS отвечает
@@ -32,7 +38,7 @@ import { diagnoseConnectivity } from '../utils/networkDiagnosis';
 const LOGIN_DIAGNOSIS_TIMEOUT_MS = 3_000;
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, loginWithPoint, sessionEndedNotice, clearSessionEndedNotice } = useAuth();
   // Login screen is intentionally LOCKED to the light palette regardless
   // of the user's preferred theme mode. The owner wants the brand entry
   // screen — logo on near-white — to always read as "Autexa", not flip
@@ -45,6 +51,11 @@ export default function LoginScreen() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [registerOpen, setRegisterOpen] = useState(false);
+  // ── Второй шаг входа: выбор филиала (163) ────────────────────────────────
+  // Пока здесь не null, экран показывает НЕ форму, а выбор филиала. Сессии в
+  // этот момент ещё нет: на руках только промежуточный токен на пять минут.
+  const [pendingPoints, setPendingPoints] = useState<PendingPointSelection | null>(null);
+  const [submittingPointId, setSubmittingPointId] = useState<string | null>(null);
 
   // Entrance animations — the LOGO is intentionally static at full
   // opacity/scale so the SplashOverlay → LoginScreen handoff is seamless:
@@ -91,6 +102,33 @@ export default function LoginScreen() {
     setPhoneError('');
   };
 
+  /**
+   * Разбор сетевых/серверных отказов ШАГА 1 — общий для «Войти» и для
+   * повторного запроса списка филиалов (когда доступ сняли между шагами).
+   */
+  const showLoginError = async (error: any) => {
+    if (error.code === 'ERR_NETWORK' || !error.response) {
+      // Не обвиняем сервер, пока не выяснили, кто виноват: при мёртвом DNS
+      // разом умирают ВСЕ хосты кольца, и «сервер недоступен» — ложь, из-за
+      // которой владелец месяцами искал поломку не там.
+      const verdict = await diagnoseConnectivity(LOGIN_DIAGNOSIS_TIMEOUT_MS);
+      if (verdict === 'dns-blocked') {
+        Alert.alert(
+          'Мешает VPN или DNS',
+          'Сеть работает, но адрес сервера не удаётся разрешить. Выключите VPN (или смените DNS в настройках сети) и войдите снова.',
+        );
+      } else if (verdict === 'no-internet') {
+        Alert.alert('Нет интернета', 'Проверьте подключение и попробуйте снова.');
+      } else {
+        Alert.alert('Сервер недоступен', error.message || 'Проверьте подключение.');
+      }
+    } else if (error.response?.status === 401) {
+      Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
+    } else {
+      Alert.alert('Ошибка', `Ошибка сервера: ${error.response?.status}. Попробуйте позже.`);
+    }
+  };
+
   const handleSubmit = async () => {
     setPhoneError('');
     setPasswordError('');
@@ -106,32 +144,100 @@ export default function LoginScreen() {
 
     setSubmitting(true);
     try {
-      await login(phone, password);
+      const result = await login(phone, password);
+      // Доступен ровно один филиал (или филиалов нет вовсе) — сессия уже
+      // создана, экран сейчас исчезнет. Иначе показываем второй шаг.
+      if (result.status === 'point-required') setPendingPoints(result);
     } catch (error: any) {
-      if (error.code === 'ERR_NETWORK' || !error.response) {
-        // Не обвиняем сервер, пока не выяснили, кто виноват: при мёртвом DNS
-        // разом умирают ВСЕ хосты кольца, и «сервер недоступен» — ложь, из-за
-        // которой владелец месяцами искал поломку не там.
-        const verdict = await diagnoseConnectivity(LOGIN_DIAGNOSIS_TIMEOUT_MS);
-        if (verdict === 'dns-blocked') {
-          Alert.alert(
-            'Мешает VPN или DNS',
-            'Сеть работает, но адрес сервера не удаётся разрешить. Выключите VPN (или смените DNS в настройках сети) и войдите снова.',
-          );
-        } else if (verdict === 'no-internet') {
-          Alert.alert('Нет интернета', 'Проверьте подключение и попробуйте снова.');
-        } else {
-          Alert.alert('Сервер недоступен', error.message || 'Проверьте подключение.');
-        }
-      } else if (error.response?.status === 401) {
-        Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
-      } else {
-        Alert.alert('Ошибка', `Ошибка сервера: ${error.response?.status}. Попробуйте позже.`);
-      }
+      await showLoginError(error);
     } finally {
       setSubmitting(false);
     }
   };
+
+  /** Вернуться с выбора филиала к телефону и паролю: промежуточный токен бросаем. */
+  const backToCredentials = () => {
+    setPendingPoints(null);
+    setSubmittingPointId(null);
+  };
+
+  /**
+   * ШАГ 2: обменять выбранный филиал на сессию.
+   *
+   * Промежуточный токен ОДНОРАЗОВЫЙ, поэтому здесь ровно три исхода, и каждый
+   * обязан вести человека дальше, а не оставлять его на экране с ошибкой:
+   * начать вход заново, перевыбрать из обновлённого списка или повторить тот
+   * же выбор. Правило — в screens/loginPointSelection.ts (покрыто тестами).
+   */
+  const handleSelectPoint = async (pointId: string) => {
+    const pending = pendingPoints;
+    if (!pending || submittingPointId) return;
+
+    // Токен уже мёртв по времени — не платим ожиданием за заведомо отказной
+    // запрос, особенно на плохой связи.
+    if (isSelectTokenExpired(pending.expiresAt)) {
+      backToCredentials();
+      Alert.alert(SELECT_TOKEN_EXPIRED.title, SELECT_TOKEN_EXPIRED.message);
+      return;
+    }
+
+    setSubmittingPointId(pointId);
+    try {
+      await loginWithPoint(pending.selectToken, pointId);
+      // Успех: сессия создана, навигатор уносит нас с экрана входа.
+    } catch (error: any) {
+      const failure = resolveSelectPointFailure(error);
+      if (failure.action === 'restart') {
+        backToCredentials();
+        Alert.alert(failure.title, failure.message);
+        return;
+      }
+      if (failure.action === 'refresh') {
+        // Доступ к филиалу сняли между шагами. Промежуточный токен сервер при
+        // этом НЕ гасит, но список филиалов устарел — перезапрашиваем его
+        // шагом 1 (пароль ещё в поле), чтобы человек выбрал из оставшихся.
+        try {
+          const again = await login(phone, password);
+          if (again.status === 'point-required') {
+            setPendingPoints(again);
+            Alert.alert(failure.title, failure.message);
+          }
+          // Остался ровно один доступный филиал — сервер сразу выдал сессию,
+          // и говорить больше нечего: человек уже внутри.
+        } catch (retryError: any) {
+          backToCredentials();
+          await showLoginError(retryError);
+        }
+        return;
+      }
+      // 'stay' — сеть или 5xx: токен цел, повтор тем же выбором законен.
+      Alert.alert(failure.title, failure.message);
+    } finally {
+      setSubmittingPointId(null);
+    }
+  };
+
+  // Сессию погасили не по истечению токена, а потому что филиал закрыли или
+  // сняли доступ (163). Человек обязан узнать ПРИЧИНУ: иначе «меня выкинуло»
+  // выглядит как поломка приложения, и он звонит владельцу вместо того, чтобы
+  // войти в доступный филиал. Показываем один раз и гасим.
+  useEffect(() => {
+    if (!sessionEndedNotice) return;
+    Alert.alert('Вход нужно повторить', sessionEndedNotice);
+    clearSessionEndedNotice();
+  }, [sessionEndedNotice, clearSessionEndedNotice]);
+
+  if (pendingPoints) {
+    return (
+      <LoginPointSelect
+        points={pendingPoints.points}
+        defaultPointId={pendingPoints.defaultPointId}
+        submittingPointId={submittingPointId}
+        onSelect={handleSelectPoint}
+        onBack={backToCredentials}
+      />
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>

@@ -251,12 +251,12 @@ export class ImportsService {
     tenantID: string,
     rows: ImportRowInputDto[],
     options: { allowForeignPlates: boolean },
-    actorUserID?: string,
+    actorPoint?: string | null,
   ): Promise<PlanResult> {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException({ message: 'Нет строк для импорта' });
     }
-    return this.planImport(tenantID, rows, options, await this.clients.separatePointFor(tenantID, actorUserID));
+    return this.planImport(tenantID, rows, options, await this.clients.separatePointFor(tenantID, actorPoint));
   }
 
   // ─── Confirm ──────────────────────────────────────────────────────────────
@@ -266,6 +266,9 @@ export class ImportsService {
     rows: ImportRowInputDto[],
     options: { allowForeignPlates: boolean },
     duplicates?: DuplicateDecisions,
+    // 163 — филиал приезжает ОТДЕЛЬНЫМ аргументом: userId здесь ещё и автор
+    // импорта (пишется в карточку), и одним полем эти две роли не покрыть.
+    actorPoint?: string | null,
   ): Promise<ConfirmResult> {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException({ message: 'Нет строк для импорта' });
@@ -273,7 +276,8 @@ export class ImportsService {
 
     // 161 — филиал автора: новые клиенты рождаются на нём, а карточки чужих
     // филиалов не должны попадать ни в переиспользование, ни в сообщения.
-    const separatePoint = await this.clients.separatePointFor(tenantID, userId);
+    // 163 — это филиал СЕССИИ автора, из токена.
+    const separatePoint = await this.clients.separatePointFor(tenantID, actorPoint);
 
     // Re-plan from scratch — never trust client-side preview.
     const plan = await this.planImport(tenantID, rows, options, separatePoint);

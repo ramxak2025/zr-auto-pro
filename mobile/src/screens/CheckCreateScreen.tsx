@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, usePreventRemove } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Image as ExpoImage } from 'expo-image';
@@ -72,6 +72,7 @@ import {
   type ProductPickerBridge,
 } from '../utils/productPickerSession';
 import { enqueueOfflineCheck, generateClientRequestId, isNetworkClassCheckError } from '../utils/offlineCheckQueue';
+import { buildCheckFormFingerprint, findStrayMaster } from './checkCreate/formGuards';
 import type {
   Client,
   Car,
@@ -102,7 +103,6 @@ import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
 import PointIndicator from '../components/PointIndicator';
-import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
 import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 
@@ -117,6 +117,13 @@ const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
  * the backend caps the response by tenant size, not by this number.
  */
 const PICKER_CACHE_PRODUCT_LIMIT = 100000;
+
+/**
+ * Псевдо-индекс строки для пикера мастера: выбирается мастер ВСЕГО
+ * заказ-наряда, а не конкретной услуги. Отдельного состояния не заводим —
+ * список мастеров и модалка те же, различается только присвоение.
+ */
+const CHECK_MASTER_PICKER_INDEX = -1;
 
 function formatMoney(v: number) {
   return (
@@ -596,6 +603,11 @@ export default function CheckCreateScreen() {
   // Пикер товаров — теперь ПОЛНОЭКРАННЫЙ роут `ProductPicker` на корневом
   // стеке (Round 8 #2, Склад-паттерн с папками), а не модалка: локального
   // show-state больше нет, открытие — openProductPicker() ниже.
+  // showMasterPicker — индекс СТРОКИ УСЛУГИ, чьего мастера выбирают, либо
+  // CHECK_MASTER_PICKER_INDEX для мастера ВСЕГО заказ-наряда (тот же список,
+  // другое присвоение). Второй режим появился вместе с проверкой «мастер из
+  // этого филиала»: до неё мастером чека молча становился вошедший, и сменить
+  // его было нечем.
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
   const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
   // Пикер шаблонов с папками (round 8 #3): текущий уровень личного дерева
@@ -781,10 +793,7 @@ export default function CheckCreateScreen() {
   // но ушёл бы в отдельный слот кеша мимо прогретого логином ['all-users'] —
   // лишний запрос на самом частом экране. Список точек к этому моменту почти
   // всегда уже в кеше (персистится и греется «Ещё»/дашбордом).
-  const { points: tenantPoints, needsPointForWrite } = usePointAccess();
-  // Отказ сервера «Выберите филиал» и предупреждение ДО отправки — один и тот
-  // же диалог с кнопкой, открывающей шторку выбора (см. PointRequiredPrompt).
-  const pointPrompt = usePointRequiredPrompt();
+  const { points: tenantPoints } = usePointAccess();
   const scopeMastersToPoint = tenantPoints.length > 1;
   const { data: allUsers } = useQuery<User[]>({
     queryKey: scopeMastersToPoint ? ['all-users', 'point'] : ['all-users'],
@@ -795,6 +804,23 @@ export default function CheckCreateScreen() {
   });
 
   const masters = useMemo(() => (allUsers || []).filter((u) => u.isActive && !u.hiddenEverywhere), [allUsers]);
+
+  // ── Кто РЕАЛЬНО работает в этом филиале ────────────────────────────────
+  // Список выше уже приходит по текущему филиалу (?scope=point), но ВЫБРАННЫЙ
+  // мастер до сих пор ни с чем не сверялся. Дефолтом мастером чека становится
+  // сам вошедший, а он запросто не числится в филиале, в который только что
+  // вошёл (администратор, скрытый сотрудник, мастер, которого сняли с точки),
+  // — и заказ-наряд вместе с зарплатой и рейтингом уезжал в ЧУЖОЙ филиал
+  // молча. Пустое множество = список ещё не приехал ИЛИ филиал у тенанта один:
+  // в обоих случаях сверять не с чем и проверка не применяется.
+  const pointMasterIds = useMemo(
+    () => (scopeMastersToPoint ? new Set(masters.map((m) => m.id)) : new Set<string>()),
+    [scopeMastersToPoint, masters],
+  );
+  const worksAtThisPoint = React.useCallback(
+    (id: string | undefined | null): boolean => (pointMasterIds.size === 0 ? true : !!id && pointMasterIds.has(id)),
+    [pointMasterIds],
+  );
 
   const {
     data: allServices,
@@ -1712,6 +1738,112 @@ export default function CheckCreateScreen() {
     };
   }, [navigation]);
 
+  // ── ЗАЩИТА НАБРАННОГО ЗАКАЗ-НАРЯДА ОТ «НАЗАД» И СВАЙПА ─────────────────
+  //
+  // Касса, открытая ПУШЕМ (правка из Журнала, приход из Записей, «+» с доски),
+  // — это экран стека: у неё есть стрелка «назад» и нативный edge-swipe. Оба
+  // уносили набранный заказ-наряд молча, без единого вопроса: строки услуг,
+  // товары, клиент, фото — всё жило только в памяти экрана. Самая дорогая
+  // потеря в приложении: чек набирают руками по 5–10 минут.
+  //
+  // Отпечаток формы — строкой: сравнение дешёвое и не зависит от ссылок на
+  // массивы, которые пересоздаются на каждом рендере.
+  const formFingerprint = useMemo(
+    () =>
+      buildCheckFormFingerprint({
+        clientId,
+        carId,
+        masterId,
+        mileage,
+        comment,
+        discount,
+        paymentMethod,
+        cashAmount,
+        installmentFirst,
+        isDeferred,
+        tagIds: selectedTags.map((t) => t.id),
+        assigneeIds,
+        orderLocationId,
+        serviceLines: serviceLines.map((l) => ({
+          serviceId: l.serviceId,
+          name: l.name,
+          price: l.price,
+          quantity: l.quantity,
+          master: l.lineMasterId || l.masterId || '',
+        })),
+        productLines: productLines.map((l) => ({
+          productId: l.productId,
+          name: l.name,
+          sellPrice: l.sellPrice,
+          quantity: l.quantity,
+        })),
+        pendingPhotos,
+        manualDateIso: manualDate ? manualDate.toISOString() : '',
+      }),
+    [
+      clientId,
+      carId,
+      masterId,
+      mileage,
+      comment,
+      discount,
+      paymentMethod,
+      cashAmount,
+      installmentFirst,
+      isDeferred,
+      selectedTags,
+      assigneeIds,
+      orderLocationId,
+      serviceLines,
+      productLines,
+      pendingPhotos,
+      manualDate,
+    ],
+  );
+  // Базовая линия «ничего не меняли»: для нового чека — пустая форма, для
+  // правки — состояние СРАЗУ ПОСЛЕ гидрации чека (иначе экран правки считался
+  // бы грязным всегда и спрашивал при каждом выходе). Гидрация живёт в эффекте,
+  // поэтому базовую линию берём на первом рендере ПОСЛЕ неё.
+  const baselineFingerprintRef = useRef<string | null>(null);
+  if (baselineFingerprintRef.current === null && (!editId || hydratedEditIdRef.current === editId)) {
+    baselineFingerprintRef.current = formFingerprint;
+  }
+  const hasUnsavedContent =
+    baselineFingerprintRef.current !== null && baselineFingerprintRef.current !== formFingerprint;
+
+  // Сохранение (в том числе «сохранено на телефоне» офлайн-очередью) снимает
+  // гвард: это и есть выход «с сохранением». Ref нужен для навигации, которая
+  // случается в том же тике, что и setState, — до того, как гвард пересчитан.
+  const [formSaved, setFormSaved] = useState(false);
+  const formSavedRef = useRef(false);
+  const markFormSaved = React.useCallback(() => {
+    formSavedRef.current = true;
+    setFormSaved(true);
+  }, []);
+
+  usePreventRemove(isStackScreen && hasUnsavedContent && !formSaved, ({ data }) => {
+    if (formSavedRef.current) {
+      // Чек уже сохранён, а рендер со снятым гвардом ещё не применился.
+      // Отпускаем навигацию следующим тиком: к нему setState отработает и
+      // повторный dispatch в гвард уже не упрётся (иначе получили бы цикл).
+      setTimeout(() => navigation.dispatch(data.action), 0);
+      return;
+    }
+    haptic('warning');
+    Alert.alert(
+      'Выйти без сохранения?',
+      'Набранный заказ-наряд не сохранён. Если выйти сейчас, он пропадёт — услуги, товары и фото придётся набирать заново.',
+      [
+        { text: 'Остаться', style: 'cancel' },
+        {
+          text: 'Выйти без сохранения',
+          style: 'destructive',
+          onPress: () => navigation.dispatch(data.action),
+        },
+      ],
+    );
+  });
+
   const createMutation = useMutation({
     mutationFn: (data: any) => (editId ? checksApi.update(editId, data) : checksApi.create(data)),
     // Defensive: if the mutation is cancelled / aborted (e.g. component
@@ -1722,6 +1854,9 @@ export default function CheckCreateScreen() {
     },
     onSuccess: async (res: any) => {
       submittingRef.current = false;
+      // Чек записан — гвард «несохранённое» больше не нужен, иначе навигация
+      // после сохранения упёрлась бы в вопрос «выйти без сохранения?».
+      markFormSaved();
       // Premium confirmation: success haptic fires only once the check is
       // actually persisted (mutation resolved) — a failed submit must never
       // feel successful. Android variant is softened inside the helper.
@@ -1928,9 +2063,6 @@ export default function CheckCreateScreen() {
   const showSubmitError = (err: any) => {
     // eslint-disable-next-line no-console
     console.error('[CheckCreate] submit error', err?.response?.status, err?.response?.data, err?.message);
-    // 400 «Выберите филиал, чтобы пробить чек» — не обычная ошибка: у неё есть
-    // ровно одно осмысленное действие, и мы даём его прямо в диалоге.
-    if (pointPrompt.handleApiError(err)) return;
     const status = err?.response?.status;
     const data = err?.response?.data;
     const friendly =
@@ -1972,6 +2104,9 @@ export default function CheckCreateScreen() {
       showSubmitError(err);
       return;
     }
+    // Чек лежит на телефоне и уйдёт сам — это сохранение, а не потеря:
+    // гвард «несохранённое» снимаем, чтобы уход с экрана не спрашивал.
+    markFormSaved();
     haptic('warning');
     // Навигация «как при успехе» — ДО алерта, чтобы мастер сразу вернулся к
     // работе (алерт глобальный, показывается поверх целевого экрана).
@@ -2243,6 +2378,37 @@ export default function CheckCreateScreen() {
       }
     }
 
+    // ── Мастер обязан работать В ЭТОМ ФИЛИАЛЕ ─────────────────────────────
+    // Филиал выдаётся сессии при входе, поэтому «войти в другой филиал» — это
+    // обычный сценарий смены рабочего места. Мастер, оставшийся от прежнего
+    // филиала (или сам вошедший, который здесь не числится), уводит зарплату и
+    // рейтинг в чужой автосервис, а по экрану это НЕ видно. Подставить
+    // «первого попавшегося» нельзя — это была бы такая же тихая ложь, только в
+    // другую сторону: честно просим выбрать заново. Только СОЗДАНИЕ: у уже
+    // существующего чека мастер исторический, и правка комментария не повод
+    // переназначать исполнителя.
+    // `preValidated` = СБП: деньги уже приняты, и блокирующих отказов здесь
+    // быть не может (BUG #1) — ту же проверку openSbpPayment делает ДО оплаты.
+    if (!editId && !opts?.preValidated) {
+      const stray = findStrayMaster({ pointMasterIds, checkMasterId: resolvedMasterId, lines: serviceLines });
+      if (stray) {
+        haptic('warning');
+        Alert.alert(
+          'Мастер не из этого филиала',
+          stray.kind === 'check'
+            ? 'Выбранный мастер не работает в филиале, в который вы вошли. Выберите мастера заказ-наряда заново.'
+            : `В строке «${stray.name}» стоит мастер, который не работает в этом филиале. Выберите мастера заново.`,
+          [
+            {
+              text: 'Выбрать',
+              onPress: () => setShowMasterPicker(stray.kind === 'check' ? CHECK_MASTER_PICKER_INDEX : stray.index),
+            },
+          ],
+        );
+        return;
+      }
+    }
+
     const proceed = () => {
       let finalCash = 0;
       let finalCard = 0;
@@ -2345,20 +2511,10 @@ export default function CheckCreateScreen() {
     };
 
     // ── Филиал заказ-наряда ──────────────────────────────────────────
-    // Сервер откажет (400 «Выберите филиал, чтобы пробить чек»), если филиал
-    // не выбран, а подставить его молча нельзя (доступных больше одного).
-    // Спрашиваем ДО отправки: иначе кассир жмёт «Пробить», получает ошибку и
-    // (в офлайне) чек ещё и уходит в очередь, чтобы упасть тем же 400 позже.
-    // Ветку СБП (`preValidated`) не трогаем НИКОГДА: деньги там уже приняты
-    // эквайрингом, и блокировать запись чека нельзя — её место в очереди.
-    // Правка существующего чека филиал не переставляет, поэтому только create.
-    if (!editId && !opts?.preValidated && needsPointForWrite) {
-      pointPrompt.show(
-        'Автосервис не выбран — заказ-наряд не попадёт ни в основной сервис, ни в филиал: ни в журнал, ни в ' +
-          'выручку, ни в зарплату мастера. Откройте «Филиалы» и зайдите в тот автосервис, где пробиваете чек.',
-      );
-      return;
-    }
+    // Проверки «выбран ли филиал» здесь больше НЕТ и быть не может: филиал —
+    // свойство сессии (163), он выдан при входе и известен серверу из токена.
+    // Спрашивать нечего, отказывать не в чем — чек всегда попадает в тот
+    // автосервис, который написан на индикаторе над формой.
 
     // ── Round 12 #7: наджим «забыли клиента» ─────────────────────────
     // Новый ЖИВОЙ чек без клиента (не правка, не отложенный, не
@@ -2452,6 +2608,31 @@ export default function CheckCreateScreen() {
       Alert.alert(
         'Не выбран мастер',
         'Не удалось определить мастера для чека. Откройте экран «Сотрудники» и убедитесь, что есть хотя бы один активный мастер.',
+      );
+      return;
+    }
+    // 4) Мастер (чека и каждой строки) из ЭТОГО филиала — до оплаты по той же
+    //    причине, что и всё остальное здесь: после подтверждения СБП отказать
+    //    уже нельзя (деньги приняты), а записать чек на мастера чужого филиала
+    //    — увести его зарплату и рейтинг в соседний автосервис.
+    const straySbp = findStrayMaster({
+      pointMasterIds,
+      checkMasterId: defaultMasterId || masters[0]?.id || '',
+      lines: serviceLines,
+    });
+    if (straySbp) {
+      haptic('warning');
+      Alert.alert(
+        'Мастер не из этого филиала',
+        straySbp.kind === 'check'
+          ? 'Выбранный мастер не работает в филиале, в который вы вошли. Выберите мастера заказ-наряда заново.'
+          : `В строке «${straySbp.name}» стоит мастер, который не работает в этом филиале. Выберите мастера заново.`,
+        [
+          {
+            text: 'Выбрать',
+            onPress: () => setShowMasterPicker(straySbp.kind === 'check' ? CHECK_MASTER_PICKER_INDEX : straySbp.index),
+          },
+        ],
       );
       return;
     }
@@ -2618,18 +2799,17 @@ export default function CheckCreateScreen() {
         ]}
         reserveTabBar={openedFromTab}
       >
-        {/* ═══ АВТОСЕРВИС ЗАКАЗ-НАРЯДА (156/160) ═══
+        {/* ═══ АВТОСЕРВИС ЗАКАЗ-НАРЯДА (156/160/163) ═══
             Главный страх владельца: «чтобы чек не туда случайно не пробил».
-            Один и тот же мастер работает в двух автосервисах, поэтому текущий
-            обязан быть виден ДО нажатия «Пробить». Сменить его отсюда НЕЛЬЗЯ —
-            тап ведёт в раздел «Филиалы»: выпадающий выбор прямо над кнопкой
-            «Пробить» и был тем самым способом промахнуться. «Филиалы»
-            открываются ПОВЕРХ Кассы (корневой стек, см. AppNavigator →
-            Stack.Screen "Points"), поэтому «назад» возвращает набранный
-            заказ-наряд нетронутым — экран не размонтируется. Скрыт, когда
-            автосервис ровно один — там подставлять нечего. В push-режиме
-            (правка чека из Журнала) слева висит плавающая стрелка «назад»,
-            поэтому сдвигаем строку правее, чтобы она не уезжала под кнопку. */}
+            Один и тот же мастер работает в двух автосервисах, поэтому тот, в
+            который уйдёт чек, обязан быть виден ДО нажатия «Пробить». Это
+            ПОДПИСЬ, а не выбор: филиал выдан сессии при входе, сменить его
+            можно только выходом и новым входом (163). Ни выпадающего списка,
+            ни перехода — оба были способом промахнуться и увести кассу в
+            соседний автосервис. Скрыт, когда автосервис ровно один — там
+            показывать нечего. В push-режиме (правка чека из Журнала) слева
+            висит плавающая стрелка «назад», поэтому сдвигаем строку правее,
+            чтобы она не уезжала под кнопку. */}
         <PointIndicator variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
 
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
@@ -4123,13 +4303,19 @@ export default function CheckCreateScreen() {
         </PressableScale>
       </KeyboardAwareScroll>
 
-      {/* Master Picker */}
-      <Modal visible={showMasterPicker !== null} onClose={() => setShowMasterPicker(null)} title="Выберите мастера">
+      {/* Master Picker — строка услуги либо весь заказ-наряд (CHECK_MASTER_PICKER_INDEX) */}
+      <Modal
+        visible={showMasterPicker !== null}
+        onClose={() => setShowMasterPicker(null)}
+        title={showMasterPicker === CHECK_MASTER_PICKER_INDEX ? 'Мастер заказ-наряда' : 'Выберите мастера'}
+      >
         <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
           {masters.map((m) => {
             const isSelected =
-              showMasterPicker !== null &&
-              (serviceLines[showMasterPicker]?.lineMasterId || serviceLines[showMasterPicker]?.masterId) === m.id;
+              showMasterPicker === CHECK_MASTER_PICKER_INDEX
+                ? defaultMasterId === m.id
+                : showMasterPicker !== null &&
+                  (serviceLines[showMasterPicker]?.lineMasterId || serviceLines[showMasterPicker]?.masterId) === m.id;
             return (
               <TouchableOpacity
                 key={m.id}
@@ -4139,7 +4325,20 @@ export default function CheckCreateScreen() {
                   isSelected && { backgroundColor: palette.accent.primarySoft },
                 ]}
                 onPress={() => {
-                  if (showMasterPicker !== null) {
+                  if (showMasterPicker === CHECK_MASTER_PICKER_INDEX) {
+                    // Мастер всего заказ-наряда. Строки услуг, которые всё ещё
+                    // ссылались на мастера чужого филиала, переезжают вместе с
+                    // ним: иначе человек выбрал бы мастера и упёрся в тот же
+                    // отказ на следующей же строке.
+                    setMasterId(m.id);
+                    setServiceLines((prev) =>
+                      prev.map((line) =>
+                        worksAtThisPoint(line.lineMasterId || line.masterId)
+                          ? line
+                          : { ...line, lineMasterId: m.id, masterId: m.id },
+                      ),
+                    );
+                  } else if (showMasterPicker !== null) {
                     updateServiceLine(showMasterPicker, 'lineMasterId', m.id);
                     updateServiceLine(showMasterPicker, 'masterId', m.id);
                   }

@@ -42,7 +42,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
-import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
@@ -64,7 +63,6 @@ import type {
   SafeState,
   SafeTransaction,
 } from '../../../shared/types';
-import { choosePointMessage } from '../../../shared/utils/apiError';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Formatting helpers
@@ -263,12 +261,6 @@ export default function CashShiftScreen() {
     setToSafeInput('');
   }, []);
 
-  // Сервер отказывает открыть смену в режиме «Все автосервисы»: деньги смены
-  // обязаны принадлежать конкретному автосервису. Правильный ответ на этот
-  // отказ — увести человека в раздел «Филиалы», единственное место, где
-  // автосервис выбирают (см. components/PointRequiredPrompt).
-  const pointPrompt = usePointRequiredPrompt();
-
   const openMutation = useMutation({
     // 155 — openingAmount опционален: без него сервер сам подставляет размен
     // прошлой смены (carryoverAmount последней закрытой).
@@ -293,22 +285,8 @@ export default function CashShiftScreen() {
     },
     onError: (err) => {
       haptic('error');
-      // 160/161: у тенанта с филиалами смену нельзя открыть «на всю сеть» —
-      // деньги смены должны принадлежать конкретной точке. Сервер отвечает
-      // человеческим текстом; мы не пересказываем его, а даём кнопку, которая
-      // решает проблему на месте. Распознаём отказ ОБЩИМ хелпером
-      // (shared/utils/apiError), а не «есть ли в тексте слово филиал»: под
-      // ту проверку попал бы любой другой отказ, где это слово встретилось.
-      const pointMessage = choosePointMessage(err);
-      if (pointMessage) {
-        // Форма ввода размена — RN `<Modal>`, диалог отказа тоже системный.
-        // Презентация одного в тот же кадр, когда другой ещё уходит, на iOS
-        // съедает верхний, поэтому сначала закрываем форму, потом (через
-        // анимацию) спрашиваем: смена всё равно не откроется без автосервиса.
-        closeInputModal();
-        setTimeout(() => pointPrompt.show(pointMessage), 250);
-        return;
-      }
+      // 163: кассовая смена всегда принадлежит филиалу СЕССИИ — отказа
+      // «выберите филиал» больше не существует, поэтому и ветки под него нет.
       Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось открыть смену. Возможно, смена уже открыта.');
     },
   });
@@ -602,12 +580,12 @@ export default function CashShiftScreen() {
         onBack={isTabRoot ? undefined : () => navigation.goBack()}
       />
 
-      {/* Автосервис смены (156/161): GET /cash-shifts/current отдаёт смену
-          ТЕКУЩЕГО автосервиса, а открыть смену в режиме «Все автосервисы»
-          сервер не даёт вовсе — деньги смены обязаны принадлежать конкретному.
-          Индикатор не переключает: тап ведёт в раздел «Филиалы». Отдельной
-          строкой, а не в trailing шапки: длинное название обрезало бы
-          заголовок. Скрывает себя сам, когда автосервис один. */}
+      {/* Автосервис смены (156/161/163): GET /cash-shifts/current отдаёт смену
+          автосервиса ЭТОЙ СЕССИИ — деньги смены принадлежат ему и только ему.
+          Индикатор — подпись, а не кнопка: филиал выбран при входе и внутри
+          приложения не меняется. Отдельной строкой, а не в trailing шапки:
+          длинное название обрезало бы заголовок. Скрывает себя сам, когда
+          автосервис один. */}
       <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {loadingFirst ? (

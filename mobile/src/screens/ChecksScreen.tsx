@@ -1342,10 +1342,10 @@ export default function ChecksScreen() {
           tab-bar label already, and the count duplicates info shown at
           the bottom of the list (pagination). Less chrome → more list. */}
 
-      {/* Автосервис журнала (156/160) — Журнал показывает чеки ТЕКУЩЕГО
-          автосервиса, поэтому человек обязан видеть, чью выручку он сейчас
-          читает. Индикатор НЕ переключает: тап ведёт в раздел «Филиалы», где
-          переключение и живёт. Скрыт, когда автосервис один. */}
+      {/* Автосервис журнала (156/160/163) — Журнал показывает чеки автосервиса
+          ЭТОЙ СЕССИИ, поэтому человек обязан видеть, чью выручку он сейчас
+          читает. Индикатор — подпись, а не кнопка: филиал выбран при входе.
+          Скрыт, когда автосервис один. */}
       <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {/* Freshness pill — HYBRID-perf plan. ChecksScreen renders from

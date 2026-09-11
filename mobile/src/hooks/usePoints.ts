@@ -1,51 +1,40 @@
 /**
  * usePoints — единственный источник правды об автосервисах владельца
- * (основной сервис + филиалы, мульти-точки 156/160/161) на клиенте.
+ * (основной сервис + филиалы, мульти-точки 156/160/161/163) на клиенте.
  *
  * ЗАЧЕМ ОТДЕЛЬНЫЙ МОДУЛЬ. Правило «кто какие автосервисы видит» повторялось в
  * трёх местах (чип на дашборде, пункт «Ещё», экран филиалов) и уже
- * разъезжалось: дашборд показывал переключатель мастеру, а пункт меню требовал
- * user_management. Разъезд в этой зоне стоит денег — заказ-наряд, пробитый не
- * в том автосервисе, уезжает в чужую выручку и чужую зарплату. Поэтому и
- * правило доступа, и сама процедура переключения живут здесь в одном
- * экземпляре.
+ * разъезжалось. Разъезд в этой зоне стоит денег — заказ-наряд, пробитый не в
+ * том автосервисе, уезжает в чужую выручку и чужую зарплату. Поэтому правило
+ * доступа живёт здесь в одном экземпляре.
  *
- * ГДЕ ПЕРЕКЛЮЧАЮТ. Ровно в одном месте — раздел «Филиалы» (screens/
- * PointsScreen). Требование владельца дословно: «переключиться туда можно
- * ТОЛЬКО через филиал, а не везде». На денежных экранах остаётся лишь
- * НЕинтерактивный индикатор (components/PointIndicator): он показывает, где
- * человек сейчас, но сам ничего не переключает — случайный тап по шапке
- * больше не может увести кассу в соседний автосервис.
+ * ПЕРЕКЛЮЧЕНИЯ ФИЛИАЛА ЗДЕСЬ БОЛЬШЕ НЕТ И НЕ БУДЕТ (163). Филиал — свойство
+ * СЕССИИ: он выбирается при входе (второй шаг, LoginPointSelect) и живёт ровно
+ * столько, сколько живёт токен. Требование владельца дословно: «чтобы выйти и
+ * войти в другой им надо опять выйти и войти в другой филиал». Поэтому:
+ *   • ручки смены филиала на клиенте нет (сервер на POST /points/switch
+ *     отвечает 409 — она осталась только для сборок 3.5/3.6);
+ *   • раздел «Филиалы» показывает карточки с цифрами и предлагает ВЫЙТИ и
+ *     войти в другой филиал, а не переключает молча;
+ *   • на денежных экранах стоит НЕинтерактивный индикатор
+ *     (components/PointIndicator) — он только показывает, где человек сейчас.
  *
- * ПРАВИЛО ДОСТУПА (зеркало PointsService.switchPoint на сервере):
- *   • держатель user_management (владелец/админ) — все живые точки + режим
- *     «Все точки» (сброс выбора, currentPointId = null);
- *   • сотрудник, назначенный хотя бы на одну точку, — только свои (memberIds),
- *     без «Всех точек»: филиал ему обязателен (160);
- *   • сотрудник БЕЗ явных назначений не ограничен (безопасный дефолт 156) —
- *     видит все точки, но по-прежнему без «Всех точек».
+ * ПРАВИЛО ДОСТУПА — ЗЕРКАЛО ФУНКЦИИ autexa_available_points (миграция 163):
+ * есть назначения на живые филиалы (user_points) → доступны только они;
+ * назначений нет вовсе → доступны все живые филиалы тенанта. Право
+ * user_management здесь НИ ПРИ ЧЁМ: сервер при входе про него не спрашивает, и
+ * добавь мы его сюда — владелец, назначенный на один филиал, видел бы кнопку
+ * «войти» в филиал, куда сервер его не пустит.
  */
-import { useCallback, useEffect, useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { pointsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { setOfflineCheckQueuePointId } from '../utils/offlineCheckQueue';
-import { clearPersistentCacheForPointSwitch } from '../utils/persistentCache';
 import type { PointsListResponse, TenantPoint } from '../../../shared/types';
 
 /** Канонический ключ списка точек — один слот кеша на всё приложение. */
 export const POINTS_QUERY_KEY = ['points'] as const;
-
-/**
- * Подпись режима «без выбранного автосервиса» — только у владельца/админа.
- * Не «Все точки»: у владельца это ДВА РАЗНЫХ автосервиса (основной ZR AUTO и
- * открытый позже филиал), а не одна сеть точек, и подпись обязана читаться
- * так же.
- */
-export const ALL_POINTS_LABEL = 'Все автосервисы';
-
-/** Подпись, когда автосервис не выбран, а сводки по всем человеку не положено. */
-export const NO_POINT_LABEL = 'Автосервис не выбран';
 
 /** «Основной сервис» / «Филиал» — одна формулировка на все экраны. */
 export function pointKindLabel(point: Pick<TenantPoint, 'isMain'>): string {
@@ -72,7 +61,8 @@ function sortPoints(points: TenantPoint[]): TenantPoint[] {
 /**
  * GET /points. Ходить в pointsApi.list() напрямую больше не нужно: единый ключ
  * = единая форма данных в кеше (та же дисциплина, что у useUsers) и один
- * сетевой запрос на весь экран.
+ * сетевой запрос на весь экран. Ручка ЧИТАЮЩАЯ — она ничего не подставляет и
+ * ничего не переключает (163).
  */
 export function usePointsQuery() {
   const query = useQuery<PointsListResponse>({
@@ -98,50 +88,38 @@ export function usePointsQuery() {
 export interface PointAccess {
   /** Все живые точки тенанта (может быть больше, чем доступно пользователю). */
   points: TenantPoint[];
-  /** Точки, между которыми пользователь ВПРАВЕ переключаться. Основной первым. */
+  /**
+   * Точки, в которые пользователь ВПРАВЕ войти (зеркало autexa_available_points).
+   * Основной сервис первым. Войти = выйти из приложения и войти заново — внутри
+   * приложения филиал не меняется.
+   */
   selectable: TenantPoint[];
   /**
-   * ОСНОВНОЙ сервис из доступных — сам автосервис владельца, которому
-   * принадлежит вся история, заведённая до появления филиалов. null, если
-   * пользователю доступны только филиалы (он на основной не назначен).
+   * ОСНОВНОЙ сервис — сам автосервис владельца, которому принадлежит вся
+   * история, заведённая до появления филиалов. null, если у тенанта его нет.
    */
   mainPoint: TenantPoint | null;
-  /** Доступные ФИЛИАЛЫ — всё, кроме основного сервиса. */
+  /** ФИЛИАЛЫ — всё, кроме основного сервиса. */
   branches: TenantPoint[];
-  /** Текущий автосервис; null = режим «Все автосервисы» (сводка). */
+  /**
+   * Филиал ТЕКУЩЕЙ СЕССИИ. null = у тенанта нет живых филиалов (одноточечный
+   * автосервис) либо ответ ещё не пришёл и в сессии филиала нет.
+   */
   currentPointId: string | null;
   currentPoint: TenantPoint | null;
-  /** Право управлять назначениями сотрудников на автосервисы. */
+  /** Право настраивать доступ сотрудников к филиалам (карточка сотрудника). */
   canManage: boolean;
-  /** Доступен ли режим «Все автосервисы» (общая сводка). */
-  canSeeAllPoints: boolean;
   /**
    * Показывать ли индикатор автосервиса и раздел «Филиалы».
    *
-   * Два случая, а не один:
-   *   • переключать есть что (доступно больше одного автосервиса) — очевидный;
-   *   • держатель user_management при ХОТЯ БЫ ОДНОМ филиале у тенанта: у него
-   *     два режима даже с единственной точкой — сам автосервис и «Все
-   *     автосервисы» (общая сводка), и цифры в них РАЗНЫЕ. Пока индикатор
-   *     прятался, владелец не мог ни понять, в каком он режиме, ни выйти из
-   *     сводки, ни попасть в «Филиалы», чтобы назначить туда сотрудников, —
-   *     тупик на ровном месте.
+   * Ровно один критерий: у тенанта БОЛЬШЕ ОДНОГО живого автосервиса. У
+   * одноточечного второго автосервиса не существует — ни выбора при входе, ни
+   * раздела, ни индикатора он не видит и не должен (требование владельца).
+   * Прежний второй критерий («держателю user_management показываем всегда»)
+   * жил ради режима «Все филиалы» — режима больше нет, критерий ушёл вместе с
+   * ним.
    */
   multiPoint: boolean;
-  /**
-   * Сколько филиалов сервер посчитал бы «доступными» для ДЕНЕЖНОЙ ЗАПИСИ.
-   * Зеркало resolvePointForWrite (backend/src/common/point-scope.ts): есть
-   * назначения на живые точки — только они; нет назначений — все живые точки
-   * тенанта. Право user_management здесь НИ ПРИ ЧЁМ: сервер про него не знает.
-   */
-  writePointCount: number;
-  /**
-   * Уйдёт ли денежная запись в отказ 400 «Выберите филиал». True ровно тогда,
-   * когда филиал не выбран, а подставить его молча сервер не сможет
-   * (доступных больше одного). Экран Кассы спрашивает это ДО отправки, чтобы
-   * кассир не упирался в ошибку уже после нажатия «Пробить».
-   */
-  needsPointForWrite: boolean;
   isLoading: boolean;
 }
 
@@ -149,19 +127,13 @@ export interface PointAccess {
  * ЧИСТОЕ правило доступа к филиалам — без react-query и без AuthContext,
  * поэтому покрывается юнит-тестом (hooks/__tests__/usePoints.test.ts).
  *
- * Зона денег: `needsPointForWrite` обязан ПОБИТОВО повторять серверный
- * resolvePointForWrite (backend/src/common/point-scope.ts). Разъедется —
- * клиент либо блокирует пробитие там, где сервер молча подставил бы точку,
- * либо (хуже) отпускает чек в 400 уже после нажатия «Пробить».
- *
  * Поля входа:
  *   • `points` — живые точки тенанта из GET /points (может быть пусто);
- *   • `resolvedPointId` — текущая точка ИЗ ОТВЕТА /points; `undefined` = ответа
+ *   • `resolvedPointId` — филиал сессии ИЗ ОТВЕТА /points; `undefined` = ответа
  *     ещё нет, и тогда берётся `sessionPointId` (холодный старт: филиал уже
  *     лежит в персистентной сессии /auth/me, и индикатор обязан быть верным ДО
- *     первого ответа сети — иначе Касса секунду показывает «Все точки» там, где
- *     филиал на самом деле выбран). Явный `null` из ответа означает
- *     СОЗНАТЕЛЬНЫЙ режим «Все точки» и сессию перебивает.
+ *     первого ответа сети — иначе Касса секунду показывает не тот автосервис).
+ *     Оба источника — ОДИН И ТОТ ЖЕ токен, поэтому разойтись они не могут.
  */
 export function derivePointAccess(input: {
   points: TenantPoint[];
@@ -173,15 +145,11 @@ export function derivePointAccess(input: {
 }): PointAccess {
   const { points, resolvedPointId, sessionPointId, userId, canManage, isLoading } = input;
   const assigned = userId ? points.filter((p) => p.memberIds?.includes(userId)) : [];
-  const selectable = sortPoints(canManage || assigned.length === 0 ? points : assigned);
+  const selectable = sortPoints(assigned.length > 0 ? assigned : points);
   const mainPoint = selectable.find((p) => p.isMain) ?? null;
   const branches = selectable.filter((p) => !p.isMain);
   const currentPointId = resolvedPointId !== undefined ? resolvedPointId : (sessionPointId ?? null);
   const currentPoint = currentPointId ? (points.find((p) => p.id === currentPointId) ?? null) : null;
-  // Доступность для ЗАПИСИ считаем так же, как сервер: по назначениям, а не по
-  // правам. Иначе владелец, назначенный ровно на один филиал, получал бы
-  // предупреждение там, где сервер молча подставил бы его точку.
-  const writePointCount = assigned.length > 0 ? assigned.length : points.length;
   return {
     points,
     selectable,
@@ -190,10 +158,7 @@ export function derivePointAccess(input: {
     currentPointId,
     currentPoint,
     canManage,
-    canSeeAllPoints: canManage,
-    multiPoint: selectable.length > 1 || (canManage && points.length > 0),
-    writePointCount,
-    needsPointForWrite: currentPointId === null && writePointCount > 1,
+    multiPoint: points.length > 1,
     isLoading,
   };
 }
@@ -217,56 +182,4 @@ export function usePointAccess(): PointAccess {
       }),
     [data, userId, sessionPointId, canManage, isLoading],
   );
-}
-
-/**
- * Переключение филиала — единственная точка входа.
- *
- * ПОЧЕМУ ЗДЕСЬ ЖЁСТКИЙ СБРОС, А НЕ ТОЧЕЧНАЯ ИНВАЛИДАЦИЯ. После смены филиала
- * меняется ответ практически КАЖДОГО денежного эндпоинта (журнал, дашборд,
- * отчёты, зарплата, смены, расходы, кассовая смена, рассрочка, возвраты,
- * клиенты, машины…). Точечный список ключей уже отставал от бэкенда и молча
- * показывал чужие деньги. Поэтому:
- *   1. отменяем запросы, ушедшие в сеть ещё со СТАРЫМ филиалом;
- *   2. `resetQueries` (а не `invalidateQueries`) — данные становятся
- *      undefined, поэтому экран покажет загрузку, а НЕ цифры чужого филиала
- *      на время рефетча;
- *   3. чистим персистентный кеш на диске целиком — слоты писались без учёта
- *      филиала, и на холодном старте подняли бы прошлый филиал обратно.
- * Список точек (['points']) из сброса исключён: денег в нём нет, а без него
- * мигал бы сам индикатор филиала.
- */
-export function useSwitchPoint() {
-  const queryClient = useQueryClient();
-  const { refreshUser } = useAuth();
-
-  const mutation = useMutation({
-    mutationFn: async (pointId: string | null) => (await pointsApi.switch(pointId)).data,
-    onSuccess: async (res) => {
-      // Сервер мог ПОДСТАВИТЬ точку сам (сотруднику без user_management с
-      // единственной доступной точкой сброс схлопывается в неё) — источник
-      // правды именно ответ, а не то, что мы просили.
-      const effective = res?.currentPointId ?? null;
-
-      // Офлайн-очередь — первым делом и синхронно: между переключением и
-      // обновлением сессии пользователь уже может нажать «Пробить».
-      setOfflineCheckQueuePointId(effective);
-
-      await queryClient.cancelQueries();
-      queryClient.setQueryData<PointsListResponse>(POINTS_QUERY_KEY, (prev) =>
-        prev ? { ...prev, currentPointId: effective } : prev,
-      );
-      void queryClient.resetQueries({ predicate: (query) => query.queryKey[0] !== POINTS_QUERY_KEY[0] });
-      void clearPersistentCacheForPointSwitch();
-      void queryClient.invalidateQueries({ queryKey: POINTS_QUERY_KEY });
-      // Персистентная сессия: без неё User.currentPointId остался бы прежним и
-      // холодный старт снова показал бы прошлый филиал.
-      void refreshUser();
-    },
-  });
-
-  const { mutateAsync } = mutation;
-  const switchPoint = useCallback((pointId: string | null) => mutateAsync(pointId), [mutateAsync]);
-
-  return { switchPoint, isSwitching: mutation.isPending };
 }

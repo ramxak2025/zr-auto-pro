@@ -15,6 +15,7 @@ import {
   UserX,
   KeyRound,
   ShieldCheck,
+  Building2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -31,6 +32,8 @@ import IconButton from '../components/IconButton';
 import PhoneInput from '../components/PhoneInput';
 import RolesManagement from '../components/RolesManagement';
 import RateByMonthModal from '../components/RateByMonthModal';
+import UserPointsModal from '../components/UserPointsModal';
+import { usePointAccess } from '../hooks/usePoints';
 import { roleLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -120,11 +123,26 @@ export default function UsersPage() {
   const [dismissedOpen, setDismissedOpen] = useState(false);
   // 150 — «Ставка по месяцам»: смена ставки за прошлый/будущий месяц + история.
   const [rateUser, setRateUser] = useState<User | null>(null);
+  // 163 — «Филиалы сотрудника»: на каких филиалах человек может работать.
+  // Сохраняется СВОЕЙ ручкой (PUT /users/:id/points), а не вместе с формой:
+  // это отдельное правило доступа, и снятие филиала мгновенно выкидывает
+  // сотрудника из сессии — такое нельзя проводить «заодно» с правкой имени.
+  const [pointsUser, setPointsUser] = useState<User | null>(null);
+  // Настройка филиалов имеет смысл только у тенанта, где их больше одного:
+  // одноточечный автосервис про мульти-точки не знает вовсе.
+  const { multiPoint } = usePointAccess();
 
+  // В слоте ['users'] лежит МАССИВ сотрудников — так его пишут и читают все
+  // остальные потребители (прогрев после входа в AuthContext, главная,
+  // расписание, планирование) и так он кладётся в IndexedDB-снимок. Здесь
+  // раньше хранился целиком ответ axios, а массив доставался через select:
+  // кто монтировался первым, тот и определял форму слота. После входа слот
+  // грелся массивом — и «Сотрудники» показывали «Нет сотрудников», хотя люди
+  // есть; в обратную сторону главная получала ответ axios и падала на
+  // usersData.filter. Форма слота обязана быть ОДНА.
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users'],
-    queryFn: () => usersApi.getAll(),
-    select: (res) => res.data as User[],
+    queryFn: async () => (await usersApi.getAll()).data as User[],
   });
 
   // Список ролей — для select'а «Роль (набор прав)» в карточке сотрудника и для
@@ -578,6 +596,32 @@ export default function UsersPage() {
             </div>
           )}
 
+          {/* ── Филиалы сотрудника (163) ──────────────────────────────────
+              «Настройка, на каких филиалах они могут работать» — требование
+              владельца дословно. Только в режиме редактирования: у ещё не
+              созданного сотрудника нет id, которому назначать доступ. У
+              одноточечного тенанта блока нет вовсе. */}
+          {editingUser && canManageUsers && multiPoint && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                    <Building2 className="h-4 w-4 text-gray-400" />
+                    Филиалы сотрудника
+                  </p>
+                  <p className="mt-0.5 text-xs text-gray-500">Где он может работать — выбирается им при входе</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPointsUser(editingUser)}
+                  className="flex-shrink-0 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-200 transition-colors hover:bg-gray-100"
+                >
+                  Настроить
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Active Toggle */}
           <div className="flex items-center gap-3">
             <label className="relative inline-flex items-center cursor-pointer">
@@ -670,6 +714,18 @@ export default function UsersPage() {
           userName={rateUser.fullName}
           currentSalaryPercent={rateUser.salaryPercent || 0}
           currentProductPercent={rateUser.productSalaryPercent || 0}
+        />
+      )}
+
+      {/* 163 — «Филиалы сотрудника»: доступ к филиалам настраивается ЗДЕСЬ,
+          в карточке человека; раздел «Филиалы» показывает состав только для
+          просмотра. Сохраняется своей ручкой, отдельно от формы сотрудника. */}
+      {pointsUser && (
+        <UserPointsModal
+          isOpen={!!pointsUser}
+          onClose={() => setPointsUser(null)}
+          userId={pointsUser.id}
+          userName={pointsUser.fullName}
         />
       )}
 

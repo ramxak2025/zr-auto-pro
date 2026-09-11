@@ -95,6 +95,8 @@ import { formatPhone } from '../../../shared/validation/phone';
 import { ShareCardModal } from '../components/employee/ShareCardModal';
 import { EditProfileModal } from '../components/employee/EditProfileModal';
 import { AwardAchievementModal } from '../components/employee/AwardAchievementModal';
+import { UserPointsSheet } from '../components/employee/UserPointsSheet';
+import { usePointAccess } from '../hooks/usePoints';
 import { rankFromLifetime, progressToNextRank, rankLabelUpper } from '../components/employee/rank';
 
 type RouteParams = { EmployeeDetail: { id: string } };
@@ -181,6 +183,9 @@ export default function EmployeeDetailScreen() {
   // гейтит расширенный профиль/документы/увольнение (employees.service,
   // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
   const isOwnerLike = hasPermission('user_management');
+  // Настройка филиалов имеет смысл только там, где филиалов больше одного:
+  // одноточечный автосервис про мульти-точки не знает вовсе (163).
+  const { multiPoint } = usePointAccess();
 
   // ── Full profile from the new endpoint ───────────────────────────────
   const {
@@ -228,6 +233,9 @@ export default function EmployeeDetailScreen() {
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [awardOpen, setAwardOpen] = useState(false);
+  // 163 — «Филиалы сотрудника»: на каких филиалах он может работать. Право —
+  // user_management (isOwnerLike ниже); у одноточечного тенанта пункта нет.
+  const [pointsOpen, setPointsOpen] = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
 
   // ── Achievement remove (custom only, long press) ─────────────────────
@@ -505,6 +513,23 @@ export default function EmployeeDetailScreen() {
                 }}
                 palette={palette}
               />
+              {/* Доступ к филиалам настраивается ЗДЕСЬ (163) — в карточке
+                  человека, а не в разделе «Филиалы»: там состав показывается
+                  только для просмотра. У одноточечного тенанта пункта нет. */}
+              {multiPoint && (
+                <>
+                  <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+                  <MenuItem
+                    icon="business-outline"
+                    label="Филиалы сотрудника"
+                    onPress={() => {
+                      setMenuOpen(false);
+                      setPointsOpen(true);
+                    }}
+                    palette={palette}
+                  />
+                </>
+              )}
             </>
           )}
           {canDismiss && (
@@ -754,6 +779,14 @@ export default function EmployeeDetailScreen() {
       <ShareCardModal visible={shareOpen} onClose={() => setShareOpen(false)} data={shareData} />
       <EditProfileModal visible={editOpen} onClose={() => setEditOpen(false)} profile={profile} />
       <AwardAchievementModal visible={awardOpen} onClose={() => setAwardOpen(false)} employeeId={id} />
+      {pointsOpen ? (
+        <UserPointsSheet
+          visible={pointsOpen}
+          onClose={() => setPointsOpen(false)}
+          userId={id}
+          userName={profile.fullName}
+        />
+      ) : null}
       <AchievementsModal
         visible={achievementsOpen}
         onClose={() => setAchievementsOpen(false)}

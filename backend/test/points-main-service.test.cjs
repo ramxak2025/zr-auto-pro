@@ -274,7 +274,13 @@ test('единственная заведённая точка-филиал НЕ
   const binds = bindCalls(pool);
   assert.equal(binds.length, PointsService.HISTORY_TABLES.length, 'привязана не вся история');
   for (const call of binds) {
-    assert.deepEqual(call.params, ['t-1'], 'разбор истории адресуется тенантом, точка находится по is_main');
+    // Второй параметр — размер порции: привязка идёт пачками, чтобы каждый
+    // запрос укладывался в statement_timeout рантайм-пула (8 с).
+    assert.deepEqual(
+      call.params,
+      ['t-1', PointsService.HISTORY_BATCH],
+      'разбор истории адресуется тенантом, точка находится по is_main',
+    );
     assert.ok(
       /tp\.is_main AND tp\.is_active AND tp\.tenant_id = \$1/.test(call.text),
       'история приписана филиалу ТопГаз вместо ZR AUTO — обратно различить их будет нечем',
@@ -307,7 +313,7 @@ test('первую точку, названную как компания, по�
 
   const binds = bindCalls(pool);
   assert.equal(binds.length, PointsService.HISTORY_TABLES.length);
-  for (const call of binds) assert.deepEqual(call.params, ['t-1']);
+  for (const call of binds) assert.deepEqual(call.params, ['t-1', PointsService.HISTORY_BATCH]);
 });
 
 test('тенант без точек не затронут: adminCreate у него никто не звал', () => {
@@ -438,8 +444,7 @@ test('основная точка идёт первой в любом списк
   // детерминированного выбора кандидата среди одноимённых.
   const between = (from, to) => points.slice(points.indexOf(from), points.indexOf(to));
   const cases = [
-    ['пикер точек тенанта (GET /points)', between('async listForTenant(', 'async switchPoint(')],
-    ['дефолтная точка сотрудника', between('private async defaultPointForMember(', 'async setMembers(')],
+    ['пикер точек тенанта (GET /points)', between('async listForTenant(', 'switchPoint(): never')],
     ['карточки раздела «Филиалы»', between('private async computeSummary(', '// ── Суперадмин')],
     ['список точек в ЛК суперадмина', between('async adminList(', 'HISTORY_TABLES')],
   ];
@@ -451,8 +456,19 @@ test('основная точка идёт первой в любом списк
       `${label}: без «is_main DESC» основной сервис оказывается посреди филиалов`,
     );
   }
+  // 163 — «первый доступный филиал» (список при входе, подстановка старому
+  // клиенту, филиал сессии без claim'а) резолвит ОДНА функция миграции; порядок
+  // в ней тот же, и он определяет, на чей счёт по умолчанию пойдут деньги
+  // сотрудника.
+  const migration163 = read('migrations/163_point_session_login.sql');
   assert.ok(
-    /ORDER BY is_main DESC, sort_order ASC, created_at ASC, id ASC/.test(pointScope),
-    'резолв точки для денежной записи обязан предпочитать основной сервис',
+    /a\.is_main DESC,\s*\n\s*a\.sort_order ASC,\s*\n\s*lower\(a\.name\) ASC,\s*\n\s*a\.id ASC/.test(migration163),
+    'филиал по умолчанию обязан предпочитать основной сервис и быть детерминированным',
+  );
+  assert.ok(
+    /ORDER BY a\.is_main DESC, a\.sort_order ASC, lower\(a\.name\) ASC, a\.id ASC/.test(
+      read('src/auth/auth.service.ts'),
+    ),
+    'список филиалов на экране входа обязан начинаться с основного сервиса',
   );
 });

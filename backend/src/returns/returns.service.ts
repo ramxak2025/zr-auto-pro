@@ -108,7 +108,10 @@ export class ReturnsService {
       const lockParams: unknown[] = [checkId, tenantID];
       const lockPointFilter = pointFilterSql(null, actorPointId(actor), lockParams);
       const { rows: checkRows } = await client.query(
-        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${lockPointFilter} LIMIT 1 FOR UPDATE`,
+        // cash_amount читаем ЗДЕСЬ, под тем же локом: это наличные чека ДО
+        // реверса, и только из них выводится наличная часть возврата (164).
+        // После UPDATE ниже исходное значение уже не восстановить.
+        `SELECT id, total_revenue, cash_amount, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${lockPointFilter} LIMIT 1 FOR UPDATE`,
         lockParams,
       );
       if (checkRows.length === 0) {
@@ -139,6 +142,8 @@ export class ReturnsService {
       }
 
       const totalRevenue = parseFloat(checkRows[0].total_revenue) || 0;
+      // Наличные чека ДО реверса — база для наличной части возврата (164).
+      const cashBefore = parseFloat(checkRows[0].cash_amount) || 0;
 
       // Collect the check's lines WITH their money columns: the sell side
       // drives the default refund for partial scope (money-audit M6), the cost
@@ -266,13 +271,21 @@ export class ReturnsService {
       // otherwise reversing it would drive the check's revenue/cash negative.
       const refundAmount = Math.min(requestedRefund, totalRevenue);
 
+      // НАЛИЧНАЯ ЧАСТЬ ВОЗВРАТА (164) — ровно то, что реверс ниже снимет с
+      // cash_amount: возврат гасит НАЛ ПЕРВЫМ, остаток добирает с карты
+      // (`cash_amount = GREATEST(cash - refund, 0)` + `card_amount = ... - GREATEST(refund - cash, 0)`).
+      // Значение сохраняем в строку возврата, потому что кассовой смене нужна
+      // выдача из ДЕНЕЖНОГО ЯЩИКА в день ФАКТА возврата, а после UPDATE
+      // исходный cash_amount не восстановить (см. шапку миграции 164).
+      const refundCash = round2(Math.min(refundAmount, cashBefore));
+
       // Insert the header row first (return lines FK to it).
       const { rows: retRows } = await client.query(
         `INSERT INTO check_returns
-           (check_id, tenant_id, returned_by, destination, reason, refund_amount, scope)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (check_id, tenant_id, returned_by, destination, reason, refund_amount, refund_cash_amount, scope)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id, created_at`,
-        [checkId, tenantID, userID || null, dto.destination, dto.reason ?? null, refundAmount, dto.scope],
+        [checkId, tenantID, userID || null, dto.destination, dto.reason ?? null, refundAmount, refundCash, dto.scope],
       );
       const returnId = retRows[0].id;
 
@@ -519,6 +532,8 @@ export class ReturnsService {
         scope: dto.scope,
         reason: dto.reason ?? null,
         refundAmount,
+        // 164 — сколько из возврата выдано НАЛИЧНЫМИ (остаток ушёл на карту).
+        refundCashAmount: refundCash,
         returnedBy: userID || null,
         createdAt: retRows[0].created_at,
       };

@@ -13,7 +13,7 @@ import { PushService } from '../push/push.service';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { getTenantTimezone } from '../common/timezone';
-import { actorPointId, assertRowPointForWrite, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { actorPointId, assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 
 // «Привилегированный» здесь — про СЕМАНТИКУ записи (source='owner', без дневного
 // лимита и очереди утверждения), НЕ про доступ. Право вносить расходы решает
@@ -376,13 +376,13 @@ export class ExpensesService {
     // 161 — ручной расход рождается НА ТЕКУЩЕМ ФИЛИАЛЕ АВТОРА (решение
     // владельца).
     //
-    // ВОЛНА 4 — ФИЛИАЛ ОБЯЗАТЕЛЕН. Расход с point_id = NULL не видел НИ ОДИН
-    // филиальный срез: он выпадал из «Движения денег» филиала, из его прибыли
-    // и из наличного расхода в окне кассовой смены (Z-отчёт филиала сходился
-    // бы на эту сумму лишними деньгами в ящике). Общий резолв: своя точка →
-    // единственная доступная → 400 «Выберите филиал». Точек у тенанта нет
-    // вовсе → NULL, как было: одноточечный автосервис изменений не заметит.
-    const pointId = await resolvePointForWrite(this.pool, actor, 'чтобы записать расход');
+    // ФИЛИАЛ ОБЯЗАТЕЛЕН, и он берётся из сессии (163). Расход с point_id =
+    // NULL не видел НИ ОДИН филиальный срез: он выпадал из «Движения денег»
+    // филиала, из его прибыли и из наличного расхода в окне кассовой смены
+    // (Z-отчёт филиала сходился бы на эту сумму лишними деньгами в ящике).
+    // Теперь такой строки у тенанта с филиалами не появляется по построению:
+    // филиал выбран при входе. Филиалов у тенанта нет вовсе → NULL, как было.
+    const pointId = actorPointId(actor);
 
     const { rows } = await this.pool.query(
       `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, point_id)
@@ -437,7 +437,7 @@ export class ExpensesService {
    * есть последствий он не видит вовсе.
    *
    * Предикат общий (common/point-scope.assertRowPointForWrite). Точки нет
-   * («Все точки» / одноточечный тенант) — гейта нет, поведение прежнее.
+   * (у тенанта нет филиалов — одноточечный автосервис) — гейта нет, поведение прежнее.
    */
   private assertOwnPoint(id: string, tenantID: string, actor?: JwtPayload): Promise<void> {
     return assertRowPointForWrite(this.pool, 'expenses', id, tenantID, actorPointId(actor), 'Расход не найден');
@@ -472,8 +472,257 @@ export class ExpensesService {
     return rows[0];
   }
 
-  async remove(id: string, tenantID: string) {
+  /**
+   * НАСТОЯЩАЯ ПРАВКА РАСХОДА — PATCH /expenses/:id.
+   *
+   * ПОЧЕМУ ЭТА РУЧКА ВООБЩЕ ПОЯВИЛАСЬ. Ручки правки не было, и мобильный экран
+   * изображал её парой запросов «удалить, потом создать заново». Удаление здесь
+   * ФИЗИЧЕСКОЕ (DELETE, без soft-delete), поэтому любой отказ второго запроса —
+   * нет права, чужой филиал, оборвалась связь в подвале автосервиса — стирал
+   * расход НАВСЕГДА: восстанавливать было нечего, и владелец видел просто
+   * пропавшие деньги. Правка обязана быть ОДНИМ запросом: либо строка изменилась,
+   * либо осталась ровно такой, какой была.
+   *
+   * ЧТО СОХРАНЯЕТСЯ НЕИЗМЕННЫМ (и почему это важнее удобства):
+   *   • `id` — на него ссылаются ссылки/пуши/открытые списки у других устройств;
+   *   • `created_by` / `user_id` — автор траты не меняется от того, кто её правит;
+   *   • `source` ('owner'/'employee') — семантика записи задаётся при создании;
+   *   • `point_id` — филиал траты; перенос денег между филиалами правкой суммы
+   *     не делается (для этого пришлось бы пересчитать оба филиала);
+   *   • `period_month` / `recipient_name` — поля зеркальных выплат (зарплата,
+   *     выплата вне программы), их правит свой поток, не форма расхода.
+   *
+   * СТАТУС ОДОБРЕНИЯ НЕ ПОВЫШАЕТСЯ ПРАВКОЙ. Отклонённая заявка остаётся
+   * отклонённой, ожидающая — ожидающей: иначе сотрудник «чинил» бы отказ
+   * владельца редактированием. Обратный ход есть: одобренная заявка
+   * НЕПРИВИЛЕГИРОВАННОГО автора, вышедшая правкой за дневной лимит или
+   * переехавшая в категорию «требует одобрения», снова становится 'pending' —
+   * иначе правка суммы была бы дырой в обход очереди согласования.
+   */
+  async update(id: string, actor: JwtPayload, dto: any) {
+    const tenantID = actor.tenantID;
     if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
+    // Гейт филиала — до чтения строки, как в approve/reject: чужой филиал
+    // получает 404 и не узнаёт даже о существовании строки.
+    await this.assertOwnPoint(id, tenantID, actor);
+
+    const { rows: currentRows } = await this.pool.query(
+      `SELECT * FROM expenses WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+      [id, tenantID],
+    );
+    if (currentRows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
+    const current = currentRows[0];
+
+    // Кто может править: финансист (financial_reports) — любую строку своего
+    // филиала; вносящий расходы (can_add_expenses) — только СВОЮ. Дубль
+    // route-гейта — defence-in-depth на случай прямого вызова сервиса.
+    const canManageFinance = userHasPermission(actor, 'financial_reports');
+    if (!canManageFinance) {
+      if (!userHasPermission(actor, 'can_add_expenses')) {
+        throw new ForbiddenException({ message: 'У вас нет права изменять расходы' });
+      }
+      if (current.created_by !== actor.userID) {
+        throw new ForbiddenException({ message: 'Можно изменять только свои расходы' });
+      }
+    }
+
+    // ЗЕРКАЛЬНЫЙ РАСХОД ВЫПЛАТЫ ЗАРПЛАТЫ правкой не трогаем — ровно по той же
+    // причине, по которой его нельзя удалить (см. remove ниже): его сумма и
+    // дата обязаны совпадать со строкой выплаты (salary_payouts.expense_id /
+    // salary_payments.expense_id). Сдвинув их здесь, мы получили бы «выдано
+    // 30 000, из кассы ушло 3 000» без единого следа, и сторно выплаты уже
+    // нечего было бы компенсировать. Правильное действие — отменить саму
+    // выплату и выдать заново.
+    const { rows: linked } = await this.pool.query(
+      `SELECT 1 FROM salary_payouts WHERE expense_id = $1 AND tenant_id = $2
+       UNION ALL
+       SELECT 1 FROM salary_payments WHERE expense_id = $1 AND tenant_id = $2
+       LIMIT 1`,
+      [id, tenantID],
+    );
+    if (linked.length > 0) {
+      throw new BadRequestException({
+        message: 'Это зеркальный расход выплаты зарплаты — измените саму выплату, расход подстроится',
+      });
+    }
+
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    let nextAmount = parseFloat(current.amount) || 0;
+    if (dto.amount !== undefined) {
+      const amount = parseFloat(String(dto.amount));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new BadRequestException({ message: 'Сумма должна быть положительной' });
+      }
+      // Тот же потолок, что в create — защита от 1e308-переполнения.
+      if (amount > 100_000_000) {
+        throw new BadRequestException({ message: 'Сумма слишком велика' });
+      }
+      nextAmount = amount;
+      sets.push(`amount=$${idx++}`);
+      vals.push(amount);
+    }
+
+    // Категория решает, уходит ли расход в очередь одобрения, поэтому её
+    // approval_required нужен и при смене категории, и когда её не трогали.
+    let nextCategoryId: string | null = current.category_id ?? null;
+    if (dto.categoryId !== undefined) {
+      const raw = dto.categoryId || null;
+      // Не-uuid в WHERE id=$1 дал бы 22P02 → 500; отвечаем честным 404.
+      if (raw !== null && (typeof raw !== 'string' || !UUID_RE.test(raw))) {
+        throw new NotFoundException({ message: 'Категория расходов не найдена' });
+      }
+      nextCategoryId = raw;
+      sets.push(`category_id=$${idx++}`);
+      vals.push(raw);
+    }
+    let categoryApprovalRequired = false;
+    if (nextCategoryId) {
+      const { rows: catRows } = await this.pool.query(
+        'SELECT approval_required FROM expense_categories WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [nextCategoryId, tenantID],
+      );
+      // Чужая/несуществующая категория — та же ошибка, что в create: иначе
+      // расход уехал бы под имя категории другого тенанта.
+      if (catRows.length === 0) throw new NotFoundException({ message: 'Категория расходов не найдена' });
+      categoryApprovalRequired = !!catRows[0].approval_required;
+    }
+
+    if (dto.description !== undefined) {
+      const description = typeof dto.description === 'string' ? dto.description.trim() : null;
+      sets.push(`description=$${idx++}`);
+      vals.push(description || null);
+    }
+
+    let nextDate: Date = current.date instanceof Date ? current.date : new Date(String(current.date));
+    if (dto.date !== undefined) {
+      const parsed = new Date(String(dto.date));
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException({ message: 'Неверная дата расхода' });
+      }
+      nextDate = parsed;
+      sets.push(`date=$${idx++}`);
+      vals.push(parsed.toISOString());
+    }
+
+    // ── Очередь согласования после правки ───────────────────────────────
+    // Только вниз (approved → pending) и только у непривилегированного автора:
+    // иначе правка суммы была бы обходом дневного лимита и категорий
+    // «требует одобрения». PRIVILEGED_ROLES здесь — про семантику записи
+    // (как в create), а не про доступ: доступ решён выше.
+    const currentStatus: string = current.approval_status ?? 'approved';
+    let nextStatus = currentStatus;
+    const authorIsPrivileged = PRIVILEGED_ROLES.has(actor.role) && current.created_by === actor.userID;
+    if (!authorIsPrivileged && currentStatus === 'approved') {
+      if (categoryApprovalRequired) {
+        nextStatus = 'pending';
+      } else if (current.created_by) {
+        const { rows: limitRows } = await this.pool.query(
+          'SELECT daily_expense_limit FROM users WHERE id=$1 AND tenant_id=$2',
+          [current.created_by, tenantID],
+        );
+        const limit =
+          limitRows[0]?.daily_expense_limit === null || limitRows[0]?.daily_expense_limit === undefined
+            ? null
+            : parseFloat(limitRows[0].daily_expense_limit);
+        if (limit !== null && limit > 0) {
+          const dayStartIso = nextDate.toISOString().slice(0, 10);
+          // САМУ правимую строку исключаем ($4): иначе её старая сумма
+          // считалась бы дважды и любая правка вниз всё равно ушла бы в pending.
+          const { rows: totalRows } = await this.pool.query(
+            `SELECT COALESCE(SUM(amount), 0) as total FROM expenses
+              WHERE tenant_id=$1 AND created_by=$2
+                AND date >= $3::date AND date < ($3::date + 1)
+                AND id <> $4
+                AND COALESCE(approval_status, 'approved') <> 'rejected'`,
+            [tenantID, current.created_by, dayStartIso, id],
+          );
+          const sumOthers = parseFloat(totalRows[0].total) || 0;
+          if (sumOthers + nextAmount > limit) nextStatus = 'pending';
+        }
+      }
+    }
+    if (nextStatus !== currentStatus) {
+      sets.push(`approval_status=$${idx++}`);
+      vals.push(nextStatus);
+    }
+
+    // Нечего менять — отвечаем текущей строкой (идемпотентно), а не пустым
+    // UPDATE: клиенту важен объект, а не факт записи.
+    const row = await (async () => {
+      if (sets.length === 0) return current;
+      vals.push(id, tenantID);
+      const { rows } = await this.pool.query(
+        `UPDATE expenses SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        vals,
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
+      return rows[0];
+    })();
+
+    // Сумма/дата/категория расхода двигают прибыль и «Движение денег» — те же
+    // побочки, что у create.
+    invalidateReportsForTenant(tenantID);
+    if (this.pushService) {
+      this.pushService
+        .sendDataToTenant(tenantID, actor.userID, { type: 'cash-changed', tenantId: tenantID })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+
+    return {
+      id: row.id,
+      categoryId: row.category_id,
+      amount: parseFloat(row.amount) || 0,
+      description: row.description,
+      date: row.date,
+      userId: row.user_id,
+      createdBy: row.created_by,
+      source: row.source,
+      approvalStatus: row.approval_status,
+      periodMonth: row.period_month ?? null,
+      recipientName: row.recipient_name ?? null,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Удаление расхода. Денежная мутация, поэтому гейтов ДВА.
+   *
+   * 1) ФИЛИАЛ — тот же assertOwnPoint, что у approve/reject. Удаление было
+   *    ЕДИНСТВЕННОЙ денежной мутацией расходов без этой проверки: актор
+   *    филиала А, зная id, стирал расход филиала Б — в своём срезе он ничего
+   *    не видит, а прибыль и касса ЧУЖОГО филиала уже поехали вверх.
+   *
+   * 2) СВЯЗЬ С ВЫПЛАТОЙ ЗАРПЛАТЫ. Расход категории «Зарплата» — это ЗЕРКАЛО
+   *    строки выплаты (salary_payouts.expense_id / salary_payments.expense_id,
+   *    миграции 100 и 153). FK стоит ON DELETE SET NULL, то есть удаление
+   *    расхода молча рвёт связь: выплата остаётся «выданной» (сотруднику
+   *    списан долг), а денег из кассы будто и не уходило — зарплата и касса
+   *    расходятся навсегда, и сторно (reversePayout/reversePayment) уже нечего
+   *    компенсировать. Правильное действие — ОТМЕНИТЬ ВЫПЛАТУ: она сама снимет
+   *    свой расход. Поэтому здесь отказ с подсказкой, а не тихое удаление.
+   */
+  async remove(id: string, tenantID: string, actor?: JwtPayload) {
+    if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
+    await this.assertOwnPoint(id, tenantID, actor);
+
+    const { rows: linked } = await this.pool.query(
+      `SELECT 1 FROM salary_payouts WHERE expense_id = $1 AND tenant_id = $2
+       UNION ALL
+       SELECT 1 FROM salary_payments WHERE expense_id = $1 AND tenant_id = $2
+       LIMIT 1`,
+      [id, tenantID],
+    );
+    if (linked.length > 0) {
+      throw new BadRequestException({
+        message: 'Это зеркальный расход выплаты зарплаты — отмените саму выплату, она снимет расход',
+      });
+    }
+
     const { rows } = await this.pool.query('DELETE FROM expenses WHERE id=$1 AND tenant_id=$2 RETURNING id', [
       id,
       tenantID,

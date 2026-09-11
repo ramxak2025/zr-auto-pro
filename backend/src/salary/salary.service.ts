@@ -6,8 +6,15 @@ import { ExpensesService } from '../expenses/expenses.service';
 import { ScheduleService } from '../schedule/schedule.service';
 import { AuditService } from '../tenants/audit.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
-import { getTenantTimezone, zonedMidnight } from '../common/timezone';
-import { assertRowPointForWrite, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import {
+  getTenantTimezone,
+  startOfDayInZone,
+  startOfMonthInZone,
+  startOfWeekInZone,
+  zonedDateKey,
+  zonedMidnight,
+} from '../common/timezone';
+import { assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 
 interface PremiumDto {
@@ -229,7 +236,7 @@ export class SalaryService {
    *   верно:      A: 100−70=30, B: 60−40=20, сумма 50 = 160−110.
    *   половинчато: A: 100−110=−10, B: 60−110=−50 — деньги «исчезли».
    * Инвариант, который держит тест salary-points-scoping: сумма филиальных
-   * остатков равна сетевому остатку (режим «Все точки» — фильтра нет).
+   * остатков равна сетевому остатку (у тенанта без филиалов фильтра нет).
    *
    * Состав СПИСКА режется филиалом ПО ДВУМ основаниям сразу: есть денежные
    * строки этого филиала в периоде ИЛИ сотрудник на филиал назначен
@@ -239,28 +246,17 @@ export class SalaryService {
    * своим заработком. Подробности — у сборки `touched` ниже.
    */
   /**
-   * ФИЛИАЛ ДЛЯ ДЕНЕЖНОЙ ЗАПИСИ — единый резолв на все зарплатные пути
-   * (выплата, премия, штраф, легаси-выплата, внепрограммная выплата).
-   *
-   * `pointId` сюда приезжает из контроллера как ТЕКУЩАЯ точка актора
-   * (actorPointId), а `actorID` — это createdBy/awardedBy, то есть тот же
-   * человек: из этих двух полей и собирается актор для общего хелпера. Сам
-   * хелпер решает одинаково для всех денег в системе — своя точка, либо
-   * единственная доступная, либо 400 «Выберите филиал, …»; у тенанта без
-   * точек — null, как было (см. common/point-scope.resolvePointForWrite).
+   * ФИЛИАЛ ДЛЯ ДЕНЕЖНОЙ ЗАПИСИ на всех зарплатных путях (выплата, премия,
+   * штраф, легаси-выплата, внепрограммная выплата) — это ФИЛИАЛ СЕССИИ автора:
+   * `pointId` приезжает из контроллера как actorPointId(user), то есть из
+   * токена (163). Отдельного резолва и отказа «Выберите филиал» больше нет —
+   * филиал выбирается при входе и у сессии всегда конкретный; у тенанта без
+   * филиалов это null, как было.
    *
    * ЗАЧЕМ ЭТО ЗДЕСЬ ЖИЗНЕННО ВАЖНО: выплата с point_id = NULL не вычиталась из
    * «к выплате» НИ В ОДНОМ филиале — владелец, глядя на филиальный экран,
    * выдавал зарплату второй раз. Это прямая потеря денег, а не отображение.
    */
-  private writePoint(
-    tenantID: string,
-    actorID: string,
-    pointId: string | null,
-    purpose: string,
-  ): Promise<string | null> {
-    return resolvePointForWrite(this.pool, { tenantID, userID: actorID, currentPointId: pointId }, purpose);
-  }
 
   /**
    * ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ПРАВИЛА — ГЕЙТ ИЗМЕНЕНИЯ ЧУЖОЙ СТРОКИ.
@@ -342,7 +338,7 @@ export class SalaryService {
     // фильтров тех самых шести запросов ниже, которые эти суммы и считают:
     // разъехавшись, они снова начали бы прятать деньги.
     //
-    // В режиме «Все точки» (pointId = null) фрагмент пустой — запрос остаётся
+    // Без филиала (pointId = null — одноточечный тенант) фрагмент пустой — запрос остаётся
     // прежним дословно, и лист по-прежнему содержит ВСЮ команду тенанта.
     let touchedCte = '';
     let memberWhere = '';
@@ -746,7 +742,6 @@ export class SalaryService {
     // Волна 4 — филиал обязателен ровно по той же причине, что у createPayout:
     // «ничья» выплата не уменьшает «к выплате» ни в одном филиале. Резолвим до
     // открытия транзакции.
-    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы выдать зарплату');
 
     // Денежный путь: выплата и её зеркальный расход пишутся АТОМАРНО — одна
     // транзакция, как в новом flow decidePayout. Раньше два независимых INSERT
@@ -770,7 +765,7 @@ export class SalaryService {
           dto.type || 'salary',
           dto.comment || null,
           createdBy,
-          writePointId,
+          pointId,
         ],
       );
       payment = paymentRows[0];
@@ -803,7 +798,7 @@ export class SalaryService {
         `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [categoryId, dto.amount, description, payment.date, createdBy, tenantID, writePointId],
+        [categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId],
       );
       await client.query(`UPDATE salary_payments SET expense_id = $1 WHERE id = $2`, [expRows[0].id, payment.id]);
 
@@ -880,7 +875,6 @@ export class SalaryService {
     // Волна 4 — филиал обязателен: премия входит в «начислено», и «ничья»
     // премия не попадает ни в один филиальный лист, зато видна в сетевом —
     // суммы по филиалам перестают сходиться с общей.
-    const writePointId = await this.writePoint(tenantID, awardedBy, pointId, 'чтобы начислить премию');
 
     const { rows } = await this.pool.query(
       // 161 — премия принадлежит филиалу, за счёт которого выдана (текущая
@@ -899,10 +893,15 @@ export class SalaryService {
         dto.reason,
         dto.periodMonthYear ?? null,
         awardedBy,
-        writePointId,
+        pointId,
       ],
     );
     const p = rows[0];
+
+    // Денежная премия теперь УМЕНЬШАЕТ прибыль (common/salary-extras-sql), то
+    // есть двигает те же плитки, что расход, — сбрасываем кеш отчётов, иначе
+    // владелец до 30 секунд видел бы прибыль без только что выданной премии.
+    if (p.type === 'cash') invalidateReportsForTenant(tenantID);
 
     // Push the news so the employee sees it instantly.
     const body =
@@ -958,6 +957,8 @@ export class SalaryService {
       tenantID,
     ]);
     if (!rowCount) throw new NotFoundException({ message: 'Премия не найдена' });
+    // Симметрия с createPremium: снятая премия возвращает прибыль обратно.
+    invalidateReportsForTenant(tenantID);
     return { message: 'Удалено' };
   }
 
@@ -1017,7 +1018,6 @@ export class SalaryService {
 
     // Волна 4 — филиал обязателен: штраф вычитается из «к выплате», и «ничий»
     // штраф не уменьшает долг ни в одном филиале (сотруднику переплатят).
-    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы наложить штраф');
 
     const { rows } = await this.pool.query(
       // 161 — штраф режет «к выплате» ТОГО филиала, в котором наложен
@@ -1025,7 +1025,7 @@ export class SalaryService {
       `INSERT INTO salary_penalties (tenant_id, user_id, amount, description, date, created_by, point_id)
        VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6, $7)
        RETURNING *`,
-      [tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, writePointId],
+      [tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, pointId],
     );
     const p = rows[0];
     p.user_name = userRows[0].full_name;
@@ -1222,13 +1222,18 @@ export class SalaryService {
    */
   async getMy(tenantID: string, userID: string) {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    // Вс: getDay()=0 — «date − getDay() + 1» дал бы ПОНЕДЕЛЬНИК СЛЕДУЮЩЕЙ
-    // недели (week-суммы = 0 всё воскресенье). ISO-неделя: Вс = 7-й день —
-    // та же формула, что в checks.service.getDashboard.
-    const dow = now.getDay() === 0 ? 7 : now.getDay();
-    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow + 1).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    // ГРАНИЦЫ СУТОК/НЕДЕЛИ/МЕСЯЦА — В ПОЯСЕ ТЕНАНТА (157), а не в локали
+    // контейнера. Здесь оставался ПОСЛЕДНИЙ денежный расчёт на `new Date(y, m,
+    // d)`: контейнер живёт в UTC, поэтому «сегодня» у мастера начиналось в
+    // 03:00 по Москве и в 10:00 во Владивостоке — утренние чеки первых часов
+    // смены он видел во «вчера», а вечерние после местной полуночи прыгали в
+    // «сегодня». Функции те же, что в checks.getDashboard и reports: ISO-неделя
+    // (Вс = 7-й день) учтена внутри startOfWeekInZone — иначе «день − dow + 1»
+    // уводил бы на понедельник СЛЕДУЮЩЕЙ недели и всё воскресенье week = 0.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const todayStart = startOfDayInZone(tz, now).toISOString();
+    const weekStart = startOfWeekInZone(tz, now).toISOString();
+    const monthStart = startOfMonthInZone(tz, now).toISOString();
 
     const { rows: userRows } = await this.pool.query(
       'SELECT full_name, COALESCE(salary_percent, 0) as salary_percent, COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id=$1 AND tenant_id=$2',
@@ -1342,12 +1347,11 @@ export class SalaryService {
     // v3.0.1 ФИЧА 4 — «ЗП за день / за месяц» на ГЛАВНОЙ у самого сотрудника
     // (master-view). Отработанные смены с начала месяца по сегодня (по настройкам
     // расписания тенанта). perDay = ЗП за месяц (month) ÷ отработанных смен; смен
-    // 0 → null (показываем только «за месяц»). Даты — локальные YYYY-MM-DD,
-    // согласованно с monthStart выше.
-    const y = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const shiftsMap = await this.workedShiftsByUser(tenantID, `${y}-${mm}-01`, `${y}-${mm}-${dd}`);
+    // 0 → null (показываем только «за месяц»). Даты — календарный день В ПОЯСЕ
+    // ТЕНАНТА, согласованно с monthStart выше: иначе первого числа до местного
+    // утра окно смен было бы «прошлый месяц», а начисления — уже текущий.
+    const todayKey = zonedDateKey(now, tz);
+    const shiftsMap = await this.workedShiftsByUser(tenantID, `${todayKey.slice(0, 7)}-01`, todayKey);
     const workedShiftsMonth = shiftsMap.get(userID) || 0;
     const monthEarned = monthService + monthProduct;
     const perDay = workedShiftsMonth > 0 ? Math.round(monthEarned / workedShiftsMonth) : null;
@@ -1436,7 +1440,6 @@ export class SalaryService {
     // ни в одном филиале и приводит к ПОВТОРНОЙ выдаче. Резолвим ДО открытия
     // транзакции: тянуть вторую коннекцию, уже держа одну, значит рисковать
     // взаимной блокировкой на исчерпанном пуле.
-    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы выдать зарплату');
 
     // Выплата и её зеркальный расход — ОДНА транзакция (паттерн createPayment):
     // падение между ними оставило бы деньги без расхода, а долг сотруднику —
@@ -1453,7 +1456,7 @@ export class SalaryService {
            (tenant_id, employee_id, type, amount, status, comment, created_by, period_month, decided_at, point_id)
          VALUES ($1, $2, $3, $4, 'accepted', $5, $6, $7, now(), $8)
          RETURNING *`,
-        [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, writePointId],
+        [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, pointId],
       );
       p = rows[0];
       // 149 — период выплаты («за какой месяц») пробрасывается в расход.
@@ -1465,7 +1468,7 @@ export class SalaryService {
           date: new Date().toISOString(),
           createdBy,
           periodMonth,
-          pointId: writePointId,
+          pointId: pointId,
         },
         client,
       );
@@ -2605,7 +2608,6 @@ export class SalaryService {
     }
     // Волна 4 — филиал обязателен: это расход, и без точки он выпадает из
     // «Движения денег» и прибыли КАЖДОГО филиала.
-    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы провести выплату');
 
     return this.expenses.recordOutsideProgramPayout(tenantID, {
       recipientName,
@@ -2616,7 +2618,7 @@ export class SalaryService {
       createdBy,
       // 161 — внепрограммная выплата режет прибыль ТОГО филиала, за счёт
       // которого сделана (текущая точка выдающего).
-      pointId: writePointId,
+      pointId: pointId,
     });
   }
 

@@ -370,7 +370,7 @@ test('разархивация точки у тенанта БЕЗ основн�
   for (const table of PointsService.HISTORY_TABLES) {
     const call = pool.calls.find((c) => c.text.startsWith(`UPDATE ${table} `));
     assert.ok(call, `${table}: история осталась без филиала — раздел покажет пустоту`);
-    assert.deepEqual(call.params, ['t-1']);
+    assert.deepEqual(call.params, ['t-1', PointsService.HISTORY_BATCH]);
     const at = sql.indexOf(flat(call.text));
     assert.ok(at > mainAt && at < commit, `${table}: разбор идёт вне транзакции или раньше основного сервиса`);
   }

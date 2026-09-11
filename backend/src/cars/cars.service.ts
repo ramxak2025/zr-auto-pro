@@ -49,10 +49,10 @@ export class CarsService {
   private async ownerVisibleSql(
     alias: string,
     tenantID: string,
-    actorUserID: string | undefined,
+    actorPoint: string | null | undefined,
     params: unknown[],
   ): Promise<string> {
-    return this.ownerVisibleSqlFor(alias, await this.clients.separatePointFor(tenantID, actorUserID), params);
+    return this.ownerVisibleSqlFor(alias, await this.clients.separatePointFor(tenantID, actorPoint), params);
   }
 
   /**
@@ -61,11 +61,11 @@ export class CarsService {
    * закрывает самый тихий обходной путь — узнать чужого клиента можно было,
    * просто привязав к нему авто и открыв карточку машины.
    */
-  private async assertClientInTenant(clientId: string, tenantID: string, actorUserID?: string): Promise<void> {
+  private async assertClientInTenant(clientId: string, tenantID: string, actorPoint?: string | null): Promise<void> {
     const params: unknown[] = [clientId, tenantID];
     const pointWhere = this.clients.separatePointWhere(
       null,
-      await this.clients.separatePointFor(tenantID, actorUserID),
+      await this.clients.separatePointFor(tenantID, actorPoint),
       params,
     );
     const { rows } = await this.pool.query(
@@ -83,14 +83,14 @@ export class CarsService {
    * Cyrillic look-alikes transliterated, so "Р 332 РА 05" and "P332PA05"
    * resolve to the same record. Used by the UI duplicate-warning popup.
    */
-  async findByPlate(tenantID: string, plate: string, actorUserID?: string) {
+  async findByPlate(tenantID: string, plate: string, actorPoint?: string | null) {
     const norm = normalizePlate(plate || '');
     if (!norm.key) return null;
     // 161 — САМАЯ ЗАМЕТНАЯ УТЕЧКА раздельного режима: по одному госномеру
     // ручка отдавала ФИО и телефон владельца чужого филиала любому мастеру.
     // Теперь поиск по номеру подчиняется тем же границам, что база клиентов.
     const params: unknown[] = [tenantID, norm.key];
-    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
+    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorPoint, params);
     const { rows } = await this.pool.query(
       `SELECT ca.id, ca.plate_number, ca.make_model, ca.client_id, ca.created_at,
               cl.full_name AS client_full_name, cl.phone AS client_phone
@@ -140,7 +140,7 @@ export class CarsService {
     return car;
   }
 
-  async getAll(tenantID: string, query: any, actorUserID?: string) {
+  async getAll(tenantID: string, query: any, actorPoint?: string | null) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -172,7 +172,7 @@ export class CarsService {
 
     // Филиал — последним фильтром: дальше локальный idx для WHERE не растёт,
     // а LIMIT/OFFSET нумеруются от актуальной длины params.
-    where += await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
+    where += await this.ownerVisibleSql('ca', tenantID, actorPoint, params);
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM cars ca WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
@@ -189,9 +189,9 @@ export class CarsService {
     return { data: rows.map(this.mapCar), total, page, limit };
   }
 
-  async getById(id: string, tenantID: string, actorUserID?: string) {
+  async getById(id: string, tenantID: string, actorPoint?: string | null) {
     const params: unknown[] = [id, tenantID];
-    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
+    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorPoint, params);
     const { rows } = await this.pool.query(
       `SELECT ca.*, cl.full_name as client_full_name, cl.phone as client_phone
        FROM cars ca LEFT JOIN clients cl ON cl.id = ca.client_id
@@ -223,13 +223,13 @@ export class CarsService {
     return rows.length > 0 ? this.mapCar(rows[0]) : null;
   }
 
-  async create(tenantID: string, dto: any, actorUserID?: string) {
+  async create(tenantID: string, dto: any, actorPoint?: string | null) {
     // If linked to a client, the client must live in the same tenant.
     // Without this a director could attach a car to another tenant's client.
     // 161 — и быть ВИДИМЫМ автору: в раздельном режиме привязка к клиенту
     // чужого филиала запрещена (см. assertClientInTenant).
     if (dto.clientId) {
-      await this.assertClientInTenant(dto.clientId, tenantID, actorUserID);
+      await this.assertClientInTenant(dto.clientId, tenantID, actorPoint);
     }
     // "Без номера" cars store an empty plate; the duplicate-plate lookup (run
     // by the FE before create) is meaningless for them and is skipped. Foreign
@@ -263,13 +263,13 @@ export class CarsService {
     return this.mapCar(rows[0]);
   }
 
-  async update(id: string, tenantID: string, dto: any, actorUserID?: string) {
+  async update(id: string, tenantID: string, dto: any, actorPoint?: string | null) {
     // Точка автора — ОДИН раз на весь метод: и предварительная выборка
     // владельца, и финальный UPDATE обязаны резать один и тот же филиал.
-    const viewerPoint = await this.clients.separatePointFor(tenantID, actorUserID);
+    const viewerPoint = await this.clients.separatePointFor(tenantID, actorPoint);
 
     if (dto.clientId !== undefined && dto.clientId !== null) {
-      await this.assertClientInTenant(dto.clientId, tenantID, actorUserID);
+      await this.assertClientInTenant(dto.clientId, tenantID, actorPoint);
     }
 
     // Reassigning a car to a different owner (feature #9): guard against
@@ -340,7 +340,7 @@ export class CarsService {
       vals.push(dto.clientId);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID, actorUserID);
+    if (sets.length === 0) return this.getById(id, tenantID, actorPoint);
 
     vals.push(id, tenantID);
     // 161 — ЕДИНСТВЕННЫЙ путь записи машины, у которого предиката видимости не
@@ -358,11 +358,11 @@ export class CarsService {
     return this.mapCar(rows[0]);
   }
 
-  async remove(id: string, tenantID: string, actorUserID?: string) {
+  async remove(id: string, tenantID: string, actorPoint?: string | null) {
     // 161 — удалить машину клиента чужого филиала нельзя: тот же предикат
     // видимости, что и в чтении (иначе гараж филиала Б чистился бы из А).
     const params: unknown[] = [id, tenantID];
-    const ownerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, params);
+    const ownerWhere = await this.ownerVisibleSql('cars', tenantID, actorPoint, params);
     await this.pool.query(`DELETE FROM cars WHERE id=$1 AND tenant_id=$2${ownerWhere}`, params);
     return { message: 'Удалено' };
   }
@@ -397,17 +397,17 @@ export class CarsService {
     tenantID: string,
     newClientId: string,
     moveHistory: boolean,
-    actorUserID?: string,
+    actorPoint?: string | null,
   ) {
     // 1) Target client must exist in the tenant.
     // 161 — и быть ВИДИМЫМ автору. Перенос владельца на клиента чужого филиала
     // в раздельном режиме запрещён: вместе с машиной уехала бы вся история
     // чеков и рассрочка, то есть деньги сменили бы филиал незаметно для обоих.
-    await this.assertClientInTenant(newClientId, tenantID, actorUserID);
+    await this.assertClientInTenant(newClientId, tenantID, actorPoint);
 
     // 2) Load the car (tenant-scoped) → current owner + plate.
     const carParams: unknown[] = [carId, tenantID];
-    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, carParams);
+    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorPoint, carParams);
     const { rows: carRows } = await this.pool.query(
       `SELECT id, client_id, plate_number, no_plate FROM cars WHERE id=$1 AND tenant_id=$2${carOwnerWhere} LIMIT 1`,
       carParams,
@@ -417,7 +417,7 @@ export class CarsService {
 
     // Idempotent no-op: already owned by the target client.
     if (current.client_id === newClientId) {
-      return { car: await this.getById(carId, tenantID, actorUserID), movedChecks: 0 };
+      return { car: await this.getById(carId, tenantID, actorPoint), movedChecks: 0 };
     }
 
     // 3) Dedup guard: the target must not already own a car with this plate.
@@ -485,7 +485,7 @@ export class CarsService {
       client.release();
     }
 
-    return { car: await this.getById(carId, tenantID, actorUserID), movedChecks };
+    return { car: await this.getById(carId, tenantID, actorPoint), movedChecks };
   }
 
   /**
@@ -505,14 +505,14 @@ export class CarsService {
    * Зеркальные исключения: checks.getAll при ?clientId/?carId и
    * ClientsService.getChecksByCar.
    */
-  async getChecks(id: string, tenantID: string, limit: number, actorUserID?: string) {
+  async getChecks(id: string, tenantID: string, limit: number, actorPoint?: string | null) {
     // Verify car belongs to tenant — without this the foreign-id path
     // returns an empty array instead of a 404, which masks bugs.
     // 161 — скоупится ДОСТУП К МАШИНЕ (чужой гараж не открывается), но НЕ сами
     // чеки ниже: история открытой машины общая на всю сеть, см. блок
     // «ИСКЛЮЧЕНИЕ, НЕ ЧИНИТЬ» в доке метода.
     const carParams: unknown[] = [id, tenantID];
-    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, carParams);
+    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorPoint, carParams);
     const { rows: carRows } = await this.pool.query(
       `SELECT 1 FROM cars WHERE id=$1 AND tenant_id=$2${carOwnerWhere} LIMIT 1`,
       carParams,

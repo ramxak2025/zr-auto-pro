@@ -31,6 +31,7 @@ import InlineLoader from '../components/InlineLoader';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse, StockMovement, Warehouse } from '../types';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -253,6 +254,8 @@ export default function SupplierDetailPage() {
   // только с suppliers_manage (байпас superadmin/director — внутри
   // hasPermission; admin — по матрице роли). Просмотр — suppliers_access.
   const canManage = hasPermission('suppliers_manage');
+  // Календарь АВТОСЕРВИСА для дат-дефолтов форм прихода и оплаты (157).
+  const { today: tenantToday, month: tenantMonth } = useTenantCalendar();
   // Round 14: сторно платежа + «Возврат от поставщика» — ОТДЕЛЬНАЯ галка
   // suppliers_payments_correct (manage её НЕ влечёт; сид — только Директор).
   // Сервер дублирует проверку на POST payments/:id/reverse и payments/refund.
@@ -439,7 +442,10 @@ export default function SupplierDetailPage() {
 
   // Delivery form
   const emptyDeliveryForm: DeliveryFormData = {
-    date: format(new Date(), 'yyyy-MM-dd'),
+    // Дата по умолчанию — сегодня У АВТОСЕРВИСА (157), не у браузера: дата
+    // уезжает на сервер как есть, а он считает сутки поясом тенанта — поставка,
+    // оформленная поздним вечером из другого региона, вставала на чужой день.
+    date: tenantToday,
     items: [{ productId: '', quantity: 1, price: 0 }],
     comment: '',
   };
@@ -517,13 +523,14 @@ export default function SupplierDetailPage() {
   // Payment form
   const emptyPaymentForm: PaymentFormData = {
     amount: 0,
-    date: format(new Date(), 'yyyy-MM-dd'),
+    // Сегодня У АВТОСЕРВИСА — обоснование см. emptyDeliveryForm.
+    date: tenantToday,
     comment: '',
     // 149 (семантика уточнена adversarial-ревью): дефолт поля = месяц ДАТЫ
     // платежа. При сабмите periodMonth отправляется ТОЛЬКО если отличается от
     // месяца даты — иначе undefined → NULL → точная дата-семантика отчётов
     // (дневные/недельные срезы «Закупки товара» не раздуваются до месяца).
-    periodMonth: format(new Date(), 'yyyy-MM'),
+    periodMonth: tenantMonth,
   };
   const [paymentForm, setPaymentForm] = useState<PaymentFormData>(emptyPaymentForm);
 

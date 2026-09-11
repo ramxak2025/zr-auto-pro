@@ -16,8 +16,13 @@ import { SetRateDto } from './dto/set-rate.dto';
 // false. Update-путь — это одновременно путь эскалации роли (UpdateUserDto.role
 // honoured by the service), защита от самоповышения — assertCanAssignRole в
 // UsersService. Self-avatar updates go through /auth/avatar — never this
-// controller. Открытые GET (/, /masters, /:id) — пикеры мастеров в Кассе и
-// расписании, нужны всем аутентифицированным.
+// controller.
+//
+// ОТКРЫТЫЕ GET (/, /masters, /:id) ОСТАЮТСЯ ОТКРЫТЫМИ — ими питаются пикер
+// мастера в Кассе, график и резолв имён в журнале/расходах/зарплате, закрыть их
+// правом нельзя. Изменился ОБЪЁМ ответа (аудит 2026-09): телефон, логин,
+// проценты зарплаты, лимиты расходов и карта прав уезжают только держателю
+// 'user_management' и самому сотруднику про себя — см. UsersService.mapUser.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('users')
 export class UsersController {
@@ -30,12 +35,12 @@ export class UsersController {
   // сотрудник означает неверные деньги, — пикер мастера в Кассе.
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
-    return this.usersService.getAll(user.tenantID, scope === 'point' ? actorPointId(user) : null);
+    return this.usersService.getAll(user, scope === 'point' ? actorPointId(user) : null);
   }
 
   @Get('masters')
   getMasters(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
-    return this.usersService.getMasters(user.tenantID, scope === 'point' ? actorPointId(user) : null);
+    return this.usersService.getMasters(user, scope === 'point' ? actorPointId(user) : null);
   }
 
   // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────
@@ -71,7 +76,7 @@ export class UsersController {
   @Get(':id')
   async getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.getById(id, tenantID);
+    return this.usersService.getById(id, tenantID, user);
   }
 
   @RequirePermission('user_management')

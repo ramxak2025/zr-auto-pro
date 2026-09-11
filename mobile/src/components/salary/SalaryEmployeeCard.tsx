@@ -51,10 +51,8 @@ import QueryErrorState from '../QueryErrorState';
 import Modal from '../Modal';
 import ConfirmDialog from '../ConfirmDialog';
 import { BottomSheet } from '../BottomSheet';
-import { usePointRequiredPrompt } from '../PointRequiredPrompt';
 import RateByMonthSheet from '../employee/RateByMonthSheet';
 import { salaryApi } from '../../api/services';
-import { choosePointMessage } from '../../../../shared/utils/apiError';
 import { useColors } from '../../contexts/ThemeContext';
 import { useTabBarHeight } from '../../hooks/useTabBarHeight';
 import { Text } from '../../platform/Typography';
@@ -281,41 +279,16 @@ export default function SalaryEmployeeCard({
     }
   }, [invalidate, queryClient]);
 
-  // 160/161: выплата / премия / штраф без филиала не вычлась бы из «к выплате»
-  // НИ В ОДНОМ филиале — владелец, глядя на филиальный экран, выдал бы деньги
-  // второй раз. Сервер отвечает 400 «Выберите филиал…»; вместо глухой «Ошибки»
-  // показываем его текст и сразу даём выбрать филиал.
-  const pointPrompt = usePointRequiredPrompt();
-
-  /** Закрыть любую открытую форму/подтверждение карточки (все они — RN Modal). */
-  const closeAllForms = useCallback(() => {
-    setActiveForm(null);
-    setPayoutMenu(null);
-    setPayoutToSettle(null);
-    setPayoutToCancel(null);
-    setPayoutToEdit(null);
-    setPaymentToReverse(null);
-    setFineToEdit(null);
-  }, []);
-
+  // 163: выплата, премия и штраф пишутся в филиал СЕССИИ — он есть всегда,
+  // поэтому отказа «выберите филиал» больше не существует и особой ветки под
+  // него здесь нет.
   const errorAlert = useCallback(
     (fallback: string) => (err: any) => {
-      const pointMessage = choosePointMessage(err);
-      if (pointMessage) {
-        // Операция не пройдёт, пока филиал не выбран, поэтому открытую форму
-        // закрываем: она всё равно упрётся в тот же отказ. И это обязательно
-        // технически — шторка выбора филиала и форма оба RN `<Modal>`, а
-        // презентация одного в тот же кадр, когда другой ещё уходит, на iOS
-        // съедает верхний (та же пауза 250 мс, что в afterMenuClosed).
-        closeAllForms();
-        setTimeout(() => pointPrompt.show(pointMessage), 250);
-        return;
-      }
       haptic('error');
       const friendly = err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback;
       Alert.alert('Ошибка', String(Array.isArray(friendly) ? friendly.join('\n') : friendly));
     },
-    [closeAllForms, pointPrompt],
+    [],
   );
 
   const payoutMutation = useMutation({

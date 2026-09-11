@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useQueryClient, QueryClient } from '@tanstack/react-query';
 import {
   authApi,
@@ -9,10 +9,13 @@ import {
   usersApi,
   warehouseCategoriesApi,
   subscriptionApi,
+  pointsApi,
 } from '../api/services';
 import { User, UserPermissions, UserRole } from '../types';
+import type { LoginPointOption } from '../../../shared/api/types';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
+import { forgetSessionEndedNotice, peekSessionEndedNotice } from '../utils/sessionNotice';
 
 /**
  * Warm the React Query cache with data the user is likely to open next.
@@ -83,6 +86,15 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   // Subscription is read by Layout for every authenticated role.
   pairs.push([['subscription'], () => subscriptionApi.get().then((r: { data: unknown }) => r.data)]);
 
+  // ФИЛИАЛ СЕССИИ (163) — тот же слот ['points'], что читают индикатор в
+  // шапке, раздел «Филиалы» и пикер мастера в кассе. Греем сразу после входа:
+  // вход ЧИСТИТ все кеши (иначе после входа в другой филиал мелькнут чужие
+  // цифры), поэтому без прогрева первый кадр кассы шёл бы без подписи
+  // автосервиса — ровно там, где цена ошибки максимальна. Ответ лёгкий:
+  // справочник точек, без денег. Права не требует — ручка отдаёт свои филиалы
+  // любому сотруднику тенанта.
+  pairs.push([['points'], () => pointsApi.list().then((r: { data: unknown }) => r.data)]);
+
   for (const [key, fn] of pairs) {
     qc.prefetchQuery({ queryKey: key, queryFn: fn, staleTime: 60_000 }).catch(() => {
       // Silent — prefetch is best-effort.
@@ -90,15 +102,58 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   }
 }
 
+/**
+ * ЧТО ОТВЕТИЛ ШАГ 1 ВХОДА (163). Экран входа обязан различать два исхода
+ * ОДНОГО нажатия «Войти»:
+ *   • `authenticated` — сессия уже установлена (одноточечный автосервис либо
+ *     сотруднику доступен ровно один филиал), форма просто исчезает;
+ *   • `point-required` — пароль верен, но сессии ещё НЕТ: филиал выбирается
+ *     вторым шагом. Токена здесь нет и быть не может — сессия без филиала это
+ *     и есть убранный режим «все филиалы».
+ */
+export type LoginStepResult =
+  | { status: 'authenticated' }
+  | {
+      status: 'point-required';
+      /** Одноразовый промежуточный токен; живёт минуты, в обычные ручки не ходит. */
+      selectToken: string;
+      /** Момент, после которого сервер откажет: считаем из expiresIn при получении. */
+      expiresAt: number;
+      /** Доступные сотруднику живые филиалы; основной сервис первым (порядок сервера). */
+      points: LoginPointOption[];
+      /** Где человек работал в прошлый раз — подсветить, но НЕ выбирать за него. */
+      defaultPointId: string;
+    };
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (phone: string, password: string) => Promise<void>;
+  /**
+   * ШАГ 1 ВХОДА: телефон + пароль. Возвращает, закончился ли вход (сессия
+   * установлена) или требуется выбор филиала — см. {@link LoginStepResult}.
+   */
+  login: (phone: string, password: string) => Promise<LoginStepResult>;
+  /**
+   * ШАГ 2 ВХОДА: обменять промежуточный токен и выбранный филиал на сессию.
+   * Пароль здесь не нужен — он проверен на шаге 1. Бросает ошибку axios как
+   * есть: разбор кодов живёт в shared/utils/loginPointSelection.ts (чистая
+   * функция), потому что от него зависит, куда вести человека.
+   */
+  loginWithPoint: (selectToken: string, pointId: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
   isRole: (...roles: UserRole[]) => boolean;
+  /**
+   * ПОЧЕМУ СЕССИЯ ЗАКОНЧИЛАСЬ — текст сервера, если это был не просто
+   * истёкший токен, а снятый доступ к филиалу или закрытый филиал (163).
+   * Экран входа показывает его один раз и гасит: без причины человека просто
+   * «выкидывает», и он не понимает, что делать дальше.
+   */
+  sessionEndedNotice: string | null;
+  /** Погасить причину (показали — забыли), чтобы она не всплыла второй раз. */
+  clearSessionEndedNotice: () => void;
 }
 
 // Use null default instead of `{} as AuthContextType` — accessing the context
@@ -111,6 +166,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
   const queryClient = useQueryClient();
+  // Причина принудительного разлогина (163): «Филиал больше не доступен».
+  // Её кладёт перехватчик axios ПЕРЕД жёсткой перезагрузкой на /login, поэтому
+  // читаем один раз при монтировании провайдера — то есть ровно на том
+  // загрузочном кадре, где родился экран входа. Читаем БЕЗ стирания: стирает
+  // тот, кто показал (clearSessionEndedNotice на экране входа).
+  const [sessionEndedNotice, setSessionEndedNotice] = useState<string | null>(() => peekSessionEndedNotice());
 
   useEffect(() => {
     if (token) {
@@ -142,10 +203,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token, queryClient]);
 
-  const login = async (phone: string, password: string) => {
-    const res = await authApi.login({ phone, password });
-    const { token: t, user: u } = res.data;
-
+  /**
+   * УСТАНОВИТЬ СЕССИЮ по выданному сервером токену — общее тело ОБОИХ шагов
+   * входа (163). Один экземпляр, потому что изоляция прошлой сессии здесь не
+   * «желательна», а обязательна: вход в ДРУГОЙ филиал обязан стирать кеш так
+   * же жёстко, как вход под другим пользователем. Иначе на главной первым
+   * кадром мелькнут вчерашние цифры чужого филиала — и это прочитается как
+   * «деньги пропали».
+   */
+  const commitSession = async (t: string, u: User) => {
     // Cross-tenant safety: `logout()` is the normal off-boarding path, but a
     // crash / kill / 401 hard-redirect can leave the previous user's data in
     // the in-memory cache, the persist IndexedDB store, or the SW API cache.
@@ -163,11 +229,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('token', t);
     setToken(t);
     setUser(u);
+    // Вход состоялся — прошлая причина разлогина больше не актуальна.
+    forgetSessionEndedNotice();
+    setSessionEndedNotice(null);
     // Prefetch dashboards/lists in the background — by the time the user
     // navigates to /products or /clients, the cache is already warm. Gated by
     // the logged-in user's role (mirrors mobile) so a master never fires
     // owner-only requests that would 401/403 right after login.
     prefetchAfterLogin(queryClient, u);
+  };
+
+  /**
+   * ШАГ 1 ВХОДА (163). Зовём loginWithPointSelect, а не login: этой сборке
+   * ответ со списком филиалов ПОНЯТЕН, и получить вместо него молча
+   * подставленный сервером филиал — значит вернуть ровно ту ошибку, из-за
+   * которой волна и делалась (человек работает не там, где думает).
+   *
+   * Сессия здесь создаётся ТОЛЬКО если сервер отдал токен — то есть выбора не
+   * было (одноточечный автосервис или ровно один доступный филиал).
+   */
+  const login = async (phone: string, password: string): Promise<LoginStepResult> => {
+    const res = await authApi.loginWithPointSelect({ phone, password });
+    const data = res.data;
+    if ('pointSelectionRequired' in data) {
+      return {
+        status: 'point-required',
+        selectToken: data.selectToken,
+        // Дедлайн считаем от МОМЕНТА ОТВЕТА, а не храним expiresIn: экран
+        // должен уметь ответить «уже поздно» без похода в сеть.
+        expiresAt: Date.now() + data.expiresIn * 1000,
+        points: data.points,
+        defaultPointId: data.defaultPointId,
+      };
+    }
+    await commitSession(data.token, data.user);
+    return { status: 'authenticated' };
+  };
+
+  /** ШАГ 2 ВХОДА (163): выбранный филиал + промежуточный токен → сессия. */
+  const loginWithPoint = async (selectToken: string, pointId: string) => {
+    const res = await authApi.selectPoint({ selectToken, pointId });
+    await commitSession(res.data.token, res.data.user);
   };
 
   const refreshUser = async () => {
@@ -213,6 +315,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    // Обычный выход причины не имеет: если в хранилище осталась чужая (её
+    // положил перехватчик, но экран входа так и не открылся), она всплыла бы
+    // сейчас и напугала бы человека, который просто нажал «Выход».
+    forgetSessionEndedNotice();
+    setSessionEndedNotice(null);
     setToken(null);
     setUser(null);
   };
@@ -233,8 +340,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return roles.includes(user.role);
   };
 
+  // Стабильная ссылка: экран входа гасит причину из useEffect, и меняющаяся
+  // на каждом рендере функция гоняла бы этот эффект по кругу.
+  const clearSessionEndedNotice = useCallback(() => {
+    forgetSessionEndedNotice();
+    setSessionEndedNotice(null);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshUser, hasPermission, isRole }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        login,
+        loginWithPoint,
+        logout,
+        refreshUser,
+        hasPermission,
+        isRole,
+        sessionEndedNotice,
+        clearSessionEndedNotice,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

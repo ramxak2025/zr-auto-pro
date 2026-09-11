@@ -12,13 +12,16 @@ const test = require('node:test');
  *
  *   1. ЧЕТЫРЕ ПУТИ СОЗДАНИЯ РАСХОДА мимо ExpensesService.create: списание со
  *      склада (две ручки — POST /stock-movements и POST /products/:id/stock) и
- *      покупка имущества (create/update storage item). Туда приезжала СЫРАЯ
- *      точка актора: в режиме «Все точки» расход рождался с point_id = NULL и
- *      не попадал НИ В ОДИН филиальный срез — ни в «Движение денег», ни в
- *      прибыль, ни в наличный расход окна кассовой смены.
+ *      покупка имущества (create/update storage item). Каждый обязан штамповать
+ *      расход ФИЛИАЛОМ СЕССИИ автора: расход с point_id = NULL не попадает НИ В
+ *      ОДИН филиальный срез — ни в «Движение денег», ни в прибыль, ни в
+ *      наличный расход окна кассовой смены. (До 163 филиал здесь резолвился на
+ *      месте, потому что сессия могла существовать без филиала; теперь филиал
+ *      выбирается при входе, и резолва быть не должно — это вторая копия
+ *      правила и лишний запрос на каждую денежную строку.)
  *
- *   2. РАБОЧАЯ СМЕНА. Штамповалась сырой точкой: смена без филиала не
- *      попадала ни в ленту смен филиала, ни в счётчик «мастеров на работе» —
+ *   2. РАБОЧАЯ СМЕНА. Открывается в филиале сессии: смена без филиала не
+ *      попадает ни в ленту смен филиала, ни в счётчик «мастеров на работе» —
  *      человек на работе, а карточка филиала показывает ноль.
  *
  *   3. АСИММЕТРИЯ «ЧИТАЕМ УЗКО — ПИШЕМ ШИРОКО» в зарплате и расходах.
@@ -73,121 +76,107 @@ const bodyBetween = (src, from, to) => {
 
 // ── 1. Четыре пути создания расхода ─────────────────────────────────────────
 
-test('списание со склада (обе ручки) резолвит филиал зеркального расхода', () => {
+test('списание со склада (обе ручки) штампует расход филиалом сессии', () => {
   for (const [name, src, body] of [
     ['stock-movements', stockMovements, bodyBetween(stockMovements, '  async create(tenantID: string', 'BEGIN')],
     ['products/:id/stock', products, bodyBetween(products, '  async updateStock(id: string', 'BEGIN')],
   ]) {
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     assert.ok(
-      /resolvePointForWrite\(/.test(body),
-      `${name}: расход списания снова штампуется сырой точкой актора и пропадает из всех филиалов`,
+      !/resolvePointForWrite/.test(code),
+      `${name}: филиал снова резолвится на месте — при филиале в сессии это вторая копия правила`,
     );
-    assert.ok(/'чтобы списать товар'/.test(body), `${name}: у гейта нет осмысленного текста цели`);
-    // Резолв ДО pool.connect(): вторая коннекция под открытой транзакцией на
-    // исчерпанном пуле = взаимная блокировка.
-    const gate = body.indexOf('resolvePointForWrite');
-    const connect = body.indexOf('await this.pool.connect()');
-    assert.ok(gate > 0 && connect > gate, `${name}: резолв уехал за pool.connect() — риск взаимной блокировки`);
-    // Гейт узкий НАМЕРЕННО: склад общий на сеть, и требовать филиал под
-    // инвентаризацию/приход значило бы ловить 400 там, где денег нет.
+    assert.ok(!/Выберите филиал/.test(code), `${name}: отказ «Выберите филиал» вернулся`);
     assert.ok(
-      /'writeoff'/.test(body) && /recordAsExpense/.test(body),
-      `${name}: резолв должен включаться только для списания, записываемого расходом`,
-    );
-    assert.ok(
-      /writePointId/.test(src),
-      `${name}: INSERT расхода обязан брать РЕЗОЛВНУТУЮ точку, а не исходный параметр`,
+      /pointId: string \| null/.test(src),
+      `${name}: филиал обязан приезжать параметром из контроллера (actorPointId актора)`,
     );
   }
   assert.ok(
-    /\[categoryId, amount, dto\.reason \?\? 'Списание со склада', userID, tenantID, pointId\]/.test(stockMovements) ===
-      false,
-    'stock-movements: расход списания снова пишется сырой точкой',
+    /\[categoryId, amount, dto\.reason \?\? 'Списание со склада', userID, tenantID, expensePointId\]/.test(
+      stockMovements,
+    ),
+    'stock-movements: расход списания пишется без филиала — он выпадет из всех филиальных срезов',
+  );
+  assert.ok(
+    /\[categoryId, amount, reason \?\? 'Списание со склада', userId \|\| null, tenantID, pointId\]/.test(products),
+    'products/:id/stock: расход списания пишется без филиала',
   );
 });
 
-test('покупка имущества резолвит филиал в обоих путях', () => {
+test('покупка имущества штампуется филиалом сессии в обоих путях', () => {
   const create = bodyBetween(equipment, '  async createStorageItem(', 'private async getOrCreateEquipmentCategory(');
-  assert.ok(/resolvePointForWrite\(/.test(create) && /'чтобы записать покупку имущества'/.test(create));
-  assert.ok(
-    create.indexOf('resolvePointForWrite') < create.indexOf('await this.pool.connect()'),
-    'createStorageItem: резолв обязан идти до pool.connect()',
-  );
-  assert.ok(
-    /purchasePrice > 0\s*\n?\s*\?/.test(create),
-    'бесплатное имущество денег не двигает — требовать под него филиал незачем',
-  );
-  assert.ok(/item\.id, writePointId\]/.test(create), 'createStorageItem: расход пишется мимо резолва');
-
   const update = bodyBetween(equipment, '  async updateStorageItem(', '  async removeStorageItem(');
-  assert.ok(/resolvePointForWrite\(\s*client,/.test(update), 'updateStorageItem: расход рождается без резолва филиала');
+  for (const [name, body] of [
+    ['createStorageItem', create],
+    ['updateStorageItem', update],
+  ]) {
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert.ok(!/resolvePointForWrite/.test(code), `${name}: филиал снова резолвится на месте`);
+    assert.ok(!/Выберите филиал/.test(code), `${name}: отказ «Выберите филиал» вернулся`);
+  }
+  assert.ok(/item\.id, pointId\]/.test(create), 'createStorageItem: расход пишется без филиала');
   assert.ok(
-    /\[categoryId, expenseAmount, `Покупка имущества: \$\{itemName\}`, tenantId, id, writePointId\]/.test(update),
-    'updateStorageItem: INSERT расхода снова берёт сырую точку',
-  );
-  // Резолв идёт по КЛИЕНТУ ТРАНЗАКЦИИ (второй коннекции из пула не берётся) —
-  // иначе пришлось бы снаружи гадать, родится расход или нет, и отвечать 400
-  // на безобидную правку цены уже существующего расхода.
-  assert.ok(
-    !/resolvePointForWrite\(\s*this\.pool,/.test(update),
-    'updateStorageItem: резолв по пулу внутри транзакции = взаимная блокировка на исчерпанном пуле',
-  );
-  assert.ok(
-    /updateStorageItem\(\s*id: string,\s*tenantId: string,\s*dto: any,\s*actorId: string \| null/.test(equipment),
-    'updateStorageItem: без автора резолв не сможет посчитать ДОСТУПНЫЕ этому человеку точки',
+    /\[categoryId, expenseAmount, `Покупка имущества: \$\{itemName\}`, tenantId, id, pointId\]/.test(update),
+    'updateStorageItem: расход пишется без филиала',
   );
   assert.ok(
     /this\.service\.updateStorageItem\(id, user\.tenantID, dto, user\.userID, actorPointId\(user\)\)/.test(
       equipmentController,
     ),
-    'контроллер имущества не передаёт автора в резолв филиала',
+    'контроллер имущества не передаёт филиал сессии — расход уедет в никуда',
   );
 });
 
-test('покупка имущества без филиала отвечает 400, а не пишет расход в никуда', async () => {
-  const db = fakeDb((text) => (/FROM tenant_points p/.test(text) ? [{ id: 'p-1' }, { id: 'p-2' }] : []));
-  const service = new EquipmentService(db);
-
-  await assert.rejects(
-    () => service.createStorageItem('t-1', 'u-1', { name: 'Подъёмник', purchasePrice: 100000, quantity: 1 }, null),
-    (err) => {
-      assert.equal(err.getStatus(), 400);
-      assert.deepEqual(err.getResponse(), { message: 'Выберите филиал, чтобы записать покупку имущества' });
-      return true;
-    },
-  );
-  assert.ok(
-    !db.calls.some((c) => /INSERT INTO storage_items/.test(c.text)),
-    'отказ обязан приходить ДО транзакции: половина операции хуже честного отказа',
-  );
-});
-
-test('бесплатное имущество филиала не требует', async () => {
+test('покупка имущества пишет расход в филиал сессии, а не в никуда', async () => {
   const db = fakeDb((text) => {
-    if (/INSERT INTO storage_items/.test(text)) return [{ id: 'i-1', name: 'Ключ' }];
-    if (/FROM tenant_points p/.test(text)) return [{ id: 'p-1' }, { id: 'p-2' }];
+    if (/INSERT INTO storage_items/.test(text)) return [{ id: 'i-1', name: 'Подъёмник' }];
+    if (/FROM expense_categories/.test(text)) return [{ id: 'cat-1' }];
     return [];
   });
   const service = new EquipmentService(db);
 
-  await service.createStorageItem('t-1', 'u-1', { name: 'Ключ', purchasePrice: 0, quantity: 1 }, null);
+  await service.createStorageItem(
+    't-1',
+    'u-1',
+    { name: 'Подъёмник', purchasePrice: 100000, quantity: 1 },
+    'p-session',
+  );
+  const expense = db.calls.find((c) => /INSERT INTO expenses/.test(c.text));
+  assert.ok(expense, 'расход за покупку имущества вообще не родился');
+  assert.equal(
+    expense.params[expense.params.length - 1],
+    'p-session',
+    'расход обязан лечь в филиал СЕССИИ покупателя: деньги ушли из кассы конкретного автосервиса',
+  );
   assert.ok(
     !db.calls.some((c) => /FROM tenant_points p/.test(c.text)),
-    'резолв не должен вызываться там, где расход не рождается',
+    'лишний резолв филиала на каждую денежную строку — филиал уже известен из сессии',
+  );
+});
+
+test('бесплатное имущество расхода не рождает', async () => {
+  const db = fakeDb((text) => (/INSERT INTO storage_items/.test(text) ? [{ id: 'i-1', name: 'Ключ' }] : []));
+  const service = new EquipmentService(db);
+
+  await service.createStorageItem('t-1', 'u-1', { name: 'Ключ', purchasePrice: 0, quantity: 1 }, 'p-session');
+  assert.ok(
+    !db.calls.some((c) => /INSERT INTO expenses/.test(c.text)),
+    'бесплатное имущество денег не двигает — расход под него не создаётся',
   );
 });
 
 // ── 2. Рабочая смена ────────────────────────────────────────────────────────
 
-test('рабочая смена открывается с РЕЗОЛВНУТЫМ филиалом', () => {
+test('рабочая смена открывается в филиале сессии', () => {
   const open = bodyBetween(shifts, '  async open(userID: string', 'BEGIN');
   assert.ok(
-    /const pointId = await resolvePointForWrite\(/.test(open) && /'чтобы открыть смену'/.test(open),
-    'смена снова штампуется сырой точкой: без филиала она выпадает из ленты смен и из счётчика «на работе»',
+    /const pointId = actorPointId\(actor\);/.test(open),
+    'смена обязана штамповаться филиалом сессии: без филиала она выпадает из ленты смен и из счётчика «на работе»',
   );
   assert.ok(
-    open.indexOf('resolvePointForWrite') < open.indexOf('await this.pool.connect()'),
-    'shifts.open: резолв обязан идти до pool.connect()',
+    !/resolvePointForWrite/.test(open.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')),
+    'shifts.open: филиал снова резолвится на месте',
   );
   assert.ok(
     /INSERT INTO shifts \(user_id, date, tenant_id, point_id\) VALUES \(\$1, \$2, \$3, \$4\)/.test(shifts) &&

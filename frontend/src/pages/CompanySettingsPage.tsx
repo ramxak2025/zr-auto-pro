@@ -18,20 +18,14 @@ import {
   Clock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { myCompanyApi, loyaltyApi, checksApi, pointsApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { usePointsQuery } from '../hooks/usePoints';
 import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 
-import type {
-  Tenant,
-  LoyaltySettings,
-  PaymentAcceptorInfo,
-  PosSettings,
-  PosSettingsConflict,
-  PointsListResponse,
-} from '../types';
+import type { Tenant, LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict } from '../types';
 import {
   formatMoney,
   formatDateTime,
@@ -558,13 +552,9 @@ export default function CompanySettingsPage() {
   const [dirty, setDirty] = useState(false);
 
   // 156 — тумблер «Общая база клиентов» виден только когда есть что разделять
-  // (живых точек больше одной). Тот же ключ ['points'], что у индикатора
-  // филиала в шапке, — лишнего запроса нет.
-  const { data: pointsData } = useQuery<PointsListResponse>({
-    queryKey: ['points'],
-    queryFn: async () => (await pointsApi.list()).data,
-    staleTime: 60_000,
-  });
+  // (живых точек больше одной). Общий хук = тот же слот ['points'], что у
+  // индикатора филиала в шапке, — лишнего запроса нет.
+  const { data: pointsData } = usePointsQuery();
   const pointsCount = pointsData?.points.length ?? 0;
 
   useEffect(() => {

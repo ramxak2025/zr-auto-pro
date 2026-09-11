@@ -39,7 +39,7 @@ import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../..
 import { scheduleApi, usersApi } from '../api/services';
 import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
-import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { formatDayKey } from '../../../shared/utils/formatters';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -62,10 +62,11 @@ function AttendanceRatingTab({
   dateFrom: string;
   dateTo: string;
 }) {
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  // Месяц рейтинга — текущий У АВТОСЕРВИСА (157): выборка смен уезжает на
+  // сервер границами месяца, а он режет сутки поясом тенанта. По часам браузера
+  // в ночь на 1-е число вкладка открывалась в пустом следующем месяце.
+  const { month: tenantMonth } = useTenantCalendar();
+  const [selectedMonth, setSelectedMonth] = useState(tenantMonth);
 
   const queryClient = useQueryClient();
 
@@ -288,15 +289,22 @@ export default function SchedulePage() {
   const { hasPermission } = useAuth();
   // «Сегодня» в графике — по календарю АВТОСЕРВИСА: тем же поясом сервер решает,
   // какие дни уже отработаны (salary.workedShiftsByUser).
-  const timeZone = useTenantTimezone();
+  const { timeZone, today: tenantToday, month: tenantMonth } = useTenantCalendar();
+  // Первое число ТЕКУЩЕГО месяца автосервиса. Календарная арифметика над
+  // локальной полуночью — пояс машины на неё уже не влияет.
+  const tenantMonthStart = useMemo(() => {
+    const [y, m] = tenantToday.split('-').map(Number);
+    return new Date(y || 1970, (m || 1) - 1, 1);
+  }, [tenantToday]);
   // Мутации расписания/режимов работы — ключ schedule_manage (backend
   // POST/PATCH/DELETE /schedule*; волна Битрикс24). Просмотр — schedule_view.
   const canEdit = hasPermission('schedule_manage');
 
   const [tab, setTab] = useState<TabType>('schedule');
 
-  const today = new Date();
-  const [currentMonth, setCurrentMonth] = useState(today);
+  // Стартовый месяц — текущий У АВТОСЕРВИСА: в ночь на 1-е число график по
+  // часам браузера открывался уже в следующем месяце (пустая сетка).
+  const [currentMonth, setCurrentMonth] = useState(tenantMonthStart);
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
@@ -329,7 +337,7 @@ export default function SchedulePage() {
 
   const [entryForm, setEntryForm] = useState({
     userId: '',
-    date: format(today, 'yyyy-MM-dd'),
+    date: tenantToday,
     shiftStart: '09:00',
     shiftEnd: '18:00',
     isDayOff: false,
@@ -503,7 +511,7 @@ export default function SchedulePage() {
   // Month navigation
   const goToPrevMonth = useCallback(() => setCurrentMonth((m) => subMonths(m, 1)), []);
   const goToNextMonth = useCallback(() => setCurrentMonth((m) => addMonths(m, 1)), []);
-  const goToToday = useCallback(() => setCurrentMonth(new Date()), []);
+  const goToToday = useCallback(() => setCurrentMonth(tenantMonthStart), [tenantMonthStart]);
 
   // Instant cache update — mutates React Query cache directly
   const patchCache = (userId: string, date: string, changes: Partial<ScheduleEntry>, isNew: boolean) => {
@@ -580,7 +588,7 @@ export default function SchedulePage() {
     setEditingEntry(null);
     setEntryForm({
       userId: '',
-      date: format(today, 'yyyy-MM-dd'),
+      date: tenantToday,
       shiftStart: '09:00',
       shiftEnd: '18:00',
       isDayOff: false,
@@ -594,7 +602,7 @@ export default function SchedulePage() {
     setEditingEntry(null);
     setEntryForm({
       userId: userId || '',
-      date: date || format(today, 'yyyy-MM-dd'),
+      date: date || tenantToday,
       shiftStart: '09:00',
       shiftEnd: '18:00',
       isDayOff: false,
@@ -793,8 +801,13 @@ export default function SchedulePage() {
     if (!entry) return null;
     const note = (entry.note || '').toLowerCase();
     const lateMin = entry.lateMinutes || 0;
-    const isPast = dateStr ? new Date(dateStr + 'T23:59:59') < new Date() : false;
-    const isToday = dateStr === format(new Date(), 'yyyy-MM-dd');
+    // «Сегодня» и «прошедший день» — по календарю АВТОСЕРВИСА, ровно как
+    // isFutureDay выше и как сервер считает отработанные смены (157). По часам
+    // браузера подсветка текущего дня уезжала на соседнюю колонку у любого, кто
+    // открыл график из другого региона.
+    const todayKey = formatDayKey(new Date(), timeZone);
+    const isPast = dateStr ? dateStr < todayKey : false;
+    const isToday = dateStr === todayKey;
 
     // Больничный
     if (note.includes('больнич')) {
@@ -967,7 +980,7 @@ export default function SchedulePage() {
                   <h2 className="text-white font-semibold text-lg capitalize">
                     {format(currentMonth, 'LLLL yyyy', { locale: ru })}
                   </h2>
-                  {format(currentMonth, 'yyyy-MM') !== format(new Date(), 'yyyy-MM') && (
+                  {format(currentMonth, 'yyyy-MM') !== tenantMonth && (
                     <button
                       onClick={goToToday}
                       className="text-white/80 hover:text-white text-[10px] mt-0.5 transition-colors underline decoration-white/40"

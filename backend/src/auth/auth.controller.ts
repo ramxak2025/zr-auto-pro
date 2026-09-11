@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SelectPointDto } from './dto/select-point.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
@@ -17,15 +18,31 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  /**
+   * ШАГ 2 ВХОДА (163): обменять промежуточный токен + выбранный филиал на
+   * токен сессии. БЕЗ JwtAuthGuard — и это не упущение: промежуточный токен
+   * намеренно не проходит стратегию (она отбивает его по назначению
+   * point_select), иначе им можно было бы ходить в обычные ручки, то есть
+   * работать вообще без филиала. Подпись и одноразовость проверяет сервис.
+   * Rate-limit — глобальный write-бакет, как у /auth/login.
+   */
+  @Post('select-point')
+  selectPoint(@Body() dto: SelectPointDto) {
+    return this.authService.selectPoint(dto);
+  }
+
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
+  // Филиал в ответе — филиал ЭТОЙ сессии (из токена), поэтому актор передаётся
+  // целиком, а не одним userID: колонка users.current_point_id отдала бы вебу
+  // филиал, выбранный в телефоне.
   @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@CurrentUser() user: JwtPayload) {
-    return this.authService.me(user.userID);
+    return this.authService.me(user);
   }
 
   // Тихое продление сессии: клиент со СТАРЫМ, но ещё валидным токеном получает

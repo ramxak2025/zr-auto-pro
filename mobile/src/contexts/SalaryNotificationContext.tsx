@@ -32,6 +32,7 @@ import { salaryApi } from '../api/services';
 import { useAuth } from './AuthContext';
 import { haptic } from '../platform/haptics';
 import SalaryReceivedModal from '../components/SalaryReceivedModal';
+import { getSalaryAckQueue, type SalaryAckKind } from '../utils/salaryAckQueue';
 import type { MasterSalary, SalaryPayment, SalaryPayout } from '../../../shared/types';
 
 interface SalaryNotificationContextValue {
@@ -53,14 +54,21 @@ function currentMonthRange(): { dateFrom: string; dateTo: string; monthYear: str
   return { dateFrom, dateTo, monthYear };
 }
 
-function findPendingPayment(rows: MasterSalary[] | undefined, userId: string): SalaryPayment | null {
+function findPendingPayment(
+  rows: MasterSalary[] | undefined,
+  userId: string,
+  skip: (id: string) => boolean = () => false,
+): SalaryPayment | null {
   if (!rows || rows.length === 0) return null;
   for (const row of rows) {
     if (row.masterId !== userId) continue;
     for (const p of row.payments || []) {
       // 153 — сторнированная владельцем выплата подтверждения не требует
       // (сервер и так вернёт 400 на confirm; не дёргаем сотрудника модалом).
-      if (!p.confirmedAt && !p.reversedAt && p.userId === userId) {
+      // `skip` — уже отмеченные локально (отметка в очереди досылки) и
+      // отложенные кнопкой «Позже»: показывать их повторно нельзя, но и
+      // остальные выплаты из-за них пропускать тоже нельзя.
+      if (!p.confirmedAt && !p.reversedAt && p.userId === userId && !skip(p.id)) {
         return p;
       }
     }
@@ -74,10 +82,16 @@ function findPendingPayment(rows: MasterSalary[] | undefined, userId: string): S
  * из кэша старой версии клиента/прокси, а показывать чужую или отменённую
  * выплату нельзя.
  */
-function findUnviewedPayout(rows: SalaryPayout[] | undefined, userId: string): SalaryPayout | null {
+function findUnviewedPayout(
+  rows: SalaryPayout[] | undefined,
+  userId: string,
+  skip: (id: string) => boolean = () => false,
+): SalaryPayout | null {
   if (!rows || rows.length === 0) return null;
   for (const p of rows) {
-    if (p.status === 'accepted' && !p.viewedAt && p.userId === userId) return p;
+    // `skip` пропускает уже отмеченные локально / отложенные «Позже» — но
+    // ПЕРЕБОР продолжается: вторая невиданная выплата обязана всплыть.
+    if (p.status === 'accepted' && !p.viewedAt && p.userId === userId && !skip(p.id)) return p;
   }
   return null;
 }
@@ -99,6 +113,11 @@ function isClientError(err: unknown): boolean {
   return typeof status === 'number' && status >= 400 && status < 500;
 }
 
+/** Досылка отложенной отметки: тот же вызов, что делает кнопка в модалке. */
+function sendDeferredAck(kind: SalaryAckKind, id: string): Promise<unknown> {
+  return kind === 'payoutViewed' ? salaryApi.markPayoutViewed(id) : salaryApi.confirmPayment(id);
+}
+
 interface ProviderProps {
   children: React.ReactNode;
 }
@@ -112,6 +131,13 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
   const [modalVisible, setModalVisible] = React.useState(false);
   // Любая mutation в полёте (просмотр выплаты / подтверждение легаси-платежа).
   const [busy, setBusy] = React.useState(false);
+  /**
+   * «Позже»: выплаты, которые сотрудник закрыл, НЕ приняв решения. Только в
+   * памяти и только на эту сессию приложения — «позже» значит «я ещё не
+   * решил», поэтому при следующем входе/возврате на передний план выплата
+   * всплывёт снова. На сервер отсюда не уходит ничего.
+   */
+  const snoozedRef = React.useRef<Set<string>>(new Set());
 
   // Owners / directors never see the modal — they're the senders, not the
   // recipients. «Сотрудник» = admin + master.
@@ -126,10 +152,16 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     // Чистим только то, что ПОДТВЕРЖДЕНО успешным ответом сервера: упавшая
     // сеть не закрывает валидный модал вслепую.
     let payoutsKnownEmpty = false;
+    // 0) Досылаем отметки, которые не доехали раньше (сотрудник нажал кнопку,
+    //    а связь пропала). Пока они лежат в очереди, соответствующая выплата
+    //    модалку не показывает — иначе человек упирался бы в неё повторно.
+    const ackQueue = getSalaryAckQueue();
+    await ackQueue.flush(sendDeferredAck).catch(() => {});
+    const suppressed = (kind: SalaryAckKind, id: string) => ackQueue.has(kind, id) || snoozedRef.current.has(id);
     // 1) ВЫПЛАТЫ — зафиксированные, но ещё не просмотренные сотрудником.
     try {
       const res = await salaryApi.listPayouts({ status: 'accepted', unviewed: true });
-      const payout = findUnviewedPayout(res.data, user.id);
+      const payout = findUnviewedPayout(res.data, user.id, (id) => suppressed('payoutViewed', id));
       if (payout) {
         setPendingPayout(payout);
         setPendingPayment(null);
@@ -145,7 +177,7 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     try {
       const { dateFrom, dateTo } = currentMonthRange();
       const res = await salaryApi.getAll({ dateFrom, dateTo });
-      const found = findPendingPayment(res.data, user.id);
+      const found = findPendingPayment(res.data, user.id, (id) => suppressed('paymentConfirmed', id));
       if (found) {
         setPendingPayment(found);
         setPendingPayout(null);
@@ -212,17 +244,27 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
       // Surface the next pending item (payout or payment), if any.
       setTimeout(() => checkOnce(), 500);
     } catch (err) {
-      // Round 15 review-fix (п.2а): 4xx = выплату сторнировали, пока модал был
-      // открыт — держать его «до победного» нельзя (сервер будет отвечать 400
-      // вечно). Закрываем, честно показываем причину сервера и
-      // пересинхронизируемся. Сеть/5xx — остаёмся: повтор может пройти.
+      // 4xx = выплату сторнировали, пока модал был открыт: держать его «до
+      // победного» нельзя (сервер будет отвечать 400 вечно). Закрываем, честно
+      // показываем причину сервера и пересинхронизируемся.
       if (isClientError(err)) {
         setModalVisible(false);
         setTimeout(() => setPendingPayment(null), 220);
         Alert.alert('Выплата недоступна', serverMessage(err));
         setTimeout(() => checkOnce(), 500);
+      } else {
+        // СЕТЬ / 5xx. Раньше здесь мы просто оставались в модалке — и одна
+        // пропавшая пачка блокировала сотруднику ВСЁ приложение: выйти из неё
+        // было нечем. Намерение выражено (кнопку нажали), поэтому кладём
+        // подтверждение в долговременную очередь и закрываем: досылка уйдёт с
+        // ближайшей проверкой (вход / передний план / пуш).
+        await getSalaryAckQueue()
+          .add('paymentConfirmed', pendingPayment.id)
+          .catch(() => {});
+        setModalVisible(false);
+        setTimeout(() => setPendingPayment(null), 220);
+        Alert.alert('Нет связи', 'Подтверждение сохранено на телефоне и уйдёт автоматически, когда появится связь.');
       }
-      // Otherwise stay on the modal so the employee can retry.
     } finally {
       setBusy(false);
     }
@@ -245,18 +287,44 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     } catch (err) {
       // 4xx — выплату отменили, пока модал был открыт: держать его «до
       // победного» нельзя (сервер будет отвечать так же). Закрываем, честно
-      // показываем причину и пересинхронизируемся. Сеть/5xx — остаёмся,
-      // повтор может пройти.
+      // показываем причину и пересинхронизируемся.
       if (isClientError(err)) {
         setModalVisible(false);
         setTimeout(() => setPendingPayout(null), 240);
         Alert.alert('Выплата недоступна', serverMessage(err));
         setTimeout(() => checkOnce(), 500);
+      } else {
+        // СЕТЬ / 5xx. Отметка «просмотрено» денег не двигает, а модалка
+        // перекрывает всё приложение — держать за неё сотрудника из-за
+        // пропавшего запроса нельзя. Откладываем отметку и закрываем.
+        await getSalaryAckQueue()
+          .add('payoutViewed', pendingPayout.id)
+          .catch(() => {});
+        setModalVisible(false);
+        setTimeout(() => setPendingPayout(null), 240);
+        haptic('success');
       }
     } finally {
       setBusy(false);
     }
   }, [pendingPayout, busy, queryClient, checkOnce]);
+
+  /**
+   * «Позже» — выход из модалки БЕЗ решения (и без единого запроса). На сервер
+   * не уходит ничего и в долговременную очередь тоже: выплата просто не
+   * показывается до следующего запуска приложения. Нужен, потому что модалка
+   * глобальная и перекрывает все экраны: человек обязан иметь возможность
+   * закрыть её всегда, даже когда сети нет вовсе.
+   */
+  const onSnooze = React.useCallback(() => {
+    const id = pendingPayout?.id ?? pendingPayment?.id;
+    if (id) snoozedRef.current.add(id);
+    setModalVisible(false);
+    setTimeout(() => {
+      setPendingPayout(null);
+      setPendingPayment(null);
+    }, 240);
+  }, [pendingPayout, pendingPayment]);
 
   const ctx = React.useMemo<SalaryNotificationContextValue>(
     () => ({
@@ -275,6 +343,7 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
         confirming={busy}
         onConfirm={onConfirm}
         onAcknowledge={onAcknowledge}
+        onSnooze={onSnooze}
       />
     </SalaryNotificationContext.Provider>
   );

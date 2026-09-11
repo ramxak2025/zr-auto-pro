@@ -187,9 +187,25 @@ export class ProfileService {
     }
 
     const hash = await bcrypt.hash(dto.newPassword, 12);
-    await this.pool.query('UPDATE users SET password=$1, updated_at=now() WHERE id=$2', [hash, self.id]);
+    // СМЕНА ПАРОЛЯ ГАСИТ ВСЕ РАНЕЕ ВЫДАННЫЕ СЕССИИ (165). Раньше пароль менялся,
+    // а токены, выписанные до этого, жили до 30 суток: украденный или
+    // оставшийся на чужом телефоне токен продолжал работать, то есть сменить
+    // пароль «чтобы выгнать чужого» было НЕВОЗМОЖНО. Ревокация по jti (021)
+    // адресует один токен, а списка живых jti пользователя не существует —
+    // поэтому граница пишется одной колонкой и проверяется в JwtStrategy
+    // против claim `iat`. Текущая сессия тоже умирает: её токен выписан
+    // РАНЬШЕ смены, и исключать её значило бы оставить живым ровно тот
+    // сценарий, от которого защищаемся (менял пароль как раз не владелец
+    // устройства).
+    await this.pool.query('UPDATE users SET password=$1, sessions_valid_from=now(), updated_at=now() WHERE id=$2', [
+      hash,
+      self.id,
+    ]);
+    // 30-секундный auth-кеш обязан забыть положительные валидации этого
+    // пользователя немедленно — иначе украденный токен прожил бы ещё полминуты.
+    invalidateAuthUser(self.id);
     // Never log the plaintext or the hash.
-    return { message: 'Пароль изменён' };
+    return { message: 'Пароль изменён — войдите заново' };
   }
 
   // ─── Owner review queue (director / superadmin) ─────────────────────────

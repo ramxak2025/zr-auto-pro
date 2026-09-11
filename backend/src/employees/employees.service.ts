@@ -7,9 +7,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
 
-/** Actor shape (JWT payload subset) needed for the manager-vs-self split. */
-type EmployeeActor = { userID: string; role?: string; permissions?: Record<string, boolean> };
+/**
+ * Actor shape (JWT payload subset) needed for the manager-vs-self split.
+ * `currentPointId` — филиал СЕССИИ (163): в этом разрезе считается выручка
+ * сотрудника, иначе карточка показывала бы деньги всей сети.
+ */
+type EmployeeActor = {
+  userID: string;
+  role?: string;
+  permissions?: Record<string, boolean>;
+  currentPointId?: string | null;
+};
 
 // «Менеджер» = держатель матричного ключа 'user_management' (волна «права как
 // в Битрикс24», 2026-07; раньше — строковый список director/admin/superadmin):
@@ -29,6 +39,16 @@ const MANAGER_ONLY_FIELDS = new Set([
 
 /** Which heavy aggregates the caller opted into via `?include=`. */
 type FullProfileInclude = { heatmap: boolean; timeline: boolean };
+
+/**
+ * ЧТО ИМЕННО ВИДИТ ЭТОТ СМОТРЯЩИЙ — решается один раз в fullProfile и едет
+ * дальше одним объектом, чтобы правило не расползлось по агрегатам.
+ *   pointId     — филиал сессии: в его разрезе считаются ВСЕ денежные и
+ *                 чековые агрегаты карточки;
+ *   canSeeMoney — право видеть финансы ('profit_view') или «это я сам»;
+ *   canSeeNotes — право управления персоналом (личные заметки владельца).
+ */
+type ProfileView = { pointId: string | null; canSeeMoney: boolean; canSeeNotes: boolean };
 
 /**
  * Parse the raw `?include=` query value (CSV like `heatmap,timeline`) into a
@@ -57,17 +77,38 @@ export class EmployeesService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
+  /**
+   * КТО ВООБЩЕ ВПРАВЕ СМОТРЕТЬ КАРТОЧКУ СОТРУДНИКА — ОДНО ПРАВИЛО НА ВЕСЬ
+   * МОДУЛЬ: держатель 'user_management' ИЛИ сам сотрудник о себе.
+   *
+   * ЧТО БЫЛО СЛОМАНО (аудит 2026-09). Классовые @UseGuards(JwtAuthGuard,
+   * RolesGuard, PermissionsGuard) без @Roles/@RequirePermission на методе
+   * пропускают ЛЮБОГО аутентифицированного — оба guard'а по конвенции
+   * отвечают «нет требования → пускаем». Поэтому список документов, ВЫДАЧА
+   * ФАЙЛА документа (паспорт, трудовой договор) и полный профиль (личные
+   * заметки владельца о человеке, выручка за всё время) были открыты всем
+   * сотрудникам тенанта. Мастер брал id коллеги из открытого GET /users и
+   * скачивал его паспорт.
+   *
+   * То же правило уже действовало на PATCH /employees/:id и загрузке фото —
+   * здесь оно просто перестаёт быть выборочным.
+   */
+  private assertCanViewEmployee(actor: EmployeeActor, employeeId: string): { isManager: boolean; isSelf: boolean } {
+    const isManager = userHasPermission(actor, 'user_management');
+    const isSelf = actor.userID === employeeId;
+    if (!isManager && !isSelf) {
+      throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
+    }
+    return { isManager, isSelf };
+  }
+
   /** Update an employee's profile fields. Permission split:
    *  - Manager ('user_management' holder) may set any extension field.
    *  - The employee themselves may only update photoUrl + whatsapp on their own row.
    *  Anything outside this matrix is rejected with 403.
    */
   async update(actor: EmployeeActor, tenantID: string, employeeId: string, dto: Record<string, unknown>) {
-    const isManager = userHasPermission(actor, 'user_management');
-    const isSelf = actor.userID === employeeId;
-    if (!isManager && !isSelf) {
-      throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
-    }
+    const { isManager } = this.assertCanViewEmployee(actor, employeeId);
 
     const { rows: targetRows } = await this.pool.query('SELECT id FROM users WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
       employeeId,
@@ -131,18 +172,27 @@ export class EmployeesService {
     }
 
     if (sets.length === 0) {
-      return this.getProfile(tenantID, employeeId);
+      return this.getProfile(tenantID, employeeId, isManager);
     }
 
     vals.push(employeeId, tenantID);
     await this.pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}`, vals);
 
     ttlCache.invalidatePrefix(`employee:${tenantID}:${employeeId}`);
-    return this.getProfile(tenantID, employeeId);
+    return this.getProfile(tenantID, employeeId, isManager);
   }
 
-  /** Lightweight profile shape used as the building block for full-profile + update response. */
-  async getProfile(tenantID: string, employeeId: string) {
+  /**
+   * Lightweight profile shape used as the building block for full-profile +
+   * update response.
+   *
+   * `canSeeNotes` — ЛИЧНЫЕ ЗАМЕТКИ ВЛАДЕЛЬЦА О ЧЕЛОВЕКЕ (owner_notes) видит
+   * только держатель 'user_management'. Даже сам сотрудник их не видит: это
+   * записи руководителя О НЁМ, а не его данные, и правит их тоже только
+   * руководитель (MANAGER_ONLY_FIELDS выше). Поле остаётся в ответе всегда
+   * (null без права) — форма контракта не меняется.
+   */
+  async getProfile(tenantID: string, employeeId: string, canSeeNotes = true) {
     const { rows } = await this.pool.query(
       `SELECT id, full_name, role, hire_date, specializations, position_title, custom_title,
               monthly_kpi_revenue, monthly_kpi_checks, owner_notes, photo_url, whatsapp
@@ -163,7 +213,7 @@ export class EmployeesService {
       customTitle: r.custom_title,
       monthlyKpiRevenue: r.monthly_kpi_revenue !== null ? parseFloat(r.monthly_kpi_revenue) : null,
       monthlyKpiChecks: r.monthly_kpi_checks !== null ? parseInt(r.monthly_kpi_checks) : null,
-      ownerNotes: r.owner_notes,
+      ownerNotes: canSeeNotes ? r.owner_notes : null,
       photoUrl: r.photo_url,
       whatsapp: r.whatsapp,
     };
@@ -180,9 +230,7 @@ export class EmployeesService {
     stream: NodeJS.ReadableStream,
     ext: string,
   ) {
-    if (!userHasPermission(actor, 'user_management') && actor.userID !== employeeId) {
-      throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
-    }
+    this.assertCanViewEmployee(actor, employeeId);
 
     const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'uploads');
     const tenantDir = path.join(uploadDir, tenantID, 'employees');
@@ -241,7 +289,14 @@ export class EmployeesService {
     return `/api/employees/${employeeId}/documents/${docId}/file`;
   }
 
-  async listDocuments(tenantID: string, employeeId: string) {
+  /**
+   * Документы сотрудника. ДОСТУП: руководитель ('user_management') или сам
+   * сотрудник о себе — обоснование в assertCanViewEmployee. Список сам по себе
+   * уже чувствителен: типы и названия документов («Паспорт», «Трудовой
+   * договор») плюс id, по которым скачивается файл.
+   */
+  async listDocuments(actor: EmployeeActor, tenantID: string, employeeId: string) {
+    this.assertCanViewEmployee(actor, employeeId);
     const { rows } = await this.pool.query(
       `SELECT id, type, name, file_url, uploaded_at, expires_at
          FROM employee_documents
@@ -263,8 +318,18 @@ export class EmployeesService {
    * Resolve a document row to its on-disk stored path (tenant-checked).
    * Tolerates legacy rows that still carry the old `/api/uploads/...` public
    * URL (e.g. bootstrap migration not yet run) by stripping the prefix.
+   *
+   * ДОСТУП проверяется ЗДЕСЬ, а не в контроллере: это единственный путь к
+   * приватному файлу (паспорт, трудовой договор), и правило обязано лежать
+   * рядом с чтением, чтобы новый вызывающий не смог обойти его случайно.
    */
-  async getDocumentStoredPath(tenantID: string, employeeId: string, docId: string): Promise<string> {
+  async getDocumentStoredPath(
+    actor: EmployeeActor,
+    tenantID: string,
+    employeeId: string,
+    docId: string,
+  ): Promise<string> {
+    this.assertCanViewEmployee(actor, employeeId);
     const { rows } = await this.pool.query(
       `SELECT file_url FROM employee_documents WHERE id=$1 AND user_id=$2 AND tenant_id=$3 LIMIT 1`,
       [docId, employeeId, tenantID],
@@ -414,12 +479,39 @@ export class EmployeesService {
    * always present, just empty when not requested. This keeps old clients that
    * read the fields (without crashing on missing keys) working.
    */
-  async fullProfile(tenantID: string, employeeId: string, include?: FullProfileInclude | string | string[]) {
+  async fullProfile(
+    actor: EmployeeActor,
+    tenantID: string,
+    employeeId: string,
+    include?: FullProfileInclude | string | string[],
+  ) {
+    // ДОСТУП: руководитель или сам сотрудник. Профиль везёт личные заметки
+    // владельца о человеке и его деньги — открытым всем он быть не может.
+    const { isManager, isSelf } = this.assertCanViewEmployee(actor, employeeId);
+
+    // ДЕНЬГИ — ОТДЕЛЬНОЕ ПРАВО. Руководитель кадров (user_management) не
+    // обязательно допущен к финансам: матрица роли разводит эти ячейки, и
+    // выручка сотрудника закрыта тем же ключом, что прибыль в сводке филиалов
+    // (`profit_view`). Свои деньги человек видит всегда — он и так видит их на
+    // главной и в зарплате.
+    const canSeeMoney = isSelf || userHasPermission(actor, 'profit_view');
+
+    // ВЫРУЧКА — В РАЗРЕЗЕ ФИЛИАЛА СЕССИИ, а не по всей сети: карточка мастера
+    // в филиале Б обязана показывать то же, что журнал и дашборд этого филиала.
+    const pointId = actorPointId(actor);
+
+    // Ключ кеша несёт ВСЁ, что меняет payload: филиал (иначе филиал Б получил
+    // бы цифры филиала А), объём прав смотрящего и include-набор. Филиал стоит
+    // ПОСЛЕ employeeId сознательно: инвалидация (мутации профиля, фото,
+    // достижений) чистит по префиксу `employee:<тенант>:<сотрудник>`, и сегмент
+    // перед id вывел бы ключ из-под неё.
+    const view: ProfileView = { pointId, canSeeMoney, canSeeNotes: isManager };
     const want = normalizeInclude(include);
-    // The cache key carries the include-set so a light request and a heavy
-    // request don't clobber each other's cached payloads.
-    const cacheKey = `employee:${tenantID}:${employeeId}:full:${want.heatmap ? 'h' : ''}${want.timeline ? 't' : ''}`;
-    return ttlCache.wrap(cacheKey, 60_000, () => this.computeFullProfile(tenantID, employeeId, want));
+    const cacheKey =
+      `employee:${tenantID}:${employeeId}:full:${pointCacheSegment(pointId)}` +
+      `:${isManager ? 'n' : ''}${canSeeMoney ? 'm' : ''}` +
+      `:${want.heatmap ? 'h' : ''}${want.timeline ? 't' : ''}`;
+    return ttlCache.wrap(cacheKey, 60_000, () => this.computeFullProfile(tenantID, employeeId, want, view));
   }
 
   /**
@@ -460,16 +552,21 @@ export class EmployeesService {
     };
   }
 
-  private async computeFullProfile(tenantID: string, employeeId: string, include: FullProfileInclude) {
+  private async computeFullProfile(
+    tenantID: string,
+    employeeId: string,
+    include: FullProfileInclude,
+    view: ProfileView,
+  ) {
     // getProfile is the ONLY existence check — it throws 404 for a genuinely
     // missing tenant user and that 404 must propagate. Everything after it is
     // derived analytics; if any of it fails (DB error / statement timeout on a
     // big tenant) we degrade to the base profile + empty analytics rather than
     // 500'ing a valid employee.
-    const profile = await this.getProfile(tenantID, employeeId);
+    const profile = await this.getProfile(tenantID, employeeId, view.canSeeNotes);
 
     try {
-      return await this.computeAnalytics(tenantID, employeeId, profile, include);
+      return await this.computeAnalytics(tenantID, employeeId, profile, include, view);
     } catch (err) {
       this.logger.error(
         `fullProfile analytics failed for ${employeeId} (returning base profile): ${
@@ -485,14 +582,23 @@ export class EmployeesService {
     employeeId: string,
     profile: Awaited<ReturnType<EmployeesService['getProfile']>>,
     include: FullProfileInclude,
+    view: ProfileView,
   ) {
-    // Discipline + activity quick stats (last 30 days)
+    // Discipline + activity quick stats (last 30 days).
+    //
+    // ФИЛИАЛ СЕССИИ РЕЖЕТ ВСЕ ЧЕКОВЫЕ АГРЕГАТЫ КАРТОЧКИ (165). Раньше они
+    // считались по ВСЕЙ сети: владелец, зайдя в филиал Б, видел у мастера
+    // выручку, заработанную в филиале А, и она не сходилась ни с журналом, ни
+    // с дашбордом, ни с зарплатой этого филиала. Предикат — общий
+    // pointFilterSql (строгое равенство, см. common/point-scope.ts).
+    const monthParams: unknown[] = [tenantID, employeeId];
+    const monthPointFilter = pointFilterSql(null, view.pointId, monthParams);
     const { rows: monthAgg } = await this.pool.query(
       `WITH month_checks AS (
          SELECT *
            FROM checks
           WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
-            AND date >= now() - interval '30 days'
+            AND date >= now() - interval '30 days'${monthPointFilter}
        )
        SELECT
          COALESCE(SUM(total_revenue), 0) AS revenue,
@@ -500,7 +606,7 @@ export class EmployeesService {
          COALESCE(AVG(rr.rating), 0) AS avg_rating
        FROM month_checks
        LEFT JOIN review_responses rr ON rr.check_id = month_checks.id`,
-      [tenantID, employeeId],
+      monthParams,
     );
 
     const monthRevenue = parseFloat(monthAgg[0]?.revenue) || 0;
@@ -533,29 +639,33 @@ export class EmployeesService {
     const quality = Math.min(100, Math.round(discipline * 0.5 + rating * 0.5));
 
     // Streaks
-    const streaks = await this.computeStreaks(tenantID, employeeId);
+    const streaks = await this.computeStreaks(tenantID, employeeId, view.pointId);
 
     // Lifetime totals + best day / best month + top car brands
-    const lifetime = await this.computeLifetime(tenantID, employeeId);
+    const lifetime = await this.computeLifetime(tenantID, employeeId, view.pointId, view.canSeeMoney);
 
     // Year heatmap: 365 day buckets. Heavy GROUP BY — only computed when the
     // caller opted in via `?include=heatmap`. Otherwise it stays an empty
     // array and we skip the scan entirely.
     let yearHeatmap: Array<{ day: string; checks: number; revenue: number }> = [];
     if (include.heatmap) {
+      const heatParams: unknown[] = [tenantID, employeeId];
+      const heatPointFilter = pointFilterSql(null, view.pointId, heatParams);
       const { rows: heat } = await this.pool.query(
         `SELECT date::date AS day, COUNT(*) AS checks, COALESCE(SUM(total_revenue), 0) AS revenue
            FROM checks
           WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
-            AND date >= now() - interval '365 days'
+            AND date >= now() - interval '365 days'${heatPointFilter}
           GROUP BY date::date
           ORDER BY day`,
-        [tenantID, employeeId],
+        heatParams,
       );
       yearHeatmap = heat.map((r) => ({
         day: typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10),
         checks: parseInt(r.checks) || 0,
-        revenue: parseFloat(r.revenue) || 0,
+        // Суммы дня — денежная часть: без права видеть финансы отдаём 0, но
+        // саму сетку активности оставляем (она не про деньги).
+        revenue: view.canSeeMoney ? parseFloat(r.revenue) || 0 : 0,
       }));
     }
 
@@ -566,22 +676,24 @@ export class EmployeesService {
       tenantID,
     ]);
     const shiftsEnabled = tenantRows[0]?.shifts_enabled === true;
-    const shifts = shiftsEnabled ? await this.computeShifts(tenantID, employeeId) : undefined;
+    const shifts = shiftsEnabled ? await this.computeShifts(tenantID, employeeId, view.pointId) : undefined;
 
     // Team ranks
-    const teamRank = await this.computeTeamRank(tenantID, employeeId);
+    const teamRank = await this.computeTeamRank(tenantID, employeeId, view.pointId);
 
     // Service mastery (top 5 services)
+    const masteryParams: unknown[] = [tenantID, employeeId];
+    const masteryPointFilter = pointFilterSql('c', view.pointId, masteryParams);
     const { rows: mastery } = await this.pool.query(
       `SELECT s.id, s.name, COUNT(*) AS cnt
          FROM check_service_lines csl
          JOIN services s ON s.id = csl.service_id
          JOIN checks c ON c.id = csl.check_id
-        WHERE c.tenant_id=$1 AND csl.master_id=$2 AND c.deleted_at IS NULL
+        WHERE c.tenant_id=$1 AND csl.master_id=$2 AND c.deleted_at IS NULL${masteryPointFilter}
         GROUP BY s.id, s.name
         ORDER BY cnt DESC
         LIMIT 5`,
-      [tenantID, employeeId],
+      masteryParams,
     );
     const serviceMastery = mastery.map((r) => {
       const count = parseInt(r.cnt) || 0;
@@ -616,22 +728,26 @@ export class EmployeesService {
           title: 'Принят на работу',
         });
       }
+      const topMonthParams: unknown[] = [tenantID, employeeId];
+      const topMonthPointFilter = pointFilterSql(null, view.pointId, topMonthParams);
       const { rows: topMonths } = await this.pool.query(
         `SELECT to_char(date_trunc('month', date), 'YYYY-MM-01') AS ym,
                 SUM(total_revenue) AS revenue
            FROM checks
-          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL${topMonthPointFilter}
           GROUP BY ym
           ORDER BY revenue DESC
           LIMIT 3`,
-        [tenantID, employeeId],
+        topMonthParams,
       );
       for (const m of topMonths) {
         careerTimeline.push({
           date: m.ym,
           kind: 'top_month',
           title: 'Топовый месяц',
-          description: `${Math.round(parseFloat(m.revenue))}₽`,
+          // Сумма месяца — денежная часть: без права видеть финансы событие
+          // остаётся в ленте, а цифра из него уходит (description опционален).
+          ...(view.canSeeMoney ? { description: `${Math.round(parseFloat(m.revenue))}₽` } : {}),
         });
       }
       for (const a of achievements) {
@@ -663,16 +779,18 @@ export class EmployeesService {
     };
   }
 
-  private async computeStreaks(tenantID: string, employeeId: string) {
+  private async computeStreaks(tenantID: string, employeeId: string, pointId: string | null) {
     // checksStreak: consecutive days ending today with >=1 check
+    const dayParams: unknown[] = [tenantID, employeeId];
+    const dayPointFilter = pointFilterSql(null, pointId, dayParams);
     const { rows: dayRows } = await this.pool.query(
       `SELECT date::date AS day, COUNT(*) AS checks
          FROM checks
         WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
-          AND date >= now() - interval '120 days'
+          AND date >= now() - interval '120 days'${dayPointFilter}
         GROUP BY date::date
         ORDER BY day DESC`,
-      [tenantID, employeeId],
+      dayParams,
     );
     let checksStreak = 0;
     const today = new Date();
@@ -709,14 +827,16 @@ export class EmployeesService {
     }
 
     // fiveStarStreak: consecutive last reviews that are 5 stars
+    const revParams: unknown[] = [tenantID, employeeId];
+    const revPointFilter = pointFilterSql('ch', pointId, revParams);
     const { rows: revs } = await this.pool.query(
       `SELECT rr.rating
          FROM review_responses rr
          JOIN checks ch ON ch.id = rr.check_id
-        WHERE rr.tenant_id=$1 AND ch.master_id=$2 AND ch.deleted_at IS NULL
+        WHERE rr.tenant_id=$1 AND ch.master_id=$2 AND ch.deleted_at IS NULL${revPointFilter}
         ORDER BY rr.created_at DESC
         LIMIT 50`,
-      [tenantID, employeeId],
+      revParams,
     );
     let fiveStarStreak = 0;
     for (const r of revs) {
@@ -727,44 +847,60 @@ export class EmployeesService {
     return { disciplineStreak, fiveStarStreak, checksStreak };
   }
 
-  private async computeLifetime(tenantID: string, employeeId: string) {
+  /**
+   * Итоги «за всё время». ДВА ОГРАНИЧЕНИЯ, оба обязательны:
+   *   • `pointId` — считаем в разрезе филиала сессии (иначе карточка мастера в
+   *     филиале Б показывает деньги, заработанные в филиале А);
+   *   • `canSeeMoney` — без права видеть финансы рублёвые поля отдаются НУЛЯМИ,
+   *     а не удаляются: форма ответа одна на всех, клиент не падает на
+   *     отсутствующем ключе. Та же конвенция, что у прибыли в сводке филиалов.
+   */
+  private async computeLifetime(tenantID: string, employeeId: string, pointId: string | null, canSeeMoney: boolean) {
+    const totalsParams: unknown[] = [tenantID, employeeId];
+    const totalsPointFilter = pointFilterSql(null, pointId, totalsParams);
     const { rows: totals } = await this.pool.query(
       `SELECT COALESCE(SUM(total_revenue), 0) AS revenue,
               COUNT(*) AS check_count,
               COUNT(DISTINCT client_id) AS clients
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL`,
-      [tenantID, employeeId],
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL${totalsPointFilter}`,
+      totalsParams,
     );
+    const bestDayParams: unknown[] = [tenantID, employeeId];
+    const bestDayPointFilter = pointFilterSql(null, pointId, bestDayParams);
     const { rows: bestDayRows } = await this.pool.query(
       `SELECT date::date AS day, COALESCE(SUM(total_revenue), 0) AS revenue
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL${bestDayPointFilter}
         GROUP BY date::date
         ORDER BY revenue DESC
         LIMIT 1`,
-      [tenantID, employeeId],
+      bestDayParams,
     );
+    const bestMonthParams: unknown[] = [tenantID, employeeId];
+    const bestMonthPointFilter = pointFilterSql(null, pointId, bestMonthParams);
     const { rows: bestMonthRows } = await this.pool.query(
       `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym,
               COALESCE(SUM(total_revenue), 0) AS revenue
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL${bestMonthPointFilter}
         GROUP BY ym
         ORDER BY revenue DESC
         LIMIT 1`,
-      [tenantID, employeeId],
+      bestMonthParams,
     );
+    const brandParams: unknown[] = [tenantID, employeeId];
+    const brandPointFilter = pointFilterSql('ch', pointId, brandParams);
     const { rows: topBrands } = await this.pool.query(
       `SELECT split_part(coalesce(ca.make_model, ''), ' ', 1) AS brand, COUNT(*) AS cnt
          FROM checks ch
          JOIN cars ca ON ca.id = ch.car_id
-        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false AND ch.deleted_at IS NULL${brandPointFilter}
         GROUP BY brand
         HAVING split_part(coalesce(ca.make_model, ''), ' ', 1) <> ''
         ORDER BY cnt DESC
         LIMIT 5`,
-      [tenantID, employeeId],
+      brandParams,
     );
 
     // Top-3 products this master sold. check_product_lines has no master_id of
@@ -772,19 +908,22 @@ export class EmployeesService {
     // products by id (rows where product_id is null = free-text lines are
     // skipped) so we can carry a stable id + current name + photo. SUM(quantity)
     // counts units sold, not line rows.
+    const topProductParams: unknown[] = [tenantID, employeeId];
+    const topProductPointFilter = pointFilterSql('ch', pointId, topProductParams);
     const { rows: topProductRows } = await this.pool.query(
       `SELECT p.id, p.name, p.photo, COALESCE(SUM(cpl.quantity), 0) AS cnt
          FROM check_product_lines cpl
          JOIN checks ch ON ch.id = cpl.check_id
          JOIN products p ON p.id = cpl.product_id
-        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false
+          AND ch.deleted_at IS NULL${topProductPointFilter}
         GROUP BY p.id, p.name, p.photo
         ORDER BY cnt DESC, p.name ASC
         LIMIT 3`,
-      [tenantID, employeeId],
+      topProductParams,
     );
 
-    const totalRevenue = parseFloat(totals[0]?.revenue) || 0;
+    const totalRevenue = canSeeMoney ? parseFloat(totals[0]?.revenue) || 0 : 0;
     const totalChecks = parseInt(totals[0]?.check_count) || 0;
     const clientsServed = parseInt(totals[0]?.clients) || 0;
     const bestDay = bestDayRows[0]
@@ -793,13 +932,13 @@ export class EmployeesService {
             typeof bestDayRows[0].day === 'string'
               ? bestDayRows[0].day.slice(0, 10)
               : new Date(bestDayRows[0].day).toISOString().slice(0, 10),
-          value: parseFloat(bestDayRows[0].revenue) || 0,
+          value: canSeeMoney ? parseFloat(bestDayRows[0].revenue) || 0 : 0,
         }
       : undefined;
     const bestMonth = bestMonthRows[0]
       ? {
           ym: bestMonthRows[0].ym as string,
-          value: parseFloat(bestMonthRows[0].revenue) || 0,
+          value: canSeeMoney ? parseFloat(bestMonthRows[0].revenue) || 0 : 0,
         }
       : undefined;
 
@@ -831,7 +970,7 @@ export class EmployeesService {
    * late_minutes columns. bestDay / worstDay are the calendar days with the
    * most / fewest checks this master closed (joined from `checks`).
    */
-  private async computeShifts(tenantID: string, employeeId: string) {
+  private async computeShifts(tenantID: string, employeeId: string, pointId: string | null) {
     // Attendance aggregates. is_day_off rows are excluded from the worked-shift
     // count and from the late stats. avg is over LATE shifts only, so a master
     // who is rarely late doesn't get their average diluted by on-time zeros.
@@ -856,13 +995,15 @@ export class EmployeesService {
     // Best / worst day by number of checks closed. Single pass: most-checks day
     // ASC/DESC. worstDay only differs from bestDay when the master has >1 active
     // day, otherwise it mirrors bestDay (which the FE renders fine).
+    const byDayParams: unknown[] = [tenantID, employeeId];
+    const byDayPointFilter = pointFilterSql(null, pointId, byDayParams);
     const { rows: byDay } = await this.pool.query(
       `SELECT date::date AS day, COUNT(*) AS checks_count
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL${byDayPointFilter}
         GROUP BY date::date
         ORDER BY checks_count DESC, day DESC`,
-      [tenantID, employeeId],
+      byDayParams,
     );
     const toDayStat = (r: { day: unknown; checks_count: unknown }) => ({
       date: typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day as string).toISOString().slice(0, 10),
@@ -874,20 +1015,24 @@ export class EmployeesService {
     return { total, lateCount, avgLateMinutes, bestDay, worstDay };
   }
 
-  private async computeTeamRank(tenantID: string, employeeId: string) {
+  /** Места в команде. Тоже в разрезе филиала сессии: сравнивать мастера
+   *  филиала Б с выручкой всей сети бессмысленно — место получилось бы чужим. */
+  private async computeTeamRank(tenantID: string, employeeId: string, pointId: string | null) {
     // Rank by revenue last month + by discipline last month + by avg rating
+    const revRankParams: unknown[] = [tenantID];
+    const revRankPointFilter = pointFilterSql(null, pointId, revRankParams);
     const { rows: revRanks } = await this.pool.query(
       `WITH agg AS (
          SELECT master_id, COALESCE(SUM(total_revenue), 0) AS revenue
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
             AND date >= (date_trunc('month', now()) - interval '1 month')
-            AND date < date_trunc('month', now())
+            AND date < date_trunc('month', now())${revRankPointFilter}
           GROUP BY master_id
        )
        SELECT master_id, revenue, RANK() OVER (ORDER BY revenue DESC) AS rnk
          FROM agg`,
-      [tenantID],
+      revRankParams,
     );
     const { rows: discRanks } = await this.pool.query(
       `WITH agg AS (
@@ -902,16 +1047,18 @@ export class EmployeesService {
        SELECT user_id, RANK() OVER (ORDER BY discipline DESC) AS rnk FROM agg`,
       [tenantID],
     );
+    const ratingRankParams: unknown[] = [tenantID];
+    const ratingRankPointFilter = pointFilterSql('ch', pointId, ratingRankParams);
     const { rows: ratingRanks } = await this.pool.query(
       `WITH agg AS (
          SELECT ch.master_id, AVG(rr.rating) AS avg_rating
            FROM review_responses rr
            JOIN checks ch ON ch.id = rr.check_id
-          WHERE ch.tenant_id=$1 AND ch.deleted_at IS NULL
+          WHERE ch.tenant_id=$1 AND ch.deleted_at IS NULL${ratingRankPointFilter}
           GROUP BY ch.master_id
        )
        SELECT master_id, RANK() OVER (ORDER BY avg_rating DESC NULLS LAST) AS rnk FROM agg`,
-      [tenantID],
+      ratingRankParams,
     );
     const total = Math.max(revRanks.length, discRanks.length, ratingRanks.length, 1);
     const revRank = revRanks.find((r) => r.master_id === employeeId)?.rnk ?? 0;

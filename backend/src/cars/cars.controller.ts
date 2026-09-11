@@ -5,6 +5,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { TransferOwnerDto } from './dto/transfer-owner.dto';
+import { actorPointId } from '../common/point-scope';
 
 // Gating mirrors the clients module (гараж клиента = clients-домен):
 //   • reads (GET /, lookup-by-plate, :id, :id/checks) → 'clients_view' (сид
@@ -19,6 +20,10 @@ import { TransferOwnerDto } from './dto/transfer-owner.dto';
 //     DELETE /clients/:id — hard delete без корзины, checks.car_id уходит в
 //     NULL (006_fix_fk_cascade).
 // Owner-class (director/superadmin) bypasses permission gates.
+//
+// 163 — последним аргументом вниз идёт ФИЛИАЛ СЕССИИ (actorPointId), а не
+// userID: гараж режется тем же предикатом, что база клиентов
+// (ClientsService.separatePointFor), и филиал обязан быть филиалом ЭТОЙ сессии.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('cars')
 export class CarsController {
@@ -27,7 +32,7 @@ export class CarsController {
   @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.carsService.getAll(user.tenantID, query, user.userID);
+    return this.carsService.getAll(user.tenantID, query, actorPointId(user));
   }
 
   /**
@@ -37,13 +42,13 @@ export class CarsController {
   @RequirePermission('clients_view')
   @Get('lookup-by-plate')
   lookupByPlate(@CurrentUser() user: JwtPayload, @Query('plate') plate: string) {
-    return this.carsService.findByPlate(user.tenantID, plate || '', user.userID);
+    return this.carsService.findByPlate(user.tenantID, plate || '', actorPointId(user));
   }
 
   @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.carsService.getById(id, user.tenantID, user.userID);
+    return this.carsService.getById(id, user.tenantID, actorPointId(user));
   }
 
   /**
@@ -54,24 +59,29 @@ export class CarsController {
   @Get(':id/checks')
   getChecks(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('limit') limit?: string) {
     const numericLimit = parseInt(String(limit ?? '50'), 10);
-    return this.carsService.getChecks(id, user.tenantID, Math.min(Math.max(numericLimit || 50, 1), 200), user.userID);
+    return this.carsService.getChecks(
+      id,
+      user.tenantID,
+      Math.min(Math.max(numericLimit || 50, 1), 200),
+      actorPointId(user),
+    );
   }
 
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.carsService.create(user.tenantID, dto, user.userID);
+    return this.carsService.create(user.tenantID, dto, actorPointId(user));
   }
 
   @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.carsService.update(id, user.tenantID, dto, user.userID);
+    return this.carsService.update(id, user.tenantID, dto, actorPointId(user));
   }
 
   @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.carsService.remove(id, user.tenantID, user.userID);
+    return this.carsService.remove(id, user.tenantID, actorPointId(user));
   }
 
   /**
@@ -83,6 +93,12 @@ export class CarsController {
   @RequirePermission('clients_edit')
   @Post(':id/transfer-owner')
   transferOwner(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: TransferOwnerDto) {
-    return this.carsService.transferOwner(id, user.tenantID, dto.clientId, dto.moveHistory !== false, user.userID);
+    return this.carsService.transferOwner(
+      id,
+      user.tenantID,
+      dto.clientId,
+      dto.moveHistory !== false,
+      actorPointId(user),
+    );
   }
 }

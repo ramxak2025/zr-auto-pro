@@ -9,7 +9,6 @@ import {
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarehousesService, WarehouseKind } from '../warehouses/warehouses.service';
-import { resolvePointForWrite } from '../common/point-scope';
 
 export type StockMovementType =
   | 'inventory'
@@ -181,22 +180,12 @@ export class StockMovementsService {
       }
     }
 
-    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА (161 + волна 4). Сам склад общий на всю сеть
-    // (решение владельца), поэтому резолв нужен РОВНО одному сценарию —
-    // списанию, которое просят записать расходом. Раньше сюда приезжала сырая
-    // точка актора: в режиме «Все точки» расход рождался с point_id = NULL и
-    // не попадал ни в один филиальный срез — ни в «Движение денег», ни в
-    // прибыль, ни в наличный расход окна кассовой смены.
-    //
-    // Резолв идёт ДО pool.connect(): вторая коннекция под уже открытой
-    // транзакцией на исчерпанном пуле даёт взаимную блокировку.
-    //
-    // Условие узкое НАМЕРЕННО: гнать через резолв инвентаризацию или приход
-    // значило бы получить 400 «Выберите филиал» там, где денег вообще нет.
-    const needsExpensePoint = dto.type === 'writeoff' && !!dto.recordAsExpense;
-    const writePointId = needsExpensePoint
-      ? await resolvePointForWrite(this.pool, { tenantID, userID, currentPointId: pointId }, 'чтобы списать товар')
-      : pointId;
+    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА (161 + 163). Сам склад общий на всю сеть
+    // (решение владельца), а вот деньги за списанный товар обязаны лечь в
+    // филиал того, кто списал: иначе прибыль чужого филиала просядет на не свою
+    // потерю. Филиал берётся из сессии (`pointId` приезжает из контроллера как
+    // actorPointId актора) — резолва и отказа «Выберите филиал» здесь больше
+    // нет, филиал выбран при входе.
 
     const client = await this.pool.connect();
     try {
@@ -217,7 +206,7 @@ export class StockMovementsService {
           result = await this.applySingleWarehouse(client, tenantID, userID, dto, qty, purchasePrice);
           break;
         case 'writeoff':
-          result = await this.applyWriteoff(client, tenantID, userID, dto, qty, purchasePrice, writePointId);
+          result = await this.applyWriteoff(client, tenantID, userID, dto, qty, purchasePrice, pointId);
           break;
         case 'defect_transfer':
           result = await this.applyTransfer(client, tenantID, userID, dto, qty, purchasePrice, 'defect');
@@ -415,7 +404,7 @@ export class StockMovementsService {
     purchasePrice: number,
     // Имя намеренно кричит «резолвнутая»: сырая точка актора здесь рождала
     // расход без филиала, невидимый ни одному филиальному срезу.
-    writePointId: string | null = null,
+    expensePointId: string | null = null,
   ) {
     const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main');
     const recordAsExpense = !!dto.recordAsExpense;
@@ -440,7 +429,7 @@ export class StockMovementsService {
       const { rows: expRows } = await client.query(
         `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
          VALUES ($1,$2,$3,now(),$4,$5,$6) RETURNING id`,
-        [categoryId, amount, dto.reason ?? 'Списание со склада', userID, tenantID, writePointId],
+        [categoryId, amount, dto.reason ?? 'Списание со склада', userID, tenantID, expensePointId],
       );
       linkedExpenseId = expRows[0].id;
     }

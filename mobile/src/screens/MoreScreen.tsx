@@ -16,6 +16,7 @@ import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { usePointAccess } from '../hooks/usePoints';
+import { pendingChecksLogoutNotice, pendingOfflineCheckCount } from '../utils/offlineCheckQueue';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
@@ -369,15 +370,14 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        // Филиалы (156/160/161, мульти-точки) — ЕДИНСТВЕННЫЙ вход в
-        // переключение автосервиса: основной сервис владельца и открытые им
-        // филиалы, с оборотом каждого. Права здесь НЕТ сознательно:
-        // переключаться обязан и мастер, работающий в двух автосервисах, иначе
-        // он пробьёт заказ-наряд не туда. Видимость решает filterItem по числу
-        // ДОСТУПНЫХ пользователю автосервисов (ровно один = переключать
-        // нечего, он подставляется молча).
+        // Филиалы (156/160/161/163, мульти-точки) — сводка по сети: основной
+        // сервис владельца и открытые им филиалы с оборотом каждого. Права
+        // здесь НЕТ сознательно: свой автосервис и соседний обязан видеть и
+        // мастер, работающий в двух. Переключения филиала в приложении нет —
+        // он выбирается при входе; раздел лишь предлагает выйти и войти в
+        // другой. Видимость решает filterItem (см. multiPoint в usePoints).
         label: 'Филиалы',
-        description: 'Основной сервис и филиалы, переход между ними',
+        description: 'Основной сервис и филиалы, обороты по каждому',
         screen: 'Points',
         icon: 'business-outline',
         iconBg: colors.orange[50],
@@ -497,6 +497,27 @@ export default function MoreScreen() {
       : roleBadgeColors[roleKey];
   const avatarUrl = getImageUrl(user?.avatar);
 
+  /**
+   * Выход с ЧЕСТНЫМ предупреждением про офлайн-очередь. Неотправленный
+   * заказ-наряд — это деньги, а не черновик: человек обязан знать, что они
+   * лежат на телефоне, переживут выход и уйдут после следующего входа ЭТИМ ЖЕ
+   * аккаунтом (а вход другим их удалит). Чтение очереди с диска — если оно
+   * почему-то откажет, диалог просто остаётся прежним, выход не блокируем.
+   */
+  const confirmLogout = React.useCallback(async () => {
+    let notice = '';
+    try {
+      notice = pendingChecksLogoutNotice(await pendingOfflineCheckCount());
+    } catch {
+      notice = '';
+    }
+    const tail = 'Вы сможете снова войти по логину и паролю.';
+    Alert.alert('Выйти из аккаунта?', notice ? `${notice}\n\n${tail}` : tail, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Выйти', style: 'destructive', onPress: () => logout() },
+    ]);
+  }, [logout]);
+
   // Fetch subscription for feature gating
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
@@ -529,16 +550,12 @@ export default function MoreScreen() {
   });
   const upcomingBookingsCount = countUpcoming(upcomingBookings);
 
-  // 156/160/161 — мульти-точки: строка «Филиалы» видна тому, у кого доступ
-  // БОЛЬШЕ ЧЕМ К ОДНОМУ автосервису (включая мастера, назначенного на два:
-  // раньше тут стоял гейт user_management, и он физически не мог перейти,
-  // хотя именно он пробивает заказ-наряды), А ТАКЖЕ держателю user_management,
-  // когда у тенанта есть хотя бы один филиал — у него два режима даже с
-  // единственной точкой (сам автосервис и общая сводка), и без этого пункта он
-  // не мог ни назначить туда сотрудников, ни выйти из сводки. Теперь это ещё и
-  // ЕДИНСТВЕННЫЙ вход в переключение: с денежных экранов его убрали. Доступ
-  // считает usePointAccess (одно правило на всё приложение), запрос — тот же
-  // ключ ['points'], что и у индикатора, поэтому лишней сети нет.
+  // 156/160/161/163 — мульти-точки: строка «Филиалы» видна любому сотруднику
+  // тенанта, у которого больше одного живого автосервиса (включая мастера — он
+  // обязан видеть, где работает и что происходит в соседнем). Права здесь нет:
+  // деньги внутри раздела и так закрыты financial_reports. Видимость считает
+  // usePointAccess (одно правило на всё приложение), запрос — тот же ключ
+  // ['points'], что и у индикатора, поэтому лишней сети нет.
   const { multiPoint } = usePointAccess();
 
   // Lock badges mirror FeatureGate exactly: gate on the server-resolved
@@ -563,9 +580,9 @@ export default function MoreScreen() {
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
-    // 156/160/161 — «Филиалы» скрыты, только когда показывать нечего: у
-    // тенанта нет филиалов вовсе либо сотруднику доступен ровно один автосервис
-    // и режима общей сводки у него нет (см. multiPoint в usePoints).
+    // 163 — «Филиалы» скрыты, когда показывать нечего: у одноточечного
+    // тенанта второго автосервиса не существует, и раздел был бы пустым
+    // обещанием (см. multiPoint в usePoints).
     if (item.screen === 'Points' && !multiPoint) return false;
     return true;
   };
@@ -754,12 +771,7 @@ export default function MoreScreen() {
         {/* Logout */}
         <TouchableOpacity
           style={[styles.logoutBtn, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          onPress={() =>
-            Alert.alert('Выйти из аккаунта?', 'Вы сможете снова войти по логину и паролю.', [
-              { text: 'Отмена', style: 'cancel' },
-              { text: 'Выйти', style: 'destructive', onPress: () => logout() },
-            ])
-          }
+          onPress={confirmLogout}
           activeOpacity={0.7}
         >
           <Ionicons name="log-out-outline" size={18} color={colors.red[600]} />

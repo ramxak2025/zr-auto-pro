@@ -1,5 +1,10 @@
 import { extractApiErrorMessage } from '../apiError';
-import { choosePointMessage, otherPointPhoneConflictMessage } from '../../../../shared/utils/apiError';
+import {
+  otherPointPhoneConflictMessage,
+  sessionPointLostMessage,
+  SESSION_POINT_LOST_MESSAGE,
+  SESSION_POINT_NOT_CHOSEN_MESSAGE,
+} from '../../../../shared/utils/apiError';
 
 const axiosError = (data: unknown, message = 'Request failed with status code 400') => ({
   response: { status: 400, data },
@@ -33,27 +38,31 @@ describe('extractApiErrorMessage', () => {
 
 // ── Отказы, у которых есть ОСМЫСЛЕННОЕ ДЕЙСТВИЕ (shared/utils/apiError) ──────
 
-describe('choosePointMessage', () => {
+describe('sessionPointLostMessage', () => {
   const refusal = (status: number, message: unknown) => ({ response: { status, data: { message } } });
 
-  it('узнаёт 400 «Выберите филиал, …» и отдаёт текст сервера дословно', () => {
-    expect(choosePointMessage(refusal(400, 'Выберите филиал, чтобы пробить чек'))).toBe(
-      'Выберите филиал, чтобы пробить чек',
-    );
-    expect(choosePointMessage(refusal(400, 'Выберите филиал, чтобы открыть кассовую смену'))).toBe(
-      'Выберите филиал, чтобы открыть кассовую смену',
+  it('узнаёт 401 «филиал сессии больше не ваш» и отдаёт текст сервера дословно', () => {
+    // Это НЕ обычное истечение токена: доступ к филиалу сняли или филиал
+    // закрыли. Человек обязан прочитать причину на экране входа, иначе
+    // «меня выкинуло» читается как поломка приложения.
+    expect(sessionPointLostMessage(refusal(401, SESSION_POINT_LOST_MESSAGE))).toBe(SESSION_POINT_LOST_MESSAGE);
+    expect(sessionPointLostMessage(refusal(401, SESSION_POINT_NOT_CHOSEN_MESSAGE))).toBe(
+      SESSION_POINT_NOT_CHOSEN_MESSAGE,
     );
   });
 
-  it('НЕ срабатывает на чужой отказ, где слово «филиал» просто встретилось', () => {
-    // Ровно этот случай ловила старая проверка `.includes('филиал')` в
-    // CashShiftScreen: любой другой 400 с этим словом открывал бы выбор точки.
-    expect(choosePointMessage(refusal(400, 'В этом филиале смена уже открыта'))).toBeNull();
+  it('молчит на обычном 401 — истёкшую сессию объяснять не надо', () => {
+    expect(sessionPointLostMessage(refusal(401, 'Неверный токен'))).toBeNull();
+    expect(sessionPointLostMessage(refusal(401, 'Аккаунт деактивирован'))).toBeNull();
+  });
+
+  it('сравнивает строку ЦЕЛИКОМ, а не по вхождению слова «филиал»', () => {
+    expect(sessionPointLostMessage(refusal(401, 'Филиал больше не доступен — войдите заново, пожалуйста'))).toBeNull();
   });
 
   it('игнорирует другие статусы и сетевой сбой (ответа нет вовсе)', () => {
-    expect(choosePointMessage(refusal(403, 'Выберите филиал, чтобы пробить чек'))).toBeNull();
-    expect(choosePointMessage({ message: 'Network Error' })).toBeNull();
+    expect(sessionPointLostMessage(refusal(403, SESSION_POINT_LOST_MESSAGE))).toBeNull();
+    expect(sessionPointLostMessage({ message: 'Network Error' })).toBeNull();
   });
 });
 

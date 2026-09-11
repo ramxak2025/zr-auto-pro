@@ -5,7 +5,7 @@ import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { PushService } from '../push/push.service';
 import { getTenantTimezone, zonedDateKey, zonedTimeKey } from '../common/timezone';
-import { actorPointId, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { actorPointId, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 
 @Injectable()
@@ -59,7 +59,7 @@ export class ShiftsService {
   /**
    * Лента смен команды. 161 — фильтр по филиалу: смена принадлежит той точке,
    * на которой её ОТКРЫЛИ (shifts.point_id), поэтому лента филиала показывает
-   * ровно тех, кто работал здесь. Без выбранной точки («Все точки» /
+   * ровно тех, кто работал здесь. Без филиала (у тенанта их нет /
    * одноточечный тенант) запрос остаётся прежним.
    */
   async getAll(tenantID: string, actor?: JwtPayload) {
@@ -95,17 +95,13 @@ export class ShiftsService {
    */
   async open(userID: string, tenantID: string, actor?: JwtPayload) {
     await this.ensureShiftsEnabled(tenantID);
-    // ВОЛНА 4 — смена штампуется РЕЗОЛВНУТЫМ филиалом, а не сырой точкой
-    // актора. Сырая точка в режиме «Все точки» рождала смену с point_id =
-    // NULL, а филиальные срезы фильтруют строгим равенством: такая смена не
+    // Смена штампуется ФИЛИАЛОМ СЕССИИ (163). Прежде филиал резолвился на
+    // месте, потому что в режиме «все филиалы» смена рождалась с point_id =
+    // NULL: филиальные срезы фильтруют строгим равенством, и такая смена не
     // попадала ни в ленту смен филиала, ни в счётчик «мастеров на работе» на
     // карточке «Филиалы» — человек на работе, а филиал показывает ноль.
-    // Резолв ДО pool.connect() (см. соседний комментарий про пояс).
-    const pointId = await resolvePointForWrite(
-      this.pool,
-      { tenantID, userID, currentPointId: actorPointId(actor) },
-      'чтобы открыть смену',
-    );
+    // Режима больше нет, филиал выбран при входе.
+    const pointId = actorPointId(actor);
     // Пояс тенанта — ДО транзакции: вторая коннекция из пула под уже открытой
     // транзакцией на исчерпанном пуле даёт взаимную блокировку.
     const tz = await getTenantTimezone(this.pool, tenantID);

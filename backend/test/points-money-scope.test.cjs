@@ -268,7 +268,7 @@ test('журнал проверяет видимость клиента ДО с�
 
   // Предикат берётся из ClientsService, а не переписывается третий раз.
   assert.ok(
-    /this\.clients\.separatePointFor\(tenantID, actor\?\.userID\)/.test(checks) &&
+    /this\.clients\.separatePointFor\(tenantID, actorPointId\(actor\)\)/.test(checks) &&
       /this\.clients\.separatePointWhere\(null, viewerPoint, params\)/.test(checks),
     'checks.service: видимость клиента считается собственной копией предиката — она разъедется с базой клиентов и гаражом',
   );
@@ -300,10 +300,10 @@ test('карточка филиала показывает прибыль ПОС
   const summary = bodyBetween(points, 'private async computeSummary(', '// ── Суперадмин');
 
   assert.ok(
-    /profitMonth: \(parseFloat\(r\.profit_month\) \|\| 0\) - \(expenseByPoint\.get\(r\.id as string\) \?\? 0\)/.test(
+    /\(parseFloat\(r\.profit_month\) \|\| 0\) - \(expenseByPoint\.get\(id\) \?\? 0\) - \(extrasByPoint\.get\(id\) \?\? 0\)/.test(
       summary,
     ),
-    'points.computeSummary: расходы филиала не вычитаются — «Прибыль за месяц» на карточке и на главной снова две разные метрики с одним именем',
+    'points.computeSummary: из «Прибыли за месяц» филиала выпал терм (расходы или премии+мотивация) — карточка и главная снова две разные метрики с одним именем',
   );
 
   // Определение расхода обязано СОВПАДАТЬ с reports.computeDashboardV2, иначе

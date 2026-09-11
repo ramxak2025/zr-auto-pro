@@ -19,7 +19,7 @@ export class ClientsService {
    * Used by the UI to warn the user before creating a duplicate.
    * Returns at most one match (the first by created_at).
    */
-  async findByPhone(tenantID: string, phone: string, actorUserID?: string) {
+  async findByPhone(tenantID: string, phone: string, actorPoint?: string | null) {
     // Match on the normalized core so a client saved as «+7 (988) 444-44-85»
     // is found when the user types «89884444485» or «9884444485» (#64). The
     // previous exact `phone = '+7…'` compare missed every non-canonical row,
@@ -31,7 +31,7 @@ export class ClientsService {
     // границам, что и список: иначе одна ручка отдавала бы ФИО и телефон
     // клиента чужого филиала любому, кто просто наберёт номер.
     const params: unknown[] = [tenantID, key];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), params);
     const { rows } = await this.pool.query(
       `SELECT id, full_name, phone, created_at
        FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2${pointWhere}
@@ -90,20 +90,23 @@ export class ClientsService {
   }
 
   /**
-   * 156 — мульти-точки, раздельная база клиентов: точка запрашивающего, если
-   * тенант выбрал points_shared_clients=false И точка у сотрудника выбрана;
-   * иначе null (общая база — дефолт, поведение прежнее).
+   * 156 — мульти-точки, раздельная база клиентов: филиал запрашивающего, если
+   * тенант выбрал points_shared_clients=false; иначе null (общая база — дефолт,
+   * поведение прежнее).
+   *
+   * 163 — ФИЛИАЛ ПРИХОДИТ ИЗ СЕССИИ, а не из users.current_point_id. Колонка
+   * теперь лишь подсказка «где человек работал в прошлый раз», одна на все его
+   * устройства: читая её здесь, веб показывал бы базу клиентов того филиала,
+   * который человек выбрал в телефоне. Поэтому вниз по всем чтениям клиентов и
+   * машин течёт `actorPointId(user)`, а не `user.userID` — и лишний SELECT по
+   * users на каждый такой запрос исчез заодно.
    */
-  async separatePointFor(tenantID: string, userID?: string): Promise<string | null> {
-    if (!userID) return null;
-    const { rows } = await this.pool.query(
-      `SELECT t.points_shared_clients AS shared, u.current_point_id AS point
-         FROM tenants t, users u
-        WHERE t.id = $1 AND u.id = $2 AND u.tenant_id = $1`,
-      [tenantID, userID],
-    );
-    if (rows.length === 0) return null;
-    return rows[0].shared === false && rows[0].point ? rows[0].point : null;
+  async separatePointFor(tenantID: string, actorPoint?: string | null): Promise<string | null> {
+    if (!actorPoint) return null;
+    const { rows } = await this.pool.query(`SELECT points_shared_clients AS shared FROM tenants WHERE id = $1`, [
+      tenantID,
+    ]);
+    return rows[0]?.shared === false ? actorPoint : null;
   }
 
   /**
@@ -129,7 +132,7 @@ export class ClientsService {
     return ` AND (${prefix}point_id = $${params.length} OR ${prefix}point_id IS NULL)`;
   }
 
-  async getAll(tenantID: string, query: any, actorUserID?: string) {
+  async getAll(tenantID: string, query: any, actorPoint?: string | null) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -194,7 +197,7 @@ export class ClientsService {
     // 156 — раздельная база клиентов по точкам: клиенты СВОЕЙ точки + общие/
     // исторические (point_id IS NULL, в т.ч. розничный покупатель). Общая
     // база (дефолт) — фильтра нет, поведение прежнее.
-    where += this.separatePointWhere('c', await this.separatePointFor(tenantID, actorUserID), params);
+    where += this.separatePointWhere('c', await this.separatePointFor(tenantID, actorPoint), params);
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
@@ -233,11 +236,11 @@ export class ClientsService {
     return { data: clients, total, page, limit };
   }
 
-  async getById(id: string, tenantID: string, actorUserID?: string) {
+  async getById(id: string, tenantID: string, actorPoint?: string | null) {
     // 161 — карточка клиента чужого филиала в раздельном режиме не должна
     // открываться по прямой ссылке (её id легко узнать из истории авто).
     const params: unknown[] = [id, tenantID];
-    const pointWhere = this.separatePointWhere('c', await this.separatePointFor(tenantID, actorUserID), params);
+    const pointWhere = this.separatePointWhere('c', await this.separatePointFor(tenantID, actorPoint), params);
     // Last loyalty rating is computed in the query (not denormalized) — the
     // most recent review_responses row for this client (007_marketing_reviews).
     const { rows } = await this.pool.query(
@@ -271,7 +274,7 @@ export class ClientsService {
     return client;
   }
 
-  async create(tenantID: string, dto: any, actorUserID?: string) {
+  async create(tenantID: string, dto: any, actorPoint?: string | null) {
     // full_name / phone are NOT NULL. Coerce + validate here so a missing field
     // returns a friendly 400 instead of a raw Postgres NOT NULL 500 — that raw
     // 500 was #57 BUG B ("создание клиента падает"): any create call that
@@ -290,7 +293,7 @@ export class ClientsService {
     // retail client has ''), so this is the authoritative dedup.
     // 156 — при раздельной базе новый клиент рождается НА точке автора;
     // при общей базе (дефолт) point_id остаётся NULL — виден всем.
-    const creationPoint = await this.separatePointFor(tenantID, actorUserID);
+    const creationPoint = await this.separatePointFor(tenantID, actorPoint);
 
     const key = phoneSearchKey(phone);
     if (key) {
@@ -388,10 +391,10 @@ export class ClientsService {
     });
   }
 
-  async update(id: string, tenantID: string, dto: any, actorUserID?: string) {
+  async update(id: string, tenantID: string, dto: any, actorPoint?: string | null) {
     // 161 — правка чужого филиала невозможна: тот же предикат видимости, что и
     // в списке, уходит в WHERE — чужая карточка просто «не найдена».
-    const viewerPoint = await this.separatePointFor(tenantID, actorUserID);
+    const viewerPoint = await this.separatePointFor(tenantID, actorPoint);
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -417,7 +420,7 @@ export class ClientsService {
       vals.push(dto.ownerNotes === '' ? null : dto.ownerNotes);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID, actorUserID);
+    if (sets.length === 0) return this.getById(id, tenantID, actorPoint);
 
     vals.push(id, tenantID);
     idx += 1; // теперь idx указывает на плейсхолдер tenant_id
@@ -443,12 +446,12 @@ export class ClientsService {
     }
   }
 
-  async exportCsv(tenantID: string, actorUserID?: string) {
+  async exportCsv(tenantID: string, actorPoint?: string | null) {
     // 161 — выгрузка обязана отдавать РОВНО ту базу, которую человек видит на
     // экране: иначе экспорт становился бы самым простым способом получить
     // клиентов чужого филиала одним файлом.
     const params: unknown[] = [tenantID];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), params);
     const { rows } = await this.pool.query(
       `SELECT full_name, phone FROM clients WHERE tenant_id = $1${pointWhere} ORDER BY full_name`,
       params,
@@ -458,12 +461,12 @@ export class ClientsService {
     return [header, ...lines].join('\n');
   }
 
-  async remove(id: string, tenantID: string, actorUserID?: string) {
+  async remove(id: string, tenantID: string, actorPoint?: string | null) {
     // 161 — удалить клиента чужого филиала нельзя: он «не найден». Проверка
     // стоит ПЕРВОЙ, до чтения обязательств, чтобы наружу не утекал даже факт
     // существования карточки.
     const checkParams: unknown[] = [id, tenantID];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), checkParams);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), checkParams);
     // Refuse to delete the pinned retail client — it's a system row that
     // /cash relies on. Without this guard the cash screen would silently
     // lose its default buyer.
@@ -507,11 +510,11 @@ export class ClientsService {
    * Update just the `source` tag on a client. Trimmed and stored verbatim;
    * empty string normalised to NULL so the FE renders "Без источника".
    */
-  async updateSource(id: string, tenantID: string, source: string | null, actorUserID?: string) {
+  async updateSource(id: string, tenantID: string, source: string | null, actorPoint?: string | null) {
     const normalized = typeof source === 'string' ? source.trim().slice(0, 100) : null;
     // 161 — тот же предикат видимости, что и в update(): чужая карточка «не найдена».
     const params: unknown[] = [normalized && normalized.length > 0 ? normalized : null, id, tenantID];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), params);
     const { rows } = await this.pool.query(
       `UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3${pointWhere} RETURNING *`,
       params,
@@ -524,10 +527,10 @@ export class ClientsService {
    * Update just the `owner_notes` field. Free-form text — capped at 4000
    * chars so a runaway client can't blow up the table.
    */
-  async updateNotes(id: string, tenantID: string, notes: string | null, actorUserID?: string) {
+  async updateNotes(id: string, tenantID: string, notes: string | null, actorPoint?: string | null) {
     const normalized = typeof notes === 'string' ? notes.slice(0, 4000) : null;
     const params: unknown[] = [normalized && normalized.length > 0 ? normalized : null, id, tenantID];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), params);
     const { rows } = await this.pool.query(
       `UPDATE clients SET owner_notes=$1 WHERE id=$2 AND tenant_id=$3${pointWhere} RETURNING *`,
       params,
@@ -557,13 +560,13 @@ export class ClientsService {
     id: string,
     tenantID: string,
     opts: { limit?: number; offset?: number } = {},
-    actorUserID?: string,
+    actorPoint?: string | null,
   ) {
     // 161 — скоупится ДОСТУП К КЛИЕНТУ (карточка чужого филиала не открывается),
     // но НЕ сами чеки ниже: открытая история клиента общая на всю сеть — см.
     // блок «ИСКЛЮЧЕНИЕ, НЕ ЧИНИТЬ» выше.
     const clientParams: unknown[] = [id, tenantID];
-    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), clientParams);
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorPoint), clientParams);
     const { rows: clientRows } = await this.pool.query(
       `SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2${pointWhere}`,
       clientParams,

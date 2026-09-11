@@ -66,6 +66,20 @@ export const authApi: typeof authApiBase = {
   ...authApiBase,
   login: (data: Parameters<typeof authApiBase.login>[0]) =>
     loginAcrossHosts<Awaited<ReturnType<typeof authApiBase.login>>['data']>(data),
+  // Шаг 1 входа с выбором филиала (163) — тот же POST /auth/login, значит и та
+  // же защита от отфильтрованного домена: без кольца вход с выбором филиала
+  // умирал бы там, где старый вход работал. Признак supportsPointSelect ставит
+  // фабрика в shared, здесь меняется ТОЛЬКО транспорт.
+  loginWithPointSelect: (data: Parameters<typeof authApiBase.loginWithPointSelect>[0]) =>
+    loginAcrossHosts<Awaited<ReturnType<typeof authApiBase.loginWithPointSelect>>['data']>({
+      ...data,
+      supportsPointSelect: true,
+    }),
+  // Шаг 2 (POST /auth/select-point) кольцо НЕ обходит СОЗНАТЕЛЬНО: обмен
+  // одноразовый, и повтор на другом хосте сжёг бы токен («Выбор филиала уже
+  // использован») там, где первый хост на самом деле выдал сессию. К этому
+  // моменту рабочий хост уже выбран успешным шагом 1 — обычный инстанс идёт
+  // ровно по нему.
 };
 // Self-service registration (migration 123). ONE public method — submit() from
 // the LOGIN screen (pre-auth). It is UNAUTHENTICATED by design and, как и

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -29,7 +29,6 @@ import {
   BookmarkPlus,
   Tag,
   Check as CheckIcon,
-  AlertTriangle,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
@@ -43,9 +42,10 @@ import {
   productsApi,
   warrantyApi,
   warehousesApi,
-  pointsApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
+import { usePointsQuery } from '../hooks/usePoints';
 import type {
   Client,
   Car,
@@ -61,7 +61,6 @@ import type {
   PosSettings,
   TenantLocation,
   CheckAssignee,
-  PointsListResponse,
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
@@ -543,8 +542,17 @@ export default function CheckCreatePage() {
   // и сервер не создаст дубль чека. Сбрасывается в onSuccess.
   const clientRequestIdRef = useRef<string | null>(null);
 
+  // «Сегодня» — по календарю АВТОСЕРВИСА (157), а не браузера: дату чека в
+  // шапке кассир сверяет глазами, а ставит её сервер своими сутками. У кассира
+  // восточнее сервиса поздним вечером шапка показывала уже завтрашнее число.
+  const { today: tenantToday } = useTenantCalendar();
+  // Тот же день, но через ref: эффект гидратации формы правки не имеет права
+  // перезапускаться в полночь — он затёр бы уже набранный заказ-наряд.
+  const tenantTodayRef = useRef(tenantToday);
+  tenantTodayRef.current = tenantToday;
+
   // Form fields (no top-level master — current user is the default)
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [date, setDate] = useState(tenantToday);
   const [editingDate, setEditingDate] = useState(false);
   // true только после РУЧНОЙ правки даты. Если пользователь дату не трогал,
   // поле date в payload не уходит вовсе: create получает серверный now()
@@ -625,37 +633,21 @@ export default function CheckCreatePage() {
   }, [serviceLines.length, productLines.length]);
 
   // 156/161 — мульти-точки: список автосервисов тенанта решает, скоупить ли
-  // пикер мастера филиалом. Тот же ключ ['points'], что у индикатора в шапке.
-  const { data: pointsData } = useQuery<PointsListResponse>({
-    queryKey: ['points'],
-    queryFn: async () => (await pointsApi.list()).data,
-    staleTime: 60_000,
-  });
+  // пикер мастера филиалом. Общий хук = тот же слот ['points'], что у
+  // индикатора в шапке и раздела «Филиалы», — лишней сети нет.
+  const { data: pointsData } = usePointsQuery();
   // Пикер мастера — ЕДИНСТВЕННОЕ место, где список обязан быть по ТЕКУЩЕМУ
   // филиалу (`?scope=point`): чужой мастер в чеке уводит его зарплату и рейтинг
   // в другой филиал. Журнал, расходы и зарплата по-прежнему читают весь тенант
   // — им нужны имена всех сотрудников. У одноточечного тенанта параметр не
   // ставим: ответ тот же, но ушёл бы мимо общего прогретого слота ['masters'].
   const scopeMastersToPoint = (pointsData?.points.length ?? 0) > 1;
-  /**
-   * Уйдёт ли чек в отказ 400 «Выберите филиал, чтобы пробить чек».
-   *
-   * Зеркало серверного resolvePointForWrite (backend/src/common/point-scope.ts):
-   * есть назначения на живые точки — доступны только они; нет назначений — все
-   * живые точки тенанта. Ровно одна доступная точка сервер подставит молча,
-   * поэтому предупреждать не о чем. Право user_management здесь ни при чём:
-   * сервер про него не знает.
-   *
-   * Проверяем ДО отправки: чек, пробитый в режиме общей сводки, не попал бы
-   * ни в основной сервис, ни в филиал — ни в журнал, ни в выручку, ни в
-   * зарплату мастера.
-   */
-  const needsPointForWrite = useMemo(() => {
-    const points = pointsData?.points ?? [];
-    if (!pointsData || pointsData.currentPointId) return false;
-    const assigned = user ? points.filter((p) => p.memberIds?.includes(user.id)) : [];
-    return (assigned.length > 0 ? assigned.length : points.length) > 1;
-  }, [pointsData, user]);
+  // ЧЕК ВСЕГДА ПОПАДАЕТ В ФИЛИАЛ СЕССИИ (163) — проверять перед отправкой
+  // больше нечего. Раньше здесь стояло зеркало серверного отказа 400 «Выберите
+  // филиал, чтобы пробить чек»: он случался в режиме общей сводки, когда
+  // сессия не принадлежала ни одному автосервису. Режима больше нет — филиал
+  // выдаётся в токене при входе, — и вместе с ним ушли и отказ, и это
+  // предупреждение.
   const { data: masters } = useQuery<User[]>({
     queryKey: scopeMastersToPoint ? ['masters', 'point'] : ['masters'],
     queryFn: async () => {
@@ -816,7 +808,7 @@ export default function CheckCreatePage() {
       const car = existingCheck.client.cars?.find((c: Car) => c.id === existingCheck.carId);
       if (car) setPlateSearch(car.plateNumber);
     }
-    setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+    setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : tenantTodayRef.current);
     setMileage(existingCheck.mileage ? String(existingCheck.mileage) : '');
     setPaymentMethod(existingCheck.paymentMethod || 'cash');
     // «Сплит»: восстановить РЕАЛЬНУЮ разбивку нал/карта. Без этого cashAmount
@@ -1386,19 +1378,6 @@ export default function CheckCreatePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Автосервис заказ-наряда (160/161). Сервер откажет, если автосервис не
-    // выбран, а подставить его молча нельзя. Ловим здесь, чтобы кассир не жал
-    // «Пробить» в ошибку. Переход между автосервисами живёт ТОЛЬКО в разделе
-    // «Филиалы» — тост говорит именно это, а не «выберите в шапке»: в шапке
-    // теперь неинтерактивный индикатор.
-    // Правка существующего чека автосервис не переставляет — только создание.
-    if (!isEditMode && needsPointForWrite) {
-      toast.error('Зайдите в нужный автосервис в разделе «Филиалы» — иначе заказ-наряд не попадёт ни в один из них.', {
-        duration: 8000,
-      });
-      return;
-    }
-
     // Round 12 #7: новый ЖИВОЙ чек без клиента (не правка, не отложенный) —
     // мягкое подтверждение перед пробитием, чтобы кассир не забыл привязку.
     if (!isEditMode && !isDeferred && !selectedClient) {
@@ -1415,7 +1394,7 @@ export default function CheckCreatePage() {
   // «сегодня» на момент рендера, а не значение, зафиксированное при
   // монтировании формы: вкладка кассы может провисеть открытой до полуночи, а
   // реальную дату всё равно ставит сервер в момент пробития.
-  const displayDate = dateTouched || isEditMode ? date : format(new Date(), 'yyyy-MM-dd');
+  const displayDate = dateTouched || isEditMode ? date : tenantToday;
 
   return (
     <div className="max-w-3xl mx-auto pb-8">
@@ -1443,22 +1422,6 @@ export default function CheckCreatePage() {
       </div>
 
       <form onSubmit={handleSubmit}>
-        {/* Автосервис не выбран (160/161) — предупреждение ДО нажатия
-            «Пробить»: в режиме общей сводки сервер откажет, а сам заказ-наряд
-            не попал бы ни в основной сервис, ни в филиал. Ссылка ведёт в
-            «Филиалы» — единственное место, где автосервис выбирают. */}
-        {!isEditMode && needsPointForWrite && (
-          <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            <span>
-              Автосервис не выбран — заказ-наряд не попадёт ни в журнал, ни в выручку, ни в зарплату мастера.{' '}
-              <Link to="/points" className="font-semibold underline underline-offset-2">
-                Открыть «Филиалы»
-              </Link>{' '}
-              и зайти в тот автосервис, где пробиваете чек.
-            </span>
-          </div>
-        )}
         {/* ===== Receipt-style container ===== */}
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Receipt header with editable date */}

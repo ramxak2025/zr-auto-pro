@@ -323,13 +323,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
    * Филиал актора для рассылок, либо null (общая база / точка не выбрана).
    * Тонкая обёртка ради читаемости вызовов ниже.
    */
-  private async segmentPoint(tenantId: string, actorUserID?: string): Promise<string | null> {
-    return this.clients.separatePointFor(tenantId, actorUserID);
+  private async segmentPoint(tenantId: string, actorPoint?: string | null): Promise<string | null> {
+    return this.clients.separatePointFor(tenantId, actorPoint);
   }
 
   /** Публичный доступ к тому же резолву — нужен контроллеру и ReminderService. */
-  async pointForActor(tenantId: string, actorUserID?: string): Promise<string | null> {
-    return this.segmentPoint(tenantId, actorUserID);
+  async pointForActor(tenantId: string, actorPoint?: string | null): Promise<string | null> {
+    return this.segmentPoint(tenantId, actorPoint);
   }
 
   onModuleInit() {
@@ -1272,12 +1272,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     days: number,
     message: string,
-    actorUserID?: string,
+    actorPoint?: string | null,
   ): Promise<{ sent: number; failed: number; skippedDedup: number; total: number }> {
     const text = (message || '').trim();
     if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
 
-    const segment = await this.getWinbackSegment(tenantId, days, await this.segmentPoint(tenantId, actorUserID));
+    const segment = await this.getWinbackSegment(tenantId, days, await this.segmentPoint(tenantId, actorPoint));
     const total = segment.length;
     const dayStamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     let sent = 0;
@@ -1407,11 +1407,15 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       idempotencyKey?: string | null;
     },
     createdBy?: string | null,
+    // 163 — филиал СЕССИИ отправителя отдельным аргументом: createdBy здесь
+    // ещё и автор рассылки (пишется в журнал отправок), и одним полем эти две
+    // роли не покрыть.
+    actorPoint?: string | null,
   ): Promise<{ sent: number; skippedDedup: number; failed: number; total: number }> {
     const text = (dto.message || '').trim();
     if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
-    // 161 — сегмент режется филиалом отправителя (createdBy — он же актор).
-    const point = await this.segmentPoint(tenantId, createdBy ?? undefined);
+    // 161 — сегмент режется филиалом отправителя (163: филиалом его сессии).
+    const point = await this.segmentPoint(tenantId, actorPoint);
 
     // Resolve the channel ONCE and fail fast if nothing is connected.
     const adapterRow = await this.getAdapterRowFor(tenantId, {
@@ -1635,7 +1639,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       integrationId?: string | null;
       providerType?: string | null;
     },
-    actorUserID?: string,
+    actorPoint?: string | null,
   ): Promise<{
     recipientsCount: number;
     sample: Array<{ name: string; phone: string }>;
@@ -1651,7 +1655,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     });
 
     // Предпросмотр обязан считать РОВНО тот же сегмент, что уйдёт в отправку.
-    const previewPoint = await this.segmentPoint(tenantId, actorUserID);
+    const previewPoint = await this.segmentPoint(tenantId, actorPoint);
     const recipients = await this.resolveSegment(tenantId, dto.segment || {}, previewPoint);
 
     // Имена для первых 5 — образец «кому именно уйдёт».

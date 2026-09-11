@@ -339,6 +339,24 @@ export class ScheduleService {
   }
 
   // Helper: ensure shift is opened when admin manually sets attendance status
+  //
+  // ФИЛИАЛ СМЕНЫ, ОТКРЫТОЙ НЕ ЧЕЛОВЕКОМ, А ОТМЕТКОЙ В ГРАФИКЕ (волна филиалов).
+  // Смену, открытую самим сотрудником, штампует филиал его сессии
+  // (shifts.open → actorPointId). Здесь актора-владельца смены нет: строку
+  // рождает отметка «пришёл» в чужом графике, и филиал приходилось бы брать у
+  // того, кто нажал, — то есть у администратора, который может сидеть в другом
+  // автосервисе. Поэтому филиал определяется ПО СВЯЗАННОЙ СУЩНОСТИ — по самому
+  // сотруднику:
+  //   • назначен РОВНО на один живой филиал (user_points) → его филиал;
+  //   • назначений нет / их несколько → ОСНОВНОЙ сервис тенанта
+  //     (tenant_points.is_main) — тот же адресат, которому миграция 160/162
+  //     разово прибивает историю без филиала, и единственный филиал, про
+  //     который известно, что он существует всегда;
+  //   • у тенанта нет живых точек вовсе → NULL, поведение прежнее дословно.
+  // БЕЗ ЭТОГО смена рождалась с point_id = NULL, а филиальные срезы фильтруют
+  // СТРОГИМ равенством: человек на работе, но его нет ни в ленте смен филиала,
+  // ни в счётчике «мастеров на работе» на карточке «Филиалы», — ровно тот класс
+  // «ничьих» строк, который волна филиалов убрала для путей с человеком.
   private async ensureShiftOpen(tenantID: string, userID: string, date: string, lateStatus: string | null) {
     if (!['on_time', 'late_minor', 'late_major'].includes(lateStatus || '')) return;
     // Check if shift already exists for this user/date
@@ -347,12 +365,22 @@ export class ScheduleService {
       [userID, date, tenantID],
     );
     if (existing.length > 0) return;
-    // Auto-open shift — opened_at adjusted based on late status
-    await this.pool.query(`INSERT INTO shifts (user_id, date, tenant_id, opened_at) VALUES ($1, $2, $3, now())`, [
-      userID,
-      date,
-      tenantID,
-    ]);
+    // Auto-open shift — opened_at adjusted based on late status.
+    // `MIN(id) ... HAVING COUNT(*) = 1`: агрегат без строк-результата, когда
+    // назначений не ровно одно, — скалярный подзапрос тогда даёт NULL, и
+    // COALESCE уходит к основному сервису.
+    await this.pool.query(
+      `INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)
+       SELECT $1, $2, $3, now(), COALESCE(
+         (SELECT MIN(tp.id) FROM user_points up
+            JOIN tenant_points tp ON tp.id = up.point_id AND tp.tenant_id = up.tenant_id AND tp.is_active
+           WHERE up.user_id = $1 AND up.tenant_id = $3
+          HAVING COUNT(*) = 1),
+         (SELECT tp.id FROM tenant_points tp
+           WHERE tp.tenant_id = $3 AND tp.is_main AND tp.is_active LIMIT 1)
+       )`,
+      [userID, date, tenantID],
+    );
   }
 
   async create(tenantID: string, dto: any) {

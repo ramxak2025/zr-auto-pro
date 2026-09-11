@@ -70,7 +70,9 @@ export class EquipmentController {
     @Body() body?: { reverseExpense?: boolean },
   ) {
     const reverseExpense = reverseExpenseQuery === 'true' || body?.reverseExpense === true;
-    return this.service.removeStorageItem(id, user.tenantID, reverseExpense);
+    // Филиал сессии — гейту зеркального расхода (161/163): «вернуть деньги в
+    // оборот» можно только в том филиале, за счёт которого покупали.
+    return this.service.removeStorageItem(id, user.tenantID, reverseExpense, actorPointId(user));
   }
 
   // ─── Employee Summary ─────────────────────────────────────────────

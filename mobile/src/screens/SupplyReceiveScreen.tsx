@@ -55,6 +55,7 @@ import {
   formatSupplyDate,
   isBackdatedSupply,
   isFutureDay,
+  todaySupplyDate,
   outstandingQty,
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
@@ -124,8 +125,21 @@ export default function SupplyReceiveScreen() {
   const [seeded, setSeeded] = useState(false);
   const [pendingMode, setPendingMode] = useState<PayMode | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // Дата поставки (159) — по умолчанию сегодня; прошедшая разрешена.
-  const [supplyDate, setSupplyDate] = useState<Date>(() => new Date());
+  // Дата поставки (159) — по умолчанию СЕГОДНЯ У АВТОСЕРВИСА (пояс тенанта,
+  // 157), а не у телефона: сервер меряет потолок «не в будущем» своим поясом, и
+  // дефолт по устройству у владельца в другом часовом поясе оказывался либо в
+  // будущем (приёмка падала с 400), либо вчерашним днём автосервиса (склад и
+  // деньги молча уезжали в чужие сутки). Прошедшая дата по-прежнему разрешена.
+  const [supplyDate, setSupplyDate] = useState<Date>(() => todaySupplyDate(tenantTz));
+  // Трогал ли человек дату руками. Пояс приезжает из профиля синхронно, но
+  // может уточниться позже (владелец сменил его в настройках компании, и кэш
+  // ['my-company'] прогрелся после монтирования) — тогда НЕТРОНУТЫЙ дефолт
+  // обязан переехать на новый «сегодня», а выбранную руками дату не трогаем.
+  const [supplyDateTouched, setSupplyDateTouched] = useState(false);
+  useEffect(() => {
+    if (supplyDateTouched) return;
+    setSupplyDate(todaySupplyDate(tenantTz));
+  }, [tenantTz, supplyDateTouched]);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   // «Задним числом» — относительно СЕГОДНЯ У АВТОСЕРВИСА (пояс тенанта, 157),
   // а не устройства: сервер решает это по своему поясу, и расхождение вешало бы
@@ -297,6 +311,7 @@ export default function SupplyReceiveScreen() {
     }
     haptic('select');
     setSupplyDate(d);
+    setSupplyDateTouched(true);
     setDatePickerOpen(false);
   };
 

@@ -152,9 +152,9 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
    */
   async sendForTenant(
     tenantId: string,
-    actorUserID?: string,
+    actorPoint?: string | null,
   ): Promise<{ sent: number; errors: number; message?: string }> {
-    const point = await this.marketingService.pointForActor(tenantId, actorUserID);
+    const point = await this.marketingService.pointForActor(tenantId, actorPoint);
     return this.sendPass(tenantId, point ? { kind: 'point', pointId: point } : { kind: 'all' });
   }
 

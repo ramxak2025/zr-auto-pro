@@ -21,6 +21,8 @@ import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SelectPointDto } from './dto/select-point.dto';
+import { POINT_SELECT_PURPOSE, POINT_SELECT_TTL_SECONDS } from './point-session';
 
 // Shared SQL fragment for fetching user with tenant info.
 // ROLE-ONLY (волна «права как в Битрикс24», 2026-07): permissions клиенту
@@ -76,8 +78,16 @@ function effectivePermissionsFor(role: string | undefined, rawMatrix: unknown): 
   return effective;
 }
 
-/** Map a raw DB row to a camelCase user object with parsed tenant */
-function mapUserRow(row: any) {
+/**
+ * Map a raw DB row to a camelCase user object with parsed tenant.
+ *
+ * `sessionPointId` (163) — филиал ЭТОЙ сессии. Передаётся явно, потому что
+ * users.current_point_id перестал быть филиалом работы и стал лишь подсказкой
+ * «где человек был в прошлый раз»: отдать её клиенту значило бы показать вебу
+ * филиал, выбранный в телефоне, — ровно та ошибка, из-за которой эту волну и
+ * делали. undefined = путь, где филиала сессии нет (register).
+ */
+function mapUserRow(row: any, sessionPointId?: string | null) {
   const user: any = {
     id: row.id,
     phone: row.phone,
@@ -91,9 +101,9 @@ function mapUserRow(row: any) {
     permissions: effectivePermissionsFor(row.role, row.role_matrix),
     isActive: row.is_active,
     tenantId: row.tenant_id,
-    // 156 — мульти-точки: текущая выбранная точка (undefined в путях, которые
-    // колонку не выбирают — аддитивно, клиенты делают fallback на GET /points).
-    currentPointId: row.current_point_id ?? null,
+    // 163 — филиал СЕССИИ (из токена), а не колонка пользователя. null =
+    // у тенанта нет живых филиалов (одноточечный автосервис).
+    currentPointId: sessionPointId ?? null,
     createdAt: row.created_at,
   };
 
@@ -132,9 +142,66 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  private generateToken(userID: string, tenantID?: string): string {
+  /**
+   * ТОКЕН СЕССИИ. Филиал (163) едет claim'ом `pointId` и живёт ровно столько,
+   * сколько живёт сессия: две сессии одного человека (телефон и веб) могут
+   * работать в РАЗНЫХ филиалах и не мешают друг другу. Раньше филиал лежал в
+   * users.current_point_id — одной колонке на все устройства, — и переключение
+   * на телефоне молча уводило веб в чужой автосервис.
+   *
+   * pointId = null означает РОВНО ОДНО: у тенанта нет ни одного живого филиала
+   * (одноточечный автосервис). Рабочего режима «все филиалы» больше нет.
+   */
+  private generateToken(userID: string, tenantID: string | undefined, pointId: string | null): string {
     const jti = randomUUID();
-    return this.jwtService.sign({ sub: userID, tenantId: tenantID, jti });
+    return this.jwtService.sign({ sub: userID, tenantId: tenantID, jti, pointId });
+  }
+
+  /**
+   * ДОСТУПНЫЕ СОТРУДНИКУ ЖИВЫЕ ФИЛИАЛЫ, в порядке пикера (основной сервис →
+   * sort_order → имя → id). Предикат доступа — ОДИН на весь монорепо, функция
+   * autexa_available_points из миграции 163; порядок задаёт вызывающий, потому
+   * что планировщик волен инлайнить функцию и потерять внутренний ORDER BY.
+   *
+   * Тенанта нет (глобальный суперадмин) → пусто: филиалов у него не бывает.
+   */
+  private async availablePoints(
+    tenantID: string | null,
+    userID: string,
+  ): Promise<Array<{ id: string; name: string; address: string | null; isMain: boolean }>> {
+    if (!tenantID || tenantID === NO_TENANT_ID) return [];
+    const { rows } = await this.pool.query(
+      `SELECT a.id::text as id, a.name, a.address, a.is_main
+         FROM autexa_available_points($1::uuid, $2::uuid) a
+        ORDER BY a.is_main DESC, a.sort_order ASC, lower(a.name) ASC, a.id ASC`,
+      [tenantID, userID],
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      address: (r.address as string | null) ?? null,
+      isMain: !!r.is_main,
+    }));
+  }
+
+  /**
+   * ЗАПОМНИТЬ ПОСЛЕДНИЙ ВЫБРАННЫЙ ФИЛИАЛ. users.current_point_id перестал быть
+   * механизмом переключения (163) и остался РОВНО подсказкой «куда этот человек
+   * заходил в прошлый раз»: её honours autexa_default_point при входе старого
+   * клиента и при подстановке филиала сессии без claim'а. Ни одна выборка
+   * данных на эту колонку больше не опирается.
+   *
+   * Ошибку глотаем СОЗНАТЕЛЬНО: это подсказка для следующего входа, а не часть
+   * авторизации. Уронить успешный вход из-за неё — обменять удобство на отказ
+   * в работе.
+   */
+  private async rememberPoint(userID: string, pointId: string | null): Promise<void> {
+    if (!pointId) return;
+    try {
+      await this.pool.query(`UPDATE users SET current_point_id=$1 WHERE id=$2`, [pointId, userID]);
+    } catch (err) {
+      this.logger.warn(`current_point_id remember failed for ${userID}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**
@@ -261,7 +328,7 @@ export class AuthService {
    *   JwtStrategy снова подставит sentinel при валидации.
    */
   async refresh(
-    user: { userID: string; tenantID: string; jti?: string },
+    user: { userID: string; tenantID: string; currentPointId?: string | null; jti?: string },
     rawToken: string,
   ): Promise<{ token: string }> {
     const oldJti = user.jti;
@@ -311,7 +378,12 @@ export class AuthService {
     }
 
     const tenantID = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : undefined;
-    return { token: this.generateToken(user.userID, tenantID) };
+    // ФИЛИАЛ ПЕРЕЕЗЖАЕТ В НОВЫЙ ТОКЕН (163). Иначе тихое продление сессии
+    // молча перекидывало бы человека в филиал по умолчанию: он продолжает
+    // работать, думая, что сидит в прежнем, а чеки уходят в другой автосервис.
+    // Филиал уже проверен на живость и доступность JwtStrategy этого же
+    // запроса — второй проверки не нужно.
+    return { token: this.generateToken(user.userID, tenantID, user.currentPointId ?? null) };
   }
 
   async isTokenRevoked(jti: string): Promise<boolean> {
@@ -393,8 +465,181 @@ export class AuthService {
 
     this.logger.log(`Login OK: phone=${phone} role=${row.role} tenant=${row.tenant_id || 'none'}`);
 
-    const token = this.generateToken(row.id, row.tenant_id);
-    return { token, user: mapUserRow(row) };
+    // ── ШАГ 1 ЗАКОНЧЕН: пароль верен, решаем, нужен ли выбор филиала ────────
+    const points = await this.availablePoints(row.tenant_id ?? null, row.id);
+
+    // ДОСТУПНЫХ ФИЛИАЛОВ НЕТ, А У ТЕНАНТА ОНИ ЕСТЬ — ЭТО ОТКАЗ, А НЕ ВХОД БЕЗ
+    // ФИЛИАЛА (165). Состояние появилось вместе с разделением «доступ не
+    // настроен» и «доступ есть, но филиал закрыт»: сотрудник, назначенный
+    // только на заархивированный филиал, раньше молча проваливался в ветку
+    // «доступны все живые» и получал доступ ко всей сети, включая основной
+    // сервис. Теперь список пуст — и пускать его нельзя ни в каком виде:
+    // сессия без филиала у тенанта С филиалами рождает денежные строки с
+    // point_id = NULL, невидимые в каждом филиальном срезе (см.
+    // common/point-scope.ts). Запрос выполняется ТОЛЬКО в этой редкой ветке,
+    // поэтому вход одноточечного тенанта не дорожает.
+    //
+    // КОГО СЮДА БОЛЬШЕ НЕ ЗАНОСИТ (166): держателя права управления персоналом
+    // (владелец, директор, админ сети). Он и так распоряжается филиалами и
+    // назначениями, поэтому запереть его закрытием филиала — значит лишить
+    // единственного человека, который вправе это починить, возможности войти.
+    // Ему autexa_available_points отдаёт основной сервис, список непустой, и
+    // до этой ветки он просто не доходит. Правило целиком живёт в SQL-функции
+    // (миграция 166) — ВТОРОЙ КОПИИ ЗДЕСЬ БЫТЬ НЕ ДОЛЖНО: вход, обмен на
+    // сессию, проверка на каждом запросе и подстановка филиала по умолчанию
+    // обязаны отвечать на «кому что доступно» одинаково.
+    if (points.length === 0 && row.tenant_id) {
+      const { rows: live } = await this.pool.query(
+        `SELECT EXISTS(SELECT 1 FROM tenant_points WHERE tenant_id=$1 AND is_active) as has_points`,
+        [row.tenant_id],
+      );
+      if (live[0]?.has_points === true) {
+        this.logger.warn(`Login FAILED: phone=${phone} — no accessible point`);
+        throw new ForbiddenException({
+          message: 'Вам не назначен ни один действующий филиал — обратитесь к руководителю',
+        });
+      }
+    }
+
+    // Ноль или один доступный филиал — выбора не существует. Одноточечный
+    // автосервис (филиалов нет вовсе) получает pointId = null и не замечает
+    // этой волны вообще; сотрудник, приписанный к одному филиалу, входит в
+    // него молча, ровно как раньше.
+    if (points.length <= 1) {
+      const pointId = points[0]?.id ?? null;
+      await this.rememberPoint(row.id, pointId);
+      const token = this.generateToken(row.id, row.tenant_id, pointId);
+      return { token, user: mapUserRow(row, pointId) };
+    }
+
+    // ── СТАРАЯ СБОРКА (3.5 / 3.6) — ВХОДИТ ПО-СТАРОМУ ───────────────────────
+    // В проде стоят приложения, которые про второй шаг ничего не знают и ждут
+    // токен сразу. Ответ без `token` они прочитать не смогут — это пустой экран
+    // у живого автосервиса. Поэтому филиал за них выбирает СЕРВЕР: последний
+    // использованный, иначе основной сервис (autexa_default_point). Ключ к
+    // ветке — явный признак поддержки в запросе, а не догадка по User-Agent.
+    if (dto.supportsPointSelect !== true) {
+      const { rows: fallback } = await this.pool.query(
+        `SELECT autexa_default_point($1::uuid, $2::uuid, $3::uuid)::text as point_id`,
+        [row.tenant_id, row.id, row.current_point_id ?? null],
+      );
+      const pointId = (fallback[0]?.point_id as string | null) ?? points[0].id;
+      await this.rememberPoint(row.id, pointId);
+      const token = this.generateToken(row.id, row.tenant_id, pointId);
+      return { token, user: mapUserRow(row, pointId) };
+    }
+
+    // ── ШАГ 2 ВПЕРЕДИ: отдаём список и промежуточный токен ──────────────────
+    // Полноценного токена здесь НЕТ и быть не может: сессия без филиала — это
+    // ровно тот режим «все филиалы», из-за которого деньги записывались в
+    // никуда. Пароль во втором шаге больше не участвует, поэтому промежуточный
+    // токен живёт минуты и помечен назначением, с которым JwtStrategy не
+    // пускает его ни в одну обычную ручку.
+    const selectToken = this.jwtService.sign(
+      { sub: row.id, tenantId: row.tenant_id, jti: randomUUID(), purpose: POINT_SELECT_PURPOSE },
+      { expiresIn: POINT_SELECT_TTL_SECONDS },
+    );
+    const { rows: preferred } = await this.pool.query(
+      `SELECT autexa_default_point($1::uuid, $2::uuid, $3::uuid)::text as point_id`,
+      [row.tenant_id, row.id, row.current_point_id ?? null],
+    );
+    return {
+      pointSelectionRequired: true as const,
+      selectToken,
+      expiresIn: POINT_SELECT_TTL_SECONDS,
+      points,
+      // Куда человек заходил в прошлый раз — чтобы клиент подсветил пункт, а не
+      // заставлял вспоминать. Выбор всё равно делает человек.
+      defaultPointId: (preferred[0]?.point_id as string | null) ?? points[0].id,
+    };
+  }
+
+  /**
+   * ШАГ 2 ВХОДА: обменять промежуточный токен + выбранный филиал на токен
+   * сессии. Пароль здесь НЕ участвует — он уже проверен на шаге 1.
+   *
+   * ПОЧЕМУ ЭТО ОТДЕЛЬНАЯ ПУБЛИЧНАЯ РУЧКА, А НЕ ЗАЩИЩЁННАЯ JwtAuthGuard'ом:
+   * промежуточный токен намеренно НЕ проходит guard (JwtStrategy отбивает его
+   * по назначению). Иначе им можно было бы ходить в обычные ручки — работать
+   * без филиала.
+   *
+   * ОДИН ОБМЕН НА ТОКЕН. jti промежуточного токена атомарно уходит в
+   * revoked_tokens тем же claim-механизмом, что и ротация /auth/refresh
+   * (INSERT ... ON CONFLICT DO NOTHING + rowCount): выигрывает ровно один
+   * запрос. Поэтому повторный обмен — хоть случайный ретрай, хоть перехваченный
+   * токен — получает 401, а не второй живой токен в другой филиал.
+   *
+   * ЖИВЫЕ ПРОВЕРКИ ЗАНОВО. Между шагами проходят минуты: сотрудника могли
+   * уволить, деактивировать или снять с филиала. Проверяем аккаунт и
+   * доступность филиала ещё раз — промежуточный токен не консервирует права.
+   */
+  async selectPoint(dto: SelectPointDto) {
+    let decoded: Record<string, unknown>;
+    try {
+      decoded = this.jwtService.verify(dto.selectToken) as Record<string, unknown>;
+    } catch {
+      // Истёк / подделан / подписан другим ключом — все три означают одно:
+      // начинать вход заново. Различать их клиенту нечем и незачем.
+      throw new UnauthorizedException({ message: 'Время выбора филиала истекло — войдите заново' });
+    }
+    if (decoded.purpose !== POINT_SELECT_PURPOSE) {
+      throw new UnauthorizedException({ message: 'Неверный токен' });
+    }
+    const userID = decoded.sub as string | undefined;
+    const jti = decoded.jti as string | undefined;
+    if (!userID || !jti) {
+      throw new UnauthorizedException({ message: 'Неверный токен' });
+    }
+
+    const { rows } = await this.pool.query(
+      `SELECT ${USER_WITH_TENANT_COLUMNS}
+       FROM users u
+       LEFT JOIN tenants t ON t.id = u.tenant_id
+       ${ROLE_JOIN}
+       WHERE u.id = $1`,
+      [userID],
+    );
+    if (rows.length === 0) {
+      throw new UnauthorizedException({ message: 'Пользователь не найден' });
+    }
+    const row = rows[0];
+    if (row.dismissed_at || row.purged_at) {
+      throw new UnauthorizedException({ message: 'Аккаунт уволен' });
+    }
+    if (!row.is_active) {
+      throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
+    }
+
+    // Филиал обязан быть доступен ИМЕННО ЭТОМУ сотруднику: без проверки любой
+    // сотрудник тенанта подставил бы в шаг 2 чужой филиал и получил бы законный
+    // токен в чужой автосервис.
+    const points = await this.availablePoints(row.tenant_id ?? null, userID);
+    const chosen = points.find((p) => p.id === dto.pointId);
+    if (!chosen) {
+      throw new ForbiddenException({ message: 'Филиал недоступен' });
+    }
+
+    // Атомарный claim: промежуточный токен становится недействительным ДО
+    // выдачи сессионного. expires_at = настоящий exp промежуточного токена,
+    // чтобы строка blacklist пережила токен, который она гасит.
+    const exp = typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : new Date(Date.now() + 600_000);
+    const tenantForRow = row.tenant_id && row.tenant_id !== NO_TENANT_ID ? row.tenant_id : null;
+    const claimed = await this.blacklistToken({
+      jti,
+      userId: userID,
+      tenantId: tenantForRow,
+      graceMs: 0,
+      expiresAt: exp,
+      mode: 'claim',
+    });
+    if (!claimed) {
+      throw new UnauthorizedException({ message: 'Выбор филиала уже использован — войдите заново' });
+    }
+
+    await this.rememberPoint(userID, chosen.id);
+    this.logger.log(`Login OK (point): user=${userID} point=${chosen.id}`);
+    const token = this.generateToken(userID, row.tenant_id, chosen.id);
+    return { token, user: mapUserRow(row, chosen.id) };
   }
 
   async register(dto: RegisterDto) {
@@ -467,8 +712,10 @@ export class AuthService {
 
       await client.query('COMMIT');
 
-      const token = this.generateToken(userRows[0].id, tenantID);
-      return { token, user: mapUserRow(userRows[0]) };
+      // Тенант только что создан — филиалов у него нет по построению, поэтому
+      // филиал сессии null: одноточечный режим, поведение прежнее.
+      const token = this.generateToken(userRows[0].id, tenantID, null);
+      return { token, user: mapUserRow(userRows[0], null) };
     } catch (err) {
       await client.query('ROLLBACK');
       this.logger.error(`Register error: ${err}`);
@@ -478,21 +725,27 @@ export class AuthService {
     }
   }
 
-  async me(userID: string) {
+  /**
+   * Профиль владельца ЭТОЙ сессии. Филиал берётся из актора (то есть из
+   * токена), а не из users.current_point_id: /auth/me — то место, откуда
+   * клиент узнаёт свой филиал на старте, и колонка отдала бы вебу филиал,
+   * выбранный в телефоне.
+   */
+  async me(actor: { userID: string; currentPointId?: string | null }) {
     const { rows } = await this.pool.query(
       `SELECT ${USER_WITH_TENANT_COLUMNS}
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
        ${ROLE_JOIN}
        WHERE u.id = $1`,
-      [userID],
+      [actor.userID],
     );
 
     if (rows.length === 0) {
       throw new UnauthorizedException({ message: 'Пользователь не найден' });
     }
 
-    return mapUserRow(rows[0]);
+    return mapUserRow(rows[0], actor.currentPointId ?? null);
   }
 
   async updateAvatar(userID: string, avatar: string) {

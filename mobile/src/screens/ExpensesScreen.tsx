@@ -71,8 +71,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
-import { apiErrorMessage, choosePointMessage } from '../../../shared/utils/apiError';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { User } from '../../../shared/types';
 
 // ────────────────────────────────────────────────────────────────────────
@@ -555,8 +554,6 @@ export default function ExpensesScreen() {
   const isOwnerRole = hasPermission('financial_reports');
   const canCreate = hasPermission('can_add_expenses');
   const tabBarHeight = useTabBarHeight();
-  // Отказ «Выберите филиал» → диалог с кнопкой, открывающей шторку выбора.
-  const pointPrompt = usePointRequiredPrompt();
 
   // ── State ────────────────────────────────────────────────────────────
   const [refreshing, setRefreshing] = useState(false);
@@ -726,50 +723,44 @@ export default function ExpensesScreen() {
       resetForm();
       haptic('success');
     },
-    // 160/161: расход в режиме «Все точки» не попал бы ни в один филиал — ни в
-    // его отчёт, ни в чистую прибыль. Сервер отвечает 400 «Выберите филиал…»;
-    // показываем его текст и сразу даём выбор, а не глухое «Ошибка».
+    // 163: филиал расхода — филиал СЕССИИ, он есть всегда. Отказа «выберите
+    // филиал» больше не существует, поэтому и особой ветки под него нет.
     onError: (err) => {
-      const pointMessage = choosePointMessage(err);
-      if (pointMessage) {
-        // Форма расхода — RN `<Modal>`, шторка выбора филиала тоже. Презентация
-        // одной в тот же кадр, когда другая ещё уходит, на iOS съедает верхнюю,
-        // поэтому сначала закрываем форму, потом (через анимацию) спрашиваем.
-        // Расход всё равно не пройдёт, пока филиал не выбран.
-        setModalOpen(false);
-        setTimeout(() => pointPrompt.show(pointMessage), 250);
-        return;
-      }
       Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Ошибка при создании расхода');
     },
   });
 
-  // Бэкенд не отдаёт PATCH /expenses/:id (см. expenses.controller — есть
-  // только approve/reject/delete/create). Поэтому "редактирование" — это
-  // честный replace: атомарно удаляем исходную строку (DELETE … RETURNING),
-  // и только при успехе создаём новую с обновлёнными полями. Так сумма в
-  // отчётах и кешфлоу никогда не задваивается: либо обе операции прошли и
-  // строка одна, либо удаление не прошло — и старая строка осталась
-  // нетронутой. Pending-строки редактировать нельзя (см. handleEditExpense),
-  // иначе replace сбросил бы статус одобрения.
+  // ПРАВКА расхода — ОДИН запрос PATCH /expenses/:id.
+  //
+  // Здесь раньше стоял «replace»: сначала expensesApi.remove(id), затем
+  // expensesApi.create(...). Удаление на сервере ФИЗИЧЕСКОЕ, поэтому отказ
+  // второго запроса (нет права, чужой филиал, оборвалась связь) стирал расход
+  // НАВСЕГДА — восстанавливать было нечего. Теперь строка либо изменилась, либо
+  // осталась прежней; исчезнуть без замены она не может физически.
+  //
+  // Сервер сам сохраняет id, автора, источник, филиал и статус одобрения
+  // (правка может только вернуть строку в очередь 'pending', если сумма вышла
+  // за дневной лимит) — поэтому редактировать можно и строку «на одобрении».
   const editMutation = useMutation({
-    mutationFn: async ({
+    mutationFn: ({
       id,
       data,
     }: {
       id: string;
-      data: { categoryId?: string; amount: number; description?: string; date?: string };
-    }) => {
-      await expensesApi.remove(id);
-      await expensesApi.create(data);
-    },
+      data: { categoryId?: string | null; amount: number; description?: string; date?: string };
+    }) => expensesApi.update(id, data),
     onSuccess: () => {
       invalidateExpenseDerived();
       setModalOpen(false);
       resetForm();
       haptic('success');
     },
-    onError: () => Alert.alert('Ошибка', 'Не удалось сохранить изменения'),
+    // Текст сервера, а не немое «Не удалось сохранить»: отказ по праву или по
+    // филиалу человек обязан прочитать словами, иначе он жмёт «Сохранить» ещё раз.
+    onError: (err) => {
+      haptic('error');
+      Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Не удалось сохранить изменения');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -968,10 +959,9 @@ export default function ExpensesScreen() {
       // синтетический id, PATCH/DELETE на сервере вернут 404. Тап игнорируем.
       if (item.source === 'warranty') return;
       if (!isOwnerRole && item.createdBy !== user?.id) return;
-      // Редактирование = delete-then-create (PATCH-эндпоинта нет). Строку
-      // «на одобрении» так редактировать нельзя — replace сбросил бы
-      // approval_status. Тап по pending-строке просто ничего не открывает.
-      if (item.approvalStatus === 'pending') return;
+      // Строку «на одобрении» теперь МОЖНО править: PATCH сохраняет
+      // approval_status (раньше правка была delete+create и сбрасывала его,
+      // поэтому тап по pending-строке ничего не открывал).
       setEditingId(item.id);
       setAmount(String(item.amount));
       setDescription(item.description || '');
@@ -1013,11 +1003,14 @@ export default function ExpensesScreen() {
       date: toDateStr(expenseDate),
     };
     if (editingId) {
-      // Backend не отдаёт PATCH /expenses/:id — честно делаем replace:
-      // атомарный DELETE исходной строки, затем create новой. Так сумма
-      // в отчётах и кешфлоу не задваивается (раньше create всегда создавал
-      // новую строку, оставляя старую → двойной учёт суммы — P0).
-      editMutation.mutate({ id: editingId, data: payload });
+      // PATCH /expenses/:id — правка на месте. Поля, которые СТИРАЮТ значение,
+      // должны уехать явно, а не пропасть из JSON: `categoryId: null` снимает
+      // категорию («Без категории»), пустая строка описания — комментарий.
+      // Отсутствие поля сервер трактует как «не трогать».
+      editMutation.mutate({
+        id: editingId,
+        data: { ...payload, categoryId: selectedCategoryId || null, description },
+      });
     } else {
       createMutation.mutate(payload);
     }

@@ -47,6 +47,7 @@ import {
   formatPoDate,
   formatSupplyDate,
   isFutureDay,
+  tenantDayDate,
   outstandingQty,
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
@@ -489,9 +490,14 @@ export default function PurchaseOrderDetailScreen() {
       />
 
       {/* ── Смена даты проведённой поставки (159) ── */}
+      {/* Стартовый день пикера — КАЛЕНДАРНЫЙ ДЕНЬ АВТОСЕРВИСА (пояс тенанта,
+          157). `new Date(receivedAt)` дал бы день ТЕЛЕФОНА: у владельца в
+          другом часовом поясе пикер открывался на соседних сутках, и потолок
+          «не в будущем» (тоже по поясу автосервиса) отвергал бы собственный
+          сегодняшний день. Сравниваем и показываем однородные величины. */}
       <DateTimePickerModal
         visible={datePickerOpen}
-        value={po.receivedAt ? new Date(po.receivedAt) : new Date()}
+        value={tenantDayDate(po.receivedAt ?? new Date(), tenantTz)}
         mode="date"
         onConfirm={applyPickedDate}
         onCancel={() => setDatePickerOpen(false)}

@@ -60,6 +60,7 @@ import type {
   TenantPoint,
   PointsListResponse,
   PointsSummaryResponse,
+  UserPointsResponse,
   PlatformStats,
   MrrTrendPoint,
   SubscriptionRevenue,
@@ -191,6 +192,9 @@ import type {
 import type {
   LoginRequest,
   LoginResponse,
+  PointSelectLoginRequest,
+  PointSelectLoginResponse,
+  SelectPointRequest,
   RegisterRequest,
   DeleteAccountRequest,
   DeleteAccountResponse,
@@ -266,7 +270,42 @@ import type {
 
 export function createAuthApi(api: HttpClient) {
   return {
+    /**
+     * Вход БЕЗ второго шага: сервер всегда отдаёт токен сразу и выбирает филиал
+     * сам (последний использованный, иначе основной сервис). Так работают
+     * сборки, не умеющие показывать выбор филиала.
+     *
+     * Умеешь показывать выбор — зови loginWithPointSelect: признак поддержки и
+     * тип ответа обязаны меняться вместе, поэтому это отдельный метод, а не
+     * необязательное поле здесь.
+     */
     login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
+    /**
+     * ВХОД С ВЫБОРОМ ФИЛИАЛА (163), шаг 1. Ответ — либо обычный
+     * {@link LoginResponse} (доступен один филиал либо филиалов нет вовсе:
+     * одноточечный автосервис не видит выбора вообще), либо
+     * {@link PointSelectionRequiredResponse} со списком филиалов и
+     * промежуточным токеном.
+     *
+     *   if ('pointSelectionRequired' in res.data) → показать экран выбора и
+     *   вторым шагом вызвать selectPoint(); иначе — обычный вход.
+     */
+    loginWithPointSelect: (data: LoginRequest) =>
+      api.post<PointSelectLoginResponse>('/auth/login', {
+        ...data,
+        supportsPointSelect: true,
+      } satisfies PointSelectLoginRequest),
+    /**
+     * ШАГ 2 ВХОДА: обменять промежуточный токен и выбранный филиал на токен
+     * сессии. Пароль не нужен. Токен одноразовый: повторный обмен — 401
+     * («Выбор филиала уже использован — войдите заново»), истёкший — 401
+     * («Время выбора филиала истекло»), филиал недоступен — 403.
+     *
+     * СМЕНА ФИЛИАЛА = ВЫХОД И ВХОД ЗАНОВО. Переключения внутри приложения нет:
+     * POST /points/switch лишь запоминает филиал для СЛЕДУЮЩЕГО входа (ручка
+     * оставлена ради сборок 3.5/3.6, см. pointsApi.switch).
+     */
+    selectPoint: (data: SelectPointRequest) => api.post<LoginResponse>('/auth/select-point', data),
     register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
     me: () => api.get<User>('/auth/me'),
     // Тихое продление сессии: свежий токен (полный TTL) по ещё валидному
@@ -432,8 +471,15 @@ export function createTenantsApi(api: HttpClient) {
 }
 
 /**
- * Мульти-точки (156) — тенант-сторона: живые точки своего тенанта,
- * переключение текущей точки, назначение сотрудников (user_management).
+ * Мульти-точки (156/163) — тенант-сторона: живые филиалы своего тенанта,
+ * сводка по сети и настройка доступа сотрудников (user_management).
+ *
+ * ПЕРЕКЛЮЧЕНИЯ ФИЛИАЛА ЗДЕСЬ НЕТ И БОЛЬШЕ НЕ БУДЕТ. Филиал — свойство сессии:
+ * он выбирается при входе (authApi.loginWithPointSelect → selectPoint) и живёт
+ * ровно столько, сколько живёт токен. Чтобы работать в другом филиале, надо
+ * выйти и войти в него заново; старая ручка POST /points/switch оставлена на
+ * сервере только ради сборок 3.5/3.6 и лишь ЗАПОМИНАЕТ филиал для следующего
+ * входа.
  */
 export function createPointsApi(api: HttpClient) {
   return {
@@ -445,17 +491,56 @@ export function createPointsApi(api: HttpClient) {
     list: () => api.get<PointsListResponse>('/points'),
     /**
      * Сводка для карточек раздела «Филиалы»: оборот дня/месяца, прибыль
-     * месяца, число чеков, мастеров на работе — на каждую живую точку.
+     * месяца, число чеков, мастеров на работе.
+     *
+     * СОСТАВ — все живые точки ПЛЮС закрытые (PointSummary.isArchived), у
+     * которых в показанном периоде остались деньги или работа: их суммы всё
+     * ещё сидят в итогах тенанта, и без этих карточек сложение не сходится с
+     * главной. Клиент обязан подписать такую карточку «Закрыт» и не
+     * предлагать в неё войти.
+     *
      * Гейт `financial_reports`; прибыль дополнительно закрыта `profit_view`
      * (без права приходит 0). Деньги считаются теми же правилами, что на
      * главной и в dashboard-v2 (см. PointSummary).
      */
     summary: () => api.get<PointsSummaryResponse>('/points/summary'),
-    /** pointId: null = сбросить выбор («все точки»). */
+    /**
+     * @deprecated ПЕРЕКЛЮЧЕНИЯ ФИЛИАЛА БОЛЬШЕ НЕТ (163). Ручка оставлена ради
+     * сборок 3.5/3.6 и с 165 делает ровно одно: ЗАПОМИНАЕТ филиал как
+     * подсказку СЛЕДУЮЩЕГО входа (только тот, в котором сотрудник вправе
+     * работать, иначе 403). Филиал текущей сессии не меняется — он лежит в
+     * подписанном токене, — поэтому в ответе `currentPointId` приезжает филиал
+     * ЭТОЙ сессии, а не запрошенный. `pointId: null` («Все автосервисы») —
+     * 409: такого режима больше нет.
+     *
+     * Новый клиент вместо переключения делает выход и вход в нужный филиал
+     * (authApi.loginWithPointSelect → authApi.selectPoint) и этот метод НЕ
+     * зовёт.
+     */
     switch: (pointId: string | null) =>
       api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),
+    /**
+     * Состав филиала (user_management). Сторона раздела «Филиалы»; НОВЫЙ UI
+     * настраивает доступ в карточке сотрудника — setUserPoints ниже, а раздел
+     * «Филиалы» показывает состав для просмотра. Обе стороны — одно правило на
+     * сервере, поэтому последствия одинаковы: снятие доступа немедленно
+     * обесточивает сессии сотрудника в этом филиале (его следующий запрос →
+     * 401 «Филиал больше не доступен — войдите заново»).
+     */
     setMembers: (pointId: string, userIds: string[]) =>
       api.put<{ memberIds: string[] }>(`/points/${pointId}/members`, { userIds }),
+    /**
+     * На каких филиалах может работать сотрудник (user_management).
+     * ПУСТО = не ограничен: доступны все живые филиалы тенанта.
+     */
+    userPoints: (userId: string) => api.get<UserPointsResponse>(`/users/${userId}/points`),
+    /**
+     * Заменить набор филиалов сотрудника целиком (user_management).
+     * Пустой массив = снять ограничение. Снятие доступа обесточивает его
+     * активные сессии в снятых филиалах.
+     */
+    setUserPoints: (userId: string, pointIds: string[]) =>
+      api.put<UserPointsResponse>(`/users/${userId}/points`, { pointIds }),
   };
 }
 
@@ -1499,6 +1584,16 @@ export function createExpensesApi(api: HttpClient) {
       >('/expenses', { params }),
     create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) =>
       api.post('/expenses', data),
+    /**
+     * ПРАВКА расхода одним запросом. Раньше ручки не было, и клиент изображал
+     * «Изменить» парой «удалить + создать заново» — отказ второго запроса
+     * (нет права / чужой филиал / нет связи) стирал расход НАВСЕГДА.
+     * Передаются только изменяемые поля; `id`, автор, источник, филиал и
+     * статус одобрения сервер сохраняет (статус может только уйти в 'pending',
+     * если правка вывела сумму за дневной лимит сотрудника).
+     */
+    update: (id: string, data: { categoryId?: string | null; amount?: number; description?: string; date?: string }) =>
+      api.patch(`/expenses/${id}`, data),
     /** Owner approves a pending expense — flips approval_status to 'approved'. Director / admin / superadmin only. */
     approve: (id: string) => api.patch(`/expenses/${id}/approve`),
     /** Owner rejects a pending expense — flips approval_status to 'rejected'. Director / admin / superadmin only. */

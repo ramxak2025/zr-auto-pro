@@ -15,7 +15,6 @@ import { userHasPermission } from '../common/guards/permissions.guard';
 import { WarehouseService } from '../warehouse/warehouse.service';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
-import { resolvePointForWrite } from '../common/point-scope';
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
@@ -1155,21 +1154,11 @@ export class ProductsService {
       throw new BadRequestException({ message: 'Количество должно быть положительным' });
     }
 
-    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА (волна 4) — тот же гейт и тот же текст цели,
-    // что у StockMovementsService.create: обе ручки списывают товар и обе
-    // рождают расход, поэтому филиал у них обязан резолвиться одинаково.
-    // Сырая точка актора в режиме «Все точки» давала расход без филиала,
-    // невидимый ни одному филиальному срезу.
-    // Резолв ДО pool.connect() — вторая коннекция под открытой транзакцией на
-    // исчерпанном пуле даёт взаимную блокировку.
-    const writeAsExpensePlanned = type === 'writeoff' && !!recordAsExpense;
-    const writePointId = writeAsExpensePlanned
-      ? await resolvePointForWrite(
-          this.pool,
-          { tenantID, userID: userId ?? null, currentPointId: pointId },
-          'чтобы списать товар',
-        )
-      : pointId;
+    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА — филиал СЕССИИ того, кто списал (163).
+    // Резолва здесь больше нет: филиал выбран при входе, и у сессии он всегда
+    // конкретный (у тенанта без филиалов — null, как раньше). Прежний
+    // resolvePointForWrite чинил режим «все филиалы», в котором расход рождался
+    // без филиала и не попадал ни в один филиальный срез; режима больше нет.
 
     const client = await this.pool.connect();
     try {
@@ -1230,7 +1219,7 @@ export class ProductsService {
         const expIns = await client.query(
           `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
            VALUES ($1, $2, $3, now(), $4, $5, $6) RETURNING id`,
-          [categoryId, amount, reason ?? 'Списание со склада', userId || null, tenantID, writePointId],
+          [categoryId, amount, reason ?? 'Списание со склада', userId || null, tenantID, pointId],
         );
         linkedExpenseId = expIns.rows[0].id;
       }

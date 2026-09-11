@@ -1,6 +1,8 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
+import { rememberSessionEndedNotice } from '../utils/sessionNotice';
+import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -131,7 +133,31 @@ api.interceptors.response.use(
     // /auth/me itself returns 401/403. For a 401 on /auth/me that happens
     // OUTSIDE that boot flow (e.g. a background refreshUser after the token was
     // revoked), we tear the session down here so the user lands on /login.
+    // ── Сессия потеряла свой филиал (163) ─────────────────────────────────
+    // Единственное исключение из правила выше. Филиал лежит в подписанном
+    // токене, и когда его архивируют или снимают у сотрудника доступ, сервер
+    // отвечает 401 «Филиал больше не доступен — войдите заново» на КАЖДЫЙ
+    // запрос, а не только на /auth/me. Токен после этого мёртв целиком —
+    // держать его дальше значит показывать человеку экраны, где ни одна цифра
+    // не обновится, и дать ему пробить чек в филиал, откуда его убрали.
+    // Подставить другой филиал молча НЕЛЬЗЯ: он бы этого не заметил.
+    //
+    // Отличаем по ПОЛНОМУ тексту сервера (shared/utils/apiError.ts), а не по
+    // одному коду 401: обычный 401 с денежной ручки — это отказ в доступе к
+    // данным, и он не должен ронять живую сессию.
+    //
+    // ПРИЧИНУ ЗАПОМИНАЕМ ПЕРВОЙ СТРОКОЙ — до любого вызова hardLogoutRedirect
+    // (тот же отказ мог прилететь и с /auth/me, и тогда сессию гасит ветка
+    // ниже). Экран входа обязан объяснить, ПОЧЕМУ человека выкинуло, а после
+    // перезагрузки на /login объяснять будет уже нечем.
+    const pointLost = sessionPointLostMessage(error);
+    if (pointLost) rememberSessionEndedNotice(pointLost);
+
     if (status === 401 && url.includes('/auth/me')) {
+      hardLogoutRedirect();
+    }
+
+    if (pointLost) {
       hardLogoutRedirect();
     }
 

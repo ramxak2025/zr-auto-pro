@@ -13,6 +13,7 @@ import { WinbackSendDto } from './dto/winback-send.dto';
 import { SegmentBroadcastDto } from './dto/segment-broadcast.dto';
 import { BroadcastPreviewDto } from './dto/broadcast-preview.dto';
 import { ReminderService } from './reminder.service';
+import { actorPointId } from '../common/point-scope';
 
 @Controller('marketing')
 export class MarketingController {
@@ -161,8 +162,8 @@ export class MarketingController {
   @RequirePermission('marketing_manage')
   @Post('reminders/send')
   sendReminders(@CurrentUser() user: JwtPayload) {
-    // Ручной запуск — от лица актора: рассылка режется его филиалом (161).
-    return this.reminderService.sendForTenant(user.tenantID, user.userID);
+    // Ручной запуск — от лица актора: рассылка режется филиалом его сессии.
+    return this.reminderService.sendForTenant(user.tenantID, actorPointId(user));
   }
 
   // ─── Win-back («давно не приезжал») ──────────────────────────────
@@ -179,7 +180,7 @@ export class MarketingController {
     return this.marketingService.getWinbackSegment(
       user.tenantID,
       parsed,
-      await this.marketingService.pointForActor(user.tenantID, user.userID),
+      await this.marketingService.pointForActor(user.tenantID, actorPointId(user)),
     );
   }
 
@@ -187,7 +188,7 @@ export class MarketingController {
   @RequirePermission('marketing_manage')
   @Post('winback/send')
   winbackSend(@CurrentUser() user: JwtPayload, @Body() dto: WinbackSendDto) {
-    return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message, user.userID);
+    return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message, actorPointId(user));
   }
 
   // ─── Manual segment broadcast («Рассылки») ───────────────────────
@@ -208,6 +209,7 @@ export class MarketingController {
         idempotencyKey: dto.idempotencyKey ?? null,
       },
       user.userID,
+      actorPointId(user),
     );
   }
 
@@ -228,7 +230,7 @@ export class MarketingController {
         providerType: dto.providerType ?? null,
       },
       // Предпросмотр обязан совпадать с отправкой, в т.ч. по филиалу (161).
-      user.userID,
+      actorPointId(user),
     );
   }
 

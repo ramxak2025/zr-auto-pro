@@ -1,13 +1,46 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
-import { resolvePointForWrite } from '../common/point-scope';
+import { assertRowPointForWrite, PointScopeQueryable } from '../common/point-scope';
 
 @Injectable()
 export class EquipmentService {
   private readonly logger = new Logger('EquipmentService');
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * ГЕЙТ ФИЛИАЛА НА ЗЕРКАЛЬНОМ РАСХОДЕ ИМУЩЕСТВА.
+   *
+   * У карточки имущества филиала НЕТ (подсобка — общий справочник сети, и
+   * список отдаётся целиком), а у её зеркального расхода «Покупка имущества»
+   * филиал ЕСТЬ — тот, за чей счёт покупали. Мутации карточки (правка цены,
+   * удаление с «вернуть деньги в оборот») трогают именно расход, поэтому без
+   * этой проверки админ филиала А возвращал в оборот деньги филиала Б: у себя
+   * он изменений не видит, а прибыль соседа уже выросла.
+   *
+   * Предикат — ТОТ ЖЕ общий гейт, что у расходов и зарплаты
+   * (common/point-scope.assertRowPointForWrite). Точки у актора нет (у тенанта
+   * нет филиалов) — гейта нет, поведение прежнее дословно.
+   *
+   * `db` — клиент ОТКРЫТОЙ транзакции вызывающего, а не пул: второй коннект из
+   * пула под уже удерживаемым даёт взаимную блокировку на исчерпанном пуле.
+   */
+  private assertExpensePoint(
+    db: PointScopeQueryable,
+    expenseId: string,
+    tenantId: string,
+    pointId: string | null,
+  ): Promise<void> {
+    return assertRowPointForWrite(
+      db,
+      'expenses',
+      expenseId,
+      tenantId,
+      pointId,
+      'Имущество куплено за счёт другого филиала — менять его расход можно только там',
+    );
+  }
 
   // ─── Storage Categories (folders) ─────────────────────────────────
 
@@ -85,24 +118,11 @@ export class EquipmentService {
     const qty = parseFloat(String(dto.quantity ?? 0)) || 0;
     const expenseAmount = purchasePrice * Math.max(qty, 1);
 
-    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА (волна 4). Раньше сюда приезжала сырая точка
-    // актора, и в режиме «Все точки» покупка имущества рождала расход с
-    // point_id = NULL: деньги ушли, а из прибыли и «Движения денег» КАЖДОГО
-    // филиала эта покупка выпадала. Общий резолв — своя точка, либо
-    // единственная доступная, либо 400 «Выберите филиал».
-    //
-    // Резолвим ТОЛЬКО когда расход реально родится (цена > 0): бесплатное
-    // имущество денег не двигает, и требовать под него филиал незачем.
-    // Резолв ДО pool.connect() — вторая коннекция под открытой транзакцией на
-    // исчерпанном пуле даёт взаимную блокировку.
-    const writePointId =
-      purchasePrice > 0
-        ? await resolvePointForWrite(
-            this.pool,
-            { tenantID: tenantId, userID: createdBy, currentPointId: pointId },
-            'чтобы записать покупку имущества',
-          )
-        : pointId;
+    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА — филиал СЕССИИ покупателя (163): деньги
+    // ушли из кассы конкретного автосервиса, туда же обязан лечь и расход.
+    // Резолва больше нет — филиал выбран при входе (`pointId` приезжает из
+    // контроллера как actorPointId актора); у тенанта без филиалов это null,
+    // как было.
 
     const client = await this.pool.connect();
     try {
@@ -138,7 +158,7 @@ export class EquipmentService {
           await client.query(
             `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, storage_item_id, point_id)
              VALUES ($1, $2, $3, now(), $4, $4, 'owner', 'approved', $5, $6, $7)`,
-            [categoryId, expenseAmount, `Покупка имущества: ${item.name}`, createdBy, tenantId, item.id, writePointId],
+            [categoryId, expenseAmount, `Покупка имущества: ${item.name}`, createdBy, tenantId, item.id, pointId],
           );
         }
       }
@@ -188,9 +208,9 @@ export class EquipmentService {
    * принадлежит филиалу ПОКУПКИ, а правит карточку может кто угодно и откуда
    * угодно — перенос сдвинул бы прибыль сразу двух филиалов задним числом).
    *
-   * ВОЛНА 4 — сырая точка актора заменена общим резолвом
-   * (common/point-scope.resolvePointForWrite): в режиме «Все точки» расход
-   * рождался с point_id = NULL и не попадал ни в один филиальный срез.
+   * 163 — это филиал СЕССИИ актора (actorPointId): филиал выбирается при
+   * входе, поэтому у сессии он всегда конкретный, а прежний резолв с отказом
+   * «Выберите филиал» стал не нужен.
    */
   async updateStorageItem(
     id: string,
@@ -279,6 +299,8 @@ export class EquipmentService {
       );
 
       if (existing.length > 0) {
+        // Филиал связанного расхода — ДО любой его правки (см. assertExpensePoint).
+        await this.assertExpensePoint(client, existing[0].id as string, tenantId, pointId);
         if (newPrice > 0) {
           await client.query('UPDATE expenses SET amount = $1 WHERE storage_item_id = $2 AND tenant_id = $3', [
             expenseAmount,
@@ -293,18 +315,8 @@ export class EquipmentService {
         // No linked expense yet (item created at price 0, now priced) → create it
         // via the same reserved-category path as createStorageItem.
         //
-        // ФИЛИАЛ резолвится ИМЕННО ЗДЕСЬ, а не до транзакции: только в этой
-        // ветке расход действительно рождается. Резолв до pool.connect()
-        // потребовал бы гадать снаружи, есть ли уже связанный расход, и
-        // отвечал бы 400 «Выберите филиал» на безобидную правку цены у
-        // существующего расхода. Дедлока нет: резолв идёт по УЖЕ ВЗЯТОМУ
-        // клиенту транзакции, второй коннекции из пула не берётся (см.
-        // PointScopeQueryable — «подойдёт и пул, и клиент внутри транзакции»).
-        const writePointId = await resolvePointForWrite(
-          client,
-          { tenantID: tenantId, userID: actorId, currentPointId: pointId },
-          'чтобы записать покупку имущества',
-        );
+        // Филиал — тот же, что у покупки в createStorageItem: филиал сессии
+        // того, кто правит цену (163). Отдельного резолва больше нет.
         const categoryId = await this.getOrCreateEquipmentCategory(client, tenantId);
         const { rows: nameRows } = await client.query(
           'SELECT name FROM storage_items WHERE id = $1 AND tenant_id = $2 LIMIT 1',
@@ -314,7 +326,7 @@ export class EquipmentService {
         await client.query(
           `INSERT INTO expenses (category_id, amount, description, date, source, approval_status, tenant_id, storage_item_id, point_id)
            VALUES ($1, $2, $3, now(), 'owner', 'approved', $4, $5, $6)`,
-          [categoryId, expenseAmount, `Покупка имущества: ${itemName}`, tenantId, id, writePointId],
+          [categoryId, expenseAmount, `Покупка имущества: ${itemName}`, tenantId, id, pointId],
         );
       }
 
@@ -322,9 +334,9 @@ export class EquipmentService {
       return { message: 'Обновлено' };
     } catch (err) {
       await client.query('ROLLBACK');
-      // 400 «Выберите филиал» — это диалог с пользователем, а не сбой сервера:
-      // в error-лог (и в Sentry) он попадать не должен.
-      if (err instanceof BadRequestException) throw err;
+      // Валидационный отказ и отказ гейта филиала — диалог с пользователем,
+      // а не сбой сервера: в error-лог (и в Sentry) они попадать не должны.
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       this.logger.error(`updateStorageItem error: ${err}`);
       throw err;
     } finally {
@@ -342,10 +354,26 @@ export class EquipmentService {
    *                            would do this anyway, but we null it explicitly
    *                            in the same tx for clarity).
    */
-  async removeStorageItem(id: string, tenantId: string, reverseExpense = false) {
+  /**
+   * 161/163 — `pointId` (филиал сессии актора) нужен ГЕЙТУ: обе ветки трогают
+   * зеркальный расход чужого филиала — одна удаляет его (буквально «вернуть
+   * деньги в оборот» соседа), вторая рвёт его связь с карточкой. Гейт стоит на
+   * ОБЕИХ: вопрос у них один — «этот расход моего филиала?».
+   */
+  async removeStorageItem(id: string, tenantId: string, reverseExpense = false, pointId: string | null = null) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+
+      // Связанный расход ищем ОДИН раз: и для гейта, и чтобы ветки ниже не
+      // расходились в том, какую строку они считают связанной.
+      const { rows: linked } = await client.query(
+        'SELECT id FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2 LIMIT 1',
+        [id, tenantId],
+      );
+      if (linked.length > 0) {
+        await this.assertExpensePoint(client, linked[0].id as string, tenantId, pointId);
+      }
 
       if (reverseExpense) {
         await client.query('DELETE FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2', [id, tenantId]);
@@ -362,6 +390,8 @@ export class EquipmentService {
       return { message: reverseExpense ? 'Удалено, расход возвращён в оборот' : 'Удалено' };
     } catch (err) {
       await client.query('ROLLBACK');
+      // Отказ гейта филиала — диалог с пользователем, не сбой сервера.
+      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
       this.logger.error(`removeStorageItem error: ${err}`);
       throw err;
     } finally {

@@ -22,6 +22,9 @@ import {
   isPermanentServerRejection,
   isValidClientRequestId,
   parseStoredQueue,
+  parseStoredQueueOwner,
+  pendingChecksLogoutNotice,
+  sameQueueOwner,
   serializeQueue,
   uuidV4FromRandom,
   type QueuedCheck,
@@ -611,7 +614,7 @@ describe('offlineCheckQueue — филиал (pointId) фиксируется н
     expect(sent[0].pointId).toBe(POINT_A);
   });
 
-  it('точки нет (одноточечный тенант / «Все точки») — payload байт-в-байт прежний', async () => {
+  it('филиала нет (одноточечный тенант) — payload байт-в-байт прежний', async () => {
     const { storage } = createMemoryStorage();
     const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
     const entry = await core.enqueue(payloadOf(ID_A));
@@ -643,5 +646,157 @@ describe('offlineCheckQueue — филиал (pointId) фиксируется н
     const entry = await throwing.enqueue(payloadOf(ID_A));
     expect('pointId' in entry.payload).toBe(false);
     expect(throwing.getSnapshot()).toHaveLength(1);
+  });
+});
+
+// ── ЖИВУЧЕСТЬ ОЧЕРЕДИ ПРИ РАЗЛОГИНЕ (пакет «потеря данных», 2026-09) ────────
+// Очередь принадлежит ЧЕЛОВЕКУ, а не сессии. Истёкший токен, снятый доступ к
+// филиалу, архивация филиала и обычный «Выйти» её НЕ стирают — иначе мастер,
+// набивший три заказ-наряда в подвале без связи, терял деньги молча ровно в тот
+// момент, когда владелец правил ему доступы.
+describe('offlineCheckQueue — владелец очереди', () => {
+  const OWNER_A = { userId: 'u-master', tenantId: 't-1' };
+  const SAME_A = { userId: 'u-master', tenantId: 't-1' };
+  const OTHER_USER = { userId: 'u-other', tenantId: 't-1' };
+  const OTHER_TENANT = { userId: 'u-master', tenantId: 't-2' };
+
+  it('sameQueueOwner: неизвестный владелец не совпадает ни с кем', () => {
+    expect(sameQueueOwner(OWNER_A, SAME_A)).toBe(true);
+    expect(sameQueueOwner(OWNER_A, OTHER_USER)).toBe(false);
+    expect(sameQueueOwner(OWNER_A, OTHER_TENANT)).toBe(false);
+    expect(sameQueueOwner(null, null)).toBe(false);
+    expect(sameQueueOwner(OWNER_A, null)).toBe(false);
+  });
+
+  it('конверт хранит владельца и отдаёт его обратно', () => {
+    const raw = serializeQueue([], OWNER_A);
+    expect(parseStoredQueueOwner(raw)).toEqual(OWNER_A);
+    // Конверт БЕЗ владельца (старая схема) доказать «тот же человек» не может.
+    expect(parseStoredQueueOwner(serializeQueue([]))).toBeNull();
+    expect(parseStoredQueueOwner('{oops')).toBeNull();
+  });
+
+  it('выход НЕ стирает диск, а вход тем же человеком возвращает чеки в работу', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.adoptSession(OWNER_A);
+    await core.enqueue(payloadOf(ID_A));
+
+    // Выход (или 401 по истёкшему токену): память чистая, диск — нет.
+    await core.endSession();
+    expect(core.getSnapshot()).toEqual([]);
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toHaveLength(1);
+
+    // Тот же человек вошёл снова — чек на месте и будет отправлен.
+    await core.adoptSession(SAME_A);
+    expect(core.getSnapshot().map((e) => e.clientRequestId)).toEqual([ID_A]);
+    const sender = jest.fn(async () => ({ number: 7 }));
+    core.setSender(sender);
+    await core.flush();
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(core.getSnapshot()).toEqual([]);
+  });
+
+  it('вход ДРУГИМ пользователем стирает очередь (чужой чек не уйдёт в чужую кассу)', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.adoptSession(OWNER_A);
+    await core.enqueue(payloadOf(ID_A));
+    await core.endSession();
+
+    await core.adoptSession(OTHER_USER);
+    expect(core.getSnapshot()).toEqual([]);
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual([]);
+  });
+
+  it('вход тем же человеком в ДРУГОЙ тенант тоже стирает очередь', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.adoptSession(OWNER_A);
+    await core.enqueue(payloadOf(ID_A));
+    await core.endSession();
+
+    await core.adoptSession(OTHER_TENANT);
+    expect(core.getSnapshot()).toEqual([]);
+  });
+
+  it('конверт СТАРОЙ схемы (без владельца) не усыновляется', async () => {
+    const legacy: QueuedCheck = {
+      clientRequestId: ID_B,
+      payload: payloadOf(ID_B),
+      createdAt: 1,
+      attempts: 0,
+      status: 'pending',
+    };
+    const { storage } = createMemoryStorage({
+      [OFFLINE_CHECK_QUEUE_STORAGE_KEY]: serializeQueue([legacy]),
+    });
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.adoptSession(OWNER_A);
+    expect(core.getSnapshot()).toEqual([]);
+  });
+
+  it('холодный старт без входа: владелец поднимается с конверта и переживает сохранение', async () => {
+    const { storage, map } = createMemoryStorage();
+    const first = createOfflineCheckQueueCore({ storage });
+    await first.adoptSession(OWNER_A);
+    await first.enqueue(payloadOf(ID_A));
+
+    // Новый процесс приложения: adoptSession не звался, очередь гидратируется.
+    const restarted = createOfflineCheckQueueCore({ storage });
+    await restarted.ensureLoaded();
+    await restarted.enqueue(payloadOf(ID_B));
+    expect(parseStoredQueueOwner(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual(OWNER_A);
+    expect(restarted.getSnapshot()).toHaveLength(2);
+  });
+
+  it('конверт старой схемы: владелец дорезолвится из сессии при постановке чека', async () => {
+    const legacy: QueuedCheck = {
+      clientRequestId: ID_B,
+      payload: payloadOf(ID_B),
+      createdAt: 1,
+      attempts: 0,
+      status: 'pending',
+    };
+    const { storage, map } = createMemoryStorage({
+      [OFFLINE_CHECK_QUEUE_STORAGE_KEY]: serializeQueue([legacy]),
+    });
+    const core = createOfflineCheckQueueCore({ storage, resolveOwner: async () => OWNER_A });
+    await core.enqueue(payloadOf(ID_A));
+    expect(parseStoredQueueOwner(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual(OWNER_A);
+  });
+
+  it('упавший резолвер владельца не мешает чеку встать в очередь', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({
+      storage,
+      resolveOwner: async () => {
+        throw new Error('storage down');
+      },
+    });
+    await core.enqueue(payloadOf(ID_A));
+    expect(core.getSnapshot()).toHaveLength(1);
+  });
+});
+
+describe('pendingChecksLogoutNotice — что человек читает перед выходом', () => {
+  it('пустая очередь — приписки нет, диалог остаётся прежним', () => {
+    expect(pendingChecksLogoutNotice(0)).toBe('');
+    expect(pendingChecksLogoutNotice(-1)).toBe('');
+  });
+
+  it('склонение «заказ-наряд» по-русски', () => {
+    expect(pendingChecksLogoutNotice(1)).toContain('1 неотправленный заказ-наряд ');
+    expect(pendingChecksLogoutNotice(3)).toContain('3 неотправленных заказ-наряда ');
+    expect(pendingChecksLogoutNotice(5)).toContain('5 неотправленных заказ-нарядов ');
+    expect(pendingChecksLogoutNotice(11)).toContain('11 неотправленных заказ-нарядов ');
+    expect(pendingChecksLogoutNotice(21)).toContain('21 неотправленный заказ-наряд ');
+    expect(pendingChecksLogoutNotice(22)).toContain('22 неотправленных заказ-наряда ');
+  });
+
+  it('говорит и что сохранится, и что удалит их', () => {
+    const text = pendingChecksLogoutNotice(2);
+    expect(text).toContain('под этим же аккаунтом');
+    expect(text).toContain('другим аккаунтом их удалит');
   });
 });

@@ -1,6 +1,7 @@
 import {
   Injectable,
   Inject,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -14,7 +15,8 @@ import { invalidateAuthUser } from '../common/auth-cache';
 import { ttlCache } from '../common/ttl-cache';
 import { getTenantTimezone, startOfDayInZone, startOfMonthInZone, zonedMonthKey } from '../common/timezone';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
-import { PointScopeQueryable } from '../common/point-scope';
+import { motivationByPointMonthSql, premiumsByPointMonthSql } from '../common/salary-extras-sql';
+import { actorPointId, PointScopeQueryable } from '../common/point-scope';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -66,10 +68,17 @@ const MAIN_FACTS_SQL = `(
  * Функции-свидетели autexa_point_by_checks / autexa_point_by_assignment
  * заводит миграция 161 (CREATE OR REPLACE, идемпотентно): один и тот же
  * предикат на три места — миграцию, ремонт и этот сервис.
+ *
+ * ФОРМА ЭЛЕМЕНТА: [таблица, алиас, UPDATE]. Алиас хранится отдельно, потому
+ * что attachOrphanHistory дописывает к каждому UPDATE хвост-порцию
+ * (`AND <алиас>.id IN (…LIMIT $2)`) — вытаскивать алиас регуляркой из текста
+ * запроса значило бы ставить работоспособность привязки в зависимость от
+ * форматирования SQL.
  */
-const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
+const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string, string]> = [
   [
     'checks',
+    'ch',
     `UPDATE checks ch
         SET point_id = mp.main_id
        FROM ${MAIN_FACTS_SQL}
@@ -77,6 +86,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'clients',
+    'cl',
     `UPDATE clients cl
         SET point_id = mp.main_id
        FROM ${MAIN_FACTS_SQL}
@@ -84,6 +94,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'shifts',
+    's',
     `UPDATE shifts s
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL
@@ -100,6 +111,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'cash_shifts',
+    'cs',
     `UPDATE cash_shifts cs
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL
@@ -116,6 +128,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'salary_payouts',
+    'sp',
     `UPDATE salary_payouts sp
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL OR sp.created_at < mp.branch_since THEN mp.main_id END,
@@ -131,6 +144,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'salary_premiums',
+    'pr',
     `UPDATE salary_premiums pr
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL OR pr.created_at < mp.branch_since THEN mp.main_id END,
@@ -146,6 +160,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'salary_penalties',
+    'pe',
     `UPDATE salary_penalties pe
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL OR pe.created_at < mp.branch_since THEN mp.main_id END,
@@ -160,6 +175,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'salary_payments',
+    'spm',
     `UPDATE salary_payments spm
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL OR spm.created_at < mp.branch_since THEN mp.main_id END,
@@ -175,6 +191,7 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     'expenses',
+    'e',
     `UPDATE expenses e
         SET point_id = COALESCE(
               CASE WHEN mp.branch_since IS NULL OR e.created_at < mp.branch_since THEN mp.main_id END,
@@ -196,6 +213,19 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string]> = [
  * имени сломала бы и пикер, и уникальный индекс имён из 156.
  */
 const MAIN_POINT_FALLBACK_NAME = 'Основной';
+
+/**
+ * Доступ к БД для порционной привязки истории.
+ *
+ * Отдельный от PointScopeQueryable тип нужен ровно из-за `rowCount`: цикл
+ * порций останавливается по числу ЗАТРОНУТЫХ строк, а PointScopeQueryable
+ * обещает только `rows` (у UPDATE без RETURNING он всегда пуст). Расширять
+ * общий тип ради одного вызывающего не стали — он импортируется половиной
+ * сервисов, и лишнее поле в нём пришлось бы поддерживать всем фейкам в тестах.
+ */
+interface HistoryAttachDb {
+  query(text: string, params?: unknown[]): Promise<{ rows: any[]; rowCount?: number | null }>;
+}
 
 /**
  * Мульти-точки (миграция 156, tenant_points): несколько автосервисов у одного
@@ -223,6 +253,8 @@ const MAIN_POINT_FALLBACK_NAME = 'Основной';
 @Injectable()
 export class PointsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  private readonly logger = new Logger('PointsService');
 
   private mapPoint(row: any) {
     return {
@@ -290,11 +322,19 @@ export class PointsService {
   // ── Тенант-сторона ──────────────────────────────────────────────────────
 
   /**
-   * Точки своего тенанта для приложения: живые точки + назначения сотрудников
-   * (memberIds — для экрана управления) + текущая точка запрашивающего.
+   * Филиалы своего тенанта для приложения: живые филиалы + назначения
+   * сотрудников (memberIds — раздел «Филиалы» показывает состав ДЛЯ ПРОСМОТРА,
+   * настраивается он в карточке сотрудника) + филиал ТЕКУЩЕЙ СЕССИИ.
+   *
+   * 163 — МЕТОД БОЛЬШЕ НИЧЕГО НЕ ПИШЕТ. Раньше он на чтении подставлял
+   * сотруднику филиал (UPDATE users.current_point_id + сброс auth-кеша), потому
+   * что сессия могла существовать без филиала. Теперь филиал выдаётся при
+   * входе, и подставлять на GET нечего: currentPointId — это то, что лежит в
+   * токене этой сессии. Побочный эффект на чтении был ещё и гонкой: два
+   * параллельных GET /points с разных устройств могли записать разные филиалы.
    */
   async listForTenant(user: JwtPayload) {
-    const [{ rows: points }, { rows: members }, { rows: me }] = await Promise.all([
+    const [{ rows: points }, { rows: members }] = await Promise.all([
       this.pool.query(
         // is_main DESC во главе: основной сервис — первый пункт любого списка
         // (160). Иначе владелец искал бы «ZR AUTO» где-то посреди филиалов.
@@ -303,7 +343,6 @@ export class PointsService {
         [user.tenantID],
       ),
       this.pool.query(`SELECT user_id, point_id FROM user_points WHERE tenant_id=$1`, [user.tenantID]),
-      this.pool.query(`SELECT current_point_id FROM users WHERE id=$1 AND tenant_id=$2`, [user.userID, user.tenantID]),
     ]);
     const byPoint = new Map<string, string[]>();
     for (const m of members) {
@@ -312,227 +351,260 @@ export class PointsService {
       byPoint.set(m.point_id, list);
     }
 
-    // ── Филиал обязателен для сотрудника (решение владельца) ──────────────
-    // Режим «Все точки» (current_point_id = NULL) сохраняется ТОЛЬКО за
-    // держателем user_management — владельцем/админом, которому нужна сводка
-    // по сети, и это его осознанный выбор.
-    //
-    // ВОЛНА 4 — САМЫЙ ОПАСНЫЙ ДЕФОЛТ, КОТОРЫЙ ЗДЕСЬ БЫЛ. Раньше точка
-    // подставлялась, только когда доступна РОВНО ОДНА. Сотрудник без
-    // назначений в тенанте с двумя и более точками оставался с пустым
-    // скоупом — а пустой скоуп на чтении означает «фильтра нет», то есть
-    // мастер видел журнал, кассу и деньги ВСЕЙ СЕТИ. Теперь берём ПЕРВУЮ
-    // доступную (порядок пикера: основная точка, затем sort_order и имя):
-    // сотрудник без назначений попадает в ОСНОВНОЙ сервис, а не в случайный
-    // филиал; выбор безопасен и обратим (сотрудник переключится сам), а
-    // «видно всё» — нет. Держателя user_management это по-прежнему не касается.
-    //
-    // Почему запись выполняется на чтении: точку резолвит ровно один запрос
-    // (GET /points на старте приложения), а не каждый хоп. Операция
-    // идемпотентна (второй раз условие уже не выполняется) и обязательно
-    // сбрасывает auth-кеш — иначе актор до 30 секунд ходил бы без точки.
-    // Доступные точки берём из УЖЕ загруженных данных: есть назначения на
-    // ЖИВЫЕ точки — только они; нет ни одного (в том числе когда все
-    // назначения ведут на архивные точки) — все живые точки тенанта
-    // (безопасный дефолт 156, тот же, что в resolvePointForWrite).
-    let currentPointId: string | null = me[0]?.current_point_id ?? null;
-    if (currentPointId === null && !userHasPermission(user, 'user_management')) {
-      const mine = members.filter((m) => m.user_id === user.userID).map((m) => m.point_id as string);
-      const assigned = points.filter((p) => mine.includes(p.id));
-      const available = assigned.length > 0 ? assigned : points;
-      if (available.length > 0) {
-        const chosen = available[0].id as string;
-        await this.pool.query(`UPDATE users SET current_point_id=$1 WHERE id=$2 AND tenant_id=$3`, [
-          chosen,
-          user.userID,
-          user.tenantID,
-        ]);
-        invalidateAuthUser(user.userID);
-        currentPointId = chosen;
-      }
-    }
-
     return {
       points: points.map((p) => ({ ...this.mapPoint(p), memberIds: byPoint.get(p.id) ?? [] })),
-      currentPointId,
+      // Филиал СЕССИИ, а не колонка пользователя: колонка отдала бы вебу
+      // филиал, выбранный в телефоне.
+      currentPointId: actorPointId(user),
     };
   }
 
   /**
-   * Переключить свою текущую точку. null = сбросить («все точки» у владельца).
-   * Держатель user_management (owner-class/админ) переключается свободно;
-   * остальные (мастера) — только на назначенные им точки; сотрудник БЕЗ
-   * назначений не ограничен (безопасный дефолт внедрения).
+   * СМЕНА ФИЛИАЛА ДЛЯ СТАРЫХ СБОРОК: ручка ЗАПИСЫВАЕТ ПОДСКАЗКУ СЛЕДУЮЩЕГО
+   * ВХОДА и отвечает успехом. Сама смена происходит при повторном входе.
+   *
+   * ЧТО БЫЛО СЛОМАНО. 163 сделал филиал свойством сессии и оставил эту ручку
+   * живой, но ВСЕГДА отвечающей 409, и сознательно не писал
+   * users.current_point_id. На руках у людей сборки 3.5/3.6, которые про
+   * двухшаговый вход ничего не знают: сервер выбирает им филиал сам —
+   * autexa_default_point, то есть «последний выбранный, иначе основной». В
+   * итоге мастер, вошедший не в тот филиал, не мог попасть в нужный НИКАК:
+   * переключатель отвечал отказом, а выход и вход возвращали его туда же,
+   * потому что подсказку менять было нечем. Тупик на ровном месте.
+   *
+   * ЧТО ДЕЛАЕТ ТЕПЕРЬ — И ЧЕГО НЕ ДЕЛАЕТ. Пишет ТОЛЬКО users.current_point_id,
+   * то есть «куда этот человек хочет попасть в следующий раз». Филиал ТЕКУЩЕЙ
+   * сессии не меняется и измениться не может: он лежит в подписанном токене.
+   * Поэтому в ответе `currentPointId` — филиал ЭТОЙ сессии, неизменный, а не
+   * тот, что попросили: соврать здесь значило бы, что человек видит филиал Б, а
+   * чеки уходят в филиал А. Офлайн-очередь старого клиента читает ровно это
+   * поле и потому продолжает штамповать верный филиал.
+   *
+   * ПОЧЕМУ ПОДСКАЗКА — ЭТО НЕ ДЫРА В ДОСТУПЕ. Записываем только филиал, в
+   * котором сотрудник ВПРАВЕ работать: предикат общий на весь монорепо —
+   * autexa_point_is_allowed (163/165). Иначе подсказка стала бы способом
+   * попасть при следующем входе в чужой автосервис.
+   *
+   * pointId = null (кнопка «Все автосервисы» старых сборок) — 409: рабочего
+   * режима «все филиалы» больше нет, он рождал денежные строки без филиала.
+   * Сводка по сети осталась карточками GET /points/summary.
+   *
+   * НОВЫЙ КЛИЕНТ СЮДА НЕ ХОДИТ: в shared/api/createServices.ts метод помечен
+   * @deprecated, ни один экран web/mobile его не зовёт — смена филиала в новом
+   * UI это выход и вход (authApi.loginWithPointSelect → selectPoint).
    */
-  async switchPoint(user: JwtPayload, pointId: string | null) {
-    let effectivePointId = pointId;
-    if (pointId !== null) {
-      if (!UUID_RE.test(pointId)) throw new BadRequestException({ message: 'Точка не найдена' });
-      const { rows } = await this.pool.query(
-        `SELECT id FROM tenant_points WHERE id=$1 AND tenant_id=$2 AND is_active=true`,
-        [pointId, user.tenantID],
-      );
-      if (rows.length === 0) throw new NotFoundException({ message: 'Точка не найдена' });
-
-      if (!userHasPermission(user, 'user_management')) {
-        const { rows: mine } = await this.pool.query(
-          `SELECT point_id FROM user_points WHERE user_id=$1 AND tenant_id=$2`,
-          [user.userID, user.tenantID],
-        );
-        const allowed = mine.length === 0 || mine.some((r) => r.point_id === pointId);
-        if (!allowed) throw new ForbiddenException({ message: 'Вы не назначены на эту точку' });
-      }
-    } else if (!userHasPermission(user, 'user_management')) {
-      // Сброс в «Все точки» — привилегия владельца/админа. Сотруднику филиал
-      // обязателен, поэтому сброс молча схлопывается в ПЕРВУЮ доступную точку
-      // (тот же резолв, что в listForTenant), а не оставляет мастера с сетевым
-      // срезом чужих денег. Волна 4: раньше схлопывание работало только при
-      // РОВНО ОДНОЙ доступной точке — у мастера с двумя филиалами сброс
-      // проходил как есть, и до следующего GET /points он видел всю сеть.
-      const fallback = await this.defaultPointForMember(user);
-      if (fallback) effectivePointId = fallback;
+  async switchPoint(user: JwtPayload, pointId: string | null): Promise<{ currentPointId: string | null }> {
+    if (!pointId) {
+      throw new ConflictException({
+        message: 'Режим «Все автосервисы» больше не поддерживается. Выберите филиал при входе.',
+      });
     }
+    if (!UUID_RE.test(pointId)) throw new NotFoundException({ message: 'Филиал не найден' });
+
+    const { rows } = await this.pool.query(`SELECT autexa_point_is_allowed($1::uuid, $2::uuid, $3::uuid) as ok`, [
+      user.tenantID,
+      user.userID,
+      pointId,
+    ]);
+    if (rows[0]?.ok !== true) {
+      throw new ForbiddenException({ message: 'Филиал недоступен' });
+    }
+
     await this.pool.query(`UPDATE users SET current_point_id=$1 WHERE id=$2 AND tenant_id=$3`, [
-      effectivePointId,
+      pointId,
       user.userID,
       user.tenantID,
     ]);
-    // КРИТИЧНО: точка едет в акторе из auth-кеша (30 с). Без сброса кеша
-    // сразу после переключения филиала сервер ещё полминуты фильтровал бы
-    // журнал, кассу и отчёты по СТАРОЙ точке — владелец видит чужие деньги и
-    // считает это потерей своих.
-    invalidateAuthUser(user.userID);
-    return { currentPointId: effectivePointId };
+
+    // Филиал СЕССИИ не изменился — отдаём его, а не запрошенный. Подсказка
+    // применится при следующем входе.
+    return { currentPointId: actorPointId(user) };
   }
 
   /**
-   * ПЕРВАЯ доступная сотруднику живая точка либо null (у тенанта живых точек
-   * нет вовсе). Назначения на живые точки есть — выбираем из них, нет —
-   * из всех живых точек тенанта (безопасный дефолт внедрения, конвенция 156).
+   * ДОСТУП СОТРУДНИКА К ФИЛИАЛАМ — ОДНА ТРАНЗАКЦИЯ, ОДИН СПИСОК ПОСЛЕДСТВИЙ.
+   * Обе ручки настройки доступа (со стороны филиала — PUT /points/:id/members,
+   * со стороны карточки сотрудника — PUT /users/:id/points) обязаны вести себя
+   * ОДИНАКОВО, поэтому обе ходят сюда, а не имеют по копии правила.
    *
-   * Порядок — как в пикере (основная → sort_order → имя): «первая» обязана
-   * быть детерминированной, иначе два параллельных запроса поставили бы
-   * сотруднику разные филиалы. Сотрудник без назначений попадает при этом в
-   * ОСНОВНОЙ сервис, а не в случайный филиал — это и есть «его» автосервис по
-   * умолчанию. Это тот же выбор, что делает listForTenant по уже
-   * загруженным данным, и та же конвенция доступности, что у денежной записи
-   * (common/point-scope.resolvePointForWrite).
-   */
-  private async defaultPointForMember(user: JwtPayload): Promise<string | null> {
-    const { rows } = await this.pool.query(
-      `WITH live AS (
-         SELECT p.id, p.sort_order, p.name, p.is_main
-           FROM tenant_points p
-          WHERE p.tenant_id = $1 AND p.is_active = true
-       ),
-       mine AS (
-         SELECT l.* FROM live l
-          WHERE EXISTS (SELECT 1 FROM user_points up
-                         WHERE up.point_id = l.id AND up.user_id = $2 AND up.tenant_id = $1)
-       )
-       SELECT id FROM (
-         SELECT * FROM mine
-         UNION ALL
-         SELECT * FROM live WHERE NOT EXISTS (SELECT 1 FROM mine)
-       ) available
-        ORDER BY is_main DESC, sort_order ASC, lower(name) ASC
-        LIMIT 1`,
-      [user.tenantID, user.userID],
-    );
-    return rows.length === 1 ? (rows[0].id as string) : null;
-  }
-
-  /**
-   * Заменить состав сотрудников точки (user_management). Пустой массив =
-   * никто не назначен явно; сотрудники без назначений не ограничены.
+   * СНЯТИЕ ДОСТУПА ОБЯЗАНО ОБЕСТОЧИТЬ ЖИВУЮ СЕССИЮ (163). Филиал лежит в
+   * подписанном токене — отобрать его из выданного токена нельзя, поэтому
+   * механизм такой: сбрасываем auth-кеш затронутых сотрудников, следующий их
+   * запрос идёт в базу, JwtStrategy спрашивает autexa_point_is_allowed и
+   * отвечает 401 «Филиал больше не доступен — войдите заново». Без сброса
+   * кеша снятый сотрудник ещё до 30 секунд пробивал бы чеки там, откуда его
+   * убрали.
    *
-   * ВОЛНА 4 — СНЯТИЕ С ФИЛИАЛА ОБЯЗАНО ВЫГНАТЬ ИЗ НЕГО. Раньше метод правил
-   * только user_points: снятый мастер продолжал сидеть в
-   * users.current_point_id снятого филиала и до тридцати секунд ещё и в
-   * auth-кеше — то есть работал (и пробивал чеки) там, откуда его убрали.
-   * Сбрасываем точку тем же паттерном, что adminArchive: UPDATE ... RETURNING
-   * id + invalidateAuthUser ПОСЛЕ коммита (откат не должен оставлять пустой
-   * кеш при неснятом назначении). Следующий GET /points подставит сотруднику
-   * первую доступную точку — «Все точки» он не получает.
+   * СБРАСЫВАЕМ ВСЕМ, У КОГО НАБОР ИЗМЕНИЛСЯ — И ДОБАВЛЕННЫМ ТОЖЕ. Добавление
+   * — это тоже ограничение: сотрудник БЕЗ назначений не ограничен ничем
+   * (конвенция 156), и первое же назначение запирает его в одном филиале.
+   * Если не сбросить кеш ему, он останется работать в филиале, к которому
+   * доступ только что отобрали этим самым назначением.
+   *
+   * Сброс идёт ПОСЛЕ коммита: откат не должен оставлять пустой кеш при
+   * неизменённых назначениях.
    */
-  async setMembers(tenantID: string, pointId: string, userIds: string[]) {
-    if (!UUID_RE.test(pointId)) throw new NotFoundException({ message: 'Точка не найдена' });
-    const clean = [...new Set((userIds ?? []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))];
+  private async applyMembership(
+    tenantID: string,
+    scope: { pointId: string; userIds: string[] } | { userID: string; pointIds: string[] },
+  ): Promise<string[]> {
     const client = await this.pool.connect();
-    let resetUserIds: string[] = [];
+    let affected: string[] = [];
+    let result: string[] = [];
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query(`SELECT id FROM tenant_points WHERE id=$1 AND tenant_id=$2`, [
-        pointId,
-        tenantID,
-      ]);
-      if (rows.length === 0) throw new NotFoundException({ message: 'Точка не найдена' });
-      const { rows: before } = await client.query(
-        `SELECT user_id FROM user_points WHERE point_id=$1 AND tenant_id=$2`,
-        [pointId, tenantID],
-      );
-      await client.query(`DELETE FROM user_points WHERE point_id=$1 AND tenant_id=$2`, [pointId, tenantID]);
-      if (clean.length > 0) {
+      let before: string[];
+      let after: string[];
+      if ('pointId' in scope) {
+        const { rows } = await client.query(`SELECT id FROM tenant_points WHERE id=$1 AND tenant_id=$2`, [
+          scope.pointId,
+          tenantID,
+        ]);
+        if (rows.length === 0) throw new NotFoundException({ message: 'Точка не найдена' });
+        const { rows: prev } = await client.query(
+          `SELECT user_id FROM user_points WHERE point_id=$1 AND tenant_id=$2`,
+          [scope.pointId, tenantID],
+        );
+        before = prev.map((r) => r.user_id as string);
+        await client.query(`DELETE FROM user_points WHERE point_id=$1 AND tenant_id=$2`, [scope.pointId, tenantID]);
         // Только сотрудники СВОЕГО тенанта — чужие id молча отбрасываются JOIN'ом.
-        await client.query(
+        const { rows: ins } = await client.query(
           `INSERT INTO user_points (user_id, point_id, tenant_id)
            SELECT u.id, $1, $2 FROM users u WHERE u.tenant_id=$2 AND u.id = ANY($3::uuid[])
-           ON CONFLICT DO NOTHING`,
-          [pointId, tenantID, clean],
+           ON CONFLICT DO NOTHING
+           RETURNING user_id`,
+          [scope.pointId, tenantID, scope.userIds],
         );
-      }
-      // Снятые = были в составе и не остались в нём. Точку обнуляем ТОЛЬКО тем,
-      // кто прямо сейчас сидит в этом филиале: снятый сотрудник, работающий на
-      // другой точке, трогаться не должен.
-      const removed = before.map((r) => r.user_id as string).filter((id) => !clean.includes(id));
-      if (removed.length > 0) {
-        const { rows: reset } = await client.query(
-          `UPDATE users SET current_point_id=NULL
-            WHERE tenant_id=$1 AND current_point_id=$2 AND id = ANY($3::uuid[])
-            RETURNING id`,
-          [tenantID, pointId, removed],
+        after = ins.map((r) => r.user_id as string);
+        // Затронут тот, у кого состав ИЗМЕНИЛСЯ: снятый (был — не остался) и
+        // добавленный (не был — появился). Оставшийся в составе не затронут:
+        // его доступ не поменялся, и гасить его сессию не за что.
+        affected = [...before.filter((id) => !after.includes(id)), ...after.filter((id) => !before.includes(id))];
+      } else {
+        const { rows } = await client.query(`SELECT id FROM users WHERE id=$1 AND tenant_id=$2`, [
+          scope.userID,
+          tenantID,
+        ]);
+        if (rows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+        const { rows: prev } = await client.query(
+          `SELECT point_id FROM user_points WHERE user_id=$1 AND tenant_id=$2`,
+          [scope.userID, tenantID],
         );
-        resetUserIds = reset.map((r) => r.id as string);
+        before = prev.map((r) => r.point_id as string);
+        await client.query(`DELETE FROM user_points WHERE user_id=$1 AND tenant_id=$2`, [scope.userID, tenantID]);
+        // Только филиалы СВОЕГО тенанта; архивные не назначаем — доступ к
+        // погашенному филиалу ничего не значит и только путал бы владельца.
+        const { rows: ins } = await client.query(
+          `INSERT INTO user_points (user_id, point_id, tenant_id)
+           SELECT $1, p.id, $2 FROM tenant_points p
+            WHERE p.tenant_id=$2 AND p.is_active=true AND p.id = ANY($3::uuid[])
+           ON CONFLICT DO NOTHING
+           RETURNING point_id`,
+          [scope.userID, tenantID, scope.pointIds],
+        );
+        after = ins.map((r) => r.point_id as string);
+        // Набор филиалов правится у ОДНОГО сотрудника — он и затронут, если
+        // набор реально изменился (в любую сторону).
+        const changed = before.length !== after.length || before.some((id) => !after.includes(id));
+        affected = changed ? [scope.userID] : [];
       }
       await client.query('COMMIT');
+      result = after;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
     } finally {
       client.release();
     }
-    // Тем же основанием, что switchPoint и adminArchive: точка живёт в
-    // auth-кеше (30 с), и без сброса снятый сотрудник ещё полминуты пишет чеки
-    // в филиал, из которого его только что убрали.
-    for (const id of resetUserIds) invalidateAuthUser(id);
-    const { rows: after } = await this.pool.query(
-      `SELECT user_id FROM user_points WHERE point_id=$1 AND tenant_id=$2`,
-      [pointId, tenantID],
+    // ТОЛЬКО ПОСЛЕ КОММИТА: откат не должен оставлять пустой кеш при
+    // неизменённых назначениях — это лишний поход в базу на каждой сессии
+    // сотрудника без единой причины.
+    for (const id of affected) invalidateAuthUser(id);
+    return result;
+  }
+
+  /**
+   * Заменить состав сотрудников филиала (user_management) — сторона раздела
+   * «Филиалы». Пустой массив = явных назначений нет; сотрудник без назначений
+   * не ограничен ничем (конвенция 156).
+   *
+   * Ручка оставлена ради сборок 3.5/3.6, которые правят состав отсюда; новый
+   * UI настраивает доступ в карточке сотрудника (PUT /users/:id/points), а
+   * раздел «Филиалы» показывает состав для просмотра. Обе стороны — один и тот
+   * же applyMembership, поэтому последствия у них одинаковые.
+   */
+  async setMembers(tenantID: string, pointId: string, userIds: string[]) {
+    if (!UUID_RE.test(pointId)) throw new NotFoundException({ message: 'Точка не найдена' });
+    const clean = [...new Set((userIds ?? []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))];
+    const memberIds = await this.applyMembership(tenantID, { pointId, userIds: clean });
+    return { memberIds };
+  }
+
+  /**
+   * На каких филиалах может работать сотрудник (карточка сотрудника).
+   * ПУСТО = не ограничен: ему доступны все живые филиалы тенанта. Это
+   * конвенция 156, а не забытая настройка, — тенант, который никого никуда не
+   * назначал, продолжает работать без единой настройки.
+   */
+  async getUserPoints(tenantID: string, userID: string) {
+    if (!UUID_RE.test(userID)) throw new NotFoundException({ message: 'Сотрудник не найден' });
+    const { rows: exists } = await this.pool.query(`SELECT id FROM users WHERE id=$1 AND tenant_id=$2`, [
+      userID,
+      tenantID,
+    ]);
+    if (exists.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+    const { rows } = await this.pool.query(
+      `SELECT up.point_id::text as point_id
+         FROM user_points up
+         JOIN tenant_points p ON p.id = up.point_id AND p.is_active = true
+        WHERE up.user_id=$1 AND up.tenant_id=$2`,
+      [userID, tenantID],
     );
-    return { memberIds: after.map((r) => r.user_id) };
+    return { pointIds: rows.map((r) => r.point_id as string) };
+  }
+
+  /**
+   * Заменить набор филиалов сотрудника (user_management) — сторона карточки
+   * сотрудника, та самая «настройка, на каких филиалах они могут работать».
+   * Пустой массив = снять ограничение (доступны все живые филиалы).
+   */
+  async setUserPoints(tenantID: string, userID: string, pointIds: string[]) {
+    if (!UUID_RE.test(userID)) throw new NotFoundException({ message: 'Сотрудник не найден' });
+    const clean = [...new Set((pointIds ?? []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))];
+    const applied = await this.applyMembership(tenantID, { userID, pointIds: clean });
+    return { pointIds: applied };
   }
 
   // ── Сводка по филиалам ──────────────────────────────────────────────────
 
   /**
-   * Карточки раздела «Филиалы»: на каждую ЖИВУЮ точку — оборот за день, оборот
+   * Карточки раздела «Филиалы»: на каждую точку — оборот за день, оборот
    * за месяц, прибыль за месяц, число чеков (день и месяц) и сколько мастеров
    * сейчас на работе.
    *
    * ПРАВИЛА ДЕНЕГ — ОДИН В ОДИН с главным дашбордом (checks.getDashboard) и
    * dashboard-v2 (reports.computeDashboardV2): формулы не скопированы, а взяты
-   * из общего модуля common/check-money-sql.ts, поэтому разъехаться физически
-   * не могут. Гарантия исключена из выручки и заменена реальным убытком; в
-   * расчёт входят только проведённые живые чеки (is_deferred=false AND
-   * deleted_at IS NULL); границы дня и месяца — в поясе ТЕНАНТА (157), а не
-   * в UTC процесса.
+   * из общих модулей common/check-money-sql.ts и common/salary-extras-sql.ts,
+   * поэтому разъехаться физически не могут. Гарантия исключена из выручки и
+   * заменена реальным убытком; в расчёт входят только проведённые живые чеки
+   * (is_deferred=false AND deleted_at IS NULL); границы дня и месяца — в поясе
+   * ТЕНАНТА (157), а не в UTC процесса.
    *
-   * `profitMonth` — ЧИСТАЯ прибыль филиала: прибыль по чекам МИНУС расходы
-   * этого филиала за тот же месяц. Раньше расходы не вычитались, и владелец
-   * видел на карточке филиала 400 000, а на главной под тем же названием
-   * «Прибыль за месяц» — 150 000: две разные метрики с одним именем, из-за
-   * которых нельзя было доверять ни одной. Теперь обе считаются по одному
-   * определению (netProfitMonth из dashboard-v2), поэтому сходятся до рубля.
+   * `profitMonth` — ЧИСТАЯ прибыль филиала, ДОСЛОВНО netProfitMonth дашборда:
+   *
+   *     прибыль по чекам − расходы филиала − премии деньгами − мотивация
+   *
+   * Каждый терм добавлялся, потому что без него владелец видел на соседних
+   * экранах два разных числа под названием «Прибыль за месяц»: сначала не
+   * вычитались расходы (карточка 400 000 против главной 150 000), потом —
+   * премии и мотивация (карточка выше главной ровно на выданные мастерам
+   * деньги, см. common/salary-extras-sql.ts). Теперь термы те же и в том же
+   * составе, поэтому числа сходятся до рубля.
+   *
+   * ЧЕГО В ОБЕИХ ЦИФРАХ НЕТ ОДИНАКОВО: плановая постоянка (fixed_costs,
+   * employee_compensation) — она общетенантная, филиала не имеет и не входит
+   * ни в netProfitMonth, ни сюда. Расхождением это не является: accrual-прибыль
+   * дашборда (netProfitAccrual) — ДРУГАЯ метрика с другим именем.
    *
    * ПРИБЫЛЬ ВИДИТ ТОЛЬКО ДЕРЖАТЕЛЬ profit_view — как и в чеке/дашборде.
    * Зануляем на КОПИИ: кеш общий на тенанта, мутация закэшированного объекта
@@ -615,12 +687,47 @@ export class PointsService {
     const expenseByPoint = new Map<string, number>();
     for (const r of expRows) expenseByPoint.set(r.point_id as string, parseFloat(r.total) || 0);
 
+    // ПРЕМИИ ДЕНЬГАМИ + МОТИВАЦИЯ ЗА МЕСЯЦ — третий вид зарплатного начисления
+    // (обоснование и доказательство отсутствия двойного счёта —
+    // common/salary-extras-sql.ts). Запросы приходят ЦЕЛИКОМ оттуда же, откуда
+    // их берёт дашборд: формула, месяц отнесения премии и правило «филиал
+    // мотивации = филиал её чека» существуют в ОДНОМ экземпляре. Без этого
+    // терма карточка филиала показывала прибыль ВЫШЕ главной ровно на деньги,
+    // выданные мастерам сверх чековой зарплаты.
+    const [{ rows: premRows }, { rows: motRows }] = await Promise.all([
+      this.pool.query(premiumsByPointMonthSql(), [tenantID, monthKey, tz]),
+      this.pool.query(motivationByPointMonthSql(), [tenantID, monthStart]),
+    ]);
+    const extrasByPoint = new Map<string, number>();
+    for (const r of [...premRows, ...motRows]) {
+      const id = r.point_id as string;
+      extrasByPoint.set(id, (extrasByPoint.get(id) ?? 0) + (parseFloat(r.total) || 0));
+    }
+
     const revenue = checkRevenueExpr('ch');
     const profit = checkProfitExpr('ch');
-    // LEFT JOIN, а не подзапросы: точка без единого чека обязана вернуться
-    // строкой с нулями (карточка филиала существует и до первой продажи).
+    // АРХИВНЫЕ ФИЛИАЛЫ ТОЖЕ В ВЫБОРКЕ (фильтра `p.is_active = true` здесь
+    // больше нет).
+    //
+    // ПОЧЕМУ. Итоги тенанта считаются по ВСЕМ его чекам, а сводка брала только
+    // живые точки. Стоило закрыть филиал в середине месяца — и его выручка,
+    // прибыль и расходы оставались в сетевых цифрах, но исчезали из карточек:
+    // владелец складывал карточки, не получал того, что видит на главной, и
+    // читал это как пропавшие деньги. Молча терять их нельзя.
+    //
+    // ПОЧЕМУ ОТДЕЛЬНОЙ СТРОКОЙ В ТОМ ЖЕ СПИСКЕ, А НЕ ОДНИМ СВОДНЫМ ПУНКТОМ
+    // «архив». Деньги закрытого филиала — это деньги КОНКРЕТНОГО автосервиса
+    // с именем и историей; схлопнув два закрытых филиала в одну строку, мы
+    // лишили бы владельца возможности понять, чьи это цифры. Карточка едет с
+    // признаком `isArchived`, клиент подписывает её «Закрыт» и не предлагает
+    // в неё войти.
+    //
+    // ПУСТЫЕ АРХИВНЫЕ КАРТОЧКИ ОТСЕИВАЮТСЯ НИЖЕ: филиал, закрытый год назад,
+    // не должен вечно висеть строкой нулей — терять в нулях нечего.
     const { rows } = await this.pool.query(
-      `SELECT p.id, p.name, p.is_main,
+      // LEFT JOIN, а не подзапросы: точка без единого чека обязана вернуться
+      // строкой с нулями (карточка филиала существует и до первой продажи).
+      `SELECT p.id, p.name, p.is_main, p.is_active,
               COALESCE(SUM(CASE WHEN ch.date >= $2 THEN (${revenue}) END), 0) AS revenue_today,
               COALESCE(SUM(CASE WHEN ch.date >= $3 THEN (${revenue}) END), 0) AS revenue_month,
               COALESCE(SUM(CASE WHEN ch.date >= $3 THEN (${profit}) END), 0) AS profit_month,
@@ -630,39 +737,74 @@ export class PointsService {
          LEFT JOIN checks ch
                 ON ch.point_id = p.id AND ch.tenant_id = p.tenant_id
                AND ${checkMoneyBaseWhere('ch')}
-        WHERE p.tenant_id = $1 AND p.is_active = true
-        GROUP BY p.id, p.name, p.is_main, p.sort_order
-        ORDER BY p.is_main DESC, p.sort_order ASC, lower(p.name) ASC`,
+        WHERE p.tenant_id = $1
+        GROUP BY p.id, p.name, p.is_main, p.is_active, p.sort_order
+        ORDER BY p.is_active DESC, p.is_main DESC, p.sort_order ASC, lower(p.name) ASC`,
       [tenantID, dayStart, monthStart],
     );
 
-    return {
-      points: rows.map((r) => ({
-        pointId: r.id as string,
+    const points = rows.map((r) => {
+      const id = r.id as string;
+      const revenueToday = parseFloat(r.revenue_today) || 0;
+      const revenueMonth = parseFloat(r.revenue_month) || 0;
+      const checksToday = parseInt(r.checks_today, 10) || 0;
+      const checksMonth = parseInt(r.checks_month, 10) || 0;
+      // ЧИСТАЯ прибыль филиала = прибыль по чекам − расходы этого филиала за
+      // месяц − премии деньгами − мотивация. Минус здесь — норма, а не баг:
+      // филиал с большой постоянкой и слабой выручкой месяц и правда
+      // закрывает в убыток, и увидеть это владелец обязан именно на карточке
+      // филиала.
+      const profitMonth =
+        (parseFloat(r.profit_month) || 0) - (expenseByPoint.get(id) ?? 0) - (extrasByPoint.get(id) ?? 0);
+      return {
+        pointId: id,
         name: r.name as string,
         // Основной сервис (160) — первая карточка раздела «Филиалы». Клиент
         // подписывает её как сам автосервис, а не как один из филиалов.
         isMain: !!r.is_main,
-        revenueToday: parseFloat(r.revenue_today) || 0,
-        revenueMonth: parseFloat(r.revenue_month) || 0,
-        // ЧИСТАЯ прибыль филиала = прибыль по чекам − расходы этого филиала за
-        // месяц. Минус здесь — норма, а не баг: филиал с большой постоянкой и
-        // слабой выручкой месяц и правда закрывает в убыток, и увидеть это
-        // владелец обязан именно на карточке филиала.
-        profitMonth: (parseFloat(r.profit_month) || 0) - (expenseByPoint.get(r.id as string) ?? 0),
-        checksToday: parseInt(r.checks_today, 10) || 0,
-        checksMonth: parseInt(r.checks_month, 10) || 0,
+        // Филиал закрыт (архив). Деньги его месяца остаются в итогах тенанта,
+        // поэтому карточка остаётся в сводке — но помеченной, чтобы владелец
+        // не искал в ней сегодняшнюю работу.
+        isArchived: r.is_active !== true,
+        revenueToday,
+        revenueMonth,
+        profitMonth,
+        checksToday,
+        checksMonth,
         // 161 — сколько мастеров/админов филиала прямо сейчас в открытой смене.
         // null = учёт смен у тенанта выключен (источника факта нет — прочерк);
         // 0 = учёт включён и сегодня действительно никто не открыл смену.
-        mastersOnShift: (shiftsEnabled ? (onShiftByPoint.get(r.id as string) ?? 0) : null) as number | null,
-      })),
+        // У закрытого филиала смен быть не может — там всегда 0 либо прочерк.
+        mastersOnShift: (shiftsEnabled ? (onShiftByPoint.get(id) ?? 0) : null) as number | null,
+      };
+    });
+
+    return {
+      // ЖИВЫЕ — ВСЕГДА; АРХИВНЫЕ — ТОЛЬКО ЕСЛИ В ПОКАЗАННОМ ПЕРИОДЕ У НИХ ЕСТЬ
+      // ДЕНЬГИ ИЛИ РАБОТА. Условие проверяет РОВНО те величины, которые видит
+      // владелец на карточке: если все они нули, складывать нечего и сумма
+      // карточек сходится с итогом тенанта без этой строки. Именно поэтому
+      // проверяется profitMonth, а не только выручка: у закрытого филиала
+      // может не быть ни одного чека месяца, но остаться оплаченная аренда —
+      // и такой филиал обязан показать свой минус, а не исчезнуть.
+      //
+      // Одноточечный автосервис и тенант, который ничего не закрывал, получают
+      // прежний ответ байт-в-байт: архивных строк у них нет вовсе.
+      points: points.filter(
+        (p) =>
+          !p.isArchived ||
+          p.revenueToday !== 0 ||
+          p.revenueMonth !== 0 ||
+          p.profitMonth !== 0 ||
+          p.checksToday !== 0 ||
+          p.checksMonth !== 0,
+      ),
     };
   }
 
   // ── Суперадмин (ЛК, admin-пул) ──────────────────────────────────────────
 
-  /** Все точки тенанта (живые + архив) для карточки тенанта в ЛК. */
+  /** Все филиалы тенанта (живые + архив) для карточки тенанта в ЛК. */
   async adminList(tenantId: string) {
     const { rows } = await this.pool.query(
       // Основная точка (160) всегда живая, поэтому is_main DESC сразу после
@@ -684,6 +826,14 @@ export class PointsService {
   private static readonly HISTORY_TABLES = HISTORY_ATTACH_SQL.map(([table]) => table);
 
   /**
+   * Размер порции привязки истории — компромисс между «каждый запрос заведомо
+   * укладывается в statement_timeout» и «не делать тысячу round-trip'ов».
+   * 500 строк самой дорогой таблицы (expenses: четыре подзапроса-свидетеля на
+   * строку) — это доли секунды при лимите в 8 секунд, то есть запас на порядок.
+   */
+  private static readonly HISTORY_BATCH = 500;
+
+  /**
    * РАЗОБРАТЬ ИСТОРИЮ БЕЗ ФИЛИАЛА — момент, когда у тенанта впервые появляется
    * ЖИВАЯ точка (суперадмин её завёл или разархивировал). До этой секунды
    * скоуп филиала у тенанта выключен и point_id никого не волнует; с этой
@@ -693,15 +843,64 @@ export class PointsService {
    *
    * Зовётся ТОЛЬКО когда основной точки до этого не было: если она уже есть,
    * история к ней уже привязана, а строки, оставшиеся без филиала после этого,
-   * мог родить только владелец в режиме «Все точки» — утащить их куда-либо
+   * мог родить только актор без филиала (до 163 — режим «все филиалы») —
+   * утащить их куда-либо
    * значило бы задним числом переписать чужую выручку.
    *
    * Работает на клиенте внутри транзакции вызывающего: точка и разбор истории
    * обязаны коммититься вместе.
+   *
+   * ПОЧЕМУ ПОРЦИЯМИ, А НЕ ОДНИМ UPDATE'ОМ НА ТАБЛИЦУ. У рантайм-пула стоит
+   * statement_timeout = 8 секунд (common/db-config.ts) — он защищает быстрые
+   * списки от того, чтобы один тяжёлый запрос занял соединение пула. Девять
+   * ПОЛНОТАБЛИЧНЫХ (по тенанту) UPDATE'ов в этот лимит не укладываются, как
+   * только у автосервиса набирается многолетняя история: суперадмин, заводящий
+   * КРУПНОМУ тенанту первый филиал, получал 57014 → ROLLBACK → «Не удалось
+   * создать точку», и повторная попытка падала ровно так же — завести филиал
+   * такому тенанту было НЕЛЬЗЯ ВООБЩЕ.
+   *
+   * statement_timeout считается НА ЗАПРОС, а не на транзакцию, поэтому лекарство
+   * — резать каждый UPDATE на порции по HISTORY_BATCH строк: каждый запрос
+   * заведомо короткий, а транзакция остаётся ОДНА и по-прежнему коммитится
+   * целиком. Половинчатого состояния не бывает по построению: обрыв на любой
+   * порции — это ROLLBACK всей транзакции, включая создание точки.
+   *
+   * ПОВТОРЯЕМОСТЬ. Все UPDATE'ы адресуют только `point_id IS NULL`, поэтому
+   * повторный запуск (после отката или после ручной перезаливки) доделывает
+   * ровно недоделанное и никогда не переписывает уже привязанную строку.
+   *
+   * ПОДНЯТЫЙ ЛИМИТ — СТРАХОВКА, А НЕ ОСНОВНОЙ МЕХАНИЗМ. `SET LOCAL` живёт
+   * только до конца ЭТОЙ транзакции (вызывается строго внутри BEGIN обоих
+   * вызывающих) и не портит соединение, которое вернётся в пул. Он нужен на
+   * случай одной патологически тяжёлой порции — например, в expenses, где
+   * каждая строка тянет за собой четыре коррелированных подзапроса-свидетеля.
    */
-  private async attachOrphanHistory(db: PointScopeQueryable, tenantId: string) {
-    for (const [, sql] of HISTORY_ATTACH_SQL) {
-      await db.query(sql, [tenantId]);
+  private async attachOrphanHistory(db: HistoryAttachDb, tenantId: string) {
+    await db.query(`SET LOCAL statement_timeout = '60s'`);
+    const batch = PointsService.HISTORY_BATCH;
+    for (const [table, alias, sql] of HISTORY_ATTACH_SQL) {
+      // Хвост-порция: берём до $2 строк БЕЗ филиала и обновляем только их.
+      // ORDER BY сознательно нет — порядок не важен, а сортировка заставила бы
+      // Postgres перебрать всех сирот таблицы на каждой итерации. Итерация,
+      // обновившая строку, выводит её из-под `point_id IS NULL`, поэтому
+      // следующая порция всегда берёт СЛЕДУЮЩИЕ строки, и цикл конечен.
+      const chunked = `${sql}
+        AND ${alias}.id IN (SELECT o.id FROM ${table} o
+                             WHERE o.tenant_id = $1 AND o.point_id IS NULL
+                             LIMIT $2)`;
+      let attached = 0;
+      for (;;) {
+        const res = await db.query(chunked, [tenantId, batch]);
+        const affected = res.rowCount ?? 0;
+        attached += affected;
+        // Порция пришла неполной — сирот в этой таблице больше нет.
+        if (affected < batch) break;
+      }
+      if (attached > 0) {
+        // Прогресс в лог: у крупного тенанта привязка идёт минуты, и владельцу
+        // операции нужно видеть, что она движется, а не висит.
+        this.logger.log(`Привязка истории тенанта ${tenantId}: ${table} — ${attached} строк`);
+      }
     }
   }
 
@@ -731,7 +930,7 @@ export class PointsService {
    *
    * ПРИВЯЗКА — ТОЛЬКО В МОМЕНТ ПОЯВЛЕНИЯ ОСНОВНОЙ ТОЧКИ. Если основная у
    * тенанта уже была, история к ней уже привязана, а строки, оставшиеся без
-   * филиала после этого, мог родить только владелец в режиме «Все точки» —
+   * филиала после этого, мог родить только актор без филиала (до 163) —
    * утащить их в новорождённый филиал значило бы задним числом переписать
    * чужую выручку. Сам UPDATE к тому же адресует лишь `point_id IS NULL`.
    *
@@ -746,6 +945,7 @@ export class PointsService {
     if (!name) throw new BadRequestException({ message: 'Укажите название точки' });
     const address = String(dto?.address ?? '').trim() || null;
     const client = await this.pool.connect();
+    let created: any;
     try {
       await client.query('BEGIN');
       const { rows: t } = await client.query(`SELECT id, name FROM tenants WHERE id=$1 FOR UPDATE`, [tenantId]);
@@ -794,7 +994,7 @@ export class PointsService {
       if (!hadMain) await this.attachOrphanHistory(client, tenantId);
 
       await client.query('COMMIT');
-      return this.mapPoint(point);
+      created = point;
     } catch (err: any) {
       await client.query('ROLLBACK');
       // 23505 частичного uq-индекса: живой дубль имени.
@@ -803,6 +1003,13 @@ export class PointsService {
     } finally {
       client.release();
     }
+    // ПОСЛЕ коммита и ВНЕ try: у тенанта изменился состав живых филиалов, и
+    // сессии, жившие без филиала (одноточечный режим), обязаны получить его на
+    // следующем же запросе — иначе продолжат рождать строки без филиала (см.
+    // хелпер). Внутри try сбой этого запроса привёл бы к ROLLBACK уже
+    // закоммиченной транзакции и 500 при фактически созданном филиале.
+    await this.invalidateTenantSessions(tenantId);
+    return this.mapPoint(created);
   }
 
   /**
@@ -941,38 +1148,45 @@ export class PointsService {
     // обязаны быть теми же: иначе сотрудники остаются приколотыми к погашенной
     // точке и продолжают штамповать в неё деньги. Вне транзакции — сброс
     // auth-кеша откатить всё равно нельзя, а лишний lock на users не нужен.
-    if (dto.isActive === false) await this.detachMembersFromPoint(tenantId, pointId);
+    // Живые филиалы тенанта изменились в ЛЮБУЮ сторону — и архивация, и
+    // разархивация обязаны обесточить сессии (обоснование — в хелпере).
+    if (dto.isActive !== undefined) await this.invalidateTenantSessions(tenantId);
     return this.mapPoint(row);
   }
 
   /**
-   * ПОСЛЕДСТВИЯ АРХИВАЦИИ ТОЧКИ — один хелпер на оба пути архивации
-   * (DELETE /points/:id и PATCH с isActive:false).
+   * ПОСЛЕДСТВИЯ ИЗМЕНЕНИЯ СОСТАВА ЖИВЫХ ФИЛИАЛОВ ТЕНАНТА — один хелпер на все
+   * пути: архивация (DELETE /points/:id и PATCH isActive:false), создание
+   * первого филиала и разархивация.
    *
-   * ПОЧЕМУ ЭТО НЕ КОСМЕТИКА. Точка гаснет, а current_point_id сотрудников
-   * продолжает на неё указывать: скоуп чтения фильтрует по архивной точке
-   * (пустые журнал, склад, зарплата), а денежная запись штампует в филиал,
-   * которого больше нет ни в одном живом срезе — выручка проваливается ровно
-   * так же, как при point_id = NULL. Поэтому сброс обязателен в ОБОИХ путях;
-   * раньше он стоял только в adminArchive, и архивация через PATCH оставляла
-   * сотрудников приколотыми к мёртвому филиалу.
+   * ПОЧЕМУ ЭТО НЕ КОСМЕТИКА, А ДЕНЬГИ.
+   *   • АРХИВАЦИЯ. Филиал гаснет, а в токенах живых сессий он остался: чтение
+   *     фильтрует по архивному филиалу (пустые журнал, склад, зарплата), запись
+   *     штампует в филиал, которого нет ни в одном живом срезе, — выручка
+   *     проваливается ровно так же, как при point_id = NULL. После сброса
+   *     кеша JwtStrategy отвечает таким сессиям 401 «Филиал больше не
+   *     доступен — войдите заново».
+   *   • ПОЯВЛЕНИЕ ПЕРВОГО ФИЛИАЛА. До него сессии тенанта законно жили без
+   *     филиала (одноточечный автосервис). С этой секунды скоуп включается, и
+   *     сессия без филиала снова начала бы рождать строки без филиала. После
+   *     сброса кеша JwtStrategy подставит таким сессиям филиал по умолчанию
+   *     (autexa_default_point) — без выхода из приложения.
    *
-   * Сброс auth-кеша — по тому же основанию, что и в switchPoint: точка едет в
-   * акторе из JwtStrategy и живёт 30 секунд, а всё это время актор писал бы
-   * деньги в архив.
+   * СБРАСЫВАЕМ ВСЕМУ ТЕНАНТУ, а не «тем, кто сидел в этом филиале»: филиал
+   * сессии лежит в подписанном токене, и по базе больше нельзя узнать, кто
+   * сейчас в каком филиале. Операция редкая (её делает суперадмин), а цена
+   * ошибки — деньги в несуществующем филиале.
    */
-  private async detachMembersFromPoint(tenantId: string, pointId: string) {
-    const { rows: reset } = await this.pool.query(
-      `UPDATE users SET current_point_id=NULL WHERE current_point_id=$1 AND tenant_id=$2 RETURNING id`,
-      [pointId, tenantId],
-    );
-    for (const r of reset) invalidateAuthUser(r.id as string);
+  private async invalidateTenantSessions(tenantId: string) {
+    const { rows } = await this.pool.query(`SELECT id FROM users WHERE tenant_id=$1`, [tenantId]);
+    for (const r of rows) invalidateAuthUser(r.id as string);
   }
 
   /**
    * «Удалить» точку = АРХИВ (is_active=false), паттерн 146: старые чеки точку
-   * сохраняют, пикеры не предлагают, имя освобождается. Заодно чистим
-   * current_point_id у сотрудников, чтобы никто не «застрял» на архивной точке.
+   * сохраняют, пикеры не предлагают, имя освобождается. Заодно обесточиваем
+   * сессии тенанта, чтобы никто не остался работать в погашенном филиале
+   * (обоснование — invalidateTenantSessions).
    *
    * ОСНОВНОЙ СЕРВИС сюда не пускается вовсе — обоснование в
    * assertPointCanBeArchived.
@@ -984,7 +1198,7 @@ export class PointsService {
       [pointId, tenantId],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Точка не найдена' });
-    await this.detachMembersFromPoint(tenantId, pointId);
+    await this.invalidateTenantSessions(tenantId);
     return { success: true };
   }
 }

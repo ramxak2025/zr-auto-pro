@@ -39,9 +39,78 @@ export interface LoginRequest {
   password: string;
 }
 
+/**
+ * Успешный вход: токен сессии + профиль. `user.currentPointId` — филиал ЭТОЙ
+ * сессии (163), а не «последний выбранный на любом устройстве».
+ */
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+/**
+ * ВХОД С ВЫБОРОМ ФИЛИАЛА (163) — шаг 1. Отдельный тип запроса, а не
+ * необязательное поле в {@link LoginRequest}, ровно по одной причине: признак
+ * поддержки и тип ответа обязаны меняться ВМЕСТЕ. Прислав `supportsPointSelect`
+ * в обычный login(), клиент получил бы ответ без `token`, который его код
+ * прочитать не умеет, — пустой экран у живого автосервиса.
+ *
+ * Клиенты 3.5/3.6 этого признака не шлют и продолжают получать токен сразу:
+ * филиал за них выбирает сервер (последний использованный, иначе основной).
+ */
+export type PointSelectLoginRequest = LoginRequest & { supportsPointSelect: true };
+
+/** Филиал в списке выбора при входе. */
+export interface LoginPointOption {
+  id: string;
+  name: string;
+  address: string | null;
+  /** Основной сервис тенанта (сам автосервис), а не открытый позже филиал. */
+  isMain: boolean;
+}
+
+/**
+ * Ответ шага 1, когда сотруднику доступно НЕСКОЛЬКО филиалов. Полноценного
+ * токена здесь НЕТ и быть не может: сессия обязана принадлежать конкретному
+ * филиалу.
+ *
+ * Клиент показывает `points`, подсвечивает `defaultPointId` (где человек
+ * работал в прошлый раз) и вторым шагом вызывает POST /auth/select-point.
+ */
+export interface PointSelectionRequiredResponse {
+  /** Дискриминатор: в этом ответе НЕТ `token`. */
+  pointSelectionRequired: true;
+  /**
+   * Промежуточный токен. Живёт минуты, ОДНОРАЗОВЫЙ (после обмена мёртв) и не
+   * принимается ни одной обычной ручкой API — только POST /auth/select-point.
+   * Хранить его дольше экрана выбора не нужно.
+   */
+  selectToken: string;
+  /** Сколько секунд живёт selectToken (сейчас 300). */
+  expiresIn: number;
+  /** Доступные сотруднику живые филиалы; основной сервис первым. */
+  points: LoginPointOption[];
+  /** Филиал по умолчанию для подсветки: последний использованный, иначе основной. */
+  defaultPointId: string;
+}
+
+/**
+ * Ответ шага 1 для клиента, умеющего выбирать филиал. Различать варианты —
+ * по `pointSelectionRequired`:
+ *
+ *   const res = await authApi.loginWithPointSelect({ phone, password });
+ *   if ('pointSelectionRequired' in res.data) { …экран выбора… }
+ *   else { …обычный вход, res.data.token… }
+ */
+export type PointSelectLoginResponse = LoginResponse | PointSelectionRequiredResponse;
+
+/**
+ * POST /auth/select-point — шаг 2 входа. Пароль здесь НЕ участвует: он
+ * проверен на шаге 1. Ответ — обычный {@link LoginResponse}.
+ */
+export interface SelectPointRequest {
+  selectToken: string;
+  pointId: string;
 }
 
 export interface RegisterRequest {

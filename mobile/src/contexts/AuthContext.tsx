@@ -23,6 +23,7 @@ import {
   subscriptionApi,
   scheduleApi,
   pushApi,
+  pointsApi,
 } from '../api/services';
 import api, {
   createCapturedAuthRequester,
@@ -35,7 +36,7 @@ import api, {
 import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
-import { clearOfflineCheckQueue } from '../utils/offlineCheckQueue';
+import { adoptOfflineCheckQueue, endOfflineCheckQueueSession, type QueueOwner } from '../utils/offlineCheckQueue';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import {
@@ -47,6 +48,30 @@ import {
 } from './authSessionRuntime';
 import { createAuthSessionStorage } from './authSessionStorage';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
+import type { LoginPointOption } from '../../../shared/api/types';
+
+/**
+ * ЧТО ОТВЕТИЛ ШАГ 1 ВХОДА (163). Экран входа обязан различать два исхода
+ * ОДНОГО нажатия «Войти»:
+ *   • `authenticated` — сессия уже установлена (одноточечный автосервис либо
+ *     сотруднику доступен ровно один филиал), экран просто исчезает;
+ *   • `point-required` — пароль верен, но сессия ещё НЕ создана: филиал
+ *     выбирается вторым шагом. Токена здесь нет и быть не может — сессия без
+ *     филиала это и есть убранный режим «все филиалы».
+ */
+export type LoginStepResult =
+  | { status: 'authenticated' }
+  | {
+      status: 'point-required';
+      /** Одноразовый промежуточный токен; живёт минуты, в обычные ручки не ходит. */
+      selectToken: string;
+      /** Момент, после которого сервер откажет: считаем из expiresIn при получении. */
+      expiresAt: number;
+      /** Доступные сотруднику живые филиалы; основной сервис первым (порядок сервера). */
+      points: LoginPointOption[];
+      /** Где человек работал в прошлый раз — подсветить, но НЕ выбирать за него. */
+      defaultPointId: string;
+    };
 
 interface AuthContextType {
   user: User | null;
@@ -57,7 +82,18 @@ interface AuthContextType {
   /** A non-blocking /me recovery attempt is currently in flight. */
   sessionRecoveryPending: boolean;
   retrySessionRecovery: () => void;
-  login: (phone: string, password: string) => Promise<void>;
+  /**
+   * ШАГ 1 ВХОДА: телефон + пароль. Возвращает, закончился ли вход (сессия
+   * установлена) или требуется выбор филиала — см. {@link LoginStepResult}.
+   */
+  login: (phone: string, password: string) => Promise<LoginStepResult>;
+  /**
+   * ШАГ 2 ВХОДА: обменять промежуточный токен и выбранный филиал на сессию.
+   * Пароль здесь не нужен — он проверен на шаге 1. Бросает ошибку axios как
+   * есть: разбор кодов живёт в screens/loginPointSelection.ts (чистая
+   * функция с тестами), потому что от него зависит, куда вести человека.
+   */
+  loginWithPoint: (selectToken: string, pointId: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
@@ -81,6 +117,15 @@ interface AuthContextType {
    * superadmin signs in again (stated in the confirm dialog before starting).
    */
   endImpersonation: () => void;
+  /**
+   * ПОЧЕМУ СЕССИЯ ЗАКОНЧИЛАСЬ — текст сервера, если это был не просто
+   * истёкший токен, а снятый доступ к филиалу или закрытый филиал (163).
+   * Экран входа показывает его один раз и гасит: без причины человека просто
+   * «выкидывает», и он не понимает, что делать дальше.
+   */
+  sessionEndedNotice: string | null;
+  /** Погасить причину (показали — забыли), чтобы она не всплыла второй раз. */
+  clearSessionEndedNotice: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -91,11 +136,11 @@ const authSessionStorage = createAuthSessionStorage<User>(AsyncStorage, {
 });
 
 /**
- * Start both tenant-scoped durable clears in the same tick. allSettled keeps a
- * rejection handler attached immediately, but we still reject after both have
+ * Start both tenant-scoped durable operations in the same tick. allSettled keeps
+ * a rejection handler attached immediately, but we still reject after both have
  * settled so a cross-tenant login never persists B after a failed A clear.
  */
-async function clearPreviousTenantStorage(): Promise<void> {
+async function settleBoth(a: () => Promise<unknown>, b: () => Promise<unknown>): Promise<void> {
   const start = (operation: () => Promise<unknown>): Promise<unknown> => {
     try {
       return Promise.resolve(operation());
@@ -103,9 +148,38 @@ async function clearPreviousTenantStorage(): Promise<void> {
       return Promise.reject(error);
     }
   };
-  const results = await Promise.allSettled([start(clearOfflineCheckQueue), start(clearPersistentCache)]);
+  const results = await Promise.allSettled([start(a), start(b)]);
   const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (failed) throw failed.reason;
+}
+
+/**
+ * ВХОД: отдать долговременное хранилище новой сессии.
+ *
+ * Персистентный кеш query'ей стирается ВСЕГДА — это картинка экранов, и мелькнуть
+ * вчерашними цифрами чужого филиала она не имеет права. А вот офлайн-очередь
+ * чеков — это ДЕНЬГИ, а не картинка: она усыновляется, если за телефон сел тот
+ * же человек в том же автосервисе, и стирается только при смене владельца.
+ */
+function adoptTenantStorage(owner: QueueOwner): Promise<void> {
+  return settleBoth(() => adoptOfflineCheckQueue(owner), clearPersistentCache);
+}
+
+/**
+ * ВЫХОД / ИСТЁКШИЙ ТОКЕН: закрыть сессию.
+ *
+ * Раньше здесь стоял тот же безусловный wipe, что и на входе, и набитые в
+ * офлайне заказ-наряды исчезали при ЛЮБОМ разлогине — включая два новых частых
+ * (сняли доступ к филиалу, филиал заархивировали). Теперь очередь остаётся на
+ * диске за своим владельцем и дошлётся, когда он снова войдёт.
+ */
+function endTenantStorage(): Promise<void> {
+  return settleBoth(endOfflineCheckQueueSession, clearPersistentCache);
+}
+
+/** Владелец офлайн-очереди по профилю сессии. */
+function queueOwnerOf(u: User): QueueOwner {
+  return { userId: u.id, tenantId: u.tenantId ?? null };
 }
 
 /** True when an axios error is a genuine 401 (session expired / revoked). */
@@ -200,6 +274,18 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   // `warehouseId` (see the warehouse-scoped prefetch below, fired once
   // `['warehouses']` resolves) — the un-scoped slot was a structural MISS
   // nothing ever read, costing a full heavy products payload on every login.
+
+  // ФИЛИАЛ СЕССИИ (163) — ['points'], тот же ключ, что читает индикатор
+  // автосервиса на Кассе, главной и в Журнале. Греем его сразу после входа:
+  // логин ЧИСТИТ персистентный кеш (иначе после входа в другой филиал мелькнут
+  // чужие цифры), поэтому без прогрева первый кадр Кассы шёл бы без подписи
+  // автосервиса — ровно там, где цена ошибки максимальна. Ответ лёгкий:
+  // справочник точек, без денег.
+  qc.prefetchQuery({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    staleTime: 60_000,
+  }).catch(() => {});
 
   // Mirror key for the cash-side product picker. `ProductPickerModal`
   // reads `['all-products-check']` so opening the picker is a cache hit
@@ -574,6 +660,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const [isImpersonating, setIsImpersonating] = useState(false);
   const [recoveringSession, setRecoveringSession] = useState(false);
   const [sessionRecoveryPending, setSessionRecoveryPending] = useState(false);
+  // Причина принудительного разлогина (163): «филиал больше не доступен».
+  // Живёт до показа на экране входа и гасится там же.
+  const [sessionEndedNotice, setSessionEndedNotice] = useState<string | null>(null);
   const sessionRuntimeRef = useRef<SessionEpochRuntime | null>(null);
   if (!sessionRuntimeRef.current) sessionRuntimeRef.current = createSessionEpochRuntime();
   const sessionRuntime = sessionRuntimeRef.current;
@@ -890,8 +979,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
 
   // Listen for 401 events from axios interceptor
   useEffect(() => {
-    return onAuthExpired(() => {
+    return onAuthExpired((reason) => {
       const expiredEpoch = beginSessionTransition();
+      // Причину ставим ДО гашения сессии: экран входа отрисуется тем же
+      // кадром, что и разлогин, и должен уже знать, что сказать человеку.
+      setSessionEndedNotice(reason ?? null);
       // Publish the logout boundary before any unbounded query cancellation.
       // These calls start synchronously: even if the runtime queue is wedged,
       // a killed process cannot reboot into the expired bearer plus live A
@@ -903,7 +995,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setSessionRecoveryPending(false);
       setIsImpersonating(false);
       const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
-      const tenantDiskClear = clearPreviousTenantStorage().catch(() => {});
+      // ОЧЕРЕДЬ ЧЕКОВ ПЕРЕЖИВАЕТ ИСТЁКШИЙ ТОКЕН. Сама очередь трактует 401 как
+      // ВРЕМЕННУЮ ошибку (isPermanentServerRejection) и рассчитана дослать чек
+      // после повторного входа — а здесь она стиралась безусловно, и три
+      // набитых в офлайне заказ-наряда исчезали молча. Особенно больно после
+      // волны филиалов: снятие доступа к филиалу и его архивация выкидывают
+      // мастера посреди смены тем же 401. Диск остаётся за владельцем очереди;
+      // чужую сотрёт следующий вход (adoptTenantStorage).
+      const tenantDiskClear = endTenantStorage().catch(() => {});
 
       void sessionRuntime.commit(expiredEpoch, async (isCurrent) => {
         if (!isCurrent()) return;
@@ -924,22 +1023,28 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // them downstream. Wrapping in `useCallback` keeps the identities
   // stable across renders, so re-renders only fire on actual auth-state
   // change (login, logout, 401, refreshUser).
-  const login = useCallback(
-    async (phone: string, password: string) => {
+  /**
+   * УСТАНОВИТЬ СЕССИЮ по выданному сервером токену — общее тело обоих шагов
+   * входа (163). Один экземпляр, потому что изоляция прошлого тенанта здесь
+   * не «желательна», а обязательна: вход в ДРУГОЙ филиал обязан стирать кеш
+   * прошлой сессии так же жёстко, как вход в другой автосервис. Иначе на
+   * главной первым кадром мелькнут вчерашние цифры чужого филиала — и это
+   * прочитается как «деньги пропали».
+   */
+  const commitSession = useCallback(
+    async (t: string, u: User) => {
       const loginEpoch = beginSessionTransition();
-      // Network stays outside the commit queue: a slow login A must not hold
-      // up a newer login B or logout. Only its result is serialised below.
-      const res = await authApi.login({ phone, password });
-      const { token: t, user: u } = res.data;
       const applied = await commitAuthenticatedSession(sessionRuntime, loginEpoch, {
         clearPreviousTenant: () => {
           queryClient?.cancelQueries().catch(() => {});
           queryClient?.clear();
           clearWidgetData();
-          // clearAll empties its in-memory queue before returning the promise.
-          // Both durable tenant stores must be empty before token B is
-          // persisted; otherwise a process kill can restore B beside A data.
-          return clearPreviousTenantStorage();
+          // Долговременное хранилище отдаётся новой сессии ДО того, как токен B
+          // попадёт на диск: иначе убитый процесс восстановил бы B рядом с
+          // данными A. Очередь чеков при этом усыновляется, если вошёл тот же
+          // человек в тот же автосервис (его офлайн-чеки обязаны дослаться), и
+          // стирается, если владелец сменился.
+          return adoptTenantStorage(queueOwnerOf(u));
         },
         applyInMemory: () => {
           setAuthToken(t);
@@ -948,6 +1053,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           setRecoveringSession(false);
           setSessionRecoveryPending(false);
           setIsImpersonating(false);
+          // Вход состоялся — прошлая причина разлогина больше не актуальна.
+          setSessionEndedNotice(null);
         },
         persist: async () => {
           await authSessionStorage.write({ token: t, user: u, impersonating: false });
@@ -956,6 +1063,47 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       if (applied && sessionRuntime.isCurrent(loginEpoch) && queryClient) prefetchAfterLogin(queryClient, u);
     },
     [beginSessionTransition, queryClient, sessionRuntime],
+  );
+
+  /**
+   * ШАГ 1 ВХОДА (163). Зовём loginWithPointSelect, а не login: этой сборке
+   * ответ со списком филиалов ПОНЯТЕН, и получить вместо него молча
+   * подставленный сервером филиал — значит вернуть ровно ту ошибку, из-за
+   * которой волна и делалась (человек работает не там, где думает).
+   *
+   * Сессия здесь создаётся ТОЛЬКО если сервер отдал токен — то есть выбора не
+   * было (одноточечный автосервис или ровно один доступный филиал).
+   */
+  const login = useCallback(
+    async (phone: string, password: string): Promise<LoginStepResult> => {
+      // Network stays outside the commit queue: a slow login A must not hold
+      // up a newer login B or logout. Only its result is serialised below.
+      const res = await authApi.loginWithPointSelect({ phone, password });
+      const data = res.data;
+      if ('pointSelectionRequired' in data) {
+        return {
+          status: 'point-required',
+          selectToken: data.selectToken,
+          // Дедлайн считаем от МОМЕНТА ОТВЕТА, а не храним expiresIn: экран
+          // должен уметь ответить «уже поздно» без похода в сеть.
+          expiresAt: Date.now() + data.expiresIn * 1000,
+          points: data.points,
+          defaultPointId: data.defaultPointId,
+        };
+      }
+      await commitSession(data.token, data.user);
+      return { status: 'authenticated' };
+    },
+    [commitSession],
+  );
+
+  /** ШАГ 2 ВХОДА (163): выбранный филиал + промежуточный токен → сессия. */
+  const loginWithPoint = useCallback(
+    async (selectToken: string, pointId: string) => {
+      const res = await authApi.selectPoint({ selectToken, pointId });
+      await commitSession(res.data.token, res.data.user);
+    },
+    [commitSession],
   );
 
   const refreshUser = useCallback(async () => {
@@ -1003,7 +1151,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     setSessionRecoveryPending(false);
     setIsImpersonating(false);
     const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
-    const tenantDiskClear = clearPreviousTenantStorage().catch(() => {});
+    // Выход НЕ стирает офлайн-очередь: чеки принадлежат человеку, а не сессии,
+    // и он почти всегда входит обратно (смена филиала = выход и новый вход).
+    // Предупреждение «есть неотправленные чеки» живёт в UI до вызова logout.
+    const tenantDiskClear = endTenantStorage().catch(() => {});
 
     await sessionRuntime.commit(logoutEpoch, async (isCurrent) => {
       if (!isCurrent()) return;
@@ -1043,7 +1194,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           ExpoImage.clearDiskCache().catch(() => {});
           ExpoImage.clearMemoryCache().catch(() => {});
           clearWidgetData();
-          return clearPreviousTenantStorage();
+          // Имперсонация — это ВСЕГДА другой владелец (суперадмин → владелец
+          // тенанта), поэтому очередь здесь гарантированно стирается: иначе
+          // чеки суперадмина уехали бы в кассу чужого автосервиса.
+          return adoptTenantStorage(queueOwnerOf(u));
         },
         applyInMemory: () => {
           setAuthToken(t);
@@ -1081,6 +1235,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     [user],
   );
 
+  const clearSessionEndedNotice = useCallback(() => setSessionEndedNotice(null), []);
+
   const isRole = useCallback(
     (...roles: UserRole[]): boolean => {
       if (!user) return false;
@@ -1102,6 +1258,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       sessionRecoveryPending,
       retrySessionRecovery,
       login,
+      loginWithPoint,
       logout,
       refreshUser,
       hasPermission,
@@ -1109,6 +1266,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       isImpersonating,
       beginImpersonation,
       endImpersonation,
+      sessionEndedNotice,
+      clearSessionEndedNotice,
     }),
     [
       user,
@@ -1118,6 +1277,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       sessionRecoveryPending,
       retrySessionRecovery,
       login,
+      loginWithPoint,
       logout,
       refreshUser,
       hasPermission,
@@ -1125,6 +1285,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       isImpersonating,
       beginImpersonation,
       endImpersonation,
+      sessionEndedNotice,
+      clearSessionEndedNotice,
     ],
   );
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { format, startOfWeek, startOfMonth } from 'date-fns';
 import { CalendarDays, ChevronDown } from 'lucide-react';
+
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 
 interface DatePeriodPickerProps {
   dateFrom: string;
@@ -10,12 +11,19 @@ interface DatePeriodPickerProps {
 
 type QuickFilter = 'today' | 'week' | 'month' | null;
 
-export default function DatePeriodPicker({
-  dateFrom,
-  dateTo,
-  onChange,
-}: DatePeriodPickerProps) {
-  const today = format(new Date(), 'yyyy-MM-dd');
+export default function DatePeriodPicker({ dateFrom, dateTo, onChange }: DatePeriodPickerProps) {
+  /**
+   * «СЕГОДНЯ / НЕДЕЛЯ / МЕСЯЦ» — ПО КАЛЕНДАРЮ АВТОСЕРВИСА, А НЕ БРАУЗЕРА (157).
+   *
+   * Границы периода уезжают на сервер как dateFrom/dateTo, а сервер режет
+   * бизнес-сутки поясом тенанта (common/timezone.ts). Пока «сегодня» считалось
+   * часами машины, эти два календаря расходились на сутки у любого, кто открыл
+   * админку из другого региона: владелец из Владивостока в 08:00 своего утра
+   * (ещё 01:00 в Москве) жал «Сегодня» и получал ПУСТУЮ кассу, потому что
+   * просил у сервера завтрашний день. Тот же сдвиг ломал и подсветку активного
+   * фильтра — пилюля «Сегодня» гасла на корректном диапазоне.
+   */
+  const { today, weekStart, monthStart } = useTenantCalendar();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -48,21 +56,17 @@ export default function DatePeriodPicker({
   };
 
   const applyWeek = () => {
-    const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
     onChange(weekStart, today);
   };
 
   const applyMonth = () => {
-    const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
     onChange(monthStart, today);
   };
 
   // Detect active quick filter
   const activeFilter = ((): QuickFilter => {
     if (dateFrom === today && dateTo === today) return 'today';
-    const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
     if (dateFrom === weekStart && dateTo === today) return 'week';
-    const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
     if (dateFrom === monthStart && dateTo === today) return 'month';
     return null;
   })();
@@ -107,9 +111,7 @@ export default function DatePeriodPicker({
         <CalendarDays className="h-3.5 w-3.5 text-primary-500 flex-shrink-0" />
         <span className="truncate max-w-[7rem]">{getLabel()}</span>
         <ChevronDown
-          className={`h-3 w-3 text-gray-400 transition-transform duration-200 ${
-            open ? 'rotate-180' : ''
-          }`}
+          className={`h-3 w-3 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -154,9 +156,7 @@ export default function DatePeriodPicker({
           {/* Date inputs */}
           <div className="px-4 pt-3 pb-4 space-y-3">
             <div className="flex items-center gap-3">
-              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">
-                С
-              </label>
+              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">С</label>
               <input
                 type="date"
                 value={dateFrom}
@@ -173,9 +173,7 @@ export default function DatePeriodPicker({
               />
             </div>
             <div className="flex items-center gap-3">
-              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">
-                По
-              </label>
+              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">По</label>
               <input
                 type="date"
                 value={dateTo}

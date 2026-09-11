@@ -43,7 +43,8 @@ import {
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { formatMoney } from '../../../shared/utils/formatters';
+import { useTenantCalendar, useTenantTimezone } from '../hooks/useTenantTimezone';
+import { formatMoney, getGreeting } from '../../../shared/utils/formatters';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi, reportsApi } from '../api/services';
 import type { SalarySummary, UserRole, TodayEmployeeStatus, Shift, DeferredCheckReminder } from '../types';
@@ -405,8 +406,17 @@ const periodLabels: Record<ChartPeriod, string> = {
   year: 'Год',
 };
 
-function getOffsetLabel(period: ChartPeriod, offset: number): string {
-  const now = new Date();
+/**
+ * Подпись выбранного окна графика.
+ *
+ * `todayKey` — сегодняшний день АВТОСЕРВИСА ('YYYY-MM-DD', useTenantCalendar):
+ * окно считает сервер поясом тенанта (checks.getDashboardChart), и подпись,
+ * посчитанная часами браузера, называла соседний день/неделю/месяц — цифры под
+ * ней при этом были правильные, что читается как «график врёт».
+ */
+function getOffsetLabel(period: ChartPeriod, offset: number, todayKey: string): string {
+  const [y, m, d] = todayKey.split('-').map(Number);
+  const now = new Date(y || 1970, (m || 1) - 1, d || 1);
   switch (period) {
     case 'today': {
       const d = addDays(now, offset);
@@ -431,6 +441,8 @@ function getOffsetLabel(period: ChartPeriod, offset: number): string {
 }
 
 function RevenueChart() {
+  // Окно графика сервер режет поясом тенанта — подписи обязаны считаться им же.
+  const { today: tenantToday } = useTenantCalendar();
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
   // Прибыль — только держателю profit_view (R7): сервер зануляет profit в
@@ -567,7 +579,9 @@ function RevenueChart() {
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="text-sm font-medium text-slate-300 capitalize">{getOffsetLabel(period, offset)}</span>
+          <span className="text-sm font-medium text-slate-300 capitalize">
+            {getOffsetLabel(period, offset, tenantToday)}
+          </span>
           <button
             type="button"
             onClick={() => setOffset((o) => (o < 0 ? o + 1 : 0))}
@@ -769,6 +783,9 @@ function AdminDashboard() {
 
 function MasterDashboard() {
   const { user } = useAuth();
+  // Приветствие — по времени АВТОСЕРВИСА (157): мастер, открывший приложение в
+  // командировке в другом регионе, всё равно живёт по часам своего сервиса.
+  const tenantTz = useTenantTimezone();
   const { data, isLoading, isError, refetch } = useQuery<SalarySummary>({
     queryKey: ['salary', 'my-summary'],
     queryFn: async () => {
@@ -799,7 +816,7 @@ function MasterDashboard() {
       .map((w) => w[0])
       .join('')
       .slice(0, 2) || 'М';
-  const greeting = getGreeting();
+  const greeting = getGreeting(tenantTz);
 
   return (
     <div className="space-y-4">
@@ -947,10 +964,10 @@ function MasterDashboard() {
 }
 
 function MasterRankWidget({ userId }: { userId?: string }) {
-  const [selectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  // Месяц рейтинга — текущий У АВТОСЕРВИСА (157): границы месяца уезжают на
+  // сервер, а он режет сутки поясом тенанта.
+  const { month: tenantMonth } = useTenantCalendar();
+  const [selectedMonth] = useState(tenantMonth);
   const monthStart = `${selectedMonth}-01`;
   const monthEnd = (() => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -1236,11 +1253,13 @@ function DeferredChecksCard() {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  // Приветствие — по времени АВТОСЕРВИСА (157), а не машины владельца.
+  const tenantTz = useTenantTimezone();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
   const isOwner =
     user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
-  const greeting = getGreeting();
+  const greeting = getGreeting(tenantTz);
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
 
   return (
@@ -1261,16 +1280,4 @@ export default function DashboardPage() {
       <QuickActions />
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Time-based greeting
-// ---------------------------------------------------------------------------
-
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12) return 'Доброе утро';
-  if (hour >= 12 && hour < 17) return 'Добрый день';
-  if (hour >= 17 && hour < 22) return 'Добрый вечер';
-  return 'Доброй ночи';
 }

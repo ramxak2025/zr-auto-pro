@@ -13,11 +13,12 @@ import {
   ArrowDownToLine,
   Landmark,
 } from 'lucide-react';
-import { format, startOfMonth } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
@@ -90,8 +91,10 @@ function parseDay(date: string): Date {
 }
 
 export default function CashFlowPage() {
-  const today = format(new Date(), 'yyyy-MM-dd');
-  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  // Дефолтный период — текущий месяц ПО КАЛЕНДАРЮ АВТОСЕРВИСА (157): движение
+  // денег сервер режет сутками тенанта, и «месяц» по часам браузера в ночь на
+  // 1-е число просил у сервера уже следующий месяц.
+  const { today, monthStart } = useTenantCalendar();
   const { hasPermission } = useAuth();
   // Охват «свои vs все»: без `cashflow_view_all` сервер отдаёт только
   // собственные операции и игнорирует masterId — селектор мастера прячем

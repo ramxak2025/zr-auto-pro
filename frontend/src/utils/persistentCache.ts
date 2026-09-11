@@ -16,11 +16,7 @@
  */
 import { get, set, del, createStore } from 'idb-keyval';
 import { QueryClient, Query } from '@tanstack/react-query';
-import {
-  PersistedClient,
-  Persister,
-  persistQueryClient,
-} from '@tanstack/react-query-persist-client';
+import { PersistedClient, Persister, persistQueryClient } from '@tanstack/react-query-persist-client';
 
 const STORE_NAME = 'autexa-rq-cache';
 const KEY = 'react-query-v1';
@@ -70,7 +66,25 @@ const PERSISTED_KEYS = new Set<string>([
 function shouldPersistQuery(query: Query): boolean {
   const first = query.queryKey[0];
   if (typeof first !== 'string') return false;
-  return PERSISTED_KEYS.has(first);
+  if (!PERSISTED_KEYS.has(first)) return false;
+  /**
+   * СОХРАНЯЕМ ТОЛЬКО ЗАВЕРШЁННЫЙ УСПЕХОМ ЗАПРОС — иначе персист не работает
+   * ВООБЩЕ.
+   *
+   * Свой `shouldDehydrateQuery` подменяет библиотечный фильтр по умолчанию
+   * (`query.state.status === 'success'`), и без этой строки под выгрузку
+   * попадали и ВИСЯЩИЕ запросы. У висящего запроса dehydrate кладёт в снимок
+   * поле `promise`, а Promise нельзя положить в IndexedDB: `put` падает с
+   * «#<Promise> could not be cloned», и весь снимок кеша не сохраняется —
+   * молча, потому что ошибка прилетает асинхронно из persister'а.
+   *
+   * Висящий запрос с белым (whitelist) ключом у нас есть постоянно: hooks/useTenantTimezone
+   * подписывается на ['my-company'] с `enabled: false` — он НИКОГДА не
+   * переходит в success и живёт на каждой денежной странице. То есть персист
+   * ломался ровно там, ради чего он и сделан: холодный старт журнала, склада и
+   * графика снова ждал сеть вместо мгновенной отрисовки из снимка.
+   */
+  return query.state.status === 'success';
 }
 
 /** Wrap idb-keyval calls into a TanStack Persister interface. */

@@ -7,9 +7,12 @@ export interface JwtPayload {
   /** Action-permission map loaded by JwtStrategy.validate (users.permissions). */
   permissions: Record<string, boolean>;
   /**
-   * Текущий филиал актора (мульти-точки 156/160, users.current_point_id).
-   * null = «Все точки». Загружается JwtStrategy.validate тем же запросом, что
-   * роль; единый разбор — common/point-scope.ts (actorPointId).
+   * ФИЛИАЛ СЕССИИ (163) — claim `pointId` токена. Филиал выбирается при входе
+   * и живёт ровно столько, сколько живёт сессия; веб и телефон одного человека
+   * могут работать в разных филиалах. null означает ровно одно: у тенанта нет
+   * живых филиалов (одноточечный автосервис). Загружается JwtStrategy.validate
+   * тем же запросом, что роль; единый разбор — common/point-scope.ts
+   * (actorPointId).
    */
   currentPointId?: string | null;
   jti?: string;

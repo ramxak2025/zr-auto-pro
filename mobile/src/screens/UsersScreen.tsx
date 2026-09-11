@@ -23,6 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import RateByMonthSheet from '../components/employee/RateByMonthSheet';
+import { UserPointsSheet } from '../components/employee/UserPointsSheet';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
@@ -32,6 +33,7 @@ import { useShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useUsers, decideStaffListView } from '../hooks/useUsers';
+import { usePointAccess } from '../hooks/usePoints';
 import { haptic } from '../platform/haptics';
 import type { User, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
@@ -228,6 +230,11 @@ export default function UsersScreen() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   // 150 — шит «Ставка по месяцам» (смена ставки за прошлый/будущий месяц + история).
   const [rateSheetUser, setRateSheetUser] = useState<User | null>(null);
+  // 163 — «Филиалы сотрудника»: на каких филиалах человек может работать.
+  // Сохраняется СВОЕЙ ручкой (PUT /users/:id/points), а не вместе с формой:
+  // это отдельное правило доступа, и снятие филиала мгновенно выкидывает
+  // сотрудника из сессии — такое нельзя проводить «заодно» с правкой имени.
+  const [pointsSheetUser, setPointsSheetUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserForm>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -330,6 +337,9 @@ export default function UsersScreen() {
   // список в шите). Канонический хук useRoles — тот же слот ['roles'], что у
   // RolesScreen/RoleEditorScreen.
   const canManageRoles = hasPermission('user_management');
+  // Настройка филиалов имеет смысл только у тенанта, где их больше одного
+  // (одноточечный автосервис про филиалы не знает вовсе).
+  const { multiPoint } = usePointAccess();
   const { data: rolesData } = useRoles(canManageRoles && modalOpen);
   const roles = Array.isArray(rolesData) ? rolesData : [];
 
@@ -767,6 +777,31 @@ export default function UsersScreen() {
             </TouchableOpacity>
           ) : null}
 
+          {/* ── Филиалы сотрудника (163) ──────────────────────────────────
+              «Настройка, на каких филиалах они могут работать» — требование
+              владельца дословно. Только в режиме редактирования: у ещё не
+              созданного сотрудника нет id, которому назначать доступ. */}
+          {editingUser && canManageRoles && multiPoint ? (
+            <TouchableOpacity
+              style={[
+                styles.rateByMonthLink,
+                { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
+              ]}
+              onPress={() => {
+                haptic('tap');
+                setPointsSheetUser(editingUser);
+              }}
+              activeOpacity={0.72}
+              accessibilityRole="button"
+              accessibilityLabel={`Филиалы сотрудника ${editingUser.fullName}`}
+            >
+              <Ionicons name="business-outline" size={15} color={palette.text.secondary} />
+              <Text style={[styles.rateByMonthLinkText, { color: palette.text.primary }]}>Филиалы сотрудника</Text>
+              <Text style={[styles.rateByMonthLinkHint, { color: palette.text.tertiary }]}>где может работать</Text>
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          ) : null}
+
           <View style={styles.switchRow}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Активен</Text>
             <Switch
@@ -1030,6 +1065,21 @@ export default function UsersScreen() {
             )}
           </View>
         </Modal>
+
+        {/* ── Филиалы сотрудника (163) ─────────────────────────────────────
+            Вложен в edit-Modal ТЕМ ЖЕ приёмом, что шит выбора роли выше: два
+            RN <Modal> на одном уровне на iOS «съедают» друг друга при
+            одновременной презентации, а вложенный показывается поверх
+            родительского. В отличие от роли сохраняется СРАЗУ своей ручкой —
+            это отдельное правило доступа, а не поле формы. */}
+        {pointsSheetUser ? (
+          <UserPointsSheet
+            visible={!!pointsSheetUser}
+            onClose={() => setPointsSheetUser(null)}
+            userId={pointsSheetUser.id}
+            userName={pointsSheetUser.fullName}
+          />
+        ) : null}
       </Modal>
 
       {/* Product Commission Modal */}

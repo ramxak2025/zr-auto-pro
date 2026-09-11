@@ -127,12 +127,25 @@ test('invalidateReportsForTenant покрывает каждое кешируе�
 
 // ── 3. Актор несёт точку из JWT, переключение сбрасывает auth-кеш ───────────
 
-test('current_point_id читается тем же SELECT, что роль (без лишнего DB-hop)', () => {
+test('филиал сессии резолвится тем же SELECT, что роль (без лишнего DB-hop)', () => {
+  // 163 — филиал приезжает ИЗ ТОКЕНА; тем же запросом проверяется, что он ещё
+  // жив и ещё разрешён, и подставляется филиал по умолчанию сессии без него.
   assert.ok(
-    /u\.current_point_id::text as current_point_id/.test(jwtStrategy),
-    'jwt.strategy: точка не читается вместе с ролью',
+    /autexa_point_is_allowed\(u\.tenant_id, u\.id, \$2::uuid\)/.test(jwtStrategy),
+    'jwt.strategy: доступность филиала не проверяется — снятый доступ не обесточит сессию',
   );
-  assert.ok(/currentPointId: rows\[0\]\.current_point_id \?\? null/.test(jwtStrategy));
+  assert.ok(
+    /autexa_default_point\(u\.tenant_id, u\.id, u\.current_point_id\)/.test(jwtStrategy),
+    'jwt.strategy: сессии без филиала в токене (старая сборка) филиал не подставляется',
+  );
+  assert.ok(
+    !/u\.current_point_id::text as current_point_id/.test(jwtStrategy),
+    'jwt.strategy: филиал снова читается из строки пользователя — веб унаследует филиал телефона',
+  );
+  assert.ok(
+    /currentPointId: tokenPointId \?\? \(rows\[0\]\.default_point_id as string \| null\) \?\? null/.test(jwtStrategy),
+    'jwt.strategy: филиал актора собирается не из токена',
+  );
 
   // Лишний SELECT точки внутри транзакции создания чека должен быть удалён.
   assert.ok(
@@ -141,30 +154,36 @@ test('current_point_id читается тем же SELECT, что роль (б�
   );
 });
 
-test('переключение и архив филиала инвалидируют auth-кеш', () => {
-  // Без сброса кеша актор до 30 секунд ходит со СТАРОЙ точкой и видит деньги
-  // чужого филиала — это и есть самый дорогой баг этой волны.
-  const switchBody = pointsService.slice(
-    pointsService.indexOf('async switchPoint('),
-    pointsService.indexOf('private async defaultPointForMember('),
+test('снятие доступа и архив филиала обесточивают сессии', () => {
+  // Филиал лежит в подписанном токене: отобрать его нельзя, поэтому сессию
+  // гасят сбросом auth-кеша — следующий запрос идёт в базу и получает 401.
+  const membership = pointsService.slice(
+    pointsService.indexOf('private async applyMembership('),
+    pointsService.indexOf('async setMembers('),
   );
-  assert.ok(switchBody.includes('invalidateAuthUser(user.userID)'), 'switchPoint не сбрасывает auth-кеш');
+  assert.ok(
+    membership.includes('for (const id of affected) invalidateAuthUser(id);'),
+    'смена состава филиала не сбрасывает auth-кеш — снятый сотрудник ещё 30 секунд работает там, откуда его убрали',
+  );
 
-  // Последствия архивации живут в ОДНОМ хелпере, и оба пути архивации
-  // (DELETE и PATCH isActive:false) обязаны его звать — иначе сотрудники
-  // остаются приколотыми к погашенной точке (см. points-archive-and-first-point).
-  const detachBody = pointsService.slice(
-    pointsService.indexOf('private async detachMembersFromPoint('),
+  // Последствия смены состава ЖИВЫХ филиалов живут в ОДНОМ хелпере, и все
+  // пути (DELETE, PATCH isActive, создание первого филиала) обязаны его звать.
+  const invalidateBody = pointsService.slice(
+    pointsService.indexOf('private async invalidateTenantSessions('),
     pointsService.indexOf('async adminArchive('),
   );
   assert.ok(
-    detachBody.includes('invalidateAuthUser('),
-    'сброс с архивной точки не чистит auth-кеш «застрявших» акторов',
+    invalidateBody.includes('invalidateAuthUser('),
+    'архивация филиала не гасит сессии — деньги продолжат штамповаться в филиал, которого нет ни в одном срезе',
   );
   const archiveBody = pointsService.slice(pointsService.indexOf('async adminArchive('));
   assert.ok(
-    archiveBody.includes('await this.detachMembersFromPoint(tenantId, pointId);'),
-    'adminArchive не отвязывает сотрудников от архивной точки',
+    archiveBody.includes('await this.invalidateTenantSessions(tenantId);'),
+    'DELETE /points/:id не гасит сессии',
+  );
+  assert.ok(
+    /if \(dto\.isActive !== undefined\) await this\.invalidateTenantSessions\(tenantId\);/.test(pointsService),
+    'PATCH isActive не гасит сессии — вторая дверь в ту же дыру',
   );
 });
 
@@ -289,9 +308,12 @@ test('явный pointId из офлайн-очереди проверяется
   assert.ok(start > 0, 'приём явной точки из офлайн-очереди пропал');
   const block = checksService.slice(start, start + 1400);
   assert.ok(/UUID_RE\.test\(requestedPointId\)/.test(block), 'форма uuid не проверяется — 22P02 → 500 на досылке');
-  assert.ok(/tenant_id = \$2/.test(block), 'чужой тенант не отсекается');
-  assert.ok(/is_active = true/.test(block), 'архивная точка принимается');
-  assert.ok(/user_points/.test(block), 'доступ автора к точке не проверяется');
+  // 163 — тенант, живость филиала и доступ автора проверяет ОДИН общий
+  // предикат autexa_point_is_allowed (миграция 163), а не копия правила здесь.
+  assert.ok(
+    /autexa_point_is_allowed\(\$2::uuid, \$3::uuid, \$1::uuid\)/.test(block),
+    'проверка филиала из payload снова написана вручную — копии предиката расходятся молча',
+  );
   // Отказ должен быть МОЛЧАЛИВЫМ: 400 подвесил бы чек в очереди навсегда.
   assert.ok(
     !/throw new (BadRequest|Forbidden|NotFound)Exception/.test(block),

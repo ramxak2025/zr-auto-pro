@@ -17,6 +17,7 @@ import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
 import { assignedToPointSql } from './user-points-sql';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { assertRoleAssignable } from '../roles/privilege-ceiling';
 import {
   DEFAULT_TIMEZONE,
@@ -159,33 +160,40 @@ export class UsersService {
     return (rows[0].tenant_id as string | null) ?? NO_TENANT_ID;
   }
 
-  private mapUser(row: any) {
+  /**
+   * Строка сотрудника для клиента.
+   *
+   * ДВА ОБЪЁМА, А НЕ ОДИН (аудит 2026-09). GET /users, /users/masters и
+   * /users/:id намеренно открыты ВСЕМ аутентифицированным: ими питаются пикер
+   * мастера в Кассе, график и резолв имён в журнале/расходах/зарплате. Но в
+   * ответ уезжал ВЕСЬ состав строки — телефоны коллег, проценты зарплаты с
+   * услуг и товаров, лимиты расходов и карта прав. Мастеру для пикера не нужно
+   * ничего из этого.
+   *
+   * `full = true` отдаёт прежний состав 1:1 и полагается ровно двум:
+   *   • держателю 'user_management' (справочник сотрудников, карточка, роли);
+   *   • самому сотруднику про СЕБЯ (его телефон и его процент — его данные).
+   * Всем остальным чувствительные ключи не редактируются, а ОТСУТСТВУЮТ: ключ
+   * со значением-заглушкой (0 % / пустой телефон) клиент отрисовал бы как факт
+   * («Доля с услуг: 0%»), а отсутствующий он уже умеет показывать как «—»
+   * (все потребители читают эти поля через `|| 0` / `|| '—'`).
+   */
+  private mapUser(row: any, full: boolean) {
     let daysOff: number[] = [];
     if (row.days_off) {
       daysOff = typeof row.days_off === 'string' ? JSON.parse(row.days_off) : row.days_off;
     }
     return {
       id: row.id,
-      phone: row.phone,
       fullName: row.full_name,
-      username: row.username,
       avatar: row.avatar,
       role: row.role,
       // 114 — назначенная роль (Bitrix24-style). NULL = легаси-дефолты строковой роли.
       roleId: row.role_id ?? null,
-      salaryPercent: parseFloat(row.salary_percent) || 0,
-      productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
-      permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions || {},
       daysOff,
       sortOrder: parseInt(row.sort_order) || 0,
       isActive: row.is_active,
       team: row.team || null,
-      // 047_expenses_by_employee added these — they may be NULL on legacy rows.
-      canAddExpenses: !!row.can_add_expenses,
-      dailyExpenseLimit:
-        row.daily_expense_limit === null || row.daily_expense_limit === undefined
-          ? null
-          : parseFloat(row.daily_expense_limit) || 0,
       // 055_user_visibility_flags — FE filters by context, server never hides.
       hiddenFromSchedule: !!row.hidden_from_schedule,
       hiddenEverywhere: !!row.hidden_everywhere,
@@ -196,7 +204,36 @@ export class UsersService {
       purgedAt: row.purged_at ?? null,
       tenantId: row.tenant_id,
       createdAt: row.created_at,
+      // ── ПДн и деньги — только руководителю кадров и самому сотруднику ──
+      ...(full
+        ? {
+            phone: row.phone,
+            // Логин — тоже идентификатор доступа, коллегам его знать незачем.
+            username: row.username,
+            salaryPercent: parseFloat(row.salary_percent) || 0,
+            productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
+            permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions || {},
+            // 047_expenses_by_employee added these — they may be NULL on legacy rows.
+            canAddExpenses: !!row.can_add_expenses,
+            dailyExpenseLimit:
+              row.daily_expense_limit === null || row.daily_expense_limit === undefined
+                ? null
+                : parseFloat(row.daily_expense_limit) || 0,
+          }
+        : {}),
     };
+  }
+
+  /**
+   * Кому эта строка отдаётся целиком: держателю 'user_management' — любая,
+   * остальным — только своя собственная. Один предикат на getAll / getMasters /
+   * getById, чтобы объём ответа нельзя было развести между списком и карточкой.
+   */
+  private canSeeFullUser(
+    actor: { userID: string; role?: string; permissions?: Record<string, boolean> },
+    rowId: string,
+  ) {
+    return userHasPermission(actor, 'user_management') || actor.userID === rowId;
   }
 
   /**
@@ -216,7 +253,8 @@ export class UsersService {
    * Предикат — общий с графиком (user_points): сотрудник без назначений виден
    * везде (безопасный дефолт 156).
    */
-  async getAll(tenantID: string, pointId: string | null = null) {
+  async getAll(actor: JwtPayload, pointId: string | null = null) {
+    const tenantID = actor.tenantID;
     const params: unknown[] = [tenantID];
     const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
@@ -238,7 +276,7 @@ export class UsersService {
        ORDER BY sort_order, created_at`,
       params,
     );
-    return rows.map(this.mapUser);
+    return rows.map((r) => this.mapUser(r, this.canSeeFullUser(actor, r.id)));
   }
 
   async updateOrder(tenantID: string, orderedIds: string[]) {
@@ -254,7 +292,8 @@ export class UsersService {
   }
 
   /** Мастера и админы. `pointId` — тот же опциональный скоуп, что в getAll (161). */
-  async getMasters(tenantID: string, pointId: string | null = null) {
+  async getMasters(actor: JwtPayload, pointId: string | null = null) {
+    const tenantID = actor.tenantID;
     const params: unknown[] = [tenantID];
     const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
@@ -276,10 +315,29 @@ export class UsersService {
        ORDER BY full_name`,
       params,
     );
-    return rows.map(this.mapUser);
+    return rows.map((r) => this.mapUser(r, this.canSeeFullUser(actor, r.id)));
   }
 
-  async getById(id: string, tenantID: string) {
+  /**
+   * Карточка сотрудника для КЛИЕНТА. Объём решает тот же предикат, что в
+   * списках: руководитель кадров видит всё, остальные — только свою строку
+   * целиком (UsersService.mapUser).
+   */
+  async getById(id: string, tenantID: string, actor: JwtPayload) {
+    const row = await this.loadUserRow(id, tenantID);
+    return this.mapUser(row, this.canSeeFullUser(actor, row.id));
+  }
+
+  /**
+   * Та же карточка для ВНУТРЕННИХ путей сервиса (ответ на PATCH /users/:id и
+   * POST /users/:id/restore). Оба роута закрыты 'user_management', поэтому
+   * состав полный — и это видно в сигнатуре, а не подразумевается дефолтом.
+   */
+  private async getByIdForManager(id: string, tenantID: string) {
+    return this.mapUser(await this.loadUserRow(id, tenantID), true);
+  }
+
+  private async loadUserRow(id: string, tenantID: string) {
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
@@ -301,7 +359,7 @@ export class UsersService {
     // must resolve their name. The mapped `dismissedAt` / `purgedAt` tell the
     // client to render «Уволен» read-only and block navigation/editing.
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
-    return this.mapUser(rows[0]);
+    return rows[0];
   }
 
   async create(tenantID: string, actorRole: string, dto: any, actorPermissions?: Record<string, boolean>) {
@@ -394,7 +452,9 @@ export class UsersService {
          RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, roleId, tenantID],
       );
-      return this.mapUser(rows[0]);
+      // Создание/правка/корзина живут под 'user_management' — актору полный
+      // состав строки положен по определению.
+      return this.mapUser(rows[0], true);
     } catch (err: any) {
       this.logger.error(`User create error: code=${err.code} detail=${err.detail}`);
       if (err.code === '23505') {
@@ -572,10 +632,17 @@ export class UsersService {
       const hash = await bcrypt.hash(dto.password, 10);
       sets.push(`password=$${idx++}`);
       vals.push(hash);
+      // СБРОС ПАРОЛЯ ВЛАДЕЛЬЦЕМ ГАСИТ ВСЕ СЕССИИ СОТРУДНИКА (165) — ровно как
+      // самостоятельная смена пароля (ProfileService.changePassword). Иначе
+      // «сменить сотруднику пароль» не отбирало доступ: его старый токен жил
+      // до 30 суток, и уволенный/скомпрометированный продолжал работать. Без
+      // плейсхолдера: now() считается часами базы, как и сравнение в
+      // JwtStrategy. Кеш валидаций чистит invalidateAuthUser в конце метода.
+      sets.push(`sessions_valid_from=now()`);
     }
 
     if (sets.length === 0) {
-      return this.getById(id, tenantID);
+      return this.getByIdForManager(id, tenantID);
     }
 
     // #62: did a salary percent actually change value? Only then do we recompute
@@ -684,7 +751,7 @@ export class UsersService {
       }
     }
 
-    return this.mapUser(updatedRow);
+    return this.mapUser(updatedRow, true);
   }
 
   private static readonly MONTH_RE = /^\d{4}-\d{2}$/;
@@ -1228,7 +1295,7 @@ export class UsersService {
        ORDER BY dismissed_at DESC`,
       [tenantID],
     );
-    return rows.map(this.mapUser);
+    return rows.map((r) => this.mapUser(r, true));
   }
 
   /**
@@ -1255,7 +1322,7 @@ export class UsersService {
     ]);
     // Role / active flag may matter again immediately — flush the auth cache.
     invalidateAuthUser(id);
-    return this.getById(id, tenantID);
+    return this.getByIdForManager(id, tenantID);
   }
 
   /**

@@ -4,31 +4,34 @@ const { join } = require('node:path');
 const test = require('node:test');
 
 /**
- * ВОЛНА 4: «НИ ОДНОЙ ДЕНЕЖНОЙ ЗАПИСИ БЕЗ ФИЛИАЛА».
+ * «НИ ОДНОЙ ДЕНЕЖНОЙ ЗАПИСИ БЕЗ ФИЛИАЛА» (волна 4, переписана под 163).
  *
- * ЧТО ЗДЕСЬ ОХРАНЯЕТСЯ — не стиль, а деньги. Чтение в режиме «Все точки»
- * фильтра не применяет (владельцу нужна сводка по сети), а ЗАПИСЬ в том же
- * режиме рождала строку с point_id = NULL. Филиальные срезы фильтруют СТРОГИМ
- * равенством, поэтому такую строку не видел НИ ОДИН филиал:
+ * ЧТО ЗДЕСЬ ОХРАНЯЕТСЯ — не стиль, а деньги. Денежная строка с point_id = NULL
+ * не видна НИ ОДНОМУ филиалу (срезы фильтруют строгим равенством):
  *   • чек выпадал из журнала филиала, его Z-отчёта и карточки «Филиалы»;
  *   • выплата не вычиталась из «к выплате» ни в одном филиале — и владелец,
  *     глядя на филиальный экран, выдавал зарплату ВТОРОЙ РАЗ.
  *
+ * ЧТО ИЗМЕНИЛОСЬ В 163. Раньше такие строки рождал режим «все филиалы» —
+ * сессия без филиала, — и лечил их резолв на месте
+ * (point-scope.resolvePointForWrite: своя точка → единственная доступная →
+ * 400 «Выберите филиал»). Теперь филиал выбирается ПРИ ВХОДЕ и живёт в токене,
+ * поэтому сессии без филиала на тенанте с филиалами не существует, резолв
+ * удалён, а инвариант остался прежним и охраняется здесь же — только теперь
+ * проверяется, что денежные пути штампуют ФИЛИАЛ СЕССИИ и ничего не резолвят
+ * сами (второй копии правила быть не должно).
+ *
  * Инварианты теста:
- *   1. Правило живёт в ОДНОМ месте (common/point-scope.resolvePointForWrite),
- *      второй копии логики нет.
- *   2. Резолв ведёт себя ровно как договорено: своя точка → единственная
- *      доступная → 400; у тенанта без точек — NULL (одноточечный автосервис
- *      изменений не замечает).
- *   3. Хелпером пользуются ВСЕ денежные пути: чек, ручной расход, выплата,
- *      премия, штраф, легаси-выплата, внепрограммная выплата, кассовая смена.
- *   4. Пустой скоуп обычного сотрудника больше не означает «видно всё».
- *   5. Снятие с филиала выгоняет из филиала (и из auth-кеша).
- *   6. Лист зарплаты филиала не теряет мастера, подменявшего на другой точке.
- *   7. Пуш про инкассацию уходит кассирам ФИЛИАЛА СМЕНЫ, а не всей сети.
+ *   1. Денежные пути берут филиал из сессии, а не резолвят его сами.
+ *   2. Денежные INSERT штампуются этим филиалом, а не «чем попало».
+ *   3. Филиал офлайн-очереди применяется РАНЬШЕ филиала сессии.
+ *   4. Снятие с филиала обесточивает сессию сотрудника в нём.
+ *   5. Лист зарплаты филиала не теряет мастера, подменявшего на другой точке.
+ *   6. Пуш про инкассацию уходит кассирам ФИЛИАЛА СМЕНЫ, а не всей сети.
  *
  * Тест статический (читает исходники) + поведенческий на собранном dist с
  * фейковым пулом: живой БД в CI нет. Конвенция — points-scoping.
+ * Сам двухшаговый вход и обесточивание сессий — points-session-login.
  */
 
 const backendRoot = join(__dirname, '..');
@@ -41,219 +44,124 @@ const checks = read('src/checks/checks.service.ts');
 const expenses = read('src/expenses/expenses.service.ts');
 const cashShifts = read('src/cash-shifts/cash-shifts.service.ts');
 
-const { resolvePointForWrite } = require('../dist/common/point-scope');
+// ── 1. Филиал денежной записи = филиал СЕССИИ ───────────────────────────────
 
-/** Пул-заглушка: отдаёт заранее заданные строки и считает обращения. */
-function fakeDb(rows) {
-  const calls = [];
-  return {
-    calls,
-    query: async (text, params) => {
-      calls.push({ text, params });
-      return { rows };
-    },
-  };
-}
-
-// ── 1. Поведение резолва ────────────────────────────────────────────────────
-
-test('своя точка возвращается после проверки, что она ЕЩЁ ЖИВАЯ', async () => {
-  const db = fakeDb([{ '?column?': 1 }]);
-  const got = await resolvePointForWrite(
-    db,
-    { tenantID: 't1', userID: 'u1', currentPointId: 'p-1' },
-    'чтобы пробить чек',
-  );
-  assert.equal(got, 'p-1');
-  assert.equal(db.calls.length, 1, 'живость точки проверяется ровно одним индексным поиском по PK');
-  assert.deepEqual(db.calls[0].params, ['p-1', 't1']);
-  assert.ok(/is_active = true/.test(db.calls[0].text), 'проверка живости точки исчезла');
-});
-
-test('заархивированная точка актора НЕ становится ответом — резолв идёт дальше', async () => {
-  // Первый запрос (живость) отдаёт пусто, второй (доступные точки) — одну.
-  const calls = [];
-  const db = {
-    calls,
-    query: async (text, params) => {
-      calls.push({ text, params });
-      return { rows: calls.length === 1 ? [] : [{ id: 'p-live' }] };
-    },
-  };
-  const got = await resolvePointForWrite(
-    db,
-    { tenantID: 't1', userID: 'u1', currentPointId: 'p-archived' },
-    'чтобы пробить чек',
-  );
-  assert.equal(
-    got,
-    'p-live',
-    'деньги, штампуемые в архивный филиал, не видит ни один живой срез — это та же дыра, что point_id = NULL',
-  );
-  assert.equal(calls.length, 2);
-});
-
-test('у тенанта без живых точек запись остаётся без филиала (одноточечный режим)', async () => {
-  const db = fakeDb([]);
-  const got = await resolvePointForWrite(db, { tenantID: 't1', userID: 'u1' }, 'чтобы пробить чек');
-  assert.equal(got, null, 'одноточечный автосервис не должен заметить волну филиалов вообще');
-});
-
-test('единственная доступная точка подставляется молча', async () => {
-  const db = fakeDb([{ id: 'p-only' }]);
-  const got = await resolvePointForWrite(db, { tenantID: 't1', userID: 'u1', currentPointId: '' }, 'чтобы пробить чек');
-  assert.equal(got, 'p-only', 'мастер одного филиала не должен видеть вопроса «какой филиал»');
-});
-
-test('доступных несколько — 400 с понятным русским текстом, а не «ничья» запись', async () => {
-  const db = fakeDb([{ id: 'p-1' }, { id: 'p-2' }]);
-  await assert.rejects(
-    () => resolvePointForWrite(db, { tenantID: 't1', userID: 'u1', currentPointId: null }, 'чтобы выдать зарплату'),
-    (err) => {
-      assert.equal(err.getStatus(), 400, 'форма ошибки обязана совпадать с прежним гейтом кассовой смены');
-      assert.deepEqual(err.getResponse(), { message: 'Выберите филиал, чтобы выдать зарплату' });
-      return true;
-    },
-  );
-});
-
-test('точка уходит параметром, а не склейкой', async () => {
-  const db = fakeDb([{ id: 'p-1' }]);
-  await resolvePointForWrite(db, { tenantID: 't1', userID: 'u1' }, 'чтобы записать расход');
-  const [call] = db.calls;
-  assert.deepEqual(call.params, ['t1', 'u1']);
-  assert.ok(!call.text.includes('t1') && !call.text.includes('u1'), 'значения не должны попадать в текст SQL');
-  assert.ok(/LIMIT 2/.test(call.text), 'вопрос ровно один: «одна доступная точка или больше»');
-});
-
-test('доступность считается той же конвенцией 156, что и на чтении', () => {
-  const body = pointScope.slice(pointScope.indexOf('export async function resolvePointForWrite('));
-  // Есть назначения на живые точки — только они; нет — все живые точки
-  // тенанта. Вторая ветка закрывает «назначен только на архивную точку»:
-  // иначе сотрудник не смог бы ни провести чек, ни выбрать филиал.
-  assert.ok(/WITH live AS \(/.test(body) && /mine AS \(/.test(body), 'резолв доступных точек переписан мимо конвенции');
-  assert.ok(/SELECT \* FROM live WHERE NOT EXISTS \(SELECT 1 FROM mine\)/.test(body), 'нет ветки «назначений нет»');
-  assert.ok(/is_active = true/.test(body), 'архивная точка не может быть доступной для записи');
-});
-
-// ── 2. Второй копии правила нет ─────────────────────────────────────────────
-
-test('все денежные пути ходят через ОДИН хелпер', () => {
-  const paths = [
-    ['чек', checks, "resolvePointForWrite(\n        this.pool,"],
-    ['ручной расход', expenses, "resolvePointForWrite(this.pool, actor, 'чтобы записать расход')"],
-    ['кассовая смена', cashShifts, "resolvePointForWrite(this.pool, user, 'чтобы открыть кассовую смену')"],
-  ];
-  for (const [name, src, marker] of paths) {
-    assert.ok(src.includes(marker), `${name}: денежная запись мимо общего резолва филиала`);
-  }
-  // Зарплата — пять путей через один приватный враппер writePoint.
-  assert.ok(
-    /private writePoint\(\s*tenantID: string,\s*actorID: string,\s*pointId: string \| null,\s*purpose: string,\s*\): Promise<string \| null> \{\s*return resolvePointForWrite\(/.test(
-      salary,
-    ),
-    'salary: враппер writePoint обязан просто делегировать в общий резолв',
-  );
-  for (const [what, marker] of [
-    ['выплата', "this.writePoint(tenantID, createdBy, pointId, 'чтобы выдать зарплату')"],
-    ['премия', "this.writePoint(tenantID, awardedBy, pointId, 'чтобы начислить премию')"],
-    ['штраф', "this.writePoint(tenantID, createdBy, pointId, 'чтобы наложить штраф')"],
-    ['внепрограммная выплата', "this.writePoint(tenantID, createdBy, pointId, 'чтобы провести выплату')"],
+test('денежные пути берут филиал из сессии и не резолвят его сами', () => {
+  const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  for (const [name, src] of [
+    ['чек', checks],
+    ['ручной расход', expenses],
+    ['кассовая смена', cashShifts],
+    ['зарплата', salary],
   ]) {
-    assert.ok(salary.includes(marker), `salary: ${what} пишется без резолва филиала`);
+    const code = strip(src);
+    assert.ok(
+      !/resolvePointForWrite/.test(code),
+      `${name}: денежный путь снова резолвит филиал сам — при филиале в сессии это вторая копия правила`,
+    );
+    assert.ok(
+      !/Выберите филиал/.test(code),
+      `${name}: отказ «Выберите филиал» вернулся — спрашивать нечего, филиал выбран при входе`,
+    );
   }
-  // Выплата ЗП есть в двух путях (новый payout + легаси payment) — оба гейтятся.
-  assert.equal(
-    (salary.match(/this\.writePoint\(tenantID, createdBy, pointId, 'чтобы выдать зарплату'\)/g) ?? []).length,
-    2,
-    'легаси-выплата (salary_payments) обязана гейтиться так же, как новая — иначе двойная выдача возвращается',
+  assert.ok(
+    /const pointId = actorPointId\(actor\);/.test(expenses),
+    'expenses.create обязан штамповать расход филиалом сессии автора',
+  );
+  assert.ok(
+    /const pointId = actorPointId\(user\);/.test(cashShifts),
+    'кассовая смена обязана открываться в филиале сессии кассира',
+  );
+  assert.ok(
+    /let authorPointId: string \| null = actorPointId\(actor\);/.test(checks),
+    'чек обязан штамповаться филиалом сессии автора',
   );
 });
 
-test('денежные INSERT штампуются РЕЗОЛВНУТОЙ точкой, а не сырой точкой актора', () => {
-  // Сырой pointId в VALUES = гейт стоит, но не применён — худший из вариантов.
+test('филиал денежной записи НЕ читается из users.current_point_id', () => {
+  for (const [name, src] of [
+    ['чек', checks],
+    ['расход', expenses],
+    ['зарплата', salary],
+    ['кассовая смена', cashShifts],
+  ]) {
+    assert.ok(
+      !/current_point_id/.test(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')),
+      `${name}: колонка «последнего выбранного филиала» одна на все устройства человека — читать её здесь значит писать деньги в филиал ДРУГОЙ его сессии`,
+    );
+  }
+});
+
+test('денежные INSERT штампуются филиалом, а не пустотой', () => {
+  // Ни одна из этих строк не имеет права уехать в базу без филиала: каждая —
+  // деньги, и каждая без филиала выпадает из всех филиальных срезов сразу.
   for (const marker of [
-    '[tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, writePointId]',
-    '[tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, writePointId]',
-    '[categoryId, dto.amount, description, payment.date, createdBy, tenantID, writePointId]',
-    'pointId: writePointId,',
+    '[tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, pointId]',
+    '[tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, pointId]',
+    '[categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId]',
+    'pointId: pointId,',
   ]) {
-    assert.ok(salary.includes(marker), `salary: денежная строка пишется мимо резолва — ${marker}`);
+    assert.ok(salary.includes(marker), `salary: денежная строка пишется без филиала — ${marker}`);
   }
-  const create = expenses.slice(
-    expenses.indexOf('async create(actor: JwtPayload'),
-    expenses.indexOf('private assertOwnPoint('),
-  );
-  assert.ok(!/actorPointId\(actor\)/.test(create), 'expenses.create снова штампует расход сырой точкой актора');
 });
 
-test('гейт чека стоит ДО открытия транзакции и не ломает офлайн-очередь', () => {
+test('филиал офлайн-очереди проверяется общим предикатом и ДО транзакции', () => {
   const create = checks.slice(checks.indexOf('let authorPointId: string | null = actorPointId(actor);'));
-  const gate = create.indexOf('resolvePointForWrite');
+  const check = create.indexOf('autexa_point_is_allowed');
   const connect = create.indexOf('await this.pool.connect()');
-  assert.ok(gate > 0 && connect > gate, 'резолв обязан идти до pool.connect(): вторая коннекция под первой = дедлок');
-  // Точка из payload офлайн-очереди по-прежнему имеет приоритет над резолвом.
+  assert.ok(check > 0, 'филиал из payload офлайн-очереди снова проверяется собственной копией предиката доступа');
+  assert.ok(connect > check, 'проверка обязана идти до pool.connect(): вторая коннекция под первой = дедлок');
   assert.ok(
-    create.indexOf('if (allowed.length > 0) authorPointId = requestedPointId;') < gate,
-    'проверенная точка офлайн-очереди обязана применяться РАНЬШЕ резолва, иначе выручка уедет в чужой филиал',
+    create.indexOf('if (allowed[0]?.ok === true) authorPointId = requestedPointId;') < connect,
+    'проверенный филиал офлайн-очереди обязан применяться до записи, иначе выручка уедет в филиал досылки',
   );
 });
 
-// ── 3. Пустой скоуп сотрудника больше не значит «видно всё» ─────────────────
+// ── 3–4. Филиал выдаётся входом; снятие доступа обесточивает сессию ────────
 
-test('сотрудник без назначений получает ПЕРВУЮ доступную точку, а не сеть', () => {
-  const body = points.slice(points.indexOf('async listForTenant('), points.indexOf('async switchPoint('));
+test('филиал не подставляется на чтении и не переключается на лету', () => {
+  const list = points.slice(points.indexOf('async listForTenant('), points.indexOf('async switchPoint('));
   assert.ok(
-    /const available = assigned\.length > 0 \? assigned : points;/.test(body),
-    'назначений нет (или все на архивные точки) — доступны все живые точки тенанта',
+    !/UPDATE users/.test(list),
+    'GET /points снова пишет филиал пользователю: два устройства одного человека начнут перетягивать его друг у друга',
+  );
+  assert.ok(/currentPointId: actorPointId\(user\)/.test(list), 'отдавать нужно филиал ЭТОЙ сессии, а не колонку users');
+  // 165: ручка смены филиала жива ради сборок 3.5/3.6, но НЕ переключает
+  // сессию — она пишет подсказку следующего входа и возвращает филиал ЭТОЙ
+  // сессии. Филиал живёт в подписанном токене, и «переключение» на лету
+  // сработало бы только в UI: человек видит филиал Б, а чеки уходят в А.
+  const switchBody = points.slice(points.indexOf('async switchPoint('), points.indexOf('applyMembership'));
+  assert.ok(
+    /return \{ currentPointId: actorPointId\(user\) \}/.test(switchBody),
+    'ручка смены филиала снова переключает сессию — филиал лежит в подписанном токене',
   );
   assert.ok(
-    /if \(available\.length > 0\) \{/.test(body),
-    'подстановка «только когда доступна ровно одна» оставляла мастера с деньгами ВСЕЙ сети',
-  );
-  assert.ok(/invalidateAuthUser\(user\.userID\)/.test(body), 'подставленная точка обязана сбросить auth-кеш');
-  assert.ok(
-    /!userHasPermission\(user, 'user_management'\)/.test(body),
-    'режим «Все точки» остаётся привилегией владельца/админа — это его осознанный выбор',
-  );
-});
-
-test('сброс в «Все точки» у сотрудника схлопывается в первую доступную точку', () => {
-  const body = points.slice(points.indexOf('async switchPoint('), points.indexOf('private async defaultPointForMember('));
-  assert.ok(/const fallback = await this\.defaultPointForMember\(user\);/.test(body));
-  const helper = points.slice(points.indexOf('private async defaultPointForMember('));
-  assert.ok(
-    /ORDER BY is_main DESC, sort_order ASC, lower\(name\) ASC\s*\n\s*LIMIT 1/.test(helper),
-    '«первая» точка обязана выбираться детерминированно, и первой обязан идти ОСНОВНОЙ сервис — иначе сотрудник без назначений попадает в случайный филиал',
+    /UPDATE users SET current_point_id=/.test(switchBody),
+    'подсказка следующего входа не пишется — старый клиент заперт в одном филиале навсегда',
   );
 });
 
-// ── 4. Снятие с филиала выгоняет из филиала ─────────────────────────────────
-
-test('setMembers сбрасывает current_point_id снятым и чистит auth-кеш', () => {
-  const body = points.slice(points.indexOf('async setMembers('), points.indexOf('// ── Сводка по филиалам'));
+test('снятие доступа обесточивает сессии сотрудника, а не правит колонку', () => {
+  const body = points.slice(points.indexOf('private async applyMembership('), points.indexOf('async setMembers('));
   assert.ok(
     /SELECT user_id FROM user_points WHERE point_id=\$1 AND tenant_id=\$2/.test(body),
-    'состав ДО замены не читается — снятых вычислить не из чего',
+    'состав ДО замены не читается — затронутых вычислить не из чего',
   );
   assert.ok(
-    /UPDATE users SET current_point_id=NULL\s*\n\s*WHERE tenant_id=\$1 AND current_point_id=\$2 AND id = ANY\(\$3::uuid\[\]\)/.test(
+    /before\.filter\(\(id\) => !after\.includes\(id\)\),\s*\n\s*\.\.\.after\.filter\(\(id\) => !before\.includes\(id\)\)/.test(
       body,
     ),
-    'снятый мастер продолжает работать в филиале, из которого его убрали',
-  );
-  assert.ok(
-    /for \(const id of resetUserIds\) invalidateAuthUser\(id\);/.test(body),
-    'без сброса auth-кеша снятый сотрудник ещё 30 секунд пишет чеки в чужой филиал',
+    'сбрасывать кеш надо и снятым, и ДОБАВЛЕННЫМ: первое же назначение запирает сотрудника без назначений в одном филиале',
   );
   const commitAt = body.indexOf("await client.query('COMMIT')");
   assert.ok(
-    commitAt > 0 && body.indexOf('for (const id of resetUserIds) invalidateAuthUser(id);') > commitAt,
-    'кеш чистится только ПОСЛЕ коммита — откат не должен оставлять пустой кеш при неснятом назначении',
+    commitAt > 0 && body.indexOf('for (const id of affected) invalidateAuthUser(id);') > commitAt,
+    'кеш чистится только ПОСЛЕ коммита — откат не должен оставлять пустой кеш при неизменённых назначениях',
   );
   assert.ok(
-    /current_point_id=\$2/.test(body),
-    'обнуляем точку только у тех, кто сидит именно в этом филиале — работающих на другой точке не трогаем',
+    /setUserPoints\(tenantID: string, userID: string, pointIds: string\[\]\)/.test(points) &&
+      /applyMembership\(tenantID, \{ userID, pointIds: clean \}\)/.test(points),
+    'настройка доступа со стороны карточки сотрудника обязана идти тем же путём, что и со стороны филиала',
   );
 });
 

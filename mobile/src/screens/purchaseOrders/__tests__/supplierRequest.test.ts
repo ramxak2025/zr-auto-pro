@@ -4,6 +4,8 @@ import {
   formatSupplyDate,
   isBackdatedSupply,
   isFutureDay,
+  tenantDayDate,
+  todaySupplyDate,
   isSameDay,
   toSupplyDateStr,
 } from '../purchaseOrderHelpers';
@@ -100,5 +102,29 @@ describe('supply date helpers', () => {
       expect(isBackdatedSupply(localToday, tz)).toBe(false);
       expect(isBackdatedSupply(localYesterday, tz)).toBe(true);
     }
+  });
+
+  // ── Дата поставки ПО УМОЛЧАНИЮ (пакет «потеря данных», 2026-09) ──────────
+  // Дефолт был `new Date()` — день ТЕЛЕФОНА. При несовпадении поясов он
+  // оказывался либо в будущем (сервер отвечает 400, приёмка не проходит вовсе),
+  // либо вчерашним днём автосервиса — и поставка молча ложилась в чужие сутки:
+  // склад, накладная и деньги поставщику уезжали не в тот день.
+  it('todaySupplyDate: дефолт НЕ задним числом и НЕ в будущем ни в одном поясе', () => {
+    for (const tz of ['Asia/Vladivostok', 'Europe/Kaliningrad', 'Europe/Moscow', 'Asia/Yekaterinburg']) {
+      const def = todaySupplyDate(tz);
+      expect(isFutureDay(def, tz)).toBe(false);
+      expect(isBackdatedSupply(def, tz)).toBe(false);
+      // И отправляем на сервер ровно тот день, который автосервис считает своим.
+      expect(toSupplyDateStr(def)).toBe(formatDayKey(new Date(), tz));
+    }
+  });
+
+  it('tenantDayDate: момент сервера превращается в КАЛЕНДАРНЫЙ ДЕНЬ автосервиса', () => {
+    // 2026-09-09 22:00 UTC: в Москве (UTC+3) это уже 10-е, в Калининграде
+    // (UTC+2) — тоже 10-е (00:00), а в Нью-Йорке было бы ещё 9-е.
+    const moment = '2026-09-09T22:00:00.000Z';
+    expect(toSupplyDateStr(tenantDayDate(moment, 'Europe/Moscow'))).toBe('2026-09-10');
+    expect(toSupplyDateStr(tenantDayDate(moment, 'Asia/Vladivostok'))).toBe('2026-09-10');
+    expect(toSupplyDateStr(tenantDayDate('2026-09-09T10:00:00.000Z', 'Europe/Moscow'))).toBe('2026-09-09');
   });
 });

@@ -26,13 +26,7 @@ import { capLimit } from '../common/cap-limit';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
-import {
-  actorPointId,
-  assertRowPointForWrite,
-  pointCacheSegment,
-  pointFilterSql,
-  resolvePointForWrite,
-} from '../common/point-scope';
+import { actorPointId, assertRowPointForWrite, pointCacheSegment, pointFilterSql } from '../common/point-scope';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
 import {
   dayStartMsInZone,
@@ -53,9 +47,10 @@ interface ChecksActor {
   role: string;
   permissions?: Record<string, boolean>;
   /**
-   * Филиал (156/160): текущая точка актора из JWT. null/undefined = «Все
-   * точки» — фильтра нет, поведение одноточечного тенанта прежнее. Единый
-   * разбор — actorPointId() из common/point-scope.
+   * Филиал СЕССИИ (163): claim `pointId` токена, приезжает в акторе из
+   * JwtStrategy. null/undefined = у тенанта нет филиалов — фильтра нет,
+   * поведение одноточечного автосервиса прежнее. Единый разбор —
+   * actorPointId() из common/point-scope.
    */
   currentPointId?: string | null;
 }
@@ -390,7 +385,7 @@ export class ChecksService {
    * point_id»), и ни один UPDATE в этом сервисе колонку не пишет. Проверить
    * раньше = не занимать соединение пула на время проверки.
    *
-   * Точки нет («Все точки» либо одноточечный тенант) → гейта нет, поведение
+   * Точки нет (у тенанта нет филиалов — одноточечный автосервис) → гейта нет, поведение
    * дословно прежнее.
    */
   private assertCheckPointForWrite(id: string, tenantID: string, actor?: ChecksActor): Promise<void> {
@@ -430,7 +425,7 @@ export class ChecksService {
     carId: unknown,
     actor?: ChecksActor,
   ): Promise<void> {
-    const viewerPoint = await this.clients.separatePointFor(tenantID, actor?.userID);
+    const viewerPoint = await this.clients.separatePointFor(tenantID, actorPointId(actor));
     if (!viewerPoint) return;
 
     // Не-uuid до сравнения не доводим: `id = $1` дал бы 22P02 → 500. Такой
@@ -1072,8 +1067,8 @@ export class ChecksService {
       // Additive; existing consumers ignore them.
       locationId: row.location_id ?? null,
       deliveredAt: row.delivered_at ?? null,
-      // 156 — мульти-точки: точка (филиал), на которой создан заказ. Штамп
-      // сервера из current_point_id автора; NULL у одноточечных тенантов и на
+      // 156 — мульти-точки: филиал, на котором создан заказ. Штамп сервера из
+      // филиала СЕССИИ автора (163); NULL у одноточечных тенантов и на
       // исторических чеках. point.name приходит там, где путь джойнит
       // tenant_points (журнал/деталь/доска). Additive.
       pointId: row.point_id ?? null,
@@ -1166,7 +1161,7 @@ export class ChecksService {
     // ── ФИЛИАЛ (156/160) ─────────────────────────────────────────────────
     // Журнал показывает чеки ТОЛЬКО текущего филиала: «зайдя в филиал, вижу
     // его чеки и его деньги» (требование владельца). Точка приезжает в акторе
-    // из JWT — ноль обращений к БД. Точки нет («Все точки» у владельца либо
+    // из JWT — ноль обращений к БД. Филиала нет (у тенанта их нет вовсе, либо
     // одноточечный тенант) → фильтра нет, запрос дословно прежний.
     //
     // ИСКЛЮЧЕНИЕ — ИСТОРИЯ КЛИЕНТА И АВТО. НЕ «ЧИНИТЬ»: при явном ?clientId
@@ -2832,66 +2827,44 @@ export class ChecksService {
     // уже держа одну, значит рисковать взаимной блокировкой на исчерпанном пуле.
     const tz = await getTenantTimezone(this.pool, tenantID);
 
-    // ── Филиал заказа (156/160) ───────────────────────────────────────────
-    // ПО УМОЛЧАНИЮ — точка АВТОРА из JWT-актора (его текущий выбор в
-    // переключателе). Раньше её перечитывал отдельный SELECT внутри КАЖДОЙ
-    // транзакции создания чека; теперь она приезжает в акторе (jwt.strategy)
-    // и стоит ноль обращений к БД.
+    // ── Филиал заказа (156/160/163) ───────────────────────────────────────
+    // ПО УМОЛЧАНИЮ — ФИЛИАЛ СЕССИИ автора: он выбран при входе, приезжает в
+    // акторе из токена (jwt.strategy) и стоит ноль обращений к БД. Раньше его
+    // перечитывал отдельный SELECT внутри КАЖДОЙ транзакции создания чека.
     //
     // ЯВНЫЙ dto.pointId — только для ОФЛАЙН-ОЧЕРЕДИ. Мастер набил чек на
-    // филиале А без сети, доехал до Б и переключился — досылка без явной
-    // точки записала бы выручку филиалу Б. Поэтому очередь кладёт точку в
-    // payload в момент нажатия «Пробить» (mobile/src/utils/offlineCheckQueue).
-    // Доверяем ей ТОЛЬКО после проверки доступа: точка обязана быть живой,
-    // своего тенанта, и автор должен иметь на неё право (user_management —
-    // свободно, иначе только назначенные точки; без назначений — не
-    // ограничен, конвенция 156). Не прошла проверку — молча берём текущую:
-    // подставленный чужой id не должен ни «переехать» деньгами в другой
-    // филиал, ни уронить досылку 400-й (чек тогда завис бы в очереди навсегда).
-    // Резолв выполняется ДО pool.connect() по той же причине, что и пояс.
+    // филиале А без сети, доехал до Б и вошёл там — досылка без явной точки
+    // записала бы выручку филиалу Б. Поэтому очередь кладёт филиал в payload в
+    // момент нажатия «Пробить» (mobile/src/utils/offlineCheckQueue). Доверяем
+    // ей ТОЛЬКО после проверки доступа — ОДНИМ общим предикатом
+    // autexa_point_is_allowed (163): филиал жив, своего тенанта, и сотрудник
+    // имеет право в нём работать. Собственной копии правила здесь больше нет;
+    // прежняя копия к тому же пускала держателя user_management в ЛЮБОЙ живой
+    // филиал, включая тот, откуда владелец сам себя убрал в настройках доступа.
+    // Не прошло проверку — молча берём филиал сессии: подставленный чужой id не
+    // должен ни «переехать» деньгами в другой филиал, ни уронить досылку 400-й
+    // (чек тогда завис бы в очереди навсегда).
+    // Проверка выполняется ДО pool.connect() по той же причине, что и пояс.
     let authorPointId: string | null = actorPointId(actor);
     const requestedPointId = typeof dto.pointId === 'string' ? dto.pointId.trim().toLowerCase() : '';
     if (requestedPointId && requestedPointId !== authorPointId && UUID_RE.test(requestedPointId)) {
       const { rows: allowed } = await this.pool.query(
-        `SELECT p.id
-           FROM tenant_points p
-          WHERE p.id = $1 AND p.tenant_id = $2 AND p.is_active = true
-            AND (
-              $4::boolean
-              OR NOT EXISTS (SELECT 1 FROM user_points up WHERE up.user_id = $3 AND up.tenant_id = $2)
-              OR EXISTS (SELECT 1 FROM user_points up2
-                          WHERE up2.user_id = $3 AND up2.tenant_id = $2 AND up2.point_id = p.id)
-            )`,
-        [requestedPointId, tenantID, userID, userHasPermission(actor, 'user_management')],
+        `SELECT autexa_point_is_allowed($2::uuid, $3::uuid, $1::uuid) as ok`,
+        [requestedPointId, tenantID, userID],
       );
-      if (allowed.length > 0) authorPointId = requestedPointId;
+      if (allowed[0]?.ok === true) authorPointId = requestedPointId;
     }
 
-    // ВОЛНА 4 — «НИЧЬИХ» ЧЕКОВ НЕ БЫВАЕТ. Чек с point_id = NULL не видел НИ
-    // ОДИН филиал: он выпадал из журнала филиала, из его Z-отчёта, из карточки
-    // «Филиалы» и из зарплатных начислений мастера — выручка существовала
-    // только в сетевом срезе. Общий резолв всех денежных путей
-    // (common/point-scope.resolvePointForWrite): своя точка → единственная
-    // доступная → 400 «Выберите филиал, чтобы пробить чек». У тенанта без
-    // точек — по-прежнему NULL, одноточечный автосервис изменений не заметит.
-    //
-    // Про офлайн-очередь: она штампует точку в момент нажатия «Пробить», и
-    // валидная точка из payload сюда уже не доходит (ветка выше). Если же чек
-    // был набит В РЕЖИМЕ «Все точки» на тенанте с несколькими филиалами —
-    // досылка честно упрётся в 400. Это правильно: угадать, чья это выручка,
-    // нельзя, а «ничей» чек — потерянные для филиала деньги.
-    //
-    // Резолв выполняется ДО pool.connect() по той же причине, что и пояс.
-    if (!authorPointId) {
-      // Актора собираем из параметров метода: ChecksActor тенанта не носит (он
-      // приходит отдельным аргументом), а единственный внешний вызов — из
-      // контроллера, где это один и тот же человек.
-      authorPointId = await resolvePointForWrite(
-        this.pool,
-        { tenantID, userID, currentPointId: actorPointId(actor) },
-        'чтобы пробить чек',
-      );
-    }
+    // «НИЧЬИХ» ЧЕКОВ НЕ БЫВАЕТ — и теперь это гарантирует не резолв на месте, а
+    // сам вход (163). Чек с point_id = NULL не видел НИ ОДИН филиал: он
+    // выпадал из журнала филиала, из его Z-отчёта, из карточки «Филиалы» и из
+    // зарплатных начислений мастера — выручка существовала только в сетевом
+    // срезе. Рождал такие чеки режим «все филиалы», то есть сессия без филиала;
+    // сессия без филиала теперь означает ровно одно — у тенанта нет ни одного
+    // живого филиала, и там NULL по-прежнему корректен (одноточечный
+    // автосервис изменений не заметит). Поэтому здесь больше нет ни резолва, ни
+    // отказа «Выберите филиал, чтобы пробить чек»: досылка офлайн-очереди
+    // никогда не зависает из-за него в очереди навсегда.
 
     const client = await this.pool.connect();
     try {
@@ -3188,7 +3161,7 @@ export class ChecksService {
 
       // 156/160 — мульти-точки: точка заказа резолвлена ДО транзакции
       // (authorPointId выше — актор из JWT либо явная точка офлайн-очереди).
-      // NULL у одноточечных тенантов / у актора в режиме «Все точки» —
+      // NULL у одноточечных тенантов (филиалов нет вовсе) —
       // колонка остаётся пустой, поведение прежнее.
       const { rows: checkRows } = await client.query(
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
@@ -4072,7 +4045,7 @@ export class ChecksService {
       // (принял тот, кто закрыл), но point_id НЕ ТРОГАЕТ СОЗНАТЕЛЬНО: заказ
       // остаётся за филиалом, где его ПРИНЯЛИ и выполнили. Иначе кассир,
       // закрывающий драфт с другой точки (подмена, вечерняя пересменка,
-      // владелец в режиме «Все точки»), молча переносил бы чужую выручку в
+      // одноточечный тенант), молча переносил бы чужую выручку в
       // свой филиал — а это и есть та самая потеря денег у соседа. Ниже в
       // `sets` point_id отсутствует ровно поэтому; тест
       // points-scoping.test.cjs следит, чтобы его туда не добавили.
@@ -5677,7 +5650,7 @@ export class ChecksService {
     // по чужому чеку, оно меняет деньги филиала, к которому актор отношения не
     // имеет. Фильтр вшит В САМ ЛОК строки (а не отдельной проверкой перед
     // транзакцией): проверка и захват — один оператор, гонок нет по построению.
-    // Точки нет («Все точки» / одноточечный тенант) → фрагмент пустой, запрос
+    // Точки нет (у тенанта нет филиалов — одноточечный автосервис) → фрагмент пустой, запрос
     // дословно прежний.
     const removeParams: any[] = [id, tenantID];
     const removePointFilter = pointFilterSql(null, actorPointId(actor), removeParams);

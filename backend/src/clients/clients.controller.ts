@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // SPLIT client permissions (build-50 → матрица, миграция 136). Enforcement:
 //   • Reading (GET /, lookup-by-phone, :id, :id/checks-by-car) → 'clients_view'
@@ -16,6 +17,12 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 //     Касса and hold 'clients_view' but not 'clients_edit'.
 //   • DELETE → 'clients_delete' (clients.delete, миграция 136).
 // Owner-class (director/superadmin) bypasses the key gates via PermissionsGuard.
+//
+// 163 — вниз, в сервис, течёт ФИЛИАЛ СЕССИИ (actorPointId), а не userID: при
+// раздельной базе клиентов (tenants.points_shared_clients=false) именно он
+// решает, чью базу человек видит. Раньше сервис перечитывал филиал из
+// users.current_point_id — одной колонки на все устройства человека, — и веб
+// показывал базу того филиала, который выбрали в телефоне.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('clients')
 export class ClientsController {
@@ -24,7 +31,7 @@ export class ClientsController {
   @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.clientsService.getAll(user.tenantID, query, user.userID);
+    return this.clientsService.getAll(user.tenantID, query, actorPointId(user));
   }
 
   // Выгрузка всей клиентской базы (имя+телефон) — ровно то, от чего защищает
@@ -34,7 +41,7 @@ export class ClientsController {
   @Get('export-csv')
   async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     // Выгрузка = ровно та база, которую видит человек (161).
-    const csv = await this.clientsService.exportCsv(user.tenantID, user.userID);
+    const csv = await this.clientsService.exportCsv(user.tenantID, actorPointId(user));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="clients.csv"');
     // Add BOM for Excel
@@ -49,13 +56,13 @@ export class ClientsController {
   @RequirePermission('clients_view')
   @Get('lookup-by-phone')
   lookupByPhone(@CurrentUser() user: JwtPayload, @Query('phone') phone: string) {
-    return this.clientsService.findByPhone(user.tenantID, phone || '', user.userID);
+    return this.clientsService.findByPhone(user.tenantID, phone || '', actorPointId(user));
   }
 
   @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.clientsService.getById(id, user.tenantID, user.userID);
+    return this.clientsService.getById(id, user.tenantID, actorPointId(user));
   }
 
   /**
@@ -78,13 +85,13 @@ export class ClientsController {
         limit: limit !== undefined ? parseInt(limit, 10) : undefined,
         offset: offset !== undefined ? parseInt(offset, 10) : undefined,
       },
-      user.userID,
+      actorPointId(user),
     );
   }
 
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.clientsService.create(user.tenantID, dto, user.userID);
+    return this.clientsService.create(user.tenantID, dto, actorPointId(user));
   }
 
   // Edit an EXISTING client's own profile fields (name/phone/comment/source/
@@ -93,7 +100,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.clientsService.update(id, user.tenantID, dto, user.userID);
+    return this.clientsService.update(id, user.tenantID, dto, actorPointId(user));
   }
 
   /**
@@ -104,7 +111,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id/source')
   updateSource(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { source: string | null }) {
-    return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null, user.userID);
+    return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null, actorPointId(user));
   }
 
   /**
@@ -114,7 +121,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id/notes')
   updateNotes(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { notes: string | null }) {
-    return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null, user.userID);
+    return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null, actorPointId(user));
   }
 
   // Удаление клиента — 'clients_delete' (clients.delete, миграция 136);
@@ -122,6 +129,6 @@ export class ClientsController {
   @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.clientsService.remove(id, user.tenantID, user.userID);
+    return this.clientsService.remove(id, user.tenantID, actorPointId(user));
   }
 }

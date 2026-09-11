@@ -26,6 +26,7 @@ import { motion } from 'framer-motion';
 import { Calendar, ChevronRight, Clock, Pencil, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { usersApi, scheduleApi, salaryApi } from '../api/services';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import EmptyState from '../components/EmptyState';
 import LoadingSpinner from '../components/LoadingSpinner';
 import PageHeader from '../components/PageHeader';
@@ -52,7 +53,11 @@ const NO_GROUP = '__NO_GROUP__';
 export default function EmployeesPage() {
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState<PeriodKey>('thisMonth');
-  const range = useMemo(() => resolvePeriod(period), [period]);
+  // Опора периода — сегодняшний день АВТОСЕРВИСА (157), не браузера: сервер
+  // режет бизнес-сутки поясом тенанта, и по часам машины «Сегодня» просило
+  // соседние сутки (обоснование — в resolvePeriod).
+  const { today: tenantToday } = useTenantCalendar();
+  const range = useMemo(() => resolvePeriod(period, tenantToday), [period, tenantToday]);
 
   // ── Data ────────────────────────────────────────────────────────────
   const { data: users, isLoading: usersLoading } = useQuery<User[]>({

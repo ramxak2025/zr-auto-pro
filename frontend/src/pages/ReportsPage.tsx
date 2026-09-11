@@ -25,6 +25,7 @@ import { format, startOfMonth, endOfMonth, addMonths } from 'date-fns';
 import { reportsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
@@ -69,13 +70,27 @@ function monthRange(d: Date): { from: string; to: string } {
   return { from: format(startOfMonth(d), 'yyyy-MM-dd'), to: format(endOfMonth(d), 'yyyy-MM-dd') };
 }
 
+/**
+ * Первое число месяца из ключа 'YYYY-MM-DD'. Дальше — только календарная
+ * арифметика, пояс машины на неё уже не влияет.
+ */
+function monthDateOf(dayKey: string): Date {
+  const [y, m] = dayKey.split('-').map(Number);
+  return new Date(y || 1970, (m || 1) - 1, 1);
+}
+
 export default function ReportsPage() {
   const { hasPermission } = useAuth();
+  // «Текущий месяц» — ПО КАЛЕНДАРЮ АВТОСЕРВИСА (157). Финансовый отчёт сервер
+  // считает сутками тенанта; по часам браузера в ночь на 1-е число страница
+  // открывалась уже в новом месяце (пустой отчёт), а пейджер месяцев считал
+  // текущий месяц будущим и запрещал шаг вперёд.
+  const currentMonthStart = monthDateOf(useTenantCalendar().monthStart);
 
   // Дефолт — ПОЛНЫЙ текущий месяц (не «1-е…сегодня»), чтобы уже назначенные
   // на этот месяц period_month-расходы сразу были в прибыли (см. коммент выше).
-  const [dateFrom, setDateFrom] = useState(() => monthRange(new Date()).from);
-  const [dateTo, setDateTo] = useState(() => monthRange(new Date()).to);
+  const [dateFrom, setDateFrom] = useState(() => monthRange(currentMonthStart).from);
+  const [dateTo, setDateTo] = useState(() => monthRange(currentMonthStart).to);
 
   // Пейджер «активен», только когда dateFrom/dateTo — ровно календарный месяц;
   // любой ручной диапазон из пикера честно гасит подсветку месяца.
@@ -87,8 +102,8 @@ export default function ReportsPage() {
     return r.from === dateFrom && r.to === dateTo ? candidate : null;
   }, [dateFrom, dateTo]);
 
-  const nowIdx = monthIndex(new Date());
-  const baseMonth = activeMonth ?? startOfMonth(new Date());
+  const nowIdx = monthIndex(currentMonthStart);
+  const baseMonth = activeMonth ?? currentMonthStart;
   const canPrevMonth = monthIndex(baseMonth) > nowIdx - MONTH_PAGER_DEPTH;
   const canNextMonth = activeMonth !== null && monthIndex(activeMonth) < nowIdx;
 
@@ -169,7 +184,7 @@ export default function ReportsPage() {
           </button>
           <button
             type="button"
-            onClick={() => applyMonth(startOfMonth(new Date()))}
+            onClick={() => applyMonth(currentMonthStart)}
             title={activeMonth ? 'К текущему месяцу' : 'Показать месяц целиком'}
             className={`h-8 min-w-[6.5rem] px-1 text-center text-xs font-semibold tabular-nums transition-colors ${
               activeMonth ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'

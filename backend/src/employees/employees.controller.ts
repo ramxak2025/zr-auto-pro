@@ -32,6 +32,15 @@ const ALLOWED_DOC_EXTS = new Set(['.jpg', '.jpeg', '.png', '.pdf', '.webp', '.he
 // Мутации документов/достижений — под матричным ключом 'user_management'
 // (волна «права как в Битрикс24», 2026-07). Self-роуты (PATCH своего профиля,
 // фото) остаются открытыми — split self-vs-manager живёт в сервисе.
+//
+// ВАЖНО ПРО ЧТЕНИЕ (аудит 2026-09). Классовые guard'ы БЕЗ ключа никого не
+// ограничивают: и RolesGuard, и PermissionsGuard по конвенции отвечают «нет
+// требования на методе → пускаем». Поэтому GET-роуты карточки (полный профиль,
+// список документов, выдача файла документа) были открыты любому
+// аутентифицированному сотруднику тенанта. Их правило — «руководитель или сам
+// сотрудник» — живёт в сервисе (EmployeesService.assertCanViewEmployee), а не
+// в декораторе: @RequirePermission('user_management') отрезал бы человека от
+// его собственной карточки и его собственных документов.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('employees')
 export class EmployeesController {
@@ -111,14 +120,22 @@ export class EmployeesController {
   // default for all current clients — which skips that server work.
   @Get(':id/full-profile')
   fullProfile(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('include') include?: string) {
-    return this.employees.fullProfile(user.tenantID, id, include);
+    // ДОСТУП (и объём) решает сервис: руководитель ('user_management') видит
+    // карточку любого сотрудника, остальные — только свою; деньги внутри
+    // дополнительно закрыты 'profit_view' и считаются в разрезе филиала
+    // сессии. Декоратора @RequirePermission здесь быть не может — он отрезал
+    // бы сотрудника от СВОЕЙ ЖЕ карточки.
+    return this.employees.fullProfile(user, user.tenantID, id, include);
   }
 
   // ── Documents ──────────────────────────────────────────────────────────
 
+  // Список документов: руководитель или сам сотрудник — правило в сервисе
+  // (EmployeesService.assertCanViewEmployee), по той же причине, что и у
+  // full-profile: @RequirePermission отрезал бы человека от своих документов.
   @Get(':id/documents')
   listDocuments(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.employees.listDocuments(user.tenantID, id);
+    return this.employees.listDocuments(user, user.tenantID, id);
   }
 
   /**
@@ -126,6 +143,12 @@ export class EmployeesController {
    * PRIVATE uploads subtree which nginx and the public uploads route both
    * refuse to serve — this endpoint is the ONLY way to read them, and it
    * checks the document belongs to the caller's tenant first.
+   *
+   * ТЕНАНТА МАЛО. Проверки «документ моего тенанта» не хватало: любой
+   * аутентифицированный сотрудник скачивал паспорт и трудовой договор коллеги,
+   * взяв его id из открытого GET /users. Доступ теперь тот же, что у остальной
+   * карточки — руководитель или сам сотрудник (проверяется в сервисе, до
+   * чтения файла с диска).
    */
   @Get(':id/documents/:docId/file')
   async serveDocument(
@@ -134,7 +157,7 @@ export class EmployeesController {
     @CurrentUser() user: JwtPayload,
     @Res() res: Response,
   ) {
-    const storedPath = await this.employees.getDocumentStoredPath(user.tenantID, id, docId);
+    const storedPath = await this.employees.getDocumentStoredPath(user, user.tenantID, id, docId);
 
     // Defense-in-depth: stay inside the uploads base dir.
     const normalized = path.normalize(storedPath);

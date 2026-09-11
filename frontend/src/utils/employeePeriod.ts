@@ -42,34 +42,56 @@ function startOfWeek(d: Date): Date {
   return monday;
 }
 
-export function resolvePeriod(period: PeriodKey): PeriodRange {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
+/**
+ * Границы периода вокруг ЗАДАННОГО дня.
+ *
+ * `todayKey` — сегодняшний день АВТОСЕРВИСА ('YYYY-MM-DD', useTenantCalendar),
+ * а не браузера (157). Границы уезжают на сервер, а он режет бизнес-сутки
+ * поясом тенанта: у владельца, открывшего админку из другого региона, «Сегодня»
+ * просило у сервера соседние сутки — карточки сотрудников показывали чужой день
+ * и считали дельту «период к периоду» от неверной опоры.
+ *
+ * Ключ разбирается покомпонентно: `new Date('YYYY-MM-DD')` — это UTC-полночь,
+ * и западнее Гринвича она уводит день назад.
+ */
+export function resolvePeriod(period: PeriodKey, todayKey: string): PeriodRange {
+  const [y, m, d] = todayKey.split('-').map(Number);
+  const now = new Date(y || 1970, (m || 1) - 1, d || 1);
 
   switch (period) {
     case 'today': {
       const yesterday = new Date(now);
       yesterday.setDate(yesterday.getDate() - 1);
       return {
-        from: fmt(now), to: fmt(now),
-        prevFrom: fmt(yesterday), prevTo: fmt(yesterday),
+        from: fmt(now),
+        to: fmt(now),
+        prevFrom: fmt(yesterday),
+        prevTo: fmt(yesterday),
       };
     }
     case 'yesterday': {
-      const y = new Date(now); y.setDate(y.getDate() - 1);
-      const dayBefore = new Date(now); dayBefore.setDate(dayBefore.getDate() - 2);
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      const dayBefore = new Date(now);
+      dayBefore.setDate(dayBefore.getDate() - 2);
       return {
-        from: fmt(y), to: fmt(y),
-        prevFrom: fmt(dayBefore), prevTo: fmt(dayBefore),
+        from: fmt(y),
+        to: fmt(y),
+        prevFrom: fmt(dayBefore),
+        prevTo: fmt(dayBefore),
       };
     }
     case 'thisWeek': {
       const monday = startOfWeek(now);
-      const lastMonday = new Date(monday); lastMonday.setDate(lastMonday.getDate() - 7);
-      const lastSunday = new Date(monday); lastSunday.setDate(lastSunday.getDate() - 1);
+      const lastMonday = new Date(monday);
+      lastMonday.setDate(lastMonday.getDate() - 7);
+      const lastSunday = new Date(monday);
+      lastSunday.setDate(lastSunday.getDate() - 1);
       return {
-        from: fmt(monday), to: fmt(now),
-        prevFrom: fmt(lastMonday), prevTo: fmt(lastSunday),
+        from: fmt(monday),
+        to: fmt(now),
+        prevFrom: fmt(lastMonday),
+        prevTo: fmt(lastSunday),
       };
     }
     case 'thisMonth': {
@@ -77,8 +99,10 @@ export function resolvePeriod(period: PeriodKey): PeriodRange {
       const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
       return {
-        from: fmt(monthStart), to: fmt(now),
-        prevFrom: fmt(prevMonthStart), prevTo: fmt(prevMonthEnd),
+        from: fmt(monthStart),
+        to: fmt(now),
+        prevFrom: fmt(prevMonthStart),
+        prevTo: fmt(prevMonthEnd),
       };
     }
     case 'lastMonth': {
@@ -87,8 +111,10 @@ export function resolvePeriod(period: PeriodKey): PeriodRange {
       const prevStart = new Date(now.getFullYear(), now.getMonth() - 2, 1);
       const prevEnd = new Date(now.getFullYear(), now.getMonth() - 1, 0);
       return {
-        from: fmt(monthStart), to: fmt(monthEnd),
-        prevFrom: fmt(prevStart), prevTo: fmt(prevEnd),
+        from: fmt(monthStart),
+        to: fmt(monthEnd),
+        prevFrom: fmt(prevStart),
+        prevTo: fmt(prevEnd),
       };
     }
   }

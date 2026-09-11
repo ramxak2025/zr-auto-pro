@@ -171,6 +171,9 @@ const routeTitles: Record<string, string> = {
   employees: 'Сотрудники',
   schedule: 'Расписание',
   more: 'Ещё',
+  // Без этой строки хлебная крошка показывала сырое «Points» — раздел, куда
+  // владелец заходит смотреть выручку каждого автосервиса.
+  points: 'Филиалы',
   notifications: 'Уведомления',
   tariff: 'Тариф',
   marketing: 'Маркетинг',
@@ -313,10 +316,10 @@ const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: Mob
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        {/* Автосервис (156/160): текущий хранится на сервере, поэтому веб и
-            так работает «внутри» одного из них — человек обязан это видеть.
-            Индикатор НЕ переключает, он ведёт на страницу «Филиалы»; сам
-            прячется, когда автосервис один. */}
+        {/* Автосервис ЭТОЙ СЕССИИ (156/160/163). Филиал выбран при входе и
+            до выхода не меняется — человек обязан видеть, где работает, до
+            того как пробьёт чек. Это подпись, а не кнопка: ни выбора, ни
+            перехода. Прячется, когда автосервис у тенанта один. */}
         <PointIndicator />
         {userAvatar ? (
           <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
@@ -465,7 +468,7 @@ export default function Layout() {
             ))}
           </div>
           <div className="flex items-center gap-4">
-            {/* Автосервис (156/160) — см. комментарий в MobileHeader. */}
+            {/* Автосервис (156/160/163) — см. комментарий в MobileHeader. */}
             <PointIndicator />
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-medium text-gray-700">{userName}</span>

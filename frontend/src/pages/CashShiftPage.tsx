@@ -20,12 +20,14 @@ import toast from 'react-hot-toast';
 import { cashShiftsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { usePointAccess } from '../hooks/usePoints';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 import type { CashShift, CashShiftReport, SafeTransaction } from '../../../shared/types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
+import PointBadge from '../components/PointBadge';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 
@@ -79,6 +81,15 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
 
       {/* Meta */}
       <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 space-y-1">
+        {/* Автосервис смены (161). У мульти-точечного тенанта Z-отчёт без
+            подписи неотличим от отчёта соседнего филиала — а цифры в нём
+            разные, и печатают его как документ. */}
+        {s.pointId && (
+          <div className="flex items-center justify-between gap-2">
+            <span>Автосервис</span>
+            <PointBadge pointId={s.pointId} />
+          </div>
+        )}
         <div className="flex justify-between">
           <span>Открыл</span>
           <span className="font-medium text-gray-800">
@@ -249,6 +260,10 @@ export default function CashShiftPage() {
   const queryClient = useQueryClient();
   // Время открытия/закрытия смен — в поясе автосервиса (см. ZReportDocument).
   const timeZone = useTenantTimezone();
+  // Автосервис ТЕКУЩЕЙ СЕССИИ (163): касса, её Z-отчёт и её недостача — деньги
+  // одного конкретного автосервиса, и закрывать смену вправе только тот, кто
+  // в этом автосервисе и работает.
+  const { currentPointId, multiPoint } = usePointAccess();
   // Открытие/закрытие/инкассация кассовой смены — ключ cash_shifts_manage
   // (backend POST /cash-shifts/*, волна Битрикс24). Просмотр статуса — всем.
   const canManage = hasPermission('cash_shifts_manage');
@@ -327,11 +342,11 @@ export default function CashShiftPage() {
       setNoteInput('');
       refresh();
     },
-    // 160/161: у тенанта с филиалами смену нельзя открыть «на всю сеть» —
-    // деньги смены принадлежат конкретному автосервису. Сервер отвечает 400
-    // «Выберите филиал, чтобы открыть кассовую смену»: показываем ЕГО текст
-    // (он говорит, что делать). Зайти в нужный автосервис можно в разделе
-    // «Филиалы» — единственном месте перехода; в шапке только индикатор.
+    // Смена открывается в филиале СЕССИИ (163): «на всю сеть» её открыть
+    // нельзя было и раньше, но теперь это невозможно по построению — отказ
+    // 400 «Выберите филиал…» ушёл вместе с режимом общей сводки. Текст сервера
+    // показываем и дальше: у отказа бывают другие причины (смена уже открыта,
+    // нет права), и глухое «Не удалось открыть смену» их бы съело.
     onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Не удалось открыть смену', { duration: 8000 }),
   });
 
@@ -397,6 +412,36 @@ export default function CashShiftPage() {
 
   const shift = currentReport?.shift;
   const hasOpenShift = !!shift && shift.status === 'open';
+  /**
+   * МОЖНО ЛИ ТРОГАТЬ ЭТУ СМЕНУ — доказательство, а не предположение.
+   *
+   * Кассовая смена принадлежит КОНКРЕТНОМУ автосервису (161): её Z-отчёт
+   * считает чеки и расходы только этой точки, а закрытие пишет туда же
+   * фактический нал, недостачу, перевод в сейф и сдачи по сотрудникам. Закрыть
+   * чужую смену — значит вписать свои деньги в чужой отчёт и оставить свой
+   * автосервис с незакрытой сменой.
+   *
+   * Сервер режет смены филиалом сессии строгим равенством
+   * (cash-shifts.service → pointFilterSql), НО фильтр отключается, когда у
+   * сессии филиала нет (`pointId` в токене пуст: сборка до 163 либо вход
+   * состоялся раньше, чем суперадмин завёл тенанту первый филиал). Тогда
+   * `current()` отдаёт ЛЮБУЮ открытую смену тенанта — в том числе соседнего
+   * автосервиса. Поэтому у мульти-точечного тенанта действия разрешены только
+   * при ДОКАЗАННОМ совпадении «филиал смены = филиал сессии».
+   *
+   * У одноточечного тенанта (`multiPoint` = false) всё остаётся как было:
+   * филиала нет ни у сессии, ни у смены, и доказывать нечего.
+   */
+  const foreignShiftReason: string | null = (() => {
+    if (!shift || !multiPoint) return null;
+    if (!currentPointId) {
+      return 'Эта сессия не привязана к автосервису, поэтому нельзя проверить, чья это смена. Выйдите и войдите заново — тогда действия со сменой станут доступны.';
+    }
+    if (shift.pointId !== currentPointId) {
+      return 'Эта смена открыта в другом автосервисе. Закрыть её и провести инкассацию можно только из него — выйдите и войдите в этот автосервис.';
+    }
+    return null;
+  })();
 
   // Close-modal live preview of difference
   const closingPreview = (() => {
@@ -494,10 +539,14 @@ export default function CashShiftPage() {
         {hasOpenShift && currentReport ? (
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                   <Unlock className="h-3 w-3" /> Смена открыта
                 </span>
+                {/* Чей это автосервис — рядом со статусом, до всех цифр: у
+                    мульти-точечного тенанта карточка без подписи неотличима от
+                    карточки соседнего филиала (161). */}
+                <PointBadge pointId={shift?.pointId} />
                 <span className="text-sm text-gray-500">
                   {shift?.openedByName ? `${shift.openedByName} · ` : ''}
                   {shift ? formatDateTime(shift.openedAt, timeZone) : ''}
@@ -569,7 +618,9 @@ export default function CashShiftPage() {
             </div>
 
             {/* Actions */}
-            {canManage ? (
+            {foreignShiftReason ? (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">{foreignShiftReason}</p>
+            ) : canManage ? (
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={() => {
@@ -672,7 +723,11 @@ export default function CashShiftPage() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
                         <p className="text-xs text-gray-500 truncate">
-                          {formatDateTime(t.createdAt)}
+                          {/* Пояс автосервиса, как и у остального времени на
+                              странице: без него операция сейфа, проведённая в
+                              23:40, у бухгалтера из другого региона вставала на
+                              соседние сутки. */}
+                          {formatDateTime(t.createdAt, timeZone)}
                           {t.actorName ? ` · ${t.actorName}` : ''}
                           {t.note ? ` · ${t.note}` : ''}
                         </p>
@@ -731,8 +786,14 @@ export default function CashShiftPage() {
                         {formatDateTime(s.openedAt, timeZone)}
                         {closed && s.closedAt ? ` — ${formatDateTime(s.closedAt, timeZone)}` : ''}
                       </p>
-                      <p className="text-xs text-gray-500 truncate">
-                        {s.openedByName || '—'} · Разменная {formatMoney(s.openingAmount)}
+                      <p className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                        {/* Автосервис строки (161): в истории мульти-точечного
+                            тенанта соседствуют смены разных автосервисов, и без
+                            подписи «недостача 3 000 ₽» читается как своя. */}
+                        <PointBadge pointId={s.pointId} />
+                        <span className="truncate">
+                          {s.openedByName || '—'} · Разменная {formatMoney(s.openingAmount)}
+                        </span>
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">

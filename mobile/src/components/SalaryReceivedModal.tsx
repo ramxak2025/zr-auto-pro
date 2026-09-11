@@ -148,6 +148,12 @@ interface SalaryReceivedModalProps {
   onConfirm: () => void;
   /** Payout: сотрудник закрывает уведомление → `salaryApi.markPayoutViewed(id)`. */
   onAcknowledge?: () => void;
+  /**
+   * «Позже» — выход БЕЗ решения и БЕЗ сетевого запроса. Модалка глобальная и
+   * перекрывает всё приложение, а её единственная кнопка ходит в сеть: без
+   * этого выхода пропавший запрос запирал сотруднику телефон целиком.
+   */
+  onSnooze?: () => void;
   /** Mutation pending flag — disables the CTAs + shows a spinner. */
   confirming: boolean;
 }
@@ -178,6 +184,7 @@ export default function SalaryReceivedModal({
   payout = null,
   onConfirm,
   onAcknowledge,
+  onSnooze,
   confirming,
 }: SalaryReceivedModalProps) {
   const palette = useColors();
@@ -230,7 +237,9 @@ export default function SalaryReceivedModal({
   const ownerName = item.creatorName || 'Руководителя';
 
   return (
-    <RNModal visible={visible} transparent animationType="none" statusBarTranslucent>
+    // onRequestClose — аппаратная «назад» на Android. Без неё модалка не
+    // закрывалась вообще ничем, кроме удачного сетевого запроса.
+    <RNModal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onSnooze}>
       <View style={styles.host}>
         <View style={styles.backdrop} />
 
@@ -292,6 +301,21 @@ export default function SalaryReceivedModal({
             <Text style={[styles.hint, { color: palette.text.tertiary }]}>
               {isPayout ? 'Выплата зафиксирована руководителем' : 'Подтвердите получение денег от руководителя'}
             </Text>
+
+            {/* Выход без решения. Ничего не отправляет: выплата всплывёт снова
+                при следующем запуске приложения. */}
+            {onSnooze ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Позже"
+                onPress={onSnooze}
+                disabled={confirming}
+                style={styles.snooze}
+                hitSlop={8}
+              >
+                <Text style={[styles.snoozeText, { color: palette.text.tertiary }]}>Позже</Text>
+              </Pressable>
+            ) : null}
           </ScrollView>
         </Animated.View>
       </View>
@@ -482,6 +506,19 @@ const styles = StyleSheet.create({
     marginTop: spacing[3],
     fontSize: fontSize.xs,
     color: colors.gray[400],
+    textAlign: 'center',
+  },
+  // «Позже» — тихая текстовая кнопка под подсказкой: выход есть всегда, но он
+  // не конкурирует вниманием с основным действием.
+  snooze: {
+    marginTop: spacing[3],
+    paddingVertical: spacing[2],
+    paddingHorizontal: spacing[4],
+    alignSelf: 'center',
+  },
+  snoozeText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
     textAlign: 'center',
   },
 });

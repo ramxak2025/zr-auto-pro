@@ -5,6 +5,7 @@ import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
+import { motivationPointFilterSql, premiumCashAmountExpr, premiumMonthExpr } from '../common/salary-extras-sql';
 import {
   getTenantTimezone,
   getZonedParts,
@@ -22,7 +23,7 @@ interface CashFlowActor {
   tenantID: string;
   role?: string;
   permissions?: Record<string, boolean>;
-  /** Филиал актора (156/160), null = «Все точки». Разбор — actorPointId(). */
+  /** Филиал СЕССИИ (163), null = у тенанта нет филиалов. Разбор — actorPointId(). */
   currentPointId?: string | null;
 }
 
@@ -111,13 +112,18 @@ export class ReportsService {
     // «Расходами» нет (см. expenses).
     // Границы периода — полуинтервал [from, to+1) в поясе тенанта ($4).
     // ФИЛИАЛ (156/160): финотчёт филиала — деньги ТОЛЬКО этого филиала.
-    // Точки нет («Все точки» / одноточечный тенант) → фильтра нет, запрос
+    // Точки нет (у тенанта нет филиалов — одноточечный автосервис) → фильтра нет, запрос
     // дословно прежний.
     const checkParams: any[] = [tenantID, dateFrom, dateTo, tz];
     const checkPointFilter = pointFilterSql(null, pointId, checkParams);
     const { rows } = await this.pool.query(
+      // Выручка — ИЗ ОБЩЕГО МОДУЛЯ ФОРМУЛ (common/check-money-sql): раньше здесь
+      // стояла своя копия правила «гарантия не выручка», и таких копий по
+      // отчётам накопилось несколько. Пока формула физически одна, разъехаться
+      // экранам не на чем. Остальные колонки (себестоимость/зарплата/убыток по
+      // гарантии) — FILTER'ы того же правила, они живут только здесь.
       `SELECT
-         COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
+         COALESCE(SUM(${checkRevenueExpr()}), 0) as revenue,
          COALESCE(SUM(product_cost_total) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as product_cost,
          COALESCE(SUM(service_salary_total + COALESCE(product_salary_total, 0)) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as salaries,
          COALESCE(SUM(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) FILTER (WHERE payment_method = 'warranty'), 0) as warranty_loss,
@@ -126,8 +132,7 @@ export class ReportsService {
        WHERE tenant_id = $1
          AND date >= $2::date::timestamp AT TIME ZONE $4::text
          AND date < ($3::date + 1)::timestamp AT TIME ZONE $4::text
-         AND is_deferred = false
-         AND deleted_at IS NULL${checkPointFilter}`,
+         AND ${checkMoneyBaseWhere()}${checkPointFilter}`,
       checkParams,
     );
 
@@ -186,10 +191,16 @@ export class ReportsService {
     );
     const otherExpenses = parseFloat(expRows[0]?.total) || 0;
 
+    // Премии деньгами и мотивация — ТРЕТИЙ вид зарплатного начисления рядом с
+    // чековым (`salaries`) и выплатным (категория «Зарплата», исключена выше).
+    // Обоснование и доказательство отсутствия двойного счёта —
+    // common/salary-extras-sql.ts.
+    const extras = await this.salaryExtrasForPeriod(tenantID, dateFrom, dateTo, tz, pointId);
+
     // Гарантия вычитается ОТДЕЛЬНЫМ термом (warrantyLoss). productCost/salaries
     // выше уже НЕ содержат гарантийных чеков (FILTER), поэтому двойного вычета
     // запчастей/зарплаты нет.
-    const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss;
+    const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss - extras.total;
 
     return {
       dateFrom,
@@ -202,9 +213,130 @@ export class ReportsService {
       // мастеру). Уже вычтен из netProfit; отдаётся отдельно, чтобы UI мог
       // показать «Гарантия (убыток)» строкой. 0 если гарантийных чеков не было.
       warrantyLoss,
+      // Отдельными строками, чтобы владелец видел, из чего сложилась разница
+      // между «зарплатой по чекам» и фактически выданными деньгами. Обе УЖЕ
+      // вычтены из netProfit — суммировать их с netProfit повторно нельзя.
+      premiums: extras.premiums,
+      motivation: extras.motivation,
       grossProfit,
       netProfit,
       checkCount: parseInt(r.check_count) || 0,
+    };
+  }
+
+  /**
+   * Премии деньгами + мотивация за период — зарплатные начисления, которых нет
+   * ни в чековых колонках, ни в расходах (см. common/salary-extras-sql.ts).
+   *
+   * ОТНЕСЕНИЕ К ПЕРИОДУ — ДОСЛОВНО КАК У РАСХОДОВ В getFinancial:
+   *   • премия БЕЗ назначенного месяца — по дате факта, местный полуинтервал
+   *     [from 00:00, to+1 00:00);
+   *   • премия С назначенным месяцем (period_month_year) входит ТОЛЬКО когда
+   *     диапазон покрывает этот месяц ЦЕЛИКОМ — иначе сумма недель месяца
+   *     задваивала бы его (тот же инвариант «под-диапазоны не двоят»);
+   *   • мусор в period_month_year трактуется как отсутствие периода (regex —
+   *     то же, что в SalaryService.premiumMonthExpr): без этого to_date упал бы
+   *     на кривой строке и уронил весь отчёт.
+   * Мотивация периода не имеет вовсе — только дата начисления (accrued_at).
+   */
+  private async salaryExtrasForPeriod(
+    tenantID: string,
+    dateFrom: string,
+    dateTo: string,
+    tz: string,
+    pointId: string | null,
+  ): Promise<{ premiums: number; motivation: number; total: number }> {
+    // Нормализованный период премии: кривое значение = «периода нет».
+    const premPeriod = `CASE WHEN sp.period_month_year ~ '^\\d{4}-\\d{2}$' THEN sp.period_month_year END`;
+    const premParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const premPointFilter = pointFilterSql('sp', pointId, premParams);
+    const { rows: premRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(${premiumCashAmountExpr('sp')}), 0) AS total
+         FROM salary_premiums sp
+        WHERE sp.tenant_id = $1
+          AND (
+            (${premPeriod} IS NULL
+              AND sp.created_at >= $2::date::timestamp AT TIME ZONE $4::text
+              AND sp.created_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text)
+            OR (${premPeriod} IS NOT NULL
+              AND to_date(${premPeriod} || '-01', 'YYYY-MM-DD') >= $2::date
+              AND (to_date(${premPeriod} || '-01', 'YYYY-MM-DD') + interval '1 month' - interval '1 day')::date <= $3::date)
+          )${premPointFilter}`,
+      premParams,
+    );
+
+    const motParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const motPointFilter = motivationPointFilterSql('ma', '$1', pointId, motParams);
+    const { rows: motRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(ma.amount), 0) AS total
+         FROM motivation_accruals ma
+        WHERE ma.tenant_id = $1
+          AND ma.accrued_at >= $2::date::timestamp AT TIME ZONE $4::text
+          AND ma.accrued_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text${motPointFilter}`,
+      motParams,
+    );
+
+    const premiums = parseFloat(premRows[0]?.total) || 0;
+    const motivation = parseFloat(motRows[0]?.total) || 0;
+    return { premiums, motivation, total: premiums + motivation };
+  }
+
+  /**
+   * Те же премии + мотивация, но в РАЗРЕЗАХ ДАШБОРДА (сегодня / текущий месяц /
+   * окно сравнения прошлого месяца). Отдельный метод, а не три вызова
+   * salaryExtrasForPeriod: у дашборда своя, УЖЕ СУЩЕСТВУЮЩАЯ конвенция
+   * отнесения к месяцу (COALESCE(период, месяц факта) = 'YYYY-MM'), и премии
+   * обязаны собираться ровно так же, как расходы рядом с ними — иначе
+   * netProfitMonth и mtd.netProfit разъедутся на границе месяца.
+   *
+   * `today` дополнительно требует «премия ЗА ТЕКУЩИЙ месяц» — зеркало exp_today:
+   * премия задним числом за июль не имеет права портить «прибыль сегодня».
+   * У мотивации периода нет вовсе, поэтому она режется только датами.
+   */
+  private async salaryExtrasForDashboard(
+    tenantID: string,
+    pointId: string | null,
+    tz: string,
+    w: {
+      todayStart: string;
+      monthStart: string;
+      curYm: string;
+      prevYm: string;
+      prevWindowStart: string;
+      prevWindowEnd: string;
+    },
+  ): Promise<{ today: number; month: number; prevWindow: number }> {
+    const premEff = premiumMonthExpr('sp', '$5::text');
+    const premParams: any[] = [tenantID, w.todayStart, w.curYm, w.prevYm, tz, w.prevWindowEnd, w.prevWindowStart];
+    const premPointFilter = pointFilterSql('sp', pointId, premParams);
+    const cash = premiumCashAmountExpr('sp');
+    const { rows: premRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN sp.created_at >= $2 AND ${premEff} = $3 THEN ${cash} END), 0) AS prem_today,
+         COALESCE(SUM(CASE WHEN ${premEff} = $3 THEN ${cash} END), 0) AS prem_month,
+         COALESCE(SUM(CASE WHEN ${premEff} = $4 AND sp.created_at >= $7 AND sp.created_at <= $6 THEN ${cash} END), 0) AS prem_prev
+       FROM salary_premiums sp
+      WHERE sp.tenant_id = $1${premPointFilter}`,
+      premParams,
+    );
+
+    const motParams: any[] = [tenantID, w.todayStart, w.monthStart, w.prevWindowStart, w.prevWindowEnd];
+    const motPointFilter = motivationPointFilterSql('ma', '$1', pointId, motParams);
+    const { rows: motRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN ma.accrued_at >= $2 THEN ma.amount END), 0) AS mot_today,
+         COALESCE(SUM(CASE WHEN ma.accrued_at >= $3 THEN ma.amount END), 0) AS mot_month,
+         COALESCE(SUM(CASE WHEN ma.accrued_at >= $4 AND ma.accrued_at <= $5 THEN ma.amount END), 0) AS mot_prev
+       FROM motivation_accruals ma
+      WHERE ma.tenant_id = $1${motPointFilter}`,
+      motParams,
+    );
+
+    const num = (v: unknown) => parseFloat(String(v)) || 0;
+    return {
+      today: num(premRows[0]?.prem_today) + num(motRows[0]?.mot_today),
+      month: num(premRows[0]?.prem_month) + num(motRows[0]?.mot_month),
+      prevWindow: num(premRows[0]?.prem_prev) + num(motRows[0]?.mot_prev),
     };
   }
 
@@ -238,18 +370,20 @@ export class ReportsService {
     const tagParams: any[] = [tenantID, dateFrom, dateTo, tz];
     const tagPointFilter = pointFilterSql('ch', pointId, tagParams);
     const { rows } = await this.pool.query(
+      // Выручка и прибыль — ИЗ ОБЩЕГО МОДУЛЯ (common/check-money-sql). Здесь
+      // лежала дословная копия обеих формул: и «гарантия не выручка», и
+      // «прибыль гарантийного = минус запчасти и зарплата мастера». Копия
+      // ровно того сорта, из-за которого правило уже трижды разъезжалось между
+      // экранами — заменена вызовом.
       `SELECT d.id AS tag_id, d.name, d.color,
               COUNT(*) AS checks_count,
-              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) AS revenue,
-              COALESCE(SUM(CASE WHEN ch.payment_method = 'warranty'
-                                THEN -(ch.product_cost_total + ch.service_salary_total + COALESCE(ch.product_salary_total, 0))
-                                ELSE ch.profit END), 0) AS profit
+              COALESCE(SUM(${checkRevenueExpr('ch')}), 0) AS revenue,
+              COALESCE(SUM(${checkProfitExpr('ch')}), 0) AS profit
          FROM check_tag_links tl
          JOIN check_tag_defs d ON d.id = tl.tag_id
          JOIN checks ch ON ch.id = tl.check_id AND ch.tenant_id = tl.tenant_id
         WHERE tl.tenant_id = $1
-          AND ch.is_deferred = false
-          AND ch.deleted_at IS NULL
+          AND ${checkMoneyBaseWhere('ch')}
           AND ch.date >= $2::date::timestamp AT TIME ZONE $4::text
           AND ch.date < ($3::date + 1)::timestamp AT TIME ZONE $4::text${tagPointFilter}
         GROUP BY d.id, d.name, d.color
@@ -345,15 +479,19 @@ export class ReportsService {
     const funnelParams: any[] = [tenantID, dateFrom, dateTo];
     const funnelPointFilter = pointFilterSql('ch', pointId, funnelParams);
     const { rows: checkRows } = await this.pool.query(
+      // Выручка воронки — через общий модуль формул: гарантия денег не
+      // приносит, и «доехавший по звонку клиент» не имеет права раздувать
+      // конверсию в рублях гарантийным ремонтом. Счётчики визитов и чеков
+      // гарантию СОХРАНЯЮТ (человек действительно доехал) — поэтому правило
+      // применяется выражением суммы, а не фильтром строк.
       `SELECT
          COUNT(DISTINCT ch.client_id) AS arrived_clients,
          COUNT(DISTINCT ch.id) AS created_checks,
-         COALESCE(SUM(ch.total_revenue), 0) AS total_revenue
+         COALESCE(SUM(${checkRevenueExpr('ch')}), 0) AS total_revenue
        FROM checks ch
        JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
        WHERE ch.tenant_id = $1
-         AND ch.is_deferred = false
-         AND ch.deleted_at IS NULL
+         AND ${checkMoneyBaseWhere('ch')}
          AND ch.date::date BETWEEN $2::date AND $3::date
          AND cl.phone IN (
            SELECT DISTINCT phone FROM sms_history
@@ -764,8 +902,9 @@ export class ReportsService {
 
   /**
    * 155 — остатки кошельков тенанта. drawer при ОТКРЫТОЙ смене — живой
-   * expected по формуле cash-shifts (opening + наличная выручка окна −
-   * одобренные расходы окна − инкассации смены); без открытой — carryover
+   * expected по формуле cash-shifts (opening + наличная выручка окна +
+   * наличные погашения рассрочки − одобренные расходы окна − наличная часть
+   * возвратов по чекам ВНЕ окна − инкассации смены); без открытой — carryover
    * последней закрытой (до-миграционные закрытия оставляли всё в кассе →
    * fallback closing_amount). safe = Σ deposit + Σ adjustment − Σ collection.
    *
@@ -804,7 +943,8 @@ export class ReportsService {
     const safe = parseFloat(safeRows[0].balance) || 0;
 
     // Открытые смены В СКОУПЕ: филиал → максимум одна (уникальный индекс
-    // uq_cash_shifts_one_open_per_point), «Все точки» → по одной на филиал.
+    // uq_cash_shifts_one_open_per_point); без филиала (одноточечный тенант) —
+    // по одной на филиал, то есть ровно одна.
     const openParams: any[] = [tenantID];
     const openPointFilter = pointFilterSql('cs', pointId, openParams);
     const { rows: openRows } = await this.pool.query(
@@ -828,6 +968,19 @@ export class ReportsService {
       // в них неквалифицированное, поэтому фрагмент подходит и checks, и
       // expenses, а второй push дал бы Postgres лишний параметр.
       const figPointFilter = pointFilterSql(null, shiftPoint, figParams);
+      // 164 — возвраты и погашения рассрочки адресуют ТОТ ЖЕ плейсхолдер точки
+      // (значение одно, второй push дал бы Postgres лишний параметр), но с
+      // другой квалификацией колонки: у возврата филиал берётся у ЧЕКА, у
+      // погашения — у чека ПЛАНА. Оба — дословное зеркало
+      // cash-shifts.computeFigures; пять слагаемых ящика обязаны быть
+      // одинаковы здесь и там, иначе «Остаток в кассе» в «Движении денег»
+      // разойдётся с ожидаемым остатком Z-отчёта, и владелец прочитает
+      // расхождение как пропавшие деньги.
+      const retPointFilter = shiftPoint ? ` AND ch.point_id = $${figParams.length}` : '';
+      const instPointFilter = shiftPoint
+        ? ` AND EXISTS (SELECT 1 FROM checks mch WHERE mch.id = pl.check_id` +
+          ` AND mch.tenant_id = $1 AND mch.deleted_at IS NULL AND mch.point_id = $${figParams.length})`
+        : '';
       const { rows: figRows } = await this.pool.query(
         `SELECT
            (SELECT COALESCE(SUM(cash_amount), 0) FROM checks
@@ -837,6 +990,19 @@ export class ReportsService {
              WHERE tenant_id = $1
                AND COALESCE(approval_status, 'approved') = 'approved'
                AND date >= $2 AND date <= now()${figPointFilter})     AS cash_expenses,
+           (SELECT COALESCE(SUM(cr.refund_cash_amount), 0) FROM check_returns cr
+              JOIN checks ch ON ch.id = cr.check_id AND ch.tenant_id = cr.tenant_id
+             WHERE cr.tenant_id = $1
+               AND cr.created_at >= $2 AND cr.created_at <= now()
+               AND ch.deleted_at IS NULL
+               AND NOT (ch.date >= $2 AND ch.date <= now() AND ch.is_deferred = false)${retPointFilter})
+                                                                      AS cash_returns,
+           (SELECT COALESCE(SUM(p.amount), 0) FROM installment_payments p
+              JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = p.tenant_id
+             WHERE p.tenant_id = $1
+               AND p.paid_at >= $2 AND p.paid_at <= now()
+               AND COALESCE(p.payment_method, 'cash') <> 'card'${instPointFilter})
+                                                                      AS installment_cash,
            (SELECT COALESCE(SUM(amount), 0) FROM cash_collections
              WHERE tenant_id = $1 AND shift_id = $3)                  AS collections`,
         figParams,
@@ -844,8 +1010,10 @@ export class ReportsService {
       const f = figRows[0];
       drawer +=
         (parseFloat(shift.opening_amount) || 0) +
-        (parseFloat(f.cash_sales) || 0) -
+        (parseFloat(f.cash_sales) || 0) +
+        (parseFloat(f.installment_cash) || 0) -
         (parseFloat(f.cash_expenses) || 0) -
+        (parseFloat(f.cash_returns) || 0) -
         (parseFloat(f.collections) || 0);
     }
 
@@ -857,7 +1025,7 @@ export class ReportsService {
     // В скоупе ОДНОГО филиала с уже открытой сменой переносить нечего — весь
     // результат этого запроса всё равно отсеял бы liveSlots. Пропускаем его,
     // чтобы горячий путь «Движения денег» остался в те же три запроса, что до
-    // волны (в режиме «Все точки» состав слотов заранее неизвестен — там
+    // волны (без филиала состав слотов заранее неизвестен — там
     // запрос нужен всегда).
     if (!pointId || openRows.length === 0) {
       const carryParams: any[] = [tenantID];
@@ -1081,8 +1249,22 @@ export class ReportsService {
     const warrantyLossToday = parseFloat(base.warranty_loss_today) || 0;
     const installmentDebtToday = parseFloat(base.installment_debt_today) || 0;
 
-    const netProfitToday = profitToday - expToday;
-    const netProfitMonth = profitMonth - expMonth;
+    // ПРЕМИИ + МОТИВАЦИЯ — третий вид зарплатного начисления (обоснование и
+    // доказательство отсутствия двойного счёта — common/salary-extras-sql.ts).
+    // Из profitToday/profitMonth их НЕ вычитаем: это «прибыль по чекам», и её
+    // определение общее с журналом и карточкой филиала. Вычитаем ровно там, где
+    // считается ЧИСТАЯ прибыль владельца, — вместе с расходами.
+    const salaryExtras = await this.salaryExtrasForDashboard(tenantID, pointId, tz, {
+      todayStart,
+      monthStart,
+      curYm,
+      prevYm,
+      prevWindowStart,
+      prevWindowEnd,
+    });
+
+    const netProfitToday = profitToday - expToday - salaryExtras.today;
+    const netProfitMonth = profitMonth - expMonth - salaryExtras.month;
 
     // Previous-period net profit for marginPctChange — прошлый месяц НА ТУ ЖЕ
     // ДАТУ (1–9 августа против 1–9 сентября), а не целиком.
@@ -1107,7 +1289,10 @@ export class ReportsService {
     // expPrevMonth по расходам, отнесённым к августу И датированным теми же
     // 1–9 августа (см. $7/$6 выше). Одна и та же обрезка с двух сторон — иначе
     // процент маржи прошлого месяца сравнивать не с чем.
-    const prevNet = prevProfit - expPrevMonth;
+    // Обе стороны сравнения маржи вычитают премии/мотивацию своего окна —
+    // иначе месяц с премиями выглядел бы хуже прошлого без них по причине,
+    // которой в цифрах не видно.
+    const prevNet = prevProfit - expPrevMonth - salaryExtras.prevWindow;
     const marginPct = revenueMonth > 0 ? (netProfitMonth / revenueMonth) * 100 : 0;
     const prevMarginPct = prevRevenue > 0 ? (prevNet / prevRevenue) * 100 : 0;
     const marginPctChange = marginPct - prevMarginPct;
@@ -1359,6 +1544,11 @@ export class ReportsService {
       const plannedCoverageMTD = mtdPlannedFixed + mtdStaffFixed + mtdStaffPctTurnover + mtdStaffPctProfit;
       mtdRecurringExcess = Math.max(recurringActualMonth * amortFactor - plannedCoverageMTD, 0);
     }
+    // Премии/мотивация месяца — ФАКТ, а не план: они уже начислены, поэтому не
+    // амортизируются долей месяца (как разовые расходы). Терм обязателен и
+    // здесь: без него инвариант «нет планового конфига → mtd.netProfit ===
+    // netProfitMonth» сломался бы ровно на сумму премий.
+    const mtdSalaryExtras = salaryExtras.month;
     const mtdNetProfit =
       checkProfitMTD -
       mtdPlannedFixed -
@@ -1366,7 +1556,8 @@ export class ReportsService {
       mtdStaffPctTurnover -
       mtdStaffPctProfit -
       mtdOneOff -
-      mtdRecurringExcess;
+      mtdRecurringExcess -
+      mtdSalaryExtras;
 
     // Full-month projection (run-rate revenue/profit + FULL planned costs). Разовые
     // расходы — СУНК: считаем ОДИН раз (projOneOff === mtdOneOff, БЕЗ run-rate,
@@ -1381,6 +1572,10 @@ export class ReportsService {
       const plannedCoverageProj = plannedFixedMonthly + staffFixedMonthly + projStaffPctTurnover + projStaffPctProfit;
       projRecurringExcess = Math.max(recurringActualMonth * runRateFactor - plannedCoverageProj, 0);
     }
+    // Премии и мотивация — ongoing, а не сунк: мастера продолжат зарабатывать
+    // их до конца месяца, поэтому прогноз берёт их по run-rate (как непокрытую
+    // постоянку), а не один раз (как разовые расходы).
+    const projSalaryExtras = mtdSalaryExtras * runRateFactor;
     const projNetProfit =
       projCheckProfit -
       plannedFixedMonthly -
@@ -1388,7 +1583,8 @@ export class ReportsService {
       projStaffPctTurnover -
       projStaffPctProfit -
       projOneOff -
-      projRecurringExcess;
+      projRecurringExcess -
+      projSalaryExtras;
 
     const r0 = (n: number) => Math.round(n);
     const netProfitAccrual = {
@@ -1404,6 +1600,9 @@ export class ReportsService {
         // Непокрытый планом избыток фактической постоянки (FIX 2). 0 при отсутствии
         // конфига (recurring трактуется как разовое в oneOffExpenses).
         recurringExcess: r0(mtdRecurringExcess),
+        // Премии деньгами + мотивация месяца — реальные выплаты мастерам,
+        // которых нет ни в чековой прибыли, ни в расходах.
+        salaryExtras: r0(mtdSalaryExtras),
         netProfit: r0(mtdNetProfit),
       },
       projection: {
@@ -1416,6 +1615,8 @@ export class ReportsService {
         // Разовые — сунк, один раз (совпадает с mtd.oneOffExpenses, FIX 1).
         oneOffExpenses: r0(projOneOff),
         recurringExcess: r0(projRecurringExcess),
+        // Премии/мотивация — ongoing, поэтому run-rate (в отличие от разовых).
+        salaryExtras: r0(projSalaryExtras),
         netProfit: r0(projNetProfit),
       },
       config: {
@@ -1674,11 +1875,14 @@ export class ReportsService {
     const dowParams: any[] = [tenantID, params.from, params.to];
     const dowPointFilter = pointFilterSql(null, pointId, dowParams);
     const { rows } = await this.pool.query(
+      // Выручка дня недели — общий модуль формул: гарантийная суббота денег не
+      // принесла, и планировать по ней загрузку нельзя. Счётчик чеков (cnt)
+      // гарантию сохраняет — это загрузка поста, а не деньги.
       `SELECT EXTRACT(DOW FROM date)::int AS weekday,
-              COALESCE(SUM(total_revenue), 0) AS revenue,
+              COALESCE(SUM(${checkRevenueExpr()}), 0) AS revenue,
               COUNT(*) AS cnt
          FROM checks
-        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
+        WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}
           AND date::date BETWEEN $2::date AND $3::date${dowPointFilter}
         GROUP BY weekday
         ORDER BY weekday`,
@@ -1747,7 +1951,9 @@ export class ReportsService {
     const retPointFilter = pointFilterSql(null, pointId, retParams);
     const { rows } = await this.pool.query(
       `WITH visits AS (
-         SELECT client_id, COUNT(*) AS visit_count, SUM(total_revenue) AS ltv,
+         -- LTV — через общий модуль формул: «сколько клиент принёс денег» не
+         -- может включать гарантийные визиты, по которым он не платил ничего.
+         SELECT client_id, COUNT(*) AS visit_count, SUM(${checkRevenueExpr()}) AS ltv,
                 MIN(date) AS first_date, MAX(date) AS last_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
@@ -1996,7 +2202,9 @@ export class ReportsService {
     const winPointFilter = pointFilterSql(null, pointId, winParams);
     const { rows } = await this.pool.query(
       `WITH visits AS (
-         SELECT client_id, COUNT(*) AS visit_count, SUM(total_revenue) AS ltv,
+         -- LTV — через общий модуль формул (см. retention выше): гарантийный
+         -- визит денег клиенту не стоил и в его пожизненную ценность не идёт.
+         SELECT client_id, COUNT(*) AS visit_count, SUM(${checkRevenueExpr()}) AS ltv,
                 MIN(date) AS first_date, MAX(date) AS last_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL

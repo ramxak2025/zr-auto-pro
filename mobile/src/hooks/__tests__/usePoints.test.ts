@@ -1,31 +1,32 @@
 /**
  * `usePoints.ts` тянет axios / AsyncStorage / react-native на верхнем уровне
- * (api, AuthContext, офлайн-очередь, персистентный кеш), а тесту нужна ТОЛЬКО
- * чистая функция правила. Моки не дают RN-цепочке грузиться в node-окружении
- * jest — та же конвенция, что в hooks/__tests__/useUsers.test.ts.
+ * (api, AuthContext, офлайн-очередь), а тесту нужна ТОЛЬКО чистая функция
+ * правила. Моки не дают RN-цепочке грузиться в node-окружении jest — та же
+ * конвенция, что в hooks/__tests__/useUsers.test.ts.
  */
-jest.mock('../../api/services', () => ({ pointsApi: { list: jest.fn(), switch: jest.fn() } }));
+jest.mock('../../api/services', () => ({ pointsApi: { list: jest.fn(), summary: jest.fn() } }));
 jest.mock('../../contexts/AuthContext', () => ({ useAuth: jest.fn() }));
 jest.mock('../../utils/offlineCheckQueue', () => ({ setOfflineCheckQueuePointId: jest.fn() }));
-jest.mock('../../utils/persistentCache', () => ({ clearPersistentCacheForPointSwitch: jest.fn() }));
 
 import { derivePointAccess } from '../usePoints';
 import type { TenantPoint } from '../../../../shared/types';
 
 /**
- * Правило доступа к филиалам на клиенте (156/160/161).
+ * Правило доступа к филиалам на клиенте (156/160/161/163).
  *
- * ЗОНА ДЕНЕГ. `needsPointForWrite` обязан повторять серверный
- * resolvePointForWrite (backend/src/common/point-scope.ts) — «есть назначения
- * на живые точки: доступны только они; нет назначений: все живые точки». Если
- * правила разъедутся, клиент либо блокирует пробитие там, где сервер молча
- * подставил бы точку, либо отпускает чек в 400 уже после нажатия «Пробить».
+ * ЗОНА ДОСТУПА И ДЕНЕГ. `selectable` обязан ПОБИТОВО повторять серверную
+ * функцию autexa_available_points (миграция 163): «есть назначения на живые
+ * филиалы — доступны только они; назначений нет вовсе — доступны все живые».
+ * Разъедется — раздел «Филиалы» предложит человеку войти туда, куда сервер его
+ * не пустит (403 на втором шаге входа), либо спрячет филиал, в котором он
+ * реально работает.
  *
- * `multiPoint` охраняет вторую половину бага: у держателя user_management два
- * режима даже при ЕДИНСТВЕННОМ филиале (сам филиал и «Все точки»), поэтому
- * переключатель и раздел «Филиалы» ему видны всегда, когда точки есть. Пока он
- * прятался, владелец не мог ни выйти из «Всех точек», ни назначить сотрудников
- * на точку.
+ * Право user_management в этом правиле НЕ участвует: сервер при входе про него
+ * не спрашивает. Владелец, назначенный на один филиал, входит только в него —
+ * и клиент обязан показывать ровно это.
+ *
+ * `multiPoint` охраняет вторую половину: одноточечный автосервис не должен
+ * заметить мульти-точек вообще — ни раздела, ни индикатора.
  */
 
 const point = (id: string, memberIds: string[] = []): TenantPoint =>
@@ -47,30 +48,40 @@ const access = (over: Partial<Parameters<typeof derivePointAccess>[0]>) =>
   });
 
 describe('derivePointAccess — что показывать', () => {
-  it('одноточечный тенант (точек нет вовсе): ничего не показываем', () => {
-    const a = access({ points: [] });
-    expect(a.multiPoint).toBe(false);
-    expect(a.needsPointForWrite).toBe(false);
+  it('одноточечный тенант (филиалов нет вовсе): ничего не показываем', () => {
+    expect(access({ points: [] }).multiPoint).toBe(false);
   });
 
-  it('владельцу с ОДНИМ филиалом переключатель ВИДЕН — у него ещё режим «Все точки»', () => {
-    const a = access({ points: [point('p1')], canManage: true });
-    expect(a.multiPoint).toBe(true);
-    // Сервер подставит единственную точку молча — предупреждать не о чем.
-    expect(a.needsPointForWrite).toBe(false);
+  it('ровно один автосервис — раздел и индикатор всё ещё не нужны', () => {
+    // Второго автосервиса не существует: показывать «вы в ZR AUTO» — шум.
+    expect(access({ points: [mainPoint('m1')], canManage: true }).multiPoint).toBe(false);
   });
 
-  it('сотруднику, назначенному на один филиал, показывать нечего', () => {
+  it('два автосервиса — показываем всем, в том числе мастеру', () => {
+    expect(access({ points: [mainPoint('m1'), point('p1')] }).multiPoint).toBe(true);
+  });
+});
+
+describe('derivePointAccess — куда человека пустит сервер', () => {
+  it('без назначений доступны ВСЕ живые филиалы (безопасный дефолт 156)', () => {
+    const a = access({ points: [point('p1'), point('p2')] });
+    expect(a.selectable.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+
+  it('назначения сужают доступ до своих филиалов', () => {
     const a = access({ points: [point('p1', ['u1']), point('p2', ['u2'])] });
     expect(a.selectable.map((p) => p.id)).toEqual(['p1']);
-    expect(a.multiPoint).toBe(false);
-    expect(a.needsPointForWrite).toBe(false);
   });
 
-  it('сотрудник на двух филиалах видит переключатель, даже без user_management', () => {
-    const a = access({ points: [point('p1', ['u1']), point('p2', ['u1'])] });
-    expect(a.multiPoint).toBe(true);
-    expect(a.canSeeAllPoints).toBe(false);
+  it('право user_management доступ НЕ расширяет — сервер про него не знает', () => {
+    // Владелец назначен ровно на один филиал из трёх: autexa_available_points
+    // вернёт ему один, и второй шаг входа в остальные ответит 403. Показать
+    // ему кнопку «войти» в них значило бы обещать невозможное.
+    const a = access({ points: [point('p1', ['u1']), point('p2'), point('p3')], canManage: true });
+    expect(a.selectable.map((p) => p.id)).toEqual(['p1']);
+    // При этом карточки всех филиалов раздел рисует по `points`, а не по
+    // `selectable`: сводка по сети — это взгляд сверху.
+    expect(a.points).toHaveLength(3);
   });
 });
 
@@ -88,46 +99,29 @@ describe('derivePointAccess — основной сервис и филиалы'
     expect(a.branches.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 
-  it('сотруднику, назначенному только на филиал, основной не показывается', () => {
+  it('сотруднику, назначенному только на филиал, основной недоступен', () => {
     const a = access({ points: [mainPoint('m1'), point('p1', ['u1']), point('p2', ['u1'])] });
     expect(a.mainPoint).toBeNull();
     expect(a.branches.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 });
 
-describe('derivePointAccess — уйдёт ли денежная запись в 400', () => {
-  it('без назначений доступны ВСЕ живые точки (безопасный дефолт 156)', () => {
-    const a = access({ points: [point('p1'), point('p2')] });
-    expect(a.writePointCount).toBe(2);
-    expect(a.needsPointForWrite).toBe(true);
-  });
-
-  it('назначения сужают доступ — как на сервере, и право тут ни при чём', () => {
-    // Владелец (user_management) назначен ровно на один филиал из трёх: сервер
-    // про его право не знает и подставит p1 молча. Предупреждать нельзя.
-    const a = access({ points: [point('p1', ['u1']), point('p2'), point('p3')], canManage: true });
-    expect(a.writePointCount).toBe(1);
-    expect(a.needsPointForWrite).toBe(false);
-    // При этом выбирать ему по-прежнему есть из чего.
-    expect(a.selectable).toHaveLength(3);
-  });
-
-  it('выбранный филиал снимает вопрос полностью', () => {
-    const a = access({ points: [point('p1'), point('p2')], resolvedPointId: 'p1' });
-    expect(a.currentPointId).toBe('p1');
-    expect(a.needsPointForWrite).toBe(false);
-  });
-});
-
-describe('derivePointAccess — холодный старт', () => {
-  it('до ответа /points филиал берётся из сессии, а не считается «Все точки»', () => {
+describe('derivePointAccess — филиал текущей сессии', () => {
+  it('до ответа /points филиал берётся из сессии — индикатор верен сразу', () => {
     const a = access({ points: [], resolvedPointId: undefined, sessionPointId: 'p9' });
     expect(a.currentPointId).toBe('p9');
   });
 
-  it('ответ /points ПЕРЕБИВАЕТ сессию, в том числе явным «Все точки»', () => {
-    const a = access({ points: [point('p1'), point('p2')], resolvedPointId: null, sessionPointId: 'p1' });
+  it('ответ /points перебивает сессию: оба источника — один и тот же токен', () => {
+    const a = access({ points: [point('p1'), point('p2')], resolvedPointId: 'p2', sessionPointId: 'p1' });
+    expect(a.currentPointId).toBe('p2');
+    expect(a.currentPoint?.id).toBe('p2');
+  });
+
+  it('null от сервера = у тенанта нет живых филиалов (одноточечный)', () => {
+    const a = access({ points: [], resolvedPointId: null, sessionPointId: 'p1' });
     expect(a.currentPointId).toBeNull();
-    expect(a.needsPointForWrite).toBe(true);
+    expect(a.currentPoint).toBeNull();
+    expect(a.multiPoint).toBe(false);
   });
 });

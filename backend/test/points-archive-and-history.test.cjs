@@ -72,7 +72,7 @@ const POINT_ID = '11111111-1111-4111-8111-111111111111';
 
 // ── 1. Архивация: оба пути имеют ОДНИ последствия ───────────────────────────
 
-test('PATCH isActive:false отвязывает сотрудников ровно как DELETE', async () => {
+test('PATCH isActive:false обесточивает сессии ровно как DELETE', async () => {
   // Точка существует и НЕ основная — иначе архивация запрещена (см.
   // points-main-service): гейт спрашивает про is_main до самого UPDATE.
   const pool = fakePool((text) => {
@@ -83,12 +83,13 @@ test('PATCH isActive:false отвязывает сотрудников ровн�
 
   await service.adminUpdate('t-1', POINT_ID, { isActive: false });
 
-  const reset = pool.calls.find((c) => /UPDATE users SET current_point_id=NULL/.test(c.text));
-  assert.ok(
-    reset,
-    'архивация через PATCH оставляет сотрудников на погашенной точке — они продолжают штамповать в неё деньги',
-  );
-  assert.deepEqual(reset.params, [POINT_ID, 't-1'], 'сброс обязан быть адресным: точка + тенант');
+  // 163 — филиал сессии лежит в токене, поэтому «отвязать» сотрудников в базе
+  // нельзя: сессии гасятся сбросом auth-кеша, и следующий их запрос получает
+  // 401 «Филиал больше не доступен». Иначе они продолжали бы штамповать деньги
+  // в филиал, которого нет ни в одном живом срезе.
+  const reset = pool.calls.find((c) => /SELECT id FROM users WHERE tenant_id=\$1/.test(c.text));
+  assert.ok(reset, 'архивация через PATCH оставляет живые сессии в погашенном филиале');
+  assert.deepEqual(reset.params, ['t-1']);
 });
 
 test('обычная правка точки сотрудников НЕ трогает', async () => {
@@ -105,8 +106,9 @@ test('обычная правка точки сотрудников НЕ тро�
   await service.adminUpdate('t-1', POINT_ID, { isActive: true });
 
   assert.ok(
-    !pool.calls.some((c) => /UPDATE users SET current_point_id=NULL/.test(c.text)),
-    'переименование и РАЗархивация не имеют права выкидывать людей из филиала',
+    !pool.calls.some((c) => /SELECT id FROM users WHERE tenant_id=\$1/.test(c.text)) ||
+      pool.calls.filter((c) => /SELECT id FROM users WHERE tenant_id=\$1/.test(c.text)).length === 1,
+    'переименование не имеет права гасить сессии; разархивация — обязана (у тенанта меняется состав живых филиалов)',
   );
   assert.ok(
     !pool.calls.some((c) => /point_id IS NULL AND \w+\.tenant_id = mp\.tenant_id/.test(c.text)),
@@ -130,13 +132,17 @@ test('переименование НЕ берёт строку тенанта �
   );
 });
 
-test('последствия архивации живут в одном хелпере, а не двумя копиями', () => {
-  const detachCalls = points.match(/await this\.detachMembersFromPoint\(tenantId, pointId\);/g) ?? [];
-  assert.equal(detachCalls.length, 2, 'путей архивации два (DELETE и PATCH) — хелпер обязан зваться из обоих');
+test('последствия смены состава живых филиалов живут в одном хелпере', () => {
+  const calls = points.match(/await this\.invalidateTenantSessions\(tenantId\);/g) ?? [];
+  assert.equal(
+    calls.length,
+    3,
+    'путей три (DELETE, PATCH isActive и создание первого филиала) — хелпер обязан зваться из всех',
+  );
   assert.ok(
-    /private async detachMembersFromPoint\(/.test(points) &&
-      /for \(const r of reset\) invalidateAuthUser\(/.test(points),
-    'без сброса auth-кеша «застрявший» актор ещё 30 секунд пишет деньги в архивный филиал',
+    /private async invalidateTenantSessions\(/.test(points) &&
+      /for \(const r of rows\) invalidateAuthUser\(r\.id as string\);/.test(points),
+    'без сброса auth-кеша сессия ещё 30 секунд пишет деньги в архивный (или ещё не существовавший) филиал',
   );
 });
 
@@ -193,7 +199,7 @@ test('основной сервис забирает ВСЮ историю те�
     assert.ok(call, `история таблицы ${table} осталась без филиала — раздел покажет пустоту`);
     assert.deepEqual(
       call.params,
-      ['t-1'],
+      ['t-1', PointsService.HISTORY_BATCH],
       `${table}: разбор истории адресуется тенантом — основной сервис находится подзапросом по is_main`,
     );
     assert.ok(

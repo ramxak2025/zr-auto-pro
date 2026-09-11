@@ -100,6 +100,27 @@ export function formatSupplyDate(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
+/**
+ * КАЛЕНДАРНЫЙ ДЕНЬ АВТОСЕРВИСА как локальный `Date` (полночь по устройству).
+ *
+ * ЗАЧЕМ. Дата поставки — это КАЛЕНДАРНЫЙ ДЕНЬ: пикер показывает дни устройства,
+ * `toSupplyDateStr` отправляет ровно выбранный день, а сервер трактует его в
+ * поясе автосервиса (tenants.timezone, 157). Значит и «сегодня» по умолчанию
+ * обязано быть днём АВТОСЕРВИСА, а не телефона. Иначе владелец из Владивостока,
+ * открывший приложение в Москве, получал в пикере день, который сервер уже
+ * считает ЗАВТРАШНИМ: экран сразу вешал плашку «задним числом», а приёмка
+ * улетала в 400 «дата в будущем». Обратный перелёт тише и хуже — поставка молча
+ * проводилась ВЧЕРАШНИМ днём автосервиса, то есть склад и деньги ложились не в
+ * те сутки.
+ *
+ * Сравнивать после этого можно однородные величины: обе стороны — календарный
+ * день автосервиса.
+ */
+export function tenantDayDate(value: string | Date, timeZone?: string | null): Date {
+  const [y, m, d] = formatDayKey(value, timeZone).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 /** Тот ли это календарный день (локальный), что и `b`. */
 export function isSameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -116,6 +137,16 @@ export function isSameDay(a: Date, b: Date): boolean {
  */
 export function isBackdatedSupply(d: Date, timeZone?: string | null): boolean {
   return toSupplyDateStr(d) !== formatDayKey(new Date(), timeZone);
+}
+
+/**
+ * «Сегодня» для пикера даты поставки — день АВТОСЕРВИСА (см. tenantDayDate).
+ * Ровно это значение обязано стоять в поле по умолчанию: `new Date()` даёт день
+ * ТЕЛЕФОНА, и при несовпадении поясов дефолт оказывался в будущем (сервер — 400)
+ * либо задним числом (поставка тихо уезжала в чужие сутки).
+ */
+export function todaySupplyDate(timeZone?: string | null): Date {
+  return tenantDayDate(new Date(), timeZone);
 }
 
 /**

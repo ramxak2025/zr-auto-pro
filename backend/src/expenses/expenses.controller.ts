@@ -88,9 +88,27 @@ export class ExpensesController {
     return this.expensesService.reject(id, user.tenantID, user);
   }
 
+  // ПРАВКА РАСХОДА. Раньше её не было вовсе, и мобильный экран изображал
+  // «Изменить» парой «удалить + создать заново»: любой отказ второго запроса
+  // стирал расход навсегда. Гейт OR-овый, как у GET/списка: правит тот, кто
+  // вносит расходы ('can_add_expenses'), и тот, кто ими управляет
+  // ('financial_reports'); ЧЬЮ строку можно тронуть (свою / любую своего
+  // филиала) решает сервис — здесь доступен только ключ, но не владелец строки.
+  // Объявлена ПОСЛЕ ':id/approve' и ':id/reject': Nest матчит в порядке
+  // объявления, и одноsegment'ный ':id' их всё равно не перекрывает.
+  @Patch(':id')
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+    if (!userHasPermission(user, 'can_add_expenses') && !userHasPermission(user, 'financial_reports')) {
+      throw new ForbiddenException({ message: 'Недостаточно прав для этого действия' });
+    }
+    return this.expensesService.update(id, user, dto);
+  }
+
   @RequirePermission('financial_reports')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.expensesService.remove(id, user.tenantID);
+    // Актор целиком — сервису нужна его точка для гейта филиала (как в
+    // approve/reject): удаление расхода — такая же денежная мутация.
+    return this.expensesService.remove(id, user.tenantID, user);
   }
 }

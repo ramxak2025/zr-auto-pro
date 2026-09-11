@@ -6,6 +6,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ImportPreviewDto, ImportConfirmDto } from './dto/import-clients-cars.dto';
+import { actorPointId } from '../common/point-scope';
 
 // ROLE-ONLY (волна «права как в Битрикс24», 2026-07): импорт создаёт/меняет
 // клиентов и авто массово → гейт 'clients_edit' вместо @Roles(d,a,sa).
@@ -29,7 +30,7 @@ export class ImportsController {
   @Post('clients-cars/preview')
   preview(@CurrentUser() user: JwtPayload, @Body() body: ImportPreviewDto) {
     const allowForeignPlates = body.options?.allowForeignPlates !== false; // default ON
-    return this.imports.preview(user.tenantID, body.rows, { allowForeignPlates }, user.userID);
+    return this.imports.preview(user.tenantID, body.rows, { allowForeignPlates }, actorPointId(user));
   }
 
   @RequirePermission('clients_edit')
@@ -42,6 +43,7 @@ export class ImportsController {
       body.rows,
       { allowForeignPlates },
       { defaultAction: body.duplicateDefault, decisions: body.decisions },
+      actorPointId(user),
     );
   }
 }

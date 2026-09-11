@@ -1,52 +1,75 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Home, LayoutGrid, Check, LogIn, Loader2, BarChart3 } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { Archive, Building2, Home, Check, LogIn, Loader2, Users } from 'lucide-react';
 
 import { pointsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { usePointAccess, useSwitchPoint, ALL_POINTS_LABEL, pointKindLabel } from '../hooks/usePoints';
+import { usePointAccess, pointKindLabel } from '../hooks/usePoints';
 import PageHeader from '../components/PageHeader';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { formatMoney } from '../../../shared/utils/formatters';
-import type { PointSummary, PointsSummaryResponse, TenantPoint } from '../types';
+import { buildPointCardRows, type PointCardRow } from '../../../shared/utils/pointCards';
+import type { PointsSummaryResponse, TenantPoint } from '../types';
 
 /**
  * PointsPage — раздел «Филиалы» в вебе: основной автосервис владельца и
- * открытые им филиалы (мульти-точки 156/160/161).
+ * открытые им филиалы (мульти-точки 156/160/161/163).
  *
- * ЭТО ЕДИНСТВЕННОЕ МЕСТО ПЕРЕХОДА между автосервисами. Дословно от владельца:
- * «Должен быть основной сервис, он называется ZR AUTO, а филиал ТопГаз — это
- * дополнительно открытый, и переключиться туда можно ТОЛЬКО через филиал, а не
- * везде. Это два разных автосервиса одного владельца просто». В шапке остался
- * лишь индикатор (components/PointIndicator): он показывает, где человек
- * сейчас, и ведёт сюда.
+ * ФИЛИАЛ ЗДЕСЬ НЕ ПЕРЕКЛЮЧАЕТСЯ (163). Требование владельца дословно: «чтобы
+ * выйти и войти в другой им надо опять выйти и войти в другой филиал». Филиал
+ * — свойство СЕССИИ: он выбирается при входе и живёт ровно столько, сколько
+ * живёт токен. Поэтому в карточке чужого филиала стоит действие «Войти в этот
+ * филиал», которое честно предупреждает, что текущая сессия завершится, и по
+ * подтверждению делает ВЫХОД — дальше человек входит заново и выбирает филиал
+ * на экране входа. Тихого перехода нет: именно из-за него веб молча уезжал в
+ * филиал, выбранный на телефоне.
  *
- * ОСНОВНОЙ СЕРВИС ИДЁТ ПЕРВЫМ и подписан как основной (160,
- * tenant_points.is_main): ему принадлежит вся история, заведённая до появления
- * филиалов. Строкой вровень с только что открытым филиалом владелец не понял
- * бы, где лежит его многолетняя выручка.
+ * РЕЖИМА «ВСЕ ФИЛИАЛЫ» БОЛЬШЕ НЕТ. Сессия всегда принадлежит ровно одному
+ * автосервису, поэтому карточки на этой странице — это СВОДКА по сети (взгляд
+ * сверху), а не режим работы. Так по построению исчезает класс ошибок «деньги
+ * записаны без филиала и не видны ни в одном» — тот самый, из-за которого
+ * зарплату можно было выдать дважды.
  *
- * ДЕНЬГИ карточек — GET /points/summary под правом `financial_reports`;
- * прибыль внутри дополнительно закрыта `profit_view` (без права сервер отдаёт
- * 0, поэтому строку не рисуем вовсе — ноль выглядел бы как настоящий убыток).
+ * ЧЕМ ОСНОВНОЙ СЕРВИС ОТЛИЧАЕТСЯ ОТ ФИЛИАЛА (160, tenant_points.is_main):
+ * основной — это САМ автосервис владельца, ему принадлежит вся история,
+ * заведённая до появления филиалов, и назван он по названию компании. Ровно
+ * один такой у тенанта, сервер отдаёт его первым. Поэтому он идёт отдельной
+ * секцией сверху: строкой вровень с только что открытым филиалом владелец не
+ * понял бы, где лежит его многолетняя выручка.
+ *
+ * КТО ВИДИТ ЧТО:
+ *   • список — любой сотрудник тенанта, у которого больше одного автосервиса;
+ *   • «Войти в этот филиал» — только для филиалов, куда человека пускает
+ *     сервер (usePointAccess.selectable — зеркало autexa_available_points);
+ *   • деньги — GET /points/summary под ключом `financial_reports`; прибыль
+ *     внутри дополнительно закрыта `profit_view` (без права сервер отдаёт 0,
+ *     поэтому строку не рисуем вовсе — ноль выглядел бы как настоящий убыток);
+ *   • состав филиала — ТОЛЬКО ДЛЯ ПРОСМОТРА. Настройка «на каких филиалах
+ *     может работать сотрудник» живёт в карточке сотрудника («Пользователи» →
+ *     «Филиалы сотрудника»): это ответ на вопрос про ЧЕЛОВЕКА.
+ *
+ * ЗАКРЫТЫЙ ФИЛИАЛ ТОЖЕ ПОЛУЧАЕТ КАРТОЧКУ. Список строится по СВОДКЕ
+ * (buildPointCardRows), а не по одному лишь живому GET /points. Пока карточки
+ * брались только из живых точек, деньги закрытого филиала оставались в итогах
+ * тенанта, а карточки для них не существовало: владелец складывал карточки, не
+ * получал цифру с главной и читал это как пропажу денег. Такая карточка
+ * подписана «Закрыт», нарисована приглушённо, стоит ПОСЛЕ действующих и НЕ
+ * предлагает войти — филиал заархивирован, сервер туда не пустит.
  *
  * Автосервисы заводит и архивирует только суперадмин — здесь их не создают.
  */
-
-/** Идентификатор карточки «Все автосервисы»: своего id у этого режима нет. */
-const ALL_POINTS_ROW_ID = '__all_points__';
-
 export default function PointsPage() {
-  const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, logout } = useAuth();
   const canSeeMoney = hasPermission('financial_reports');
   const canSeeProfit = hasPermission('profit_view');
 
-  const { selectable, mainPoint, branches, currentPointId, canSeeAllPoints, isLoading } = usePointAccess();
-  const { switchPoint, isSwitching } = useSwitchPoint();
-  // Какую карточку сейчас открываем — чтобы спиннер крутился ровно на ней.
-  const [enteringId, setEnteringId] = useState<string | null>(null);
+  const { points, selectable, currentPointId, isLoading } = usePointAccess();
+
+  const canEnter = (pointId: string) => selectable.some((p) => p.id === pointId);
+
+  // Филиал, в который человек попросился войти: держим до подтверждения —
+  // выход из аккаунта нельзя делать по одному клику.
+  const [enterTarget, setEnterTarget] = useState<TenantPoint | null>(null);
 
   const { data: summaryData, isLoading: summaryLoading } = useQuery<PointsSummaryResponse>({
     queryKey: ['points-summary'],
@@ -55,41 +78,33 @@ export default function PointsPage() {
     staleTime: 30_000,
   });
 
-  const summaryByPoint = useMemo(() => {
-    const map = new Map<string, PointSummary>();
-    for (const s of summaryData?.points ?? []) map.set(s.pointId, s);
-    return map;
-  }, [summaryData]);
+  // Карточки строим по ВСЕМ автосервисам тенанта — живым и закрытым с деньгами
+  // в периоде, — а не только по доступным этому человеку: сводка по сети это
+  // взгляд сверху, и владелец, назначенный на один филиал, обязан видеть цифры
+  // второго. Действие «Войти» при этом появляется только там, куда сервер его
+  // пустит. Правило сборки и порядок — общие с мобилкой (shared/utils/pointCards).
+  const rows = useMemo(() => buildPointCardRows({ points, summary: summaryData?.points ?? [] }), [points, summaryData]);
 
-  /**
-   * «Перейти» = полностью зайти в автосервис. Переход сбрасывает весь кеш (см.
-   * useSwitchPoint), поэтому на главную мы уходим уже без чужих цифр в памяти.
-   */
-  const enterPoint = async (pointId: string | null) => {
-    if (pointId === currentPointId || isSwitching) return;
-    setEnteringId(pointId ?? ALL_POINTS_ROW_ID);
-    try {
-      await switchPoint(pointId);
-      navigate('/dashboard');
-    } catch {
-      toast.error('Не удалось перейти. Проверьте связь и попробуйте ещё раз.');
-    } finally {
-      setEnteringId(null);
-    }
-  };
+  // Основной сервис — отдельной секцией сверху. Закрытым он быть не может
+  // (API запрещает архивировать основной), но проверку держим явной: закрытая
+  // карточка в секции «Основной сервис» выглядела бы как закрытая компания.
+  const mainRow = rows.find((r) => r.isMain && !r.isArchived) ?? null;
+  const branchRows = rows.filter((r) => r !== mainRow);
 
-  const renderCard = (p: TenantPoint) => (
+  const renderCard = (row: PointCardRow) => (
     <PointCard
-      key={p.id}
-      point={p}
-      summary={summaryByPoint.get(p.id)}
+      key={row.pointId}
+      row={row}
       summaryLoading={summaryLoading}
       canSeeMoney={canSeeMoney}
       canSeeProfit={canSeeProfit}
-      isCurrent={p.id === currentPointId}
-      busy={enteringId === p.id}
-      isSwitching={isSwitching}
-      onEnter={() => void enterPoint(p.id)}
+      isCurrent={row.pointId === currentPointId}
+      // Войти можно только в ЖИВОЙ филиал, куда пускает сервер. У закрытого
+      // живой записи нет вовсе — и входить в него некуда.
+      canEnter={!row.isArchived && row.point !== null && canEnter(row.pointId)}
+      onEnter={() => {
+        if (row.point) setEnterTarget(row.point);
+      }}
     />
   );
 
@@ -98,11 +113,11 @@ export default function PointsPage() {
       <PageHeader title="Филиалы" icon={Building2} subtitle="Основной сервис и филиалы" />
 
       <div className="max-w-3xl space-y-6">
-        {isLoading && selectable.length === 0 ? (
+        {isLoading && rows.length === 0 ? (
           <div className="flex justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
           </div>
-        ) : selectable.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="card px-5 py-10 text-center">
             <Building2 className="mx-auto h-8 w-8 text-gray-300" />
             <p className="mt-3 text-sm font-semibold text-gray-900">Пока нет филиалов</p>
@@ -115,40 +130,56 @@ export default function PointsPage() {
             {/* Объяснение модели первым экраном: это не «главная и её
                 придаток», а два самостоятельных автосервиса одного владельца.
                 Без этой строки владелец не понимает, почему выручка не
-                суммируется. */}
+                суммируется и где он вообще сейчас работает. */}
             <p className="text-sm leading-relaxed text-gray-600">
               Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя
-              зарплата. Перейти в другой можно только отсюда.
+              зарплата. Вы работаете в том филиале, в который вошли; чтобы перейти в другой, нужно выйти и войти заново.
             </p>
 
-            {mainPoint && (
+            {mainRow && (
               <section className="space-y-2">
                 <SectionLabel text="Основной сервис" />
-                {renderCard(mainPoint)}
+                {renderCard(mainRow)}
               </section>
             )}
 
-            {branches.length > 0 && (
+            {branchRows.length > 0 && (
               <section className="space-y-2">
-                <SectionLabel text={branches.length === 1 ? 'Филиал' : 'Филиалы'} />
-                <div className="space-y-3">{branches.map(renderCard)}</div>
-              </section>
-            )}
-
-            {canSeeAllPoints && (
-              <section className="space-y-2">
-                <SectionLabel text="Общая сводка" />
-                <AllPointsCard
-                  isCurrent={currentPointId === null}
-                  busy={enteringId === ALL_POINTS_ROW_ID}
-                  isSwitching={isSwitching}
-                  onEnter={() => void enterPoint(null)}
-                />
+                <SectionLabel text={branchRows.length === 1 ? 'Филиал' : 'Филиалы'} />
+                <div className="space-y-3">{branchRows.map(renderCard)}</div>
               </section>
             )}
           </>
         )}
       </div>
+
+      {/*
+        «Войти в этот филиал» = ВЫЙТИ и войти заново.
+
+        Почему именно так, а не «переключить»: филиал лежит в подписанном
+        токене (163), и отобрать его у выданной сессии нельзя — можно только
+        выдать новую. Отсюда и честное предупреждение: страница выйдет из
+        аккаунта, всё незавершённое (набранный заказ-наряд живёт только в
+        памяти вкладки) будет потеряно, и понадобится ввести пароль. Лучше
+        сказать это до, чем показать человеку экран входа без объяснений.
+      */}
+      <ConfirmDialog
+        isOpen={!!enterTarget}
+        onClose={() => setEnterTarget(null)}
+        onConfirm={() => {
+          // logout() гасит токен и чистит все кеши, поэтому после входа в
+          // другой филиал на экранах не мелькнут цифры этого. Дальше
+          // маршрутизация сама уводит на /login.
+          logout();
+        }}
+        title={enterTarget ? `Войти в «${enterTarget.name}»?` : ''}
+        message={
+          'Филиал выбирается при входе, поэтому сейчас произойдёт выход из аккаунта. Введите телефон и пароль ещё раз ' +
+          'и выберите этот филиал в списке. Незавершённые заказ-наряды будут потеряны.'
+        }
+        confirmText="Выйти и войти"
+        variant="danger"
+      />
     </div>
   );
 }
@@ -158,49 +189,69 @@ function SectionLabel({ text }: { text: string }) {
 }
 
 function PointCard({
-  point,
-  summary,
+  row,
   summaryLoading,
   canSeeMoney,
   canSeeProfit,
   isCurrent,
-  busy,
-  isSwitching,
+  canEnter,
   onEnter,
 }: {
-  point: TenantPoint;
-  summary?: PointSummary;
+  row: PointCardRow;
   summaryLoading: boolean;
   canSeeMoney: boolean;
   canSeeProfit: boolean;
   isCurrent: boolean;
-  busy: boolean;
-  isSwitching: boolean;
+  /** Пустит ли сервер этого человека в этот филиал (user_points, 163). */
+  canEnter: boolean;
   onEnter: () => void;
 }) {
-  const kind = pointKindLabel(point);
+  const { point, summary, isArchived } = row;
+  const kind = pointKindLabel(row);
   // Дом = сам автосервис владельца, здание = открытый позже филиал.
-  const Icon = point.isMain ? Home : Building2;
+  const Icon = row.isMain ? Home : Building2;
+  const memberCount = point?.memberIds?.length ?? 0;
 
   return (
-    <div className={`card space-y-4 p-5 ${isCurrent ? 'ring-1 ring-primary-500' : ''}`}>
+    <div
+      className={`card space-y-4 p-5 ${
+        // Закрытый филиал приглушён и не выделен рамкой: он уходит на второй
+        // план, но цифры внутри остаются читаемыми — ради них карточка и есть.
+        // Фон остаётся белым: на сером плитки цифр (bg-gray-50) слились бы с
+        // карточкой. Та же степень приглушения, что и в мобилке.
+        isArchived ? 'opacity-[0.86] shadow-none' : isCurrent ? 'ring-1 ring-primary-500' : ''
+      }`}
+    >
       <div className="flex items-center gap-3">
         <span
           className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
-            isCurrent ? 'bg-primary-600 text-white' : 'bg-primary-50 text-primary-600'
+            isArchived
+              ? 'bg-gray-100 text-gray-400'
+              : isCurrent
+                ? 'bg-primary-600 text-white'
+                : 'bg-primary-50 text-primary-600'
           }`}
         >
           <Icon className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-bold text-gray-900">{point.name}</p>
-          <p className="truncate text-xs text-gray-500">{point.address ? `${kind} · ${point.address}` : kind}</p>
+          <p className={`truncate text-base font-bold ${isArchived ? 'text-gray-500' : 'text-gray-900'}`}>{row.name}</p>
+          <p className="truncate text-xs text-gray-500">{row.address ? `${kind} · ${row.address}` : kind}</p>
         </div>
-        {isCurrent && (
-          <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-600">
-            <Check className="h-3.5 w-3.5" />
-            Вы здесь
+        {/* «Закрыт» важнее «Вы здесь»: человек, оставшийся в сессии закрытого
+            филиала, обязан в первую очередь узнать, что филиала больше нет. */}
+        {isArchived ? (
+          <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-bold text-gray-500">
+            <Archive className="h-3.5 w-3.5" />
+            Закрыт
           </span>
+        ) : (
+          isCurrent && (
+            <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-600">
+              <Check className="h-3.5 w-3.5" />
+              Вы здесь
+            </span>
+          )
         )}
       </div>
 
@@ -229,7 +280,8 @@ function PointCard({
               )}
               {/* mastersOnShift === null — учёт смен у тенанта ВЫКЛЮЧЕН, факта
                   не существует. Рисуем прочерк: «0» прочиталось бы как
-                  «сегодня никто не вышел». */}
+                  «сегодня никто не вышел» и отправило бы владельца искать
+                  несуществующую проблему. */}
               <Metric
                 label="Мастеров на работе"
                 value={
@@ -243,122 +295,52 @@ function PointCard({
         </div>
       )}
 
-      <EnterButton
-        isCurrent={isCurrent}
-        busy={busy}
-        isSwitching={isSwitching}
-        onEnter={onEnter}
-        idleIcon={<LogIn className="h-4 w-4" />}
-        idleText="Перейти"
-        ariaLabel={isCurrent ? `${point.name} — вы здесь` : `Перейти в автосервис ${point.name}`}
-      />
-    </div>
-  );
-}
-
-/**
- * «Все автосервисы» — режим общей сводки (currentPointId = null). Отдельной
- * карточкой в конце и только владельцу/админу: это НЕ автосервис, а взгляд
- * сверху, и денежную запись сервер в нём не примет. Выйти из него можно тоже
- * только здесь — иначе владелец, однажды сюда попавший, не мог бы вернуться.
- */
-function AllPointsCard({
-  isCurrent,
-  busy,
-  isSwitching,
-  onEnter,
-}: {
-  isCurrent: boolean;
-  busy: boolean;
-  isSwitching: boolean;
-  onEnter: () => void;
-}) {
-  return (
-    <div className={`card space-y-4 p-5 ${isCurrent ? 'ring-1 ring-primary-500' : ''}`}>
-      <div className="flex items-center gap-3">
-        <span
-          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
-            isCurrent ? 'bg-primary-600 text-white' : 'bg-primary-50 text-primary-600'
-          }`}
-        >
-          <LayoutGrid className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-bold text-gray-900">{ALL_POINTS_LABEL}</p>
-          <p className="truncate text-xs text-gray-500">Цифры сразу по всем — только для просмотра</p>
-        </div>
-        {isCurrent && (
-          <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-600">
-            <Check className="h-3.5 w-3.5" />
-            Вы здесь
+      {/* Состав филиала — СПРАВОЧНО. Настраивается в карточке сотрудника, и
+          подпись обязана об этом сказать: иначе владелец будет искать здесь
+          кнопку, которой больше нет. У закрытого филиала состава нет: работать
+          в нём уже нельзя, и строка про закреплённых только сбивала бы. */}
+      {point && !isArchived && (
+        <p className="flex items-start gap-1.5 text-xs text-gray-400">
+          <Users className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>
+            {memberCount > 0
+              ? `Закреплены: ${memberCount} — настраивается в карточке сотрудника`
+              : 'Никто не закреплён — доступен всем сотрудникам'}
           </span>
-        )}
-      </div>
-
-      {/* Честная подпись: сервер денежную запись без автосервиса не принимает —
-          он либо подставит единственный доступный, либо ответит «Выберите
-          филиал, …». */}
-      <p className="text-xs leading-relaxed text-gray-500">
-        Чтобы пробить чек, завести расход или открыть смену, нужно зайти в конкретный автосервис.
-      </p>
-
-      <EnterButton
-        isCurrent={isCurrent}
-        busy={busy}
-        isSwitching={isSwitching}
-        onEnter={onEnter}
-        idleIcon={<BarChart3 className="h-4 w-4" />}
-        idleText="Открыть сводку"
-        ariaLabel={isCurrent ? 'Открыта общая сводка' : 'Открыть общую сводку по всем автосервисам'}
-      />
-    </div>
-  );
-}
-
-/** Кнопка перехода — одна на карточку автосервиса и на карточку сводки. */
-function EnterButton({
-  isCurrent,
-  busy,
-  isSwitching,
-  onEnter,
-  idleIcon,
-  idleText,
-  ariaLabel,
-}: {
-  isCurrent: boolean;
-  busy: boolean;
-  isSwitching: boolean;
-  onEnter: () => void;
-  idleIcon: React.ReactNode;
-  idleText: string;
-  ariaLabel: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onEnter}
-      disabled={isCurrent || isSwitching}
-      aria-label={ariaLabel}
-      className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-colors ${
-        isCurrent
-          ? 'cursor-default bg-gray-100 text-gray-500'
-          : 'bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50'
-      }`}
-    >
-      {busy ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : isCurrent ? (
-        <>
-          <Check className="h-4 w-4" />
-          Вы здесь
-        </>
-      ) : (
-        <>
-          {idleIcon}
-          {idleText}
-        </>
+        </p>
       )}
-    </button>
+
+      {isArchived ? (
+        // Действия «Войти» здесь НЕ БЫВАЕТ: филиал заархивирован, и сервер в
+        // него не пустит. Карточка существует только ради денег периода —
+        // чтобы сумма карточек сошлась с итогом сети на главной.
+        <p className="flex items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-center text-xs font-semibold text-gray-500">
+          <Archive className="h-4 w-4 flex-shrink-0" />
+          {isCurrent ? 'Филиал закрыт. Вы работаете в нём до выхода' : 'Филиал закрыт — войти нельзя'}
+        </p>
+      ) : isCurrent ? (
+        <div className="flex w-full items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-bold text-gray-500">
+          <Check className="h-4 w-4" />
+          Вы работаете здесь
+        </div>
+      ) : canEnter ? (
+        <button
+          type="button"
+          onClick={onEnter}
+          aria-label={`Войти в автосервис ${row.name} — потребуется выйти и войти заново`}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700"
+        >
+          <LogIn className="h-4 w-4" />
+          Войти в этот филиал
+        </button>
+      ) : (
+        // Филиал виден в сводке, но войти в него нельзя: сотруднику не выдан
+        // доступ. Пишем это прямо — кнопка, отвечающая отказом, была бы хуже.
+        <p className="rounded-xl bg-gray-50 px-4 py-2.5 text-center text-xs text-gray-500">
+          Вход в этот филиал вам не открыт — доступ настраивает владелец в карточке сотрудника.
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -14,7 +14,7 @@ import { PushService } from '../push/push.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
 import { CloseShiftDto } from './dto/close-shift.dto';
 import { CollectCashDto } from './dto/collect-cash.dto';
-import { actorPointId, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { actorPointId, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 
 /** Any pg connection we can run a query on — the Pool or a checked-out client. */
@@ -71,7 +71,27 @@ export interface AcceptorTotal {
  *
  *   • collectionsTotal = SUM(cash_collections.amount) for this shift_id.
  *
- *   expected = opening + cashSales − cashExpenses − collectionsTotal
+ *   • cashReturns (164) — НАЛИЧНАЯ часть возвратов, ОФОРМЛЕННЫХ В ЭТОМ ОКНЕ
+ *     (check_returns.created_at), но по чекам, которые в окно НЕ попадают.
+ *     ЗАЧЕМ ЭТОТ ТЕРМ. Возврат уменьшает cash_amount НА ИСХОДНОМ ЧЕКЕ, а чек
+ *     датирован днём ПРОДАЖИ. Пока продажа и возврат в одном окне, вычет уже
+ *     сидит в cashSales (и второй раз его вычитать нельзя — отсюда условие
+ *     «чек НЕ в окне»). Возврат же по чеку ПРОШЛОЙ смены уезжал вычетом в
+ *     закрытую смену: деньги из ящика выдали сегодня, а сегодняшний ожидаемый
+ *     остаток о них не знал → фантомная НЕДОСТАЧА и пуш директору о
+ *     расхождении. Дата факта здесь — та же, по которой возвраты показывает
+ *     «Движение денег» (reports.getCashFlow, строка refunds).
+ *     Филиал берётся У ЧЕКА: своей точки у возврата нет и не нужно.
+ *
+ *   • installmentCash (164) — погашения рассрочки, принятые НАЛИЧНЫМИ в окне
+ *     (installment_payments.paid_at, payment_method <> 'card'). Это живые
+ *     деньги, физически положенные в ящик, но чек-источник датирован днём
+ *     продажи, поэтому в cashSales их нет вовсе: Z-отчёт каждый день показывал
+ *     ИЗЛИШЕК на сумму принятых погашений. Филиал — по чеку плана, тем же
+ *     предикатом, что в «Движении денег» (paidPointFilter).
+ *
+ *   expected = opening + cashSales + installmentCash − cashExpenses
+ *              − cashReturns − collectionsTotal
  *   difference = closing (фактический нал) − expected   (>0 излишек, <0 недостача)
  *
  * ФИЛИАЛЫ (161). Кассовая смена — СВОЯ у каждого филиала (решение владельца):
@@ -92,7 +112,7 @@ export interface AcceptorTotal {
  * СЕЙФ ОСТАЁТСЯ ОДИН НА КОМПАНИЮ — сознательно. Баланс сейфа считается как
  * Σdeposit + Σadjustment − Σcollection по insert-only ленте: депозит рождается
  * при закрытии смены (филиал известен), а инкассация ИЗ сейфа делается
- * владельцем и точки может не иметь вовсе (режим «Все точки»). Точка у ЧАСТИ
+ * владельцем и филиала может не иметь вовсе (тенант без филиалов). Точка у ЧАСТИ
  * строк означала бы, что подсуммы по филиалам не сходятся с реальным
  * остатком, — а это либо запрет законной инкассации, либо «лишние» деньги в
  * филиале. Один сейф на кабинет — и физически так, и арифметически безопасно.
@@ -201,6 +221,8 @@ export class CashShiftsService {
     totalRevenue: number;
     checksCount: number;
     cashExpenses: number;
+    cashReturns: number;
+    installmentCash: number;
     collectionsTotal: number;
     perAcceptor: AcceptorTotal[];
   }> {
@@ -234,6 +256,51 @@ export class CashShiftsService {
           AND COALESCE(approval_status, 'approved') = 'approved'
           AND date >= $2 AND date <= $3${expPoint}`,
       expParams,
+    );
+
+    // ВОЗВРАТЫ ПО ДАТЕ ФАКТА (164). Вычитаем только те, чей чек-источник НЕ
+    // попадает в окно смены ТЕМ ЖЕ предикатом, что выборка продаж выше
+    // (дата в окне + не драфт + не в корзине + тот же филиал): иначе возврат,
+    // оформленный в день продажи, вычелся бы ДВАЖДЫ — один раз реверсом
+    // cash_amount внутри cashSales, второй раз этой строкой.
+    // `ch.deleted_at IS NULL` во внешнем условии — симметрия с «Движением
+    // денег»: у чека в корзине деньги уже сняты реверсом footprint'а, и
+    // вычитать их ещё раз из ящика нельзя.
+    const retParams: unknown[] = [tenantID, openedAt, windowEnd];
+    const retPoint = pointFilterSql('ch', pointId, retParams);
+    const { rows: retRows } = await db.query(
+      `SELECT COALESCE(SUM(cr.refund_cash_amount), 0) AS cash_returns
+         FROM check_returns cr
+         JOIN checks ch ON ch.id = cr.check_id AND ch.tenant_id = cr.tenant_id
+        WHERE cr.tenant_id = $1
+          AND cr.created_at >= $2 AND cr.created_at <= $3
+          AND ch.deleted_at IS NULL
+          AND NOT (ch.date >= $2 AND ch.date <= $3 AND ch.is_deferred = false)${retPoint}`,
+      retParams,
+    );
+
+    // ПОГАШЕНИЯ РАССРОЧКИ НАЛИЧНЫМИ (164) — живые деньги, принятые в ящик в
+    // этом окне. Строки до миграции 119 (payment_method NULL) считаются налом —
+    // то же решение владельца, что в reports.getCashFlow (paid_cash).
+    // Филиал — через чек плана: собственной точки у платежа нет, и платёж без
+    // живого чека-источника филиалу не атрибутируется (симметрия с «Движением
+    // денег»).
+    const instParams: unknown[] = [tenantID, openedAt, windowEnd];
+    let instPoint = '';
+    if (pointId) {
+      instParams.push(pointId);
+      instPoint =
+        ` AND EXISTS (SELECT 1 FROM checks ch WHERE ch.id = pl.check_id` +
+        ` AND ch.tenant_id = $1 AND ch.deleted_at IS NULL AND ch.point_id = $${instParams.length})`;
+    }
+    const { rows: instRows } = await db.query(
+      `SELECT COALESCE(SUM(p.amount), 0) AS installment_cash
+         FROM installment_payments p
+         JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = p.tenant_id
+        WHERE p.tenant_id = $1
+          AND p.paid_at >= $2 AND p.paid_at <= $3
+          AND COALESCE(p.payment_method, 'cash') <> 'card'${instPoint}`,
+      instParams,
     );
 
     // Инкассация — keyed by shift_id (always created during this shift).
@@ -270,6 +337,8 @@ export class CashShiftsService {
       totalRevenue: num(salesRows[0].total_revenue),
       checksCount: parseInt(salesRows[0].checks_count, 10) || 0,
       cashExpenses: num(expRows[0].cash_expenses),
+      cashReturns: num(retRows[0].cash_returns),
+      installmentCash: num(instRows[0].installment_cash),
       collectionsTotal: num(colRows[0].collections),
       perAcceptor: accRows.map((r: any) => ({
         userId: r.user_id ?? null,
@@ -279,6 +348,25 @@ export class CashShiftsService {
         checksCount: parseInt(r.checks_count, 10) || 0,
       })),
     };
+  }
+
+  /**
+   * ОЖИДАЕМЫЙ НАЛ В ЯЩИКЕ — ЕДИНСТВЕННОЕ МЕСТО ФОРМУЛЫ. Её считают два пути
+   * (живой Z-отчёт в assembleReport и заморозка при close), и разъехавшиеся
+   * копии означали бы, что кассир закрывает смену по одной цифре, а отчёт
+   * показывает другую.
+   */
+  private static expectedCash(
+    opening: number,
+    f: {
+      cashSales: number;
+      installmentCash: number;
+      cashExpenses: number;
+      cashReturns: number;
+      collectionsTotal: number;
+    },
+  ): number {
+    return round2(opening + f.cashSales + f.installmentCash - f.cashExpenses - f.cashReturns - f.collectionsTotal);
   }
 
   /**
@@ -327,7 +415,7 @@ export class CashShiftsService {
     const safeBalance = await this.safeBalance(tenantID, db);
 
     const opening = num(shiftRow.opening_amount);
-    const expectedLive = round2(opening + figures.cashSales - figures.cashExpenses - figures.collectionsTotal);
+    const expectedLive = CashShiftsService.expectedCash(opening, figures);
 
     let expectedAmount: number;
     let factualAmount: number | null;
@@ -357,6 +445,10 @@ export class CashShiftsService {
       cardSales: figures.cardSales,
       totalRevenue: figures.totalRevenue,
       cashExpenses: figures.cashExpenses,
+      // 164 — отдельные строки Z-отчёта: выдано из ящика по возвратам прошлых
+      // смен и принято в ящик по рассрочке. Обе уже учтены в expectedAmount.
+      cashReturns: figures.cashReturns,
+      installmentCash: figures.installmentCash,
       collectionsTotal: figures.collectionsTotal,
       checksCount: figures.checksCount,
       openingAmount: opening,
@@ -398,14 +490,11 @@ export class CashShiftsService {
     // чекам ВСЕЙ сети — и те же чеки попали бы во второй раз в Z-отчёт филиала,
     // где они и были пробиты. Двойной пересчёт денежного ящика недопустим.
     //
-    // Волна 4: собственная проверка заменена ОБЩИМ резолвом всех денежных путей
-    // (common/point-scope.resolvePointForWrite) — текст ошибки и её форма (400 +
-    // { message }) прежние, но теперь ровно то же правило действует у чека,
-    // расхода и зарплатных операций, а не только здесь. Бонусом появилась
-    // подстановка единственной доступной точки: кассир одного филиала больше не
-    // видит вопроса вообще. Одноточечный тенант (точек нет вовсе) под гейт не
-    // попадает никогда — его поведение прежнее.
-    const pointId = await resolvePointForWrite(this.pool, user, 'чтобы открыть кассовую смену');
+    // 163: смена открывается в ФИЛИАЛЕ СЕССИИ кассира — он выбран при входе,
+    // поэтому вопроса «в каком филиале открываем» больше не существует и
+    // отказа «Выберите филиал» здесь нет. Одноточечный тенант (филиалов нет
+    // вовсе) получает null и ведёт себя ровно как прежде.
+    const pointId = actorPointId(user);
 
     // App-level guard (fast, friendly error). Партиальный уникальный индекс
     // uq_cash_shifts_one_open_per_point — race-proof backstop ниже. Проверка
@@ -476,7 +565,7 @@ export class CashShiftsService {
       // Lock the row so two concurrent closes can't both compute & write.
       // 161 — плюс фильтр филиала: кассир точки А не должен закрыть смену
       // точки Б по прямому обращению к API (id смены он мог увидеть раньше,
-      // до перевода на другой филиал). В режиме «Все точки» фильтра нет.
+      // до перевода на другой филиал). Филиала нет только у одноточечного тенанта — там фильтра нет.
       const lockParams: unknown[] = [id, user.tenantID];
       const lockPoint = pointFilterSql(null, actorPointId(user), lockParams);
       const { rows } = await client.query(
@@ -498,7 +587,7 @@ export class CashShiftsService {
       const figures = await this.computeFigures(client, user.tenantID, id, openedAt, closedAt, shift.point_id ?? null);
 
       const opening = num(shift.opening_amount);
-      const expected = round2(opening + figures.cashSales - figures.cashExpenses - figures.collectionsTotal);
+      const expected = CashShiftsService.expectedCash(opening, figures);
       const closing = round2(num(dto.closingAmount));
       const difference = round2(closing - expected);
 
@@ -590,7 +679,7 @@ export class CashShiftsService {
   }
 
   // ─── Current open shift (or null) with live Z-report ───────────────────
-  /** Открытая смена МОЕГО филиала (или null). «Все точки» — любая открытая. */
+  /** Открытая смена МОЕГО филиала (или null). Без филиалов — любая открытая. */
   async current(tenantID: string, actor?: JwtPayload) {
     const params: unknown[] = [tenantID];
     const pointFilter = pointFilterSql('cs', actorPointId(actor), params);
@@ -611,7 +700,7 @@ export class CashShiftsService {
   // ─── Z-report for a specific shift ─────────────────────────────────────
   /**
    * Z-отчёт конкретной смены. 161 — читать можно только смены СВОЕГО филиала
-   * (в режиме «Все точки» — любые): id смены чужого филиала не должен отдавать
+   * (у тенанта без филиалов — любые): id смены чужого филиала не должен отдавать
    * его выручку по прямому обращению к API в обход списка.
    */
   async report(tenantID: string, id: string, actor?: JwtPayload) {
@@ -816,7 +905,7 @@ export class CashShiftsService {
    * ОСТАТОК ДЕНЕЖНОГО ЯЩИКА: в сети из пяти автосервисов кассир точки А читал
    * чужие остатки как свои и сверял ящик по чужой цифре. Филиал берём У СМЕНЫ,
    * а не у актора: инкассировать может владелец, сидящий в другом филиале или
-   * в режиме «Все точки» — адресаты определяются местом, откуда ушли деньги.
+   * у тенанта без филиалов — адресаты определяются местом, откуда ушли деньги.
    *
    * Инкассация ИЗ СЕЙФА приходит с pointId = null сознательно: сейф один на
    * компанию (обоснование — в шапке файла и в миграции 161), его остаток

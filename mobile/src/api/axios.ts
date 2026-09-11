@@ -9,6 +9,7 @@ import {
   orderApiHosts,
 } from './apiHosts';
 import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
+import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 
 // API URL: hardcoded production server, fallback to dev server
 function getApiBaseUrl(): string {
@@ -980,8 +981,12 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// Event emitter for auth state changes
-type AuthListener = () => void;
+// Event emitter for auth state changes.
+// `reason` (163) — человеческий текст сервера, когда сессию погасили НЕ по
+// истечению токена, а потому что филиал сессии закрыли или у сотрудника сняли
+// к нему доступ. Без него мастера просто «выкидывало» без объяснения, и он
+// звонил владельцу вместо того, чтобы войти в доступный филиал.
+type AuthListener = (reason?: string) => void;
 const authListeners: AuthListener[] = [];
 
 export function onAuthExpired(listener: AuthListener) {
@@ -1032,14 +1037,14 @@ function fireNetworkListeners(listeners: NetworkListener[]): void {
   }
 }
 
-function fireAuthExpired() {
+function fireAuthExpired(reason?: string) {
   // Token/epoch matching in the 401 handler is the coalescer: the first 401
   // clears the current bearer, so every parallel response from that bearer is
   // stale and ignored. A wall-clock debounce would be unsafe because a newly
   // logged-in session can legitimately expire inside the old 2s window.
   authListeners.forEach((fn) => {
     try {
-      fn();
+      fn(reason);
     } catch {
       // Listener errors must not block other listeners or the next
       // 401 from firing the chain.
@@ -1314,7 +1319,10 @@ api.interceptors.response.use(
       // delete token/user B after they were written. Clear the in-memory
       // bearer synchronously, then let the listener enqueue an ordered wipe.
       setAuthToken(null);
-      fireAuthExpired();
+      // Текст отдаём ТОЛЬКО для отказов «филиал сессии больше не ваш» (163) —
+      // обычное истечение токена человеку и так понятно, а лишний диалог на
+      // входе после каждой протухшей сессии превратился бы в шум.
+      fireAuthExpired(sessionPointLostMessage(error) ?? undefined);
     }
 
     return Promise.reject(error);

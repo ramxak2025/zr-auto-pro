@@ -287,12 +287,12 @@ test('Z-отчёт считает по точке САМОЙ СМЕНЫ, а не
 
 test('открыть кассовую смену без филиала нельзя, когда точки у тенанта есть', () => {
   const open = cashShifts.slice(cashShifts.indexOf('async open(user: JwtPayload'), cashShifts.indexOf('async close('));
-  // Волна 4: собственная проверка заменена ОБЩИМ резолвом денежной записи —
-  // текст ошибки и её форма (400 + { message }) прежние, но правило теперь
-  // одно на чек, расход, зарплату и кассовую смену. Гарантии «одноточечный
-  // тенант ничего не замечает» держит тест точки-записи (points-write-gate).
+  // 163: смена открывается в ФИЛИАЛЕ СЕССИИ кассира — он выбран при входе,
+  // поэтому «ничьей» смены на тенанте с филиалами не бывает по построению, а
+  // прежний резолв с отказом «Выберите филиал» удалён вместе с болезнью.
+  // Гарантию «одноточечный тенант ничего не замечает» держит points-write-gate.
   assert.ok(
-    /resolvePointForWrite\(this\.pool, user, 'чтобы открыть кассовую смену'\)/.test(open),
+    /const pointId = actorPointId\(user\);/.test(open),
     '«ничья» смена посчитала бы чеки всей сети и задвоила бы их с Z-отчётом филиала',
   );
   assert.ok(
@@ -358,7 +358,7 @@ test('сотрудник без назначений виден на всех ф
 test('сводка филиалов заполняет «мастеров на работе» и различает выключенный учёт', () => {
   assert.ok(/s\.point_id, COUNT\(DISTINCT s\.user_id\)/.test(points), 'сводка не считает смены по точке');
   assert.ok(
-    /shiftsEnabled \? \(onShiftByPoint\.get\(r\.id as string\) \?\? 0\) : null/.test(points),
+    /shiftsEnabled \? \(onShiftByPoint\.get\(id\) \?\? 0\) : null/.test(points),
     'выключенный учёт смен обязан давать null (прочерк), а не 0 («никто не работает»)',
   );
 });
@@ -430,7 +430,7 @@ test('дубль телефона из чужого филиала не раск
 test('гараж режется через владельца тем же предикатом, что база клиентов', () => {
   assert.ok(/private async ownerVisibleSql\(/.test(cars), 'нет общего фрагмента видимости владельца');
   assert.ok(
-    /this\.clients\.separatePointFor\(tenantID, actorUserID\)/.test(cars),
+    /this\.clients\.separatePointFor\(tenantID, actorPoint\)/.test(cars),
     'cars обязан переиспользовать ClientsService, а не заводить вторую копию правила',
   );
   // findByPlate — самая заметная утечка: ФИО и телефон владельца по госномеру.
@@ -442,7 +442,7 @@ test('гараж режется через владельца тем же пре
   }
   // Привязка/перенос на клиента чужого филиала запрещены.
   assert.ok(
-    /assertClientInTenant\(newClientId, tenantID, actorUserID\)/.test(cars),
+    /assertClientInTenant\(newClientId, tenantID, actorPoint\)/.test(cars),
     'transferOwner: перенос на клиента чужого филиала уносил бы историю и рассрочку в другой филиал',
   );
 });
@@ -466,13 +466,13 @@ test('PATCH /cars/:id не даёт перепривязать машину чу
     /SELECT client_id, plate_number FROM cars WHERE id=\$1 AND tenant_id=\$2\$\{currentOwnerWhere\}/.test(update),
     'выборка текущего владельца в update не режется филиалом',
   );
-  // Оба фрагмента — из ОДНОГО хелпера, а не вторая копия правила, и точка
-  // резолвится ОДИН раз: между двумя запросами актор мог переключить филиал, и
-  // тогда проверка дедупа и сам UPDATE резали бы разные точки.
+  // Оба фрагмента — из ОДНОГО хелпера, а не вторая копия правила, и филиал
+  // берётся ОДИН раз на весь метод: два разных значения между запросами
+  // означали бы, что проверка дедупа и сам UPDATE режут разные филиалы.
   assert.equal((update.match(/ownerVisibleSqlFor\('cars', viewerPoint/g) || []).length, 2);
   assert.ok(
-    /const viewerPoint = await this\.clients\.separatePointFor\(tenantID, actorUserID\)/.test(update),
-    'точка автора обязана резолвиться один раз на весь update',
+    /const viewerPoint = await this\.clients\.separatePointFor\(tenantID, actorPoint\)/.test(update),
+    'филиал сессии обязан браться один раз на весь update',
   );
 });
 
@@ -534,7 +534,13 @@ test('рассылки режутся филиалом отправителя, �
     'сегментная рассылка не режется филиалом',
   );
   // Предпросмотр обязан считать РОВНО тот же сегмент, что и отправка.
-  assert.ok(/const previewPoint = await this\.segmentPoint\(tenantId, actorUserID\);/.test(marketing));
+  assert.ok(/const previewPoint = await this\.segmentPoint\(tenantId, actorPoint\);/.test(marketing));
+  // 163 — вниз течёт ФИЛИАЛ СЕССИИ, а не userID: у отправителя рассылки роль
+  // автора (createdBy) и роль «чей филиал» разные, и одним полем их не покрыть.
+  assert.ok(
+    /createdBy\?: string \| null,[\s\S]{0,400}actorPoint\?: string \| null,/.test(marketing),
+    'сегментная рассылка снова определяет филиал по автору — при раздельной базе клиентов это чужой сегмент',
+  );
 
   // Фоновая рассылка: строгие непересекающиеся проходы (иначе одному человеку
   // может уйти два сообщения) + отдельный проход по «ничьим».
@@ -548,8 +554,10 @@ test('рассылки режутся филиалом отправителя, �
 // ── 9. Пикер мастера ───────────────────────────────────────────────────────
 
 test('список сотрудников скоупится ЯВНО, чтобы не сломать резолв имён', () => {
-  assert.ok(/async getAll\(tenantID: string, pointId: string \| null = null\)/.test(users));
-  assert.ok(/async getMasters\(tenantID: string, pointId: string \| null = null\)/.test(users));
+  // Актор нужен списку не только ради филиала: от него же зависит ОБЪЁМ строки
+  // (ПДн и деньги — только руководителю кадров и самому сотруднику).
+  assert.ok(/async getAll\(actor: JwtPayload, pointId: string \| null = null\)/.test(users));
+  assert.ok(/async getMasters\(actor: JwtPayload, pointId: string \| null = null\)/.test(users));
   const controller = read('src/users/users.controller.ts');
   assert.ok(
     /scope === 'point' \? actorPointId\(user\) : null/.test(controller),

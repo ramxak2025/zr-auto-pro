@@ -271,17 +271,6 @@ export type RootStackParamList = {
    */
   TemplateEditor: { templateId?: string; initialFolderId?: string | null } | undefined;
   /**
-   * «Филиалы» (мульти-точки 156/160/161) — единственное место переключения
-   * автосервиса. Зарегистрирован и в MoreStack (вход из «Ещё», таб-бар
-   * остаётся виден), и здесь, на корневом стеке, — для индикатора автосервиса
-   * (components/PointIndicator), который стоит на Кассе, главной, в Журнале, на
-   * кассовой смене и в расписании. Корневая копия существует ради Кассы:
-   * CheckCreate живёт на этом же стеке, и переход НА вкладку «Ещё» размонтировал
-   * бы его вместе с набранным заказ-нарядом. Push поверх — экран остаётся жив,
-   * «назад» возвращает к нему нетронутым.
-   */
-  Points: undefined;
-  /**
    * Приём оплаты по отложенному заказ-наряду (Round 14, режим «Кассир») —
    * ЕДИНЫЙ флоу активации: скидка + способ нал/карта/смешанная → PATCH
    * { isDeferred:false, ... }. Открывается из кассирской очереди «Оплата»
@@ -547,12 +536,14 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Roles" component={GatedRoles} />
       <MoreStack.Screen name="RoleEditor" component={GatedRoleEditor} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
-      {/* Точки (156, мульти-точки) — тенант-сторона: назначение сотрудников на
-          живые точки. Заводит/архивирует точки только суперадмин
-          (AdminTenantDetailScreen); строка в меню видна только при >1 точке
-          И user_management (см. MoreScreen). UNGATED здесь — MoreScreen уже
-          решает видимость входа, а сама шторка назначения самогейтится
-          canManage внутри экрана. */}
+      {/* Филиалы (156/163, мульти-точки) — тенант-сторона: сводка по сети и
+          вход в другой филиал (через выход и новый вход). Заводит/архивирует
+          филиалы только суперадмин (AdminTenantDetailScreen); строка в меню
+          видна при >1 живом филиале (см. MoreScreen). Единственная копия
+          роута: индикатор автосервиса на Кассе стал подписью и никуда не
+          ведёт, поэтому корневая копия больше не нужна. UNGATED — деньги
+          внутри экрана закрыты financial_reports, а настройка доступов
+          переехала в карточку сотрудника. */}
       <MoreStack.Screen name="Points" component={PointsScreen} />
       {/* Приём оплат (эквайринг) + онлайн-касса 54-ФЗ. Owner-class; lives in
           MoreStack so the floating tab bar stays visible (like CompanySettings).
@@ -999,13 +990,10 @@ export default function AppNavigator() {
               «Ещё» идёт через копии в MoreStack выше (таб-бар виден). */}
           <Stack.Screen name="Templates" component={TemplatesScreen} />
           <Stack.Screen name="TemplateEditor" component={TemplateEditorScreen} />
-          {/* «Филиалы» на КОРНЕВОМ стеке — вторая копия MoreStack-экрана (тот
-              же приём, что у ClientDetail / Templates). Индикатор автосервиса
-              стоит на Кассе, а Касса (CheckCreate) живёт здесь же, поверх
-              таб-бара: раньше тап уводил на вкладку «Ещё» и размонтировал
-              экран вместе с набранным заказ-нарядом. Теперь «Филиалы»
-              ложатся СВЕРХУ, и «назад» отдаёт заказ-наряд нетронутым. */}
-          <Stack.Screen name="Points" component={PointsScreen} />
+          {/* «Филиалы» КОРНЕВОЙ копии больше нет (163): индикатор автосервиса
+              на Кассе стал неинтерактивной подписью, и уводить с корневого
+              стека оттуда некому. Раздел живёт единственной копией в MoreStack
+              («Ещё → Филиалы»), где плавающий таб-бар остаётся виден. */}
           {/* Приём оплаты (Round 14, режим «Кассир») — единый флоу активации
               отложенного заказа. Slide-up поверх таб-бара, как CheckCreate. */}
           <Stack.Screen

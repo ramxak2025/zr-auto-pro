@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert, Info, Repeat, Truck } from 'lucide-react';
-import { format, startOfMonth } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { expensesApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
@@ -31,8 +32,11 @@ export default function ExpensesPage() {
   const canManageCategories = hasPermission('settings_manage');
   const canDeleteExpense = hasPermission('financial_reports');
 
-  const today = format(new Date(), 'yyyy-MM-dd');
-  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  // Дефолтный период — текущий месяц ПО КАЛЕНДАРЮ АВТОСЕРВИСА (157): границы
+  // уезжают на сервер, а он режет сутки поясом тенанта. По часам браузера
+  // бухгалтер из другого региона в ночь на 1-е число открывал страницу уже в
+  // новом месяце, пока сервер был ещё в старом, — и видел ноль расходов.
+  const { today, monthStart } = useTenantCalendar();
 
   const [dateFrom, setDateFrom] = useState(monthStart);
   const [dateTo, setDateTo] = useState(today);
@@ -96,12 +100,11 @@ export default function ExpensesPage() {
       setModalOpen(false);
       setForm({ categoryId: '', amount: '', description: '', date: today });
     },
-    // 160/161: расход, записанный в режиме общей сводки, не попал бы ни в
-    // основной сервис, ни в филиал — ни в отчёт, ни в чистую прибыль. Сервер
-    // отвечает 400 «Выберите филиал, чтобы записать расход»; показываем ЕГО
-    // текст (там сказано, что делать), а не глухое «Ошибка при добавлении
-    // расхода». Зайти в нужный автосервис можно в разделе «Филиалы» —
-    // единственном месте перехода; в шапке только индикатор.
+    // Расход всегда падает в филиал СЕССИИ (163) — «записать в никуда» больше
+    // нельзя, отказ 400 «Выберите филиал» ушёл вместе с режимом общей сводки.
+    // Текст сервера показываем по-прежнему: у отказа может быть совсем другая
+    // причина (закрытый период, снятое право), и глухое «Ошибка при добавлении
+    // расхода» её бы съело.
     onError: (err) => toast.error(apiErrorMessage(err) ?? 'Ошибка при добавлении расхода', { duration: 8000 }),
   });
 

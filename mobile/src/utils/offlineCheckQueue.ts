@@ -29,6 +29,15 @@
  *      ожидания таймера/чужого запроса; onlineManager эмитит только СМЕНУ
  *      статуса, так что триггер не спамит.
  *
+ * ЖИВУЧЕСТЬ (пакет «потеря данных», 2026-09). Очередь принадлежит ЧЕЛОВЕКУ, а
+ * не сессии: истёкший токен, снятый доступ к филиалу, архивация филиала и
+ * обычный «Выйти» её НЕ СТИРАЮТ — конверт на диске хранит владельца
+ * ({@link QueueOwner}), и следующий вход либо усыновляет очередь (тот же
+ * пользователь + тот же тенант → досылается), либо стирает её (за телефон сел
+ * другой человек). До этого любой разлогин чистил очередь безусловно, и три
+ * набитых в подвале заказ-наряда исчезали молча — ровно в тот момент, когда
+ * владелец поправил мастеру доступы.
+ *
  * FLUSH-СЕМАНТИКА: строго последовательно, по одному, в порядке добавления.
  *   • успех → запись удаляется, вызывается onSent (инвалидация журнала/
  *     дашборда + тихое уведомление — wiring в App.tsx);
@@ -98,6 +107,38 @@ export interface QueueStorage {
   setItem(key: string, value: string): Promise<void>;
 }
 
+/**
+ * ВЛАДЕЛЕЦ ОЧЕРЕДИ — «чей это набитый в офлайне заказ-наряд».
+ *
+ * Очередь обязана пережить ИСТЁКШИЙ ТОКЕН и обычный выход того же человека
+ * (см. endSession): чек лежит на телефоне мастера, а не «в сессии». Стирать её
+ * можно ровно в одном случае — за телефон сел ДРУГОЙ человек или тот же
+ * человек вошёл в ДРУГОЙ автосервис; иначе досылка ушла бы под чужим токеном,
+ * то есть в чужую кассу.
+ */
+export interface QueueOwner {
+  /** users.id — кому принадлежат отложенные чеки. */
+  userId: string;
+  /** tenants.id — очередь никогда не переезжает в другой автосервис. null = профиль без тенанта. */
+  tenantId: string | null;
+}
+
+/** Один ли это владелец. undefined/null с обеих сторон НЕ равны: неизвестный владелец не совпадает ни с кем. */
+export function sameQueueOwner(a: QueueOwner | null | undefined, b: QueueOwner | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.userId === b.userId && (a.tenantId ?? null) === (b.tenantId ?? null);
+}
+
+function sanitizeOwner(raw: unknown): QueueOwner | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const candidate = raw as { userId?: unknown; tenantId?: unknown };
+  if (typeof candidate.userId !== 'string' || !candidate.userId) return null;
+  return {
+    userId: candidate.userId,
+    tenantId: typeof candidate.tenantId === 'string' && candidate.tenantId ? candidate.tenantId : null,
+  };
+}
+
 /** Отправка одного чека на сервер (App.tsx подставляет checksApi.create). */
 export type SendQueuedCheck = (payload: QueuedCheckPayload) => Promise<unknown>;
 
@@ -112,6 +153,13 @@ export interface OfflineCheckQueueCoreDeps {
    * штампа, терять офлайн-чек из-за сбоя вспомогательного чтения нельзя.
    */
   resolvePointId?: () => Promise<string | null>;
+  /**
+   * Владелец очереди, когда его ещё никто не объявил (холодный старт на
+   * конверте старой версии, где поля owner не было). Читается из сохранённой
+   * сессии авторизации — тем же способом, что resolvePointId. Падение = null:
+   * чек важнее штампа, но такой конверт следующий вход уже не усыновит.
+   */
+  resolveOwner?: () => Promise<QueueOwner | null>;
 }
 
 // ── Константы ───────────────────────────────────────────────────────────────
@@ -191,9 +239,10 @@ export function isNetworkClassCheckError(error: unknown): boolean {
   const candidate = error as { response?: { status?: number }; code?: string; __CANCEL__?: unknown } | null | undefined;
   // Отмена запроса (axios CanceledError / staleAuthCancellation при смене
   // auth-сессии) — ДЕТЕРМИНИРОВАННЫЙ отказ, не сетевой. Такой чек в очередь
-  // класть НЕЛЬЗЯ: очередь безусловно чистится при следующем логине
-  // (clearPreviousTenantStorage), и ложный «сохранён на телефоне» превратился
-  // бы в тихую потерю чека. Экран обязан показать честную ошибку.
+  // класть НЕЛЬЗЯ: отмена приходит ровно в момент смены сессии, и запись легла
+  // бы с владельцем, который уже сменился (или без него) — ложный «сохранён на
+  // телефоне» превратился бы в тихую потерю чека. Экран обязан показать честную
+  // ошибку.
   if (candidate?.code === 'ERR_CANCELED' || candidate?.__CANCEL__) return false;
   const response = candidate?.response;
   if (!response) return true;
@@ -265,9 +314,30 @@ export function parseStoredQueue(raw: string | null): QueuedCheck[] {
   }
 }
 
-/** Обратная сторона parseStoredQueue — версионированный конверт. */
-export function serializeQueue(entries: readonly QueuedCheck[]): string {
-  return JSON.stringify({ v: STORAGE_VERSION, entries });
+/**
+ * ВЛАДЕЛЕЦ из сохранённого конверта. null — конверт старой версии (поля не
+ * было) либо мусор: такой очереди следующий вход не доверяет и стирает её,
+ * потому что доказать «это тот же человек» уже нечем.
+ */
+export function parseStoredQueueOwner(raw: string | null): QueueOwner | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { v?: number; owner?: unknown } | null;
+    if (!parsed || parsed.v !== STORAGE_VERSION) return null;
+    return sanitizeOwner(parsed.owner);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Обратная сторона parseStoredQueue — версионированный конверт. Владелец
+ * хранится НА КОНВЕРТЕ, а не в каждой записи: в один момент времени очередь
+ * принадлежит ровно одной сессии, и одного штампа достаточно, чтобы следующий
+ * вход мог решить «усыновить или стереть».
+ */
+export function serializeQueue(entries: readonly QueuedCheck[], owner?: QueueOwner | null): string {
+  return JSON.stringify({ v: STORAGE_VERSION, ...(owner ? { owner } : {}), entries });
 }
 
 // ── Ядро очереди (DI, тестируемое) ──────────────────────────────────────────
@@ -286,8 +356,21 @@ export interface OfflineCheckQueueCore {
    * вызывающий экран обязан показать честную ошибку (чек в очередь НЕ попал).
    */
   enqueue(payload: QueuedCheckPayload, meta?: QueuedCheckMeta): Promise<QueuedCheck>;
-  /** Полная очистка (logout/смена аккаунта — очередь не переживает пользователя). */
+  /** Полная очистка диска и памяти (смена владельца). */
   clearAll(): Promise<void>;
+  /**
+   * ВХОД: объявить владельца текущей сессии. Записи ТОГО ЖЕ владельца
+   * остаются на месте и будут досланы, записи чужого — стираются. Ждать до
+   * конца обязательно: вызывающий не имеет права сохранить токен B, пока на
+   * диске могла остаться очередь A.
+   */
+  adoptSession(owner: QueueOwner): Promise<void>;
+  /**
+   * ВЫХОД / ИСТЁКШИЙ ТОКЕН: закрыть сессию, НЕ ТРОГАЯ ДИСК. Память чистится
+   * (экраны следующей сессии не должны видеть чужой список), но набитые в
+   * офлайне чеки остаются на телефоне и ждут входа их владельца.
+   */
+  endSession(): Promise<void>;
   remove(clientRequestId: string): Promise<void>;
   /** failed → pending + немедленная попытка отправки. */
   retry(clientRequestId: string): Promise<void>;
@@ -309,7 +392,11 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   const now = deps.now ?? (() => Date.now());
   // Без инжекта точка не штампуется вовсе — payload остаётся прежним.
   const resolvePointId = deps.resolvePointId ?? (async () => null);
+  const resolveOwner = deps.resolveOwner ?? (async () => null);
 
+  // Владелец ТЕКУЩЕЙ очереди. Пишется на конверт при каждом сохранении, чтобы
+  // следующий вход мог отличить «мои отложенные чеки» от чужих.
+  let owner: QueueOwner | null = null;
   let entries: readonly QueuedCheck[] = [];
   let loaded = false;
   let loadPromise: Promise<void> | null = null;
@@ -347,7 +434,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   }
 
   function persistSnapshot(snapshot: readonly QueuedCheck[]): Promise<void> {
-    const serialized = serializeQueue(snapshot);
+    const serialized = serializeQueue(snapshot, owner);
     const write = storageWriteTail
       .catch(() => {})
       .then(() => deps.storage.setItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY, serialized));
@@ -381,6 +468,9 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
           if (ownerGeneration !== sessionGeneration) return;
           // enqueue мог отработать, пока читался диск, — не затираем свежие
           // записи гидратацией (дозаписываем восстановленные В НАЧАЛО: они старше).
+          // Владелец с конверта — только если его ещё не объявил вход
+          // (adoptSession): объявленный авторитетнее прочитанного.
+          if (!owner) owner = parseStoredQueueOwner(raw);
           const restored = parseStoredQueue(raw);
           if (restored.length > 0) {
             const known = new Set(entries.map((e) => e.clientRequestId));
@@ -412,15 +502,17 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     if (existing) return existing;
 
     // ── ФИЛИАЛ ЧЕКА (мульти-точки 156/160) ──────────────────────────────
-    // Та же болезнь, что была у ДАТЫ: сервер штампует точку в момент, когда
+    // Та же болезнь, что была у ДАТЫ: сервер штампует филиал в момент, когда
     // получил запрос. Живому сабмиту это подходит (запрос = нажатие
     // «Пробить»), а вот запись из очереди может пролежать до возврата сети —
-    // мастер набил чек на филиале А, доехал до Б, переключил точку, и выручка
-    // ушла бы филиалу Б. Поэтому точку фиксируем ЗДЕСЬ: постановка в очередь
-    // происходит ровно в момент нажатия «Пробить».
+    // мастер набил чек в филиале А, доехал до Б и вошёл там в свою сессию, и
+    // выручка ушла бы филиалу Б. Поэтому филиал фиксируем ЗДЕСЬ: постановка в
+    // очередь происходит ровно в момент нажатия «Пробить». Филиал теперь
+    // свойство сессии (163), но досылка может уйти уже из ДРУГОЙ сессии —
+    // именно поэтому штамп в payload остаётся обязательным.
     //
-    // Точки нет (одноточечный тенант / владелец в режиме «Все точки») —
-    // поля в payload НЕ появляется вовсе, и он остаётся байт-в-байт прежним.
+    // Филиала нет (одноточечный тенант) — поля в payload НЕ появляется вовсе,
+    // и он остаётся байт-в-байт прежним.
     // Явный pointId в payload не перетираем: если экран когда-нибудь начнёт
     // присылать точку сам, его выбор важнее нашего резолва.
     // Сервер всё равно проверит доступ автора к этой точке и при неудаче
@@ -436,6 +528,15 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     if (payload.pointId === undefined) {
       const pointId = await resolvePointId().catch(() => null);
       if (pointId) stamped = { ...payload, pointId };
+    }
+
+    // Владельца очереди объявляет вход (adoptSession). Сюда попадаем только на
+    // конверте старой версии (обновление приложения посреди офлайн-смены):
+    // дорезолвим из сохранённой сессии, иначе чек лёг бы без штампа и
+    // следующий вход стёр бы его как «ничей».
+    if (!owner) {
+      const resolved = await resolveOwner().catch(() => null);
+      if (resolved && ownerGeneration === sessionGeneration) owner = resolved;
     }
 
     const entry: QueuedCheck = {
@@ -601,13 +702,15 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       };
     },
     pendingCount: () => entries.reduce((n, e) => (e.status === 'pending' ? n + 1 : n), 0),
-    // Ревью 05.07: очередь НЕ должна переживать смену аккаунта — иначе
-    // отложенный чек мастера A дослался бы под токеном мастера B (чужой
-    // тенант!). Вызывается из logout; зеркалит решение web (purgeOfflineQueues).
+    // Очередь НЕ должна переживать смену ВЛАДЕЛЬЦА — иначе отложенный чек
+    // мастера A дослался бы под токеном мастера B (чужая касса). Стирание диска
+    // происходит ровно здесь, и зовёт его только adoptSession, когда владелец
+    // не совпал.
     clearAll: async () => {
       sessionGeneration += 1;
       const ownerGeneration = sessionGeneration;
       storageBoundaryReady = false;
+      owner = null;
       entries = [];
       loaded = true;
       loadPromise = null;
@@ -617,6 +720,70 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       notify();
       await persistSnapshot([]);
       if (ownerGeneration === sessionGeneration) storageBoundaryReady = true;
+    },
+
+    // ВХОД. Здесь решается судьба лежащих на диске чеков: тот же человек в том
+    // же автосервисе — очередь остаётся и досылается; кто-то другой — стираем.
+    // Раньше вход (и выход, и 401) стирали её БЕЗУСЛОВНО, и мастер, набивший
+    // три заказ-наряда без связи, терял их молча, стоило токену истечь или
+    // владельцу поправить ему доступ к филиалу.
+    adoptSession: async (next: QueueOwner) => {
+      sessionGeneration += 1;
+      const ownerGeneration = sessionGeneration;
+      storageBoundaryReady = false;
+      owner = null;
+      entries = [];
+      loaded = false;
+      loadPromise = null;
+      flushPromise = null;
+      flushGeneration = -1;
+      lastNetworkKickAt = 0;
+      notify();
+
+      // Дожидаемся хвоста записей прошлой сессии: иначе прочитали бы диск до
+      // её последнего сохранения и «усыновили» бы состояние без последнего чека.
+      await storageWriteTail.catch(() => {});
+      let restored: QueuedCheck[] = [];
+      try {
+        const raw = await deps.storage.getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY);
+        // Конверт без владельца (старая версия схемы) доказать «это тот же
+        // человек» не может — такие записи не усыновляем: тихо отправить чужой
+        // чек в чужую кассу хуже, чем потерять его на обновлении приложения.
+        if (sameQueueOwner(parseStoredQueueOwner(raw), next)) restored = parseStoredQueue(raw);
+      } catch {
+        // Диск не прочитался — считаем владельца неизвестным и начинаем с
+        // пустой очереди: изоляция тенантов важнее сохранности хвоста.
+        restored = [];
+      }
+      if (ownerGeneration !== sessionGeneration) return;
+
+      owner = next;
+      entries = restored;
+      loaded = true;
+      notify();
+      // Конверт переписываем ВСЕГДА: так на диске появляется штамп владельца
+      // (в том числе при миграции со старой схемы) и стирается чужая очередь.
+      await persistSnapshot(entries);
+      if (ownerGeneration === sessionGeneration) storageBoundaryReady = true;
+    },
+
+    // ВЫХОД / 401. Диск НЕ ТРОГАЕМ: чеки принадлежат человеку, а не сессии.
+    // Память чистим, чтобы список прошлой сессии не светился на экране входа и
+    // чтобы поздний flush не ушёл под новым токеном (sessionGeneration).
+    endSession: async () => {
+      sessionGeneration += 1;
+      owner = null;
+      entries = [];
+      loaded = false;
+      loadPromise = null;
+      flushPromise = null;
+      flushGeneration = -1;
+      lastNetworkKickAt = 0;
+      // storageBoundaryReady остаётся прежним: границу диска мы не двигали.
+      notify();
+      // Хвост записей прошлой сессии обязан долежать до диска — именно он и
+      // есть те самые неотправленные чеки.
+      await storageWriteTail.catch(() => {});
     },
     enqueue,
     remove,
@@ -639,19 +806,19 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
 let singleton: OfflineCheckQueueCore | null = null;
 
 /**
- * Живой филиал пользователя, если экран переключателя сообщил его напрямую.
- * Приоритетнее сохранённой сессии: переключение точки (POST /points/switch)
- * применяется мгновенно, не дожидаясь, пока обновлённый `user` доедет до
- * AsyncStorage. null = «Все точки» ЯВНО, undefined = «никто не сообщал»
- * (тогда читаем сессию). Сбрасывается на logout вместе с очередью — точка
- * прошлого пользователя не должна пережить смену аккаунта.
+ * Филиал ТЕКУЩЕЙ СЕССИИ, как его сообщил первый экран, прочитавший GET /points.
+ * Приоритетнее сохранённой сессии: она обновляется только после /auth/me, а
+ * очередь обязана знать филиал уже в момент первого «Пробить». null = у
+ * тенанта нет живых филиалов (163) ЯВНО, undefined = «никто не сообщал» (тогда
+ * читаем сессию). Сбрасывается на logout вместе с очередью — филиал прошлой
+ * сессии не должен пережить вход в другой филиал.
  */
 let liveCurrentPointId: string | null | undefined;
 
 /**
- * Сообщить очереди текущий филиал (вызывать после успешного
- * POST /points/switch и при загрузке точки на старте). Необязательно: без
- * вызова очередь читает точку из сохранённой сессии авторизации.
+ * Сообщить очереди филиал текущей сессии (зовётся из usePointsQuery, как
+ * только приехал GET /points). Необязательно: без вызова очередь читает филиал
+ * из сохранённой сессии авторизации.
  */
 export function setOfflineCheckQueuePointId(pointId: string | null): void {
   liveCurrentPointId = pointId;
@@ -686,6 +853,22 @@ function getQueue(): OfflineCheckQueueCore {
           return null;
         }
       },
+      // Владелец очереди из того же сохранённого конверта сессии. Нужен только
+      // на конверте очереди СТАРОЙ версии (обновление приложения посреди
+      // офлайн-смены): в остальных случаях владельца объявляет вход.
+      resolveOwner: async () => {
+        try {
+          const parsed = parseAuthSessionEnvelope(await AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY));
+          const sessionUser = parsed?.user as { id?: unknown; tenantId?: unknown } | null | undefined;
+          if (!sessionUser || typeof sessionUser.id !== 'string' || !sessionUser.id) return null;
+          return {
+            userId: sessionUser.id,
+            tenantId: typeof sessionUser.tenantId === 'string' && sessionUser.tenantId ? sessionUser.tenantId : null,
+          };
+        } catch {
+          return null;
+        }
+      },
     });
   }
   return singleton;
@@ -701,12 +884,61 @@ export function flushOfflineCheckQueue(): Promise<FlushResult> {
   return getQueue().flush();
 }
 
-/** Полная очистка очереди — вызывается из logout (см. clearAll в core). */
-export function clearOfflineCheckQueue(): Promise<void> {
-  // Филиал прошлого пользователя не должен пережить смену аккаунта: следующий
-  // вошедший начал бы штамповать чеки чужой точкой.
+/**
+ * ВХОД: объявить владельца сессии. Чеки того же человека в том же автосервисе
+ * остаются и будут досланы; чужие — стираются. Зовётся из AuthContext на
+ * логине, на смене филиала (это тоже новый вход) и на восстановлении сессии
+ * холодным стартом.
+ */
+export function adoptOfflineCheckQueue(owner: QueueOwner): Promise<void> {
+  // Филиал прошлой сессии не должен пережить вход: резолвер точки перечитает
+  // сохранённую сессию, а её уже перезаписал вход.
   liveCurrentPointId = undefined;
-  return getQueue().clearAll();
+  return getQueue().adoptSession(owner);
+}
+
+/**
+ * ВЫХОД / ИСТЁКШИЙ ТОКЕН: закрыть сессию, сохранив очередь на диске. Именно
+ * здесь раньше стоял безусловный wipe — и набитые в подвале заказ-наряды
+ * исчезали, стоило истечь токену или владельцу снять доступ к филиалу.
+ */
+export function endOfflineCheckQueueSession(): Promise<void> {
+  liveCurrentPointId = undefined;
+  return getQueue().endSession();
+}
+
+/**
+ * Сколько чеков ждёт АВТО-отправки прямо сейчас (без bucket'а 'failed', он
+ * требует ручного решения). Нужен экрану «Ещё», чтобы предупредить перед
+ * выходом: неотправленный заказ-наряд — это деньги, а не «черновик».
+ */
+export async function pendingOfflineCheckCount(): Promise<number> {
+  const queue = getQueue();
+  await queue.ensureLoaded();
+  return queue.pendingCount();
+}
+
+/**
+ * Приписка к диалогу выхода: сколько заказ-нарядов ещё не ушло на сервер.
+ * Пустая строка = очередь пуста, диалог остаётся прежним дословно.
+ *
+ * Чистая функция (число → текст), чтобы формулировку можно было проверить
+ * тестом: это единственное место, где человеку сообщают, что на телефоне
+ * лежат ЕГО деньги и что будет с ними при выходе.
+ */
+export function pendingChecksLogoutNotice(count: number): string {
+  if (count <= 0) return '';
+  // 1 заказ-наряд · 2–4 заказ-наряда · 5+ заказ-нарядов (11–14 — тоже «-ов»).
+  const tail = count % 100;
+  const last = count % 10;
+  const plural = tail >= 11 && tail <= 14 ? 'many' : last === 1 ? 'one' : last >= 2 && last <= 4 ? 'few' : 'many';
+  const noun = plural === 'one' ? 'заказ-наряд' : plural === 'few' ? 'заказ-наряда' : 'заказ-нарядов';
+  const adj = plural === 'one' ? 'неотправленный' : 'неотправленных';
+  return (
+    `На телефоне ${count} ${adj} ${noun} — они ещё не ушли на сервер. ` +
+    'Записи сохранятся и отправятся сами, когда вы снова войдёте под этим же аккаунтом. ' +
+    'Вход под другим аккаунтом их удалит.'
+  );
 }
 
 export function removeOfflineCheck(clientRequestId: string): Promise<void> {

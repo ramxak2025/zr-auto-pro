@@ -36,19 +36,57 @@ export class PointsController {
   }
 
   /**
-   * Переключить СВОЮ текущую точку (pointId: null = сбросить). Мастера —
-   * только на назначенные им точки; проверка в сервисе.
+   * СМЕНА ФИЛИАЛА ДЛЯ СБОРОК 3.5/3.6 (165): ручка пишет ПОДСКАЗКУ следующего
+   * входа и отвечает успехом; филиал текущей сессии не меняется — он в
+   * подписанном токене. Новый UI сюда не ходит (смена филиала = выход и вход).
+   * Полное обоснование — PointsService.switchPoint.
    */
   @Post('switch')
   switch(@CurrentUser() user: JwtPayload, @Body() dto: { pointId?: string | null }) {
     return this.pointsService.switchPoint(user, dto?.pointId ?? null);
   }
 
-  /** Заменить состав сотрудников точки — управление персоналом. */
+  /**
+   * Заменить состав сотрудников филиала — управление персоналом.
+   * Сторона раздела «Филиалы»; новый UI настраивает доступ в карточке
+   * сотрудника (PUT /users/:id/points), но правило и последствия у обеих
+   * сторон общие (PointsService.applyMembership).
+   */
   @RequirePermission('user_management')
   @Put(':id/members')
   setMembers(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { userIds?: string[] }) {
     return this.pointsService.setMembers(user.tenantID, id, dto?.userIds ?? []);
+  }
+}
+
+/**
+ * ДОСТУП СОТРУДНИКА К ФИЛИАЛАМ СО СТОРОНЫ ЕГО КАРТОЧКИ (163) — та самая
+ * «настройка, на каких филиалах они могут работать».
+ *
+ * Отдельный контроллер в ЭТОМ модуле, а не метод UsersController: данные —
+ * user_points, правило и последствия снятия доступа живут в PointsService, и
+ * второй копии этого правила в модуле пользователей быть не должно. Путь
+ * при этом пользовательский, потому что экран — карточка сотрудника.
+ *
+ * Скоуп строго по тенанту актора: сотрудников чужого тенанта здесь не видно
+ * (для суперадмина есть вход под владельцем).
+ */
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermission('user_management')
+@Controller('users/:userId/points')
+export class UserPointsController {
+  constructor(private pointsService: PointsService) {}
+
+  /** Набор филиалов сотрудника. Пусто = не ограничен (доступны все живые). */
+  @Get()
+  list(@Param('userId') userId: string, @CurrentUser() user: JwtPayload) {
+    return this.pointsService.getUserPoints(user.tenantID, userId);
+  }
+
+  /** Заменить набор целиком. Пустой массив = снять ограничение. */
+  @Put()
+  replace(@Param('userId') userId: string, @CurrentUser() user: JwtPayload, @Body() dto: { pointIds?: string[] }) {
+    return this.pointsService.setUserPoints(user.tenantID, userId, dto?.pointIds ?? []);
   }
 }
 

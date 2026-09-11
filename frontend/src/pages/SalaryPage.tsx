@@ -16,7 +16,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
+import { format, subMonths } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 
@@ -27,18 +27,28 @@ import DatePeriodPicker from '../components/DatePeriodPicker';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import RateByMonthModal from '../components/RateByMonthModal';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, SalaryFine } from '../types';
 
-/** Current month in 'yyyy-MM' format */
-function getCurrentMonthYear(): string {
-  return format(new Date(), 'yyyy-MM');
+/**
+ * Месяц как 'yyyy-MM' ИЗ КАЛЕНДАРЯ АВТОСЕРВИСА (157).
+ *
+ * Аргумент — сегодняшний день автосервиса ('YYYY-MM-DD', useTenantCalendar).
+ * Раньше месяц брался из часов машины, и в ночь на 1-е число выплата,
+ * проведённая бухгалтером западнее сервиса, по умолчанию относилась к УЖЕ
+ * СЛЕДУЮЩЕМУ месяцу — деньги выпадали из зарплатного периода, за который их
+ * платили.
+ */
+function getCurrentMonthYear(todayKey: string): string {
+  return todayKey.slice(0, 7);
 }
 
-/** Previous month in 'yyyy-MM' format */
-function getPreviousMonthYear(): string {
-  return format(subMonths(new Date(), 1), 'yyyy-MM');
+/** Предыдущий месяц как 'yyyy-MM' — от того же дня автосервиса. */
+function getPreviousMonthYear(todayKey: string): string {
+  const [y, m] = todayKey.split('-').map(Number);
+  return format(subMonths(new Date(y || 1970, (m || 1) - 1, 1), 1), 'yyyy-MM');
 }
 
 /** Translate monthYear to human-readable Russian label */
@@ -68,14 +78,14 @@ interface PaymentFormState {
   comment: string;
 }
 
-const emptyPaymentForm: PaymentFormState = {
-  userId: '',
-  userName: '',
-  amount: '',
-  monthYear: getCurrentMonthYear(),
-  type: 'salary',
-  comment: '',
-};
+/**
+ * Пустая форма выплаты. Функция, а не константа: месяц по умолчанию зависит от
+ * календаря АВТОСЕРВИСА, а он известен только внутри компонента (хук), тогда
+ * как константа замораживала месяц на момент загрузки бандла.
+ */
+function emptyPaymentForm(monthYear: string): PaymentFormState {
+  return { userId: '', userName: '', amount: '', monthYear, type: 'salary', comment: '' };
+}
 
 // ─── Payment history per row (expandable) ───────────────────────────────────
 
@@ -530,15 +540,18 @@ function AdminSalaryView() {
   // Раньше web слал dateTo = сегодня, mobile — конец месяца, и один сотрудник
   // показывал разные workedShifts/premiums на двух клиентах. Будущие дни
   // сервер теперь клампит сам (workedShiftsByUser ≤ сегодня).
-  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
-  const monthEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd');
+  // Месяц — КАЛЕНДАРЯ АВТОСЕРВИСА (157), не браузера: зарплатный период сервер
+  // режет поясом тенанта, и в ночь на 1-е число страница открывалась в новом
+  // месяце с нулями, пока сервер был ещё в старом.
+  const { today: tenantToday, monthStart, monthEnd } = useTenantCalendar();
+  const currentMonthYear = getCurrentMonthYear(tenantToday);
 
   const [dateFrom, setDateFrom] = useState(monthStart);
   const [dateTo, setDateTo] = useState(monthEnd);
 
   // Payment dialog
   const [payModalOpen, setPayModalOpen] = useState(false);
-  const [payForm, setPayForm] = useState<PaymentFormState>(emptyPaymentForm);
+  const [payForm, setPayForm] = useState<PaymentFormState>(() => emptyPaymentForm(currentMonthYear));
 
   // 149 — «Выплата вне программы»: получатель без аккаунта (маркетолог,
   // уборщица) — свободное имя + сумма + месяц отнесения.
@@ -546,7 +559,7 @@ function AdminSalaryView() {
   const [outsideForm, setOutsideForm] = useState({
     recipientName: '',
     amount: '',
-    periodMonth: getCurrentMonthYear(),
+    periodMonth: currentMonthYear,
     comment: '',
   });
 
@@ -617,7 +630,7 @@ function AdminSalaryView() {
       if (res?.status === 202 && res?.data?.queued) {
         toast('Нет сети — выплата поставлена в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
         setPayModalOpen(false);
-        setPayForm(emptyPaymentForm);
+        setPayForm(emptyPaymentForm(currentMonthYear));
         return;
       }
       queryClient.invalidateQueries({ queryKey: ['salary-all'] });
@@ -629,12 +642,13 @@ function AdminSalaryView() {
       queryClient.invalidateQueries({ queryKey: ['financial-report'] });
       toast.success('Выплата проведена');
       setPayModalOpen(false);
-      setPayForm(emptyPaymentForm);
+      setPayForm(emptyPaymentForm(currentMonthYear));
     },
-    // 160/161: выплата без филиала не вычлась бы из «к выплате» НИ В ОДНОМ
-    // филиале, и владелец, глядя на филиальный экран, выдал бы её второй раз.
-    // Сервер отвечает 400 «Выберите филиал…» — показываем его текст, а не
-    // глухую «Ошибку»; переключатель филиала живёт в шапке страницы.
+    // Выплата всегда падает в филиал СЕССИИ (163). Раньше её можно было
+    // провести «без филиала» — тогда она не вычиталась из «к выплате» НИ В
+    // ОДНОМ филиале, и владелец, глядя на филиальный экран, выдавал её второй
+    // раз. Теперь такой сессии не существует. Текст сервера показываем и
+    // дальше: у отказа бывают другие причины, и глухая «Ошибка» их съела бы.
     onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Ошибка при проведении выплаты', { duration: 8000 }),
   });
 
@@ -649,7 +663,7 @@ function AdminSalaryView() {
       queryClient.invalidateQueries({ queryKey: ['financial-report'] });
       toast.success('Выплата записана в «Расходы» и отнесена к выбранному месяцу');
       setOutsideModalOpen(false);
-      setOutsideForm({ recipientName: '', amount: '', periodMonth: getCurrentMonthYear(), comment: '' });
+      setOutsideForm({ recipientName: '', amount: '', periodMonth: currentMonthYear, comment: '' });
     },
     onError: (err: any) => {
       const msg = err?.response?.data?.message;
@@ -874,7 +888,7 @@ function AdminSalaryView() {
   // Месяц выбранного периода — первым (он и предвыбран), текущий/прошлый —
   // как быстрые альтернативы; Set убирает дубли, когда период = текущий месяц.
 
-  const monthOptions = Array.from(new Set([periodMonthYear, getCurrentMonthYear(), getPreviousMonthYear()])).map(
+  const monthOptions = Array.from(new Set([periodMonthYear, currentMonthYear, getPreviousMonthYear(tenantToday)])).map(
     (value) => ({ value, label: formatMonthYear(value) }),
   );
 
