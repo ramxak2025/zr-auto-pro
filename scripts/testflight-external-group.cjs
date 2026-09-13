@@ -12,11 +12,15 @@
  *   node scripts/testflight-external-group.cjs groups
  *   node scripts/testflight-external-group.cjs builds 3.7.2 87
  *   node scripts/testflight-external-group.cjs add 3.7.2 87 "Autexa beta"
+ *   node scripts/testflight-external-group.cjs review 3.7.2 87   # статус / отправка на Beta App Review
  *
  * `add` ждёт, пока сборка станет VALID (обработана Apple, обычно 5–30 минут
- * после загрузки), и добавляет её в группу. Первое добавление во внешнюю
- * группу само отправляет сборку на Beta App Review — вручную ничего нажимать
- * не нужно; состояние печатается в конце.
+ * после загрузки), и добавляет её в группу. Добавление во внешнюю группу
+ * САМО ПО СЕБЕ на Beta App Review не отправляет (проверено 2026-09-13:
+ * externalBuildState остаётся READY_FOR_BETA_SUBMISSION) — после `add`
+ * обязательно `review`: он создаёт betaAppReviewSubmission, и сборка уходит
+ * в WAITING_FOR_REVIEW. Для уже отправленной сборки `review` только печатает
+ * состояние.
  *
  * Зависимость `jsonwebtoken` берётся из backend/node_modules (ES256 для JWT
  * App Store Connect). Node ≥ 18 (глобальный fetch).
@@ -113,7 +117,23 @@ async function waitForValidBuild(version, buildNumber, maxMinutes = 45) {
     console.log('Beta App Review:', JSON.stringify(review && review.data ? review.data.attributes : review));
     return;
   }
-  console.log('usage: groups | builds <version> <buildNumber> | add <version> <buildNumber> "<group name>"');
+  if (cmd === 'review') {
+    // Состояние внешнего тестирования и, если сборка ещё не отправлена, —
+    // отправка на Beta App Review. Добавление во внешнюю группу не всегда
+    // создаёт submission само; для первой сборки версии он обязателен.
+    const build = await waitForValidBuild(version, buildNumber);
+    const detail = await api('GET', `/v1/builds/${build.id}/buildBetaDetail`);
+    const state = detail.data.attributes.externalBuildState;
+    console.log('externalBuildState:', state);
+    if (state === 'READY_FOR_BETA_SUBMISSION') {
+      const sub = await api('POST', '/v1/betaAppReviewSubmissions', {
+        data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: build.id } } } },
+      });
+      console.log('отправлено на Beta App Review:', sub.data.attributes.betaReviewState);
+    }
+    return;
+  }
+  console.log('usage: groups | builds <version> <buildNumber> | add <version> <buildNumber> "<group name>" | review <version> <buildNumber>');
 })().catch((e) => {
   console.error('ОШИБКА:', e.message);
   process.exit(1);
