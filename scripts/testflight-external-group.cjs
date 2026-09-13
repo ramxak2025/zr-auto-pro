@@ -90,7 +90,8 @@ async function waitForValidBuild(version, buildNumber, maxMinutes = 45) {
     const bs = await builds(version, buildNumber);
     const valid = bs.find((x) => x.state === 'VALID' && !x.expired);
     if (valid) return valid;
-    if (Date.now() > deadline) throw new Error(`сборка ${version} (${buildNumber}) не стала VALID за ${maxMinutes} мин: ${JSON.stringify(bs)}`);
+    if (Date.now() > deadline)
+      throw new Error(`сборка ${version} (${buildNumber}) не стала VALID за ${maxMinutes} мин: ${JSON.stringify(bs)}`);
     console.log(`ждём обработку Apple… (${bs.map((x) => x.state).join(', ') || 'ещё не видна'})`);
     await sleep(60_000);
   }
@@ -112,8 +113,12 @@ async function waitForValidBuild(version, buildNumber, maxMinutes = 45) {
     if (!group) throw new Error(`группа «${groupName}» не найдена; есть: ${gs.map((g) => g.name).join(', ')}`);
     const build = await waitForValidBuild(version, buildNumber);
     await api('POST', `/v1/betaGroups/${group.id}/relationships/builds`, { data: [{ type: 'builds', id: build.id }] });
-    console.log(`сборка ${version} (${buildNumber}) добавлена в группу «${group.name}»${group.internal ? '' : ' (внешняя)'}`);
-    const review = await api('GET', `/v1/builds/${build.id}/betaAppReviewSubmission`).catch((e) => ({ error: e.message }));
+    console.log(
+      `сборка ${version} (${buildNumber}) добавлена в группу «${group.name}»${group.internal ? '' : ' (внешняя)'}`,
+    );
+    const review = await api('GET', `/v1/builds/${build.id}/betaAppReviewSubmission`).catch((e) => ({
+      error: e.message,
+    }));
     console.log('Beta App Review:', JSON.stringify(review && review.data ? review.data.attributes : review));
     return;
   }
@@ -127,13 +132,18 @@ async function waitForValidBuild(version, buildNumber, maxMinutes = 45) {
     console.log('externalBuildState:', state);
     if (state === 'READY_FOR_BETA_SUBMISSION') {
       const sub = await api('POST', '/v1/betaAppReviewSubmissions', {
-        data: { type: 'betaAppReviewSubmissions', relationships: { build: { data: { type: 'builds', id: build.id } } } },
+        data: {
+          type: 'betaAppReviewSubmissions',
+          relationships: { build: { data: { type: 'builds', id: build.id } } },
+        },
       });
       console.log('отправлено на Beta App Review:', sub.data.attributes.betaReviewState);
     }
     return;
   }
-  console.log('usage: groups | builds <version> <buildNumber> | add <version> <buildNumber> "<group name>" | review <version> <buildNumber>');
+  console.log(
+    'usage: groups | builds <version> <buildNumber> | add <version> <buildNumber> "<group name>" | review <version> <buildNumber>',
+  );
 })().catch((e) => {
   console.error('ОШИБКА:', e.message);
   process.exit(1);
