@@ -27,6 +27,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointIndicator from '../components/PointIndicator';
 import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
@@ -137,10 +138,12 @@ export default function PlanningScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // Команда ТЕКУЩЕГО филиала (167): оклады заводятся сотрудникам этого
+  // автосервиса, и сервер отдаёт в списке окладов тоже только их.
   const { data: users } = useQuery<User[]>({
-    queryKey: ['users'],
+    queryKey: ['users', 'point'],
     queryFn: async () => {
-      const res = await usersApi.getAll();
+      const res = await usersApi.getAll({ scope: 'point' });
       return Array.isArray(res.data) ? res.data : [];
     },
     enabled: isOwner,
@@ -360,6 +363,11 @@ export default function PlanningScreen() {
         subtitle="Для расчёта чистой прибыли"
         onBack={() => navigation.goBack()}
       />
+
+      {/* Автосервис плана (167): постоянка — на каждый филиал своя, и владелец
+          обязан видеть, чей план перед ним. Только подпись: филиал выбран
+          при входе / в разделе «Филиалы». */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {fixedError && fixedCosts === undefined ? (
         <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchFixed()} />
@@ -808,6 +816,7 @@ export default function PlanningScreen() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const styles = StyleSheet.create({
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   safe: { flex: 1 },
   restricted: {
     flex: 1,

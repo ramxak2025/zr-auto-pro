@@ -4,7 +4,7 @@ import { PG_POOL } from '../database.module';
 import { NO_TENANT_ID } from '../common/auth-cache';
 import { getTenantTimezone } from '../common/timezone';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { actorPointId } from '../common/point-scope';
+import { actorPointId, assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 
 // Valid statuses for the schedule_settings.shift_statuses array.
@@ -177,6 +177,8 @@ export class ScheduleService {
       lateStatus: row.late_status,
       note: row.note,
       isManualOverride: row.is_manual_override,
+      // 167 — филиал дня графика (null только у тенантов без филиалов).
+      pointId: row.point_id ?? null,
     };
     if (row.user_full_name) {
       entry.user = {
@@ -190,11 +192,20 @@ export class ScheduleService {
   }
 
   /**
-   * Сетка графика за месяц. 161 — филиал режет СОСТАВ КОМАНДЫ, а не строки:
-   * у schedule_entries точки нет и не будет (решение владельца), поэтому
-   * график филиала — это график сотрудников, НАЗНАЧЕННЫХ на филиал
-   * (user_points). Сотрудник без назначений виден везде — безопасный дефолт
-   * 156, менять нельзя: пустые user_points у всех = поведение прежнее.
+   * Сетка графика за месяц.
+   *
+   * 167 — У ДНЯ ГРАФИКА ЕСТЬ СВОЙ ФИЛИАЛ (schedule_entries.point_id), и сетка
+   * филиала — это строки ЭТОГО филиала, строгим равенством, как у всех
+   * денежных таблиц (common/point-scope.pointFilterSql). Раньше (161) филиал
+   * выражался только составом команды (user_points), а сотрудник без
+   * назначений по безопасному дефолту 156 виден везде — и у тенанта, который
+   * людей по филиалам не расставил, оба автосервиса показывали ОДИН И ТОТ ЖЕ
+   * график: отметка «пришёл», поставленная в филиале, появлялась и в основном
+   * сервисе. Владелец: «это отдельные автосервисы».
+   *
+   * Кто попадает в СТРОКИ сетки (состав), по-прежнему решает клиент списком
+   * сотрудников `?scope=point` (user_points, дефолт 156 сохранён); здесь
+   * решается только, ЧЬИ ДНИ показывать.
    */
   async getAll(tenantID: string, query: any, actor?: JwtPayload) {
     const dateFrom = query?.dateFrom;
@@ -207,7 +218,7 @@ export class ScheduleService {
     }
 
     const params: unknown[] = [tenantID, dateFrom, dateTo];
-    const pointFilter = assignedToPointSql('u', '$1', actorPointId(actor), params);
+    const pointFilter = pointFilterSql('se', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT se.*, u.full_name as user_full_name, u.role as user_role, u.is_active as user_is_active
        FROM schedule_entries se
@@ -223,8 +234,13 @@ export class ScheduleService {
   /**
    * «Кто сейчас на работе». ЕДИНСТВЕННОЕ место, где считается этот факт, —
    * его же переиспользует карточка филиала (points.summaryForTenant считает то
-   * же самое из shifts). 161 — состав режется назначениями (user_points), как
-   * и сетка графика: в карточке филиала А нельзя показывать людей филиала Б.
+   * же самое из shifts). 161 — состав режется назначениями (user_points):
+   * в карточке филиала А нельзя показывать людей филиала Б.
+   *
+   * 167 — день графика и открытая смена берутся ТОЛЬКО ЭТОГО филиала
+   * (schedule_entries.point_id / shifts.point_id). Мастер, стоящий сегодня в
+   * графике филиала Б и открывший смену там, в филиале А показывается как
+   * «без графика, не на смене» — он здесь и правда не работает.
    */
   async getToday(tenantID: string, actor?: JwtPayload) {
     // Пояс тенанта — один раз на запрос, для обоих запросов ниже.
@@ -244,8 +260,13 @@ export class ScheduleService {
     // «Сегодня» считает Postgres в ПОЯСЕ ТЕНАНТА, а не в локали контейнера и не
     // по фиксированному московскому сдвигу: иначе у автосервиса восточнее
     // Москвы утренние смены каждый день не совпадали бы с графиком.
+    const pointId = actorPointId(actor);
     const todayParams: unknown[] = [tenantID, tz];
-    const todayPointFilter = assignedToPointSql('u', '$1', actorPointId(actor), todayParams);
+    const teamFilter = assignedToPointSql('u', '$1', pointId, todayParams);
+    // Фрагменты вида ` AND se.point_id = $n` встают ВНУТРЬ условий LEFT JOIN:
+    // чужой день/смена просто не присоединяются, а сотрудник в строке остаётся.
+    const entryPointFilter = pointFilterSql('se', pointId, todayParams);
+    const shiftPointFilter = pointFilterSql('s', pointId, todayParams);
     const { rows } = await this.pool.query(
       `SELECT DISTINCT ON (u.id) u.id as user_id, u.full_name, u.role, u.avatar,
               se.is_day_off, se.shift_start, se.shift_end,
@@ -256,16 +277,16 @@ export class ScheduleService {
        LEFT JOIN schedule_entries se
               ON se.user_id = u.id
              AND se.date = (now() AT TIME ZONE $2::text)::date
-             AND se.tenant_id = $1
+             AND se.tenant_id = $1${entryPointFilter}
        LEFT JOIN shifts s
               ON s.user_id = u.id
              AND s.date = (now() AT TIME ZONE $2::text)::date
              AND s.tenant_id = $1
-             AND s.closed_at IS NULL
+             AND s.closed_at IS NULL${shiftPointFilter}
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
          AND u.dismissed_at IS NULL AND u.purged_at IS NULL
          AND COALESCE(u.hidden_from_schedule, false) = false
-         AND COALESCE(u.hidden_everywhere, false) = false${todayPointFilter}
+         AND COALESCE(u.hidden_everywhere, false) = false${teamFilter}
        ORDER BY u.id, u.full_name`,
       todayParams,
     );
@@ -338,26 +359,32 @@ export class ScheduleService {
     };
   }
 
-  // Helper: ensure shift is opened when admin manually sets attendance status
-  //
-  // ФИЛИАЛ СМЕНЫ, ОТКРЫТОЙ НЕ ЧЕЛОВЕКОМ, А ОТМЕТКОЙ В ГРАФИКЕ (волна филиалов).
-  // Смену, открытую самим сотрудником, штампует филиал его сессии
-  // (shifts.open → actorPointId). Здесь актора-владельца смены нет: строку
-  // рождает отметка «пришёл» в чужом графике, и филиал приходилось бы брать у
-  // того, кто нажал, — то есть у администратора, который может сидеть в другом
-  // автосервисе. Поэтому филиал определяется ПО СВЯЗАННОЙ СУЩНОСТИ — по самому
-  // сотруднику:
-  //   • назначен РОВНО на один живой филиал (user_points) → его филиал;
-  //   • назначений нет / их несколько → ОСНОВНОЙ сервис тенанта
-  //     (tenant_points.is_main) — тот же адресат, которому миграция 160/162
-  //     разово прибивает историю без филиала, и единственный филиал, про
-  //     который известно, что он существует всегда;
-  //   • у тенанта нет живых точек вовсе → NULL, поведение прежнее дословно.
-  // БЕЗ ЭТОГО смена рождалась с point_id = NULL, а филиальные срезы фильтруют
-  // СТРОГИМ равенством: человек на работе, но его нет ни в ленте смен филиала,
-  // ни в счётчике «мастеров на работе» на карточке «Филиалы», — ровно тот класс
-  // «ничьих» строк, который волна филиалов убрала для путей с человеком.
-  private async ensureShiftOpen(tenantID: string, userID: string, date: string, lateStatus: string | null) {
+  /**
+   * Смена, которую открывает не сам сотрудник, а отметка «пришёл» в графике.
+   *
+   * ФИЛИАЛ СМЕНЫ = ФИЛИАЛ СТРОКИ ГРАФИКА (167). Отметку ставит администратор
+   * в сетке СВОЕГО филиала, и день графика уже несёт этот филиал
+   * (schedule_entries.point_id, штамп сессии при создании). Значит и смена
+   * рождается там же — без угадывания по назначениям и без фолбэков.
+   *
+   * ПОЧЕМУ НЕ ВЫЧИСЛЯТЬ, КАК РАНЬШЕ. Прежняя редакция брала «единственное
+   * назначение сотрудника, иначе основной сервис» агрегатом MIN(tp.id) по
+   * uuid — а min/max для uuid в PostgreSQL 16 НЕ СУЩЕСТВУЕТ. Каждая отметка
+   * «пришёл/опоздал» падала с 500 после того, как строка графика уже была
+   * записана: клиент откатывал отметку, владелец видел «не сохранилось», а
+   * при следующем обновлении она появлялась. Именно это «расписание перестало
+   * работать». Здесь больше нет ни одного агрегата: филиал приходит готовым.
+   *
+   * NULL — только у тенанта без филиалов (одноточечный автосервис), поведение
+   * прежнее дословно.
+   */
+  private async ensureShiftOpen(
+    tenantID: string,
+    userID: string,
+    date: string,
+    lateStatus: string | null,
+    pointId: string | null,
+  ) {
     if (!['on_time', 'late_minor', 'late_major'].includes(lateStatus || '')) return;
     // Check if shift already exists for this user/date
     const { rows: existing } = await this.pool.query(
@@ -365,37 +392,40 @@ export class ScheduleService {
       [userID, date, tenantID],
     );
     if (existing.length > 0) return;
-    // Auto-open shift — opened_at adjusted based on late status.
-    // `MIN(id) ... HAVING COUNT(*) = 1`: агрегат без строк-результата, когда
-    // назначений не ровно одно, — скалярный подзапрос тогда даёт NULL, и
-    // COALESCE уходит к основному сервису.
     await this.pool.query(
       `INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)
-       SELECT $1, $2, $3, now(), COALESCE(
-         (SELECT MIN(tp.id) FROM user_points up
-            JOIN tenant_points tp ON tp.id = up.point_id AND tp.tenant_id = up.tenant_id AND tp.is_active
-           WHERE up.user_id = $1 AND up.tenant_id = $3
-          HAVING COUNT(*) = 1),
-         (SELECT tp.id FROM tenant_points tp
-           WHERE tp.tenant_id = $3 AND tp.is_main AND tp.is_active LIMIT 1)
-       )`,
-      [userID, date, tenantID],
+       VALUES ($1, $2, $3, now(), $4)`,
+      [userID, date, tenantID, pointId],
     );
   }
 
-  async create(tenantID: string, dto: any) {
+  /**
+   * Создать / перезаписать день графика.
+   *
+   * 167 — ДЕНЬ ШТАМПУЕТСЯ ФИЛИАЛОМ СЕССИИ. У сотрудника РОВНО ОДНА строка на
+   * дату во всей сети (уникальный индекс tenant_id + user_id + date): человек
+   * физически в один день в одном автосервисе. Поэтому запись дня из филиала
+   * Б, когда день уже стоял в филиале А, ПЕРЕНОСИТ его в Б вместе с новым
+   * содержимым — ровно так же, как этот upsert всегда перезаписывал день
+   * внутри одного филиала («последняя правка побеждает»). Отказывать здесь
+   * нельзя: после привязки истории все дни лежат в основном сервисе, и
+   * владелец должен иметь возможность расставить график филиала, не удаляя
+   * дни по одному в основном.
+   */
+  async create(tenantID: string, dto: any, actor?: JwtPayload) {
     // Verify the schedule entry references a user inside the caller's tenant.
     // Otherwise the entry lands with tenant_id from JWT but user_id from a
     // foreign tenant — the schedule listing then JOIN's against that other
     // tenant's user row.
     await this.assertUserInTenant(dto.userId, tenantID);
+    const pointId = actorPointId(actor);
 
     // Upsert — backed by unique index (tenant_id, user_id, date).
     // Prevents duplicate entries that caused attendance rating to count
     // a single day as multiple shifts.
     const { rows } = await this.pool.query(
-      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, actual_arrival, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, actual_arrival, tenant_id, point_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
          shift_start     = EXCLUDED.shift_start,
          shift_end       = EXCLUDED.shift_end,
@@ -403,7 +433,8 @@ export class ScheduleService {
          note            = EXCLUDED.note,
          late_status     = EXCLUDED.late_status,
          late_minutes    = EXCLUDED.late_minutes,
-         actual_arrival  = EXCLUDED.actual_arrival
+         actual_arrival  = EXCLUDED.actual_arrival,
+         point_id        = EXCLUDED.point_id
        RETURNING *`,
       [
         dto.userId,
@@ -416,14 +447,23 @@ export class ScheduleService {
         dto.lateMinutes || 0,
         dto.actualArrival || null,
         tenantID,
+        pointId,
       ],
     );
-    // Auto-open shift if manually marked as attending
-    await this.ensureShiftOpen(tenantID, dto.userId, dto.date, dto.lateStatus);
+    // Auto-open shift if manually marked as attending — в филиале СТРОКИ.
+    await this.ensureShiftOpen(tenantID, dto.userId, dto.date, dto.lateStatus, rows[0].point_id ?? null);
     return this.mapEntry(rows[0]);
   }
 
-  async update(id: string, tenantID: string, dto: any) {
+  /**
+   * Правка дня по id. 167 — ГЕЙТ ЗАПИСИ ПО ФИЛИАЛУ: день чужого филиала
+   * править нельзя (404 «Запись не найдена» — существование чужой строки не
+   * подтверждаем, конвенция common/point-scope.assertRowPointForWrite).
+   * Клиент правит только то, что видит в сетке своего филиала, поэтому для
+   * честного клиента гейт невидим; он закрывает путь «по id из истории».
+   */
+  async update(id: string, tenantID: string, dto: any, actor?: JwtPayload) {
+    await assertRowPointForWrite(this.pool, 'schedule_entries', id, tenantID, actorPointId(actor), 'Запись не найдена');
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -477,13 +517,16 @@ export class ScheduleService {
         typeof rows[0].date === 'string'
           ? rows[0].date.slice(0, 10)
           : new Date(rows[0].date).toISOString().slice(0, 10);
-      await this.ensureShiftOpen(tenantID, rows[0].user_id, dateStr, dto.lateStatus);
+      await this.ensureShiftOpen(tenantID, rows[0].user_id, dateStr, dto.lateStatus, rows[0].point_id ?? null);
     }
     return this.mapEntry(rows[0]);
   }
 
-  async remove(id: string, tenantID: string) {
-    await this.pool.query('DELETE FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+  /** Удаление — тем же гейтом филиала, что правка: чужой день не трогаем. */
+  async remove(id: string, tenantID: string, actor?: JwtPayload) {
+    const params: unknown[] = [id, tenantID];
+    const pointFilter = pointFilterSql(null, actorPointId(actor), params);
+    await this.pool.query(`DELETE FROM schedule_entries WHERE id=$1 AND tenant_id=$2${pointFilter}`, params);
     return { message: 'Удалено' };
   }
 
@@ -533,9 +576,19 @@ export class ScheduleService {
     };
   }
 
-  async applyWorkMode(tenantID: string, dto: any) {
+  /**
+   * Применить режим работы одному или всем мастерам на диапазон дат.
+   *
+   * 167 — «ВСЕ МАСТЕРА» = КОМАНДА ЭТОГО ФИЛИАЛА (user_points, дефолт 156:
+   * сотрудник без назначений входит в команду каждого филиала), а каждый
+   * созданный день штампуется филиалом сессии. День, уже стоявший у
+   * сотрудника в другом филиале, переезжает сюда — та же семантика «последняя
+   * правка побеждает», что у create(); подробности там.
+   */
+  async applyWorkMode(tenantID: string, dto: any, actor?: JwtPayload) {
     // Apply a work mode schedule to one or all masters for a date range
     const { workModeId, userId, dateFrom, dateTo } = dto;
+    const pointId = actorPointId(actor);
 
     // Get the work mode
     const { rows: wmRows } = await this.pool.query('SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2', [
@@ -557,9 +610,13 @@ export class ScheduleService {
         days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : r.days_off || [],
       }));
     } else {
+      const teamParams: unknown[] = [tenantID];
+      const teamFilter = assignedToPointSql('u', '$1', pointId, teamParams);
       const { rows: uRows } = await this.pool.query(
-        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin') AND dismissed_at IS NULL AND purged_at IS NULL`,
-        [tenantID],
+        `SELECT u.id, COALESCE(u.days_off, '[]') as days_off FROM users u
+          WHERE u.tenant_id=$1 AND u.is_active=true AND u.role IN ('master', 'admin')
+            AND u.dismissed_at IS NULL AND u.purged_at IS NULL${teamFilter}`,
+        teamParams,
       );
       userRows = uRows.map((r) => ({
         id: r.id,
@@ -610,11 +667,19 @@ export class ScheduleService {
           tenantID,
         ]);
 
-        // Insert new entry
+        // Insert new entry — в филиале сессии (167).
         await this.pool.query(
-          `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [uid, dateStr, isWorkDay ? wm.shift_start : null, isWorkDay ? wm.shift_end : null, !isWorkDay, tenantID],
+          `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id, point_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            uid,
+            dateStr,
+            isWorkDay ? wm.shift_start : null,
+            isWorkDay ? wm.shift_end : null,
+            !isWorkDay,
+            tenantID,
+            pointId,
+          ],
         );
         created++;
 

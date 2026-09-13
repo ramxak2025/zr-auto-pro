@@ -382,9 +382,11 @@ function CompensationSection() {
   });
   const rows = data ?? [];
 
+  // Команда ТЕКУЩЕГО филиала (167): оклады заводятся сотрудникам этого
+  // автосервиса; сервер отдаёт в списке окладов тоже только их.
   const { data: usersData } = useQuery({
-    queryKey: ['users'],
-    queryFn: async () => (await usersApi.getAll()).data,
+    queryKey: ['users', 'point'],
+    queryFn: async () => (await usersApi.getAll({ scope: 'point' })).data,
   });
   const employees: User[] = (usersData ?? []).filter((u) => u.isActive && !u.dismissedAt && !u.purgedAt);
 

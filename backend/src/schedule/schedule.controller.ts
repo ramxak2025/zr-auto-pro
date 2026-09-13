@@ -54,7 +54,8 @@ export class ScheduleController {
   @RequirePermission('schedule_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.scheduleService.create(user.tenantID, dto);
+    // Актор целиком — день штампуется филиалом сессии (167).
+    return this.scheduleService.create(user.tenantID, dto, user);
   }
 
   @RequirePermission('schedule_manage')
@@ -66,7 +67,7 @@ export class ScheduleController {
   @RequirePermission('schedule_manage')
   @Post('apply-work-mode')
   applyWorkMode(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.scheduleService.applyWorkMode(user.tenantID, dto);
+    return this.scheduleService.applyWorkMode(user.tenantID, dto, user);
   }
 
   @RequirePermission('schedule_manage')
@@ -78,12 +79,12 @@ export class ScheduleController {
   @RequirePermission('schedule_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.scheduleService.update(id, user.tenantID, dto);
+    return this.scheduleService.update(id, user.tenantID, dto, user);
   }
 
   @RequirePermission('schedule_manage')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.scheduleService.remove(id, user.tenantID);
+    return this.scheduleService.remove(id, user.tenantID, user);
   }
 }

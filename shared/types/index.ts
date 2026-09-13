@@ -2099,6 +2099,8 @@ export interface Booking {
   createdAt: string;
   cancelledAt?: string | null;
   cancelledBy?: string | null;
+  /** Филиал записи (167): штамп филиала сессии при создании; список отдаёт только свой филиал. */
+  pointId?: string | null;
 }
 
 /**
@@ -3129,6 +3131,12 @@ export interface ScheduleEntry {
   lateStatus?: LateStatus | null;
   note?: string;
   isManualOverride: boolean;
+  /**
+   * Филиал дня графика (167). Штампуется сервером филиалом сессии; список
+   * `/schedule` отдаёт только дни текущего филиала. null — у тенанта нет
+   * филиалов. Клиент не отправляет это поле.
+   */
+  pointId?: string | null;
 }
 
 export interface WorkMode {
@@ -3859,6 +3867,8 @@ export interface FixedCost {
   monthlyAmount: number;
   /** Paused rows never accrue into the net profit. */
   active: boolean;
+  /** Филиал плана (167): план постоянки — на каждый автосервис свой. null — филиалов нет. */
+  pointId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

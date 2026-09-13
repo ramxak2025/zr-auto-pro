@@ -72,20 +72,32 @@ export class SalaryService {
    * литералы из белого списка ALLOWED_SHIFT_STATUSES), поэтому его безопасно
    * инлайнить; параметры запроса — только tenant + диапазон дат.
    */
-  private async workedShiftsByUser(tenantID: string, dateFrom: string, dateTo: string): Promise<Map<string, number>> {
+  private async workedShiftsByUser(
+    tenantID: string,
+    dateFrom: string,
+    dateTo: string,
+    pointId: string | null = null,
+  ): Promise<Map<string, number>> {
     const filter = await this.schedule.buildShiftFilter(tenantID);
     if (!filter) return new Map();
     // Верхняя отсечка LEAST(dateTo, сегодня): будущие размеченные дни месяца
     // сменами НЕ считаются (клиенты шлют полный календарный месяц). Бизнес-
     // «сегодня» — ПОЯС ТЕНАНТА, как в getToday / shift-auto-close.
+    //
+    // 167 — у дня графика есть филиал (schedule_entries.point_id): зарплатный
+    // экран филиала считает смены, отработанные В ЭТОМ филиале, тем же
+    // строгим предикатом, что начисления и выплаты. null (личный дашборд
+    // сотрудника / тенант без филиалов) — смены по всей сети, как раньше.
+    const params: unknown[] = [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)];
+    const pointFilter = pointFilterSql(null, pointId, params);
     const { rows } = await this.pool.query(
       `SELECT user_id, COUNT(*)::int AS worked
          FROM schedule_entries
         WHERE tenant_id = $1 AND date >= $2::date
           AND date <= LEAST($3::date, (now() AT TIME ZONE $4::text)::date)
-          AND ${filter.sql}
+          AND ${filter.sql}${pointFilter}
         GROUP BY user_id`,
-      [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)],
+      params,
     );
     const map = new Map<string, number>();
     for (const r of rows) map.set(r.user_id as string, parseInt(r.worked, 10) || 0);
@@ -612,11 +624,12 @@ export class SalaryService {
     // расписания). perDay = totalEarnings / workedShifts; смен 0 → perDay = null
     // (не делим). Один запрос на всех сотрудников.
     //
-    // 161 — БЕЗ фильтра по точке СОЗНАТЕЛЬНО: «отработанные смены» считаются по
-    // ГРАФИКУ (schedule_entries), у которого точки нет и не будет — филиал у
-    // графика выражается составом команды, а он уже отфильтрован выше. Строки
-    // достаются только тем, кто попал в список, поэтому чужие сюда не приедут.
-    const shiftsByUser = await this.workedShiftsByUser(tenantID, dateFrom, dateTo);
+    // 167 — смены считаются В ФИЛИАЛЕ зарплатного экрана: у дня графика теперь
+    // есть свой point_id, и «ЗП за смену» филиала делит начисления филиала на
+    // смены, отработанные в нём же. Раньше (161) фильтра не было: у графика
+    // не было филиала, и смены, отработанные в соседнем автосервисе,
+    // занижали «за смену» здесь.
+    const shiftsByUser = await this.workedShiftsByUser(tenantID, dateFrom, dateTo, pointId);
 
     return rows.map((r) => {
       const masterId = r.master_id;

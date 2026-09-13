@@ -141,7 +141,12 @@ export type PointScopedTable =
   | 'salary_payouts'
   | 'salary_premiums'
   | 'salary_penalties'
-  | 'salary_payments';
+  | 'salary_payments'
+  // 167 — график, план постоянных расходов и записи получили свой point_id
+  // и тот же гейт записи: день / план / запись чужого филиала не правятся.
+  | 'schedule_entries'
+  | 'fixed_costs'
+  | 'bookings';
 
 /**
  * ГЕЙТ ЗАПИСИ ПО ФИЛИАЛУ: строку ЧУЖОГО филиала изменить нельзя.

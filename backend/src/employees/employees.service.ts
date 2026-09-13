@@ -613,7 +613,11 @@ export class EmployeesService {
     const monthChecks = parseInt(monthAgg[0]?.check_count) || 0;
     const avgRating = parseFloat(monthAgg[0]?.avg_rating) || 0;
 
-    // Discipline = % of last 30 schedule_entries days that were on-time / dayoff
+    // Discipline = % of last 30 schedule_entries days that were on-time / dayoff.
+    // 167 — дни графика режутся филиалом карточки (schedule_entries.point_id),
+    // как и все денежные срезы этой карточки.
+    const discParams: unknown[] = [employeeId, tenantID];
+    const discPointFilter = pointFilterSql(null, view.pointId, discParams);
     const { rows: discRows } = await this.pool.query(
       `SELECT
          COUNT(*) FILTER (WHERE late_status IN ('on_time') OR is_day_off = true) AS good,
@@ -621,8 +625,8 @@ export class EmployeesService {
        FROM schedule_entries
        WHERE user_id=$1 AND tenant_id=$2
          AND date >= (now() - interval '30 days')::date
-         AND date <= now()::date`,
-      [employeeId, tenantID],
+         AND date <= now()::date${discPointFilter}`,
+      discParams,
     );
     const goodDays = parseInt(discRows[0]?.good) || 0;
     const totalDays = parseInt(discRows[0]?.total) || 0;
@@ -807,15 +811,18 @@ export class EmployeesService {
       }
     }
 
-    // disciplineStreak: consecutive schedule_entries days without late/absent
+    // disciplineStreak: consecutive schedule_entries days without late/absent.
+    // 167 — только дни ЭТОГО филиала (schedule_entries.point_id).
+    const streakParams: unknown[] = [employeeId, tenantID];
+    const streakPointFilter = pointFilterSql(null, pointId, streakParams);
     const { rows: disc } = await this.pool.query(
       `SELECT date::date AS day, late_status, is_day_off, actual_arrival
          FROM schedule_entries
         WHERE user_id=$1 AND tenant_id=$2
           AND date >= now() - interval '180 days'
-          AND date <= now()::date
+          AND date <= now()::date${streakPointFilter}
         ORDER BY date DESC`,
-      [employeeId, tenantID],
+      streakParams,
     );
     let disciplineStreak = 0;
     for (const r of disc) {
@@ -974,6 +981,9 @@ export class EmployeesService {
     // Attendance aggregates. is_day_off rows are excluded from the worked-shift
     // count and from the late stats. avg is over LATE shifts only, so a master
     // who is rarely late doesn't get their average diluted by on-time zeros.
+    // 167 — смены/опоздания считаются по дням графика ЭТОГО филиала.
+    const attParams: unknown[] = [employeeId, tenantID];
+    const attPointFilter = pointFilterSql(null, pointId, attParams);
     const { rows: attRows } = await this.pool.query(
       `SELECT
          COUNT(*) FILTER (WHERE is_day_off = false) AS total,
@@ -985,8 +995,8 @@ export class EmployeesService {
            0
          ) AS avg_late_minutes
        FROM schedule_entries
-       WHERE user_id=$1 AND tenant_id=$2`,
-      [employeeId, tenantID],
+       WHERE user_id=$1 AND tenant_id=$2${attPointFilter}`,
+      attParams,
     );
     const total = parseInt(attRows[0]?.total) || 0;
     const lateCount = parseInt(attRows[0]?.late_count) || 0;
@@ -1034,6 +1044,9 @@ export class EmployeesService {
          FROM agg`,
       revRankParams,
     );
+    // 167 — рейтинг дисциплины среди тех, кто работал В ЭТОМ филиале.
+    const discRankParams: unknown[] = [tenantID];
+    const discRankPointFilter = pointFilterSql(null, pointId, discRankParams);
     const { rows: discRanks } = await this.pool.query(
       `WITH agg AS (
          SELECT user_id,
@@ -1041,11 +1054,11 @@ export class EmployeesService {
            FROM schedule_entries
           WHERE tenant_id=$1
             AND date >= (date_trunc('month', now()) - interval '1 month')::date
-            AND date < date_trunc('month', now())::date
+            AND date < date_trunc('month', now())::date${discRankPointFilter}
           GROUP BY user_id
        )
        SELECT user_id, RANK() OVER (ORDER BY discipline DESC) AS rnk FROM agg`,
-      [tenantID],
+      discRankParams,
     );
     const ratingRankParams: unknown[] = [tenantID];
     const ratingRankPointFilter = pointFilterSql('ch', pointId, ratingRankParams);

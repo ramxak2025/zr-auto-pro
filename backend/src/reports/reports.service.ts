@@ -4,6 +4,7 @@ import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
 import { motivationPointFilterSql, premiumCashAmountExpr, premiumMonthExpr } from '../common/salary-extras-sql';
 import {
@@ -1188,12 +1189,11 @@ export class ReportsService {
     // вычитают ТОЛЬКО его расходы — тем же pointFilterSql, что ExpensesService
     // .getAll и getFinancial. Без фильтра «Прибыль за месяц» на главной
     // занижалась на постоянку соседнего филиала.
-    // ЧЕСТНОЕ ОГРАНИЧЕНИЕ: ПЛАНОВАЯ постоянка блока netProfitAccrual ниже
-    // (fixed_costs / employee_compensation) точки не имеет — это конфиг
-    // тенанта, а не денежная строка. В филиальном срезе она вычитается
-    // целиком, то есть accrual-прибыль филиала занижена, а не завышена. Так
-    // безопаснее: завышенная прибыль — это решение потратить деньги, которых
-    // нет. Кассовые netProfitToday/netProfitMonth фильтруются точно.
+    // ПЛАНОВАЯ постоянка блока netProfitAccrual ниже: fixed_costs с 167 несут
+    // свой филиал (план — на каждый автосервис свой), employee_compensation —
+    // конфиг сотрудника, и в срез филиала входят оклады его КОМАНДЫ
+    // (user_points, дефолт 156). Раньше план вычитался целиком по сети, и
+    // accrual-прибыль филиала занижалась на аренду соседнего автосервиса.
     // exp_prev_month РЕЖЕТСЯ ОКНОМ СРАВНЕНИЯ ЦЕЛИКОМ — обеими границами
     // ($7 = начало окна, $6 = конец), ровно как прибыль прошлого месяца
     // (prevRows ниже берёт чеки `date >= prevWindowStart AND date <= prevWindowEnd`).
@@ -1493,17 +1493,25 @@ export class ReportsService {
     // ПРОГНОЗ на весь месяц = run-rate выручки/прибыли (÷ dayOfMonth × daysInMonth)
     // − ПОЛНАЯ плановая постоянка (не амортизированная) − %-сотрудники от run-rate
     // − разовые расходы ОДИН раз (сунк, без run-rate) − run-rate непокрытой постоянки.
+    // 167 — план постоянки филиала (fixed_costs.point_id, строгое равенство)
+    // и оклады команды филиала (назначения user_points через users).
+    const fcParams: unknown[] = [tenantID];
+    const fcPointFilter = pointFilterSql(null, pointId, fcParams);
+    const compParams: unknown[] = [tenantID];
+    const compTeamFilter = assignedToPointSql('u', '$1', pointId, compParams);
     const [{ rows: fcRows }, { rows: compRows }] = await Promise.all([
       this.pool.query(
         `SELECT COALESCE(SUM(monthly_amount), 0) AS planned_fixed
-           FROM fixed_costs WHERE tenant_id = $1 AND active = true`,
-        [tenantID],
+           FROM fixed_costs WHERE tenant_id = $1 AND active = true${fcPointFilter}`,
+        fcParams,
       ),
       this.pool.query(
-        `SELECT type, COALESCE(SUM(amount), 0) AS total
-           FROM employee_compensation WHERE tenant_id = $1 AND active = true
-          GROUP BY type`,
-        [tenantID],
+        `SELECT ec.type, COALESCE(SUM(ec.amount), 0) AS total
+           FROM employee_compensation ec
+           JOIN users u ON u.id = ec.user_id AND u.tenant_id = ec.tenant_id
+          WHERE ec.tenant_id = $1 AND ec.active = true${compTeamFilter}
+          GROUP BY ec.type`,
+        compParams,
       ),
     ]);
     const plannedFixedMonthly = parseFloat(fcRows[0]?.planned_fixed) || 0;
@@ -1815,14 +1823,17 @@ export class ReportsService {
     // «Сегодня» — календарный день В ПОЯСЕ ТЕНАНТА: иначе владивостокскому
     // автосервису опоздания подсвечивались бы по московскому дню и до 09:00
     // местного времени показывались вчерашние.
+    // 167 — опоздавшие ЭТОГО филиала (schedule_entries.point_id).
+    const lateParams: unknown[] = [tenantID, await getTenantTimezone(this.pool, tenantID)];
+    const latePointFilter = pointFilterSql('se', pointId, lateParams);
     const { rows: lateMasters } = await this.pool.query(
       `SELECT u.full_name FROM schedule_entries se
         JOIN users u ON u.id = se.user_id
        WHERE se.tenant_id=$1
          AND se.date = (now() AT TIME ZONE $2::text)::date
-         AND se.late_status = 'late_major'
+         AND se.late_status = 'late_major'${latePointFilter}
        LIMIT 5`,
-      [tenantID, await getTenantTimezone(this.pool, tenantID)],
+      lateParams,
     );
     for (const m of lateMasters) {
       out.push({

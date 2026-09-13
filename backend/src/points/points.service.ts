@@ -205,6 +205,41 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string, string]> = [
        FROM ${MAIN_FACTS_SQL}
       WHERE e.point_id IS NULL AND e.tenant_id = mp.tenant_id`,
   ],
+  // 167 — график, записи и план постоянки: та же лестница, что в
+  // ATTRIBUTION-BLOCK-167 миграции (autexa_point_by_live_assignment заводит
+  // она же). День графика — по единственному ЖИВОМУ назначению сотрудника,
+  // иначе основному; запись — по филиалу своего чека, затем по назначению
+  // мастера, иначе основному; план — основному (до 167 он был один на тенант).
+  [
+    'schedule_entries',
+    'se',
+    `UPDATE schedule_entries se
+        SET point_id = COALESCE(
+              autexa_point_by_live_assignment(se.tenant_id, se.user_id),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE se.point_id IS NULL AND se.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'bookings',
+    'b',
+    `UPDATE bookings b
+        SET point_id = COALESCE(
+              (SELECT ch.point_id FROM checks ch
+                WHERE ch.id = b.check_id AND ch.tenant_id = b.tenant_id AND ch.point_id IS NOT NULL),
+              autexa_point_by_live_assignment(b.tenant_id, b.master_id),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE b.point_id IS NULL AND b.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'fixed_costs',
+    'fc',
+    `UPDATE fixed_costs fc
+        SET point_id = mp.main_id
+       FROM ${MAIN_FACTS_SQL}
+      WHERE fc.point_id IS NULL AND fc.tenant_id = mp.tenant_id`,
+  ],
 ];
 
 /**
@@ -821,10 +856,10 @@ export class PointsService {
 
   /**
    * Таблицы, чью историю без филиала разбирает атрибуция. Состав — дословно из
-   * миграций 160 (checks, clients) и 161 (остальные денежные модули). Список
-   * общий с миграциями сознательно: если у таблицы появится point_id, её надо
-   * добавить в ОБА места, иначе тенант, которому точку заводят сегодня, увидит
-   * по этой таблице пустоту.
+   * миграций 160 (checks, clients), 161 (денежные модули) и 167 (график,
+   * записи, план постоянки). Список общий с миграциями сознательно: если у
+   * таблицы появится point_id, её надо добавить в ОБА места, иначе тенант,
+   * которому точку заводят сегодня, увидит по этой таблице пустоту.
    */
   private static readonly HISTORY_TABLES = HISTORY_ATTACH_SQL.map(([table]) => table);
 

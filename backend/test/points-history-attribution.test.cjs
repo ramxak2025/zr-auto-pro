@@ -299,9 +299,12 @@ test('подзапрос фактов тенанта в коде и в мигр�
 
 test('состав разбираемых таблиц у кода и миграций общий', () => {
   const tables = [...PointsService.HISTORY_TABLES];
+  // 167 — график, записи и план постоянки получили point_id и разбираются
+  // той же привязкой (ATTRIBUTION-BLOCK-167 в миграции).
+  const POINT_TABLES_167 = ['schedule_entries', 'bookings', 'fixed_costs'];
   assert.deepEqual(
     tables.slice().sort(),
-    ['checks', 'clients', ...MONEY_TABLES].sort(),
+    ['checks', 'clients', ...MONEY_TABLES, ...POINT_TABLES_167].sort(),
     'список таблиц разъехался: по забытой таблице тенант увидит пустоту',
   );
   assert.ok(

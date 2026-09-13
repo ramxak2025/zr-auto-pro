@@ -432,18 +432,25 @@ test('выручка отчётов считается общим модулем
 // ── 8. Смена, открытая отметкой в графике, получает филиал ──────────────────
 
 test('автооткрытая смена штампуется филиалом, а не NULL', () => {
-  const ensure = bodyBetween(schedule, 'private async ensureShiftOpen(', 'async create(tenantID: string, dto: any)');
+  const ensure = bodyBetween(schedule, 'private async ensureShiftOpen(', 'async create(tenantID: string, dto: any');
 
   assert.ok(
     ensure.includes('INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)'),
     'schedule.ensureShiftOpen: смена снова рождается без филиала — человек на работе, а филиал показывает ноль',
   );
+  // 167 — филиал смены = филиал СТРОКИ ГРАФИКА, приходит параметром.
   assert.ok(
-    ensure.includes('HAVING COUNT(*) = 1'),
-    'schedule.ensureShiftOpen: филиал берётся при НЕОДНОЗНАЧНОМ назначении — смена уедет в случайный филиал',
+    /VALUES \(\$1, \$2, \$3, now\(\), \$4\)/.test(ensure),
+    'schedule.ensureShiftOpen: филиал смены обязан приходить готовым параметром (филиал строки графика)',
   );
   assert.ok(
-    ensure.includes('tp.is_main AND tp.is_active'),
-    'schedule.ensureShiftOpen: нет фолбэка на основной сервис — при отсутствии/множестве назначений филиал снова NULL',
+    ensure.includes('pointId: string | null'),
+    'schedule.ensureShiftOpen: сигнатура обязана принимать филиал строки графика',
+  );
+  // РЕГРЕССИЯ 3.7.0: MIN(uuid) не существует в PostgreSQL 16 — каждая отметка
+  // «пришёл/опоздал» падала с 500. Никаких агрегатов по uuid в этом пути.
+  assert.ok(
+    !/MIN\(|MAX\(|HAVING COUNT/.test(ensure),
+    'schedule.ensureShiftOpen: агрегат по uuid — min/max(uuid) в Postgres 16 нет, отметка прихода снова упадёт с 500',
   );
 });

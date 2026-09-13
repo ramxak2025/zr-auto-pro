@@ -39,6 +39,21 @@ export const USERS_QUERY_KEY = ['users'] as const;
 export const USERS_ALL_QUERY_KEY = ['users-all'] as const;
 
 /**
+ * КОМАНДА ТЕКУЩЕГО ФИЛИАЛА (167) — `GET /users?scope=point`: сотрудники,
+ * назначенные на филиал сессии, плюс не назначенные никуда (безопасный
+ * дефолт 156). Этим списком живут строки графика и пикер сотрудников в
+ * планировании: в филиале «ТопГаз» нельзя показывать мастеров «ZR AUTO».
+ *
+ * Ключ — ПОД тем же префиксом ['users'], поэтому `invalidateQueries(['users'])`
+ * из UsersScreen/настроек дёргает и его (react-query матчит по префиксу), а
+ * persistentCache зеркалит его отдельным слотом (storageKey — полный ключ).
+ * Справочник «Сотрудники» (UsersScreen) и назначение людей на филиалы
+ * остаются на неограниченном ['users'] — иначе владелец не смог бы назначить
+ * на филиал того, кто на нём ещё не работает.
+ */
+export const USERS_POINT_QUERY_KEY = ['users', 'point'] as const;
+
+/**
  * Привести любое значение из кэша к `User[]`. Защищает от отравленного или
  * протухшего значения (сырой `AxiosResponse`, не-массив из окна 502): кривая
  * форма деградирует в `[]`, а не роняет `.filter` / `.map` ниже по коду и не
@@ -54,6 +69,12 @@ async function fetchUsers(): Promise<User[]> {
   return toUserArray(res.data);
 }
 
+/** Команда филиала сессии — та же форма (`User[]`), тот же resilience. */
+async function fetchPointUsers(): Promise<User[]> {
+  const res = await usersApi.getAll({ scope: 'point' });
+  return toUserArray(res.data);
+}
+
 /**
  * ['users'] — список сотрудников для ScheduleScreen (грид / рейтинг /
  * настройки) и UsersScreen. Всегда массив; SWR через `placeholderData`
@@ -65,6 +86,19 @@ export function useUsers(): UseQueryResult<User[]> {
   return useQuery<User[]>({
     queryKey: USERS_QUERY_KEY,
     queryFn: fetchUsers,
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * ['users', 'point'] — команда текущего филиала для ScheduleScreen (грид /
+ * рейтинг / настройки) и пикера в планировании. См. {@link USERS_POINT_QUERY_KEY}.
+ */
+export function usePointUsers(): UseQueryResult<User[]> {
+  return useQuery<User[]>({
+    queryKey: USERS_POINT_QUERY_KEY,
+    queryFn: fetchPointUsers,
     placeholderData: (prev) => prev,
     staleTime: 5 * 60_000,
   });

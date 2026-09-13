@@ -34,6 +34,7 @@ const read = (relativePath) => readFileSync(join(backendRoot, relativePath), 'ut
 const points = read('src/points/points.service.ts');
 const migration160 = read('migrations/160_points_scoping.sql');
 const migration161 = read('migrations/161_points_scoping_modules.sql');
+const migration167 = read('migrations/167_schedule_planning_bookings_point.sql');
 
 const { PointsService } = require('../dist/points/points.service');
 
@@ -154,17 +155,23 @@ test('последствия смены состава живых филиало
  *     ещё 156, поэтому оставшийся NULL честно означает «старше филиалов»;
  *   • `SET point_id = COALESCE(` — семь денежных таблиц волны 3 (161), где
  *     колонка заводится тут же и NULL ничего не доказывает: их разбирает
- *     лестница доказательств.
+ *     лестница доказательств;
+ *   • 167 — график и записи (COALESCE-лестница) и план постоянки
+ *     (`SET point_id = mp.main_id` — до 167 план был один на тенант).
  */
 function historyTablesOfMigration(sql) {
-  return [...sql.matchAll(/UPDATE\s+(\w+)\s+\w+\s*\n?\s*SET point_id = (?:mp\.point_id|COALESCE\()/g)].map(
-    (m) => m[1],
-  );
+  return [
+    ...sql.matchAll(/UPDATE\s+(\w+)\s+\w+\s*\n?\s*SET point_id = (?:mp\.point_id|mp\.main_id|COALESCE\()/g),
+  ].map((m) => m[1]);
 }
 
-test('состав привязки один в один с миграциями 160 и 161', () => {
-  const fromMigrations = [...historyTablesOfMigration(migration160), ...historyTablesOfMigration(migration161)];
-  assert.ok(fromMigrations.length >= 9, 'парсер миграций сломался — сверять список не с чем');
+test('состав привязки один в один с миграциями 160, 161 и 167', () => {
+  const fromMigrations = [
+    ...historyTablesOfMigration(migration160),
+    ...historyTablesOfMigration(migration161),
+    ...historyTablesOfMigration(migration167),
+  ];
+  assert.ok(fromMigrations.length >= 12, 'парсер миграций сломался — сверять список не с чем');
   assert.deepEqual(
     [...PointsService.HISTORY_TABLES].sort(),
     [...new Set(fromMigrations)].sort(),

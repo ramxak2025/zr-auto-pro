@@ -333,16 +333,33 @@ test('пуш «пришёл/ушёл» уходит только ответст�
   );
 });
 
-test('график режется назначениями сотрудников, а не колонкой у строки', () => {
-  assert.equal(
-    (schedule.match(/assignedToPointSql\('u', '\$1', actorPointId\(actor\)/g) ?? []).length,
-    2,
-    'и сетка месяца, и «кто сейчас на работе» обязаны использовать один предикат назначений',
+test('график: день строки режется своим филиалом, состав команды — назначениями (167)', () => {
+  // Сетка месяца — строгое равенство по schedule_entries.point_id (как деньги).
+  assert.ok(
+    /pointFilterSql\('se', actorPointId\(actor\), params\)/.test(schedule),
+    'сетка месяца обязана резать ДНИ строгим равенством по schedule_entries.point_id',
+  );
+  // «Кто сейчас на работе»: состав — назначения (дефолт 156 сохранён), а день
+  // графика и смена присоединяются только ЭТОГО филиала.
+  assert.ok(
+    /assignedToPointSql\('u', '\$1', pointId, todayParams\)/.test(schedule),
+    '«кто на работе» обязан оставить состав по назначениям (сотрудник без назначений виден везде)',
   );
   assert.ok(
-    !/schedule_entries[\s\S]{0,400}point_id/.test(schedule),
-    'у строки графика точки быть не должно — источник правды один: user_points',
+    /pointFilterSql\('se', pointId, todayParams\)/.test(schedule) && /pointFilterSql\('s', pointId, todayParams\)/.test(schedule),
+    '«кто на работе» обязан присоединять день графика и смену только своего филиала',
   );
+  // Запись: день штампуется филиалом сессии и переезжает при перезаписи.
+  assert.ok(
+    /point_id\s*=\s*EXCLUDED\.point_id/.test(schedule),
+    'upsert дня обязан переносить день в филиал сессии (последняя правка побеждает)',
+  );
+  assert.ok(
+    /assertRowPointForWrite\(this\.pool, 'schedule_entries'/.test(schedule),
+    'правка дня по id обязана стоять за гейтом филиала',
+  );
+  // Ни одного литерала филиала в SQL.
+  assert.ok(!/point_id\s*=\s*'/.test(schedule), 'point_id сравнивается со строковым литералом');
 });
 
 test('сотрудник без назначений виден на всех филиалах (безопасный дефолт 156)', () => {

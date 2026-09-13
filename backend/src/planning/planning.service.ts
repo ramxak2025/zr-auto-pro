@@ -2,6 +2,8 @@ import { Injectable, Inject, NotFoundException, BadRequestException } from '@nes
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 // Real config ids are uuids. Guard mutating endpoints so a garbage / synthetic id
 // resolves to a clean 404 instead of a Postgres "invalid input syntax for type
@@ -35,6 +37,16 @@ const AMOUNT_CEILING = 100_000_000;
  * Access is owner-only, enforced in the controller (@Roles owner-class +
  * @RequirePermission('financial_reports')). All queries are tenant-scoped and
  * parameterised.
+ *
+ * ФИЛИАЛ (167). План постоянных расходов — на каждый автосервис СВОЙ:
+ * fixed_costs.point_id штампуется филиалом сессии и режется строгим
+ * равенством (common/point-scope), правка/удаление — тем же гейтом записи,
+ * что у расходов. Оклады (employee_compensation) остаются конфигом
+ * СОТРУДНИКА (одна строка на человека во всей сети), а в срез филиала
+ * попадают оклады его КОМАНДЫ — назначения user_points, дефолт 156. Раньше
+ * план был один на тенант: аренда филиала вычиталась из прибыли основного
+ * сервиса, а на экране филиала лежал план основного — жалоба владельца
+ * «постоянные расходы с основной точки в филиале».
  */
 @Injectable()
 export class PlanningService {
@@ -76,6 +88,8 @@ export class PlanningService {
       category: r.category,
       monthlyAmount: parseFloat(r.monthly_amount) || 0,
       active: r.active !== false,
+      // 167 — филиал плана (null только у тенантов без филиалов).
+      pointId: r.point_id ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -98,31 +112,40 @@ export class PlanningService {
 
   // ── Fixed costs ────────────────────────────────────────────────────────────
 
-  async listFixedCosts(tenantID: string) {
+  /** Гейт записи по филиалу — общий предикат common/point-scope. */
+  private assertOwnFixedCost(id: string, tenantID: string, pointId: string | null): Promise<void> {
+    return assertRowPointForWrite(this.pool, 'fixed_costs', id, tenantID, pointId, 'Постоянный расход не найден');
+  }
+
+  async listFixedCosts(tenantID: string, pointId: string | null = null) {
+    const params: unknown[] = [tenantID];
+    const pointFilter = pointFilterSql(null, pointId, params);
     const { rows } = await this.pool.query(
-      'SELECT * FROM fixed_costs WHERE tenant_id = $1 ORDER BY active DESC, name',
-      [tenantID],
+      `SELECT * FROM fixed_costs WHERE tenant_id = $1${pointFilter} ORDER BY active DESC, name`,
+      params,
     );
     return rows.map((r) => this.mapFixedCost(r));
   }
 
-  async createFixedCost(tenantID: string, dto: any) {
+  async createFixedCost(tenantID: string, dto: any, pointId: string | null = null) {
     const name = this.cleanName(dto?.name);
     const category = FIXED_COST_CATEGORIES.has(dto?.category) ? dto.category : 'other';
     const monthlyAmount = this.cleanAmount(dto?.monthlyAmount, false);
     const active = dto?.active === undefined ? true : !!dto.active;
 
+    // 167 — план рождается в филиале сессии.
     const { rows } = await this.pool.query(
-      `INSERT INTO fixed_costs (tenant_id, name, category, monthly_amount, active)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [tenantID, name, category, monthlyAmount, active],
+      `INSERT INTO fixed_costs (tenant_id, name, category, monthly_amount, active, point_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [tenantID, name, category, monthlyAmount, active, pointId],
     );
     invalidateReportsForTenant(tenantID);
     return this.mapFixedCost(rows[0]);
   }
 
-  async updateFixedCost(id: string, tenantID: string, dto: any) {
+  async updateFixedCost(id: string, tenantID: string, dto: any, pointId: string | null = null) {
     if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Постоянный расход не найден' });
+    await this.assertOwnFixedCost(id, tenantID, pointId);
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -161,8 +184,9 @@ export class PlanningService {
     return this.mapFixedCost(rows[0]);
   }
 
-  async removeFixedCost(id: string, tenantID: string) {
+  async removeFixedCost(id: string, tenantID: string, pointId: string | null = null) {
     if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Постоянный расход не найден' });
+    await this.assertOwnFixedCost(id, tenantID, pointId);
     const { rows } = await this.pool.query('DELETE FROM fixed_costs WHERE id = $1 AND tenant_id = $2 RETURNING id', [
       id,
       tenantID,
@@ -174,14 +198,17 @@ export class PlanningService {
 
   // ── Employee compensation ───────────────────────────────────────────────────
 
-  async listCompensation(tenantID: string) {
+  /** Оклады КОМАНДЫ филиала (user_points, дефолт 156); без филиала — все. */
+  async listCompensation(tenantID: string, pointId: string | null = null) {
+    const params: unknown[] = [tenantID];
+    const teamFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT ec.*, u.full_name AS user_name, u.role AS user_role
          FROM employee_compensation ec
          JOIN users u ON u.id = ec.user_id AND u.tenant_id = ec.tenant_id
-        WHERE ec.tenant_id = $1
+        WHERE ec.tenant_id = $1${teamFilter}
         ORDER BY u.full_name`,
-      [tenantID],
+      params,
     );
     return rows.map((r) => this.mapCompensation(r));
   }

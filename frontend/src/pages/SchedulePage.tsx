@@ -387,9 +387,13 @@ export default function SchedulePage() {
     enabled: tab === 'mystats',
   });
 
+  // Команда ТЕКУЩЕГО филиала (167): строки сетки — сотрудники этого
+  // автосервиса (назначенные на него + не назначенные никуда), а дни строк
+  // сервер отдаёт только этого филиала. Ключ под префиксом ['users'], чтобы
+  // инвалидации справочника сотрудников дёргали и его.
   const { data: usersData } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => usersApi.getAll(),
+    queryKey: ['users', 'point'],
+    queryFn: () => usersApi.getAll({ scope: 'point' }),
     select: (res) => res.data as User[],
   });
 
@@ -438,9 +442,9 @@ export default function SchedulePage() {
   const updateOrderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
     onMutate: async (orderedIds: string[]) => {
-      await queryClient.cancelQueries({ queryKey: ['users'] });
-      const prev = queryClient.getQueryData<any>(['users']);
-      queryClient.setQueryData<any>(['users'], (old: any) => {
+      await queryClient.cancelQueries({ queryKey: ['users', 'point'] });
+      const prev = queryClient.getQueryData<any>(['users', 'point']);
+      queryClient.setQueryData<any>(['users', 'point'], (old: any) => {
         if (!old?.data) return old;
         const byId = new Map(old.data.map((u: any) => [u.id, u]));
         const reordered = orderedIds
@@ -456,7 +460,7 @@ export default function SchedulePage() {
       return prev;
     },
     onError: (_e, _v, ctx) => {
-      if (ctx) queryClient.setQueryData(['users'], ctx);
+      if (ctx) queryClient.setQueryData(['users', 'point'], ctx);
       toast.error('Не сохранено: порядок мастеров не изменён');
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),

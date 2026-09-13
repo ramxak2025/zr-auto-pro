@@ -49,7 +49,7 @@ import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { useUsers } from '../hooks/useUsers';
+import { usePointUsers, USERS_POINT_QUERY_KEY } from '../hooks/useUsers';
 import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { decideScheduleView } from './scheduleViewState';
@@ -756,16 +756,18 @@ function GridTab() {
     staleTime: 30_000,
   });
 
-  // ['users'] — общий слот (его пишут также login-prefetch и UsersScreen).
-  // Через общий хук форма гарантированно `User[]` у всех читателей, поэтому
-  // грид больше не схлопывается в «Нет мастеров» из-за чужой формы кэша.
+  // ['users', 'point'] — КОМАНДА ТЕКУЩЕГО ФИЛИАЛА (167): строки сетки — это
+  // сотрудники этого автосервиса (назначенные на него + не назначенные никуда),
+  // а дни строк сервер отдаёт только этого филиала. Через общий хук форма
+  // гарантированно `User[]` у всех читателей, поэтому грид не схлопывается в
+  // «Нет мастеров» из-за чужой формы кэша.
   const {
     data: usersData,
     isLoading: usersLoading,
     isError: usersError,
     isSuccess: usersSuccess,
     refetch: refetchUsers,
-  } = useUsers();
+  } = usePointUsers();
 
   // Deferred grid mount — the month grid is ~300-450 cells; mounting it
   // synchronously during the push transition blocked the JS thread and
@@ -861,9 +863,11 @@ function GridTab() {
   const updateOrderMut = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
     onMutate: async (orderedIds: string[]) => {
-      await queryClient.cancelQueries({ queryKey: ['users'] });
-      const prev = queryClient.getQueryData<any>(['users']);
-      queryClient.setQueryData<any>(['users'], (old: unknown) => {
+      // Оптимистично правим слот команды филиала — им и рисуется сетка;
+      // onSettled ниже инвалидирует префикс ['users'], то есть оба слота.
+      await queryClient.cancelQueries({ queryKey: USERS_POINT_QUERY_KEY });
+      const prev = queryClient.getQueryData<any>(USERS_POINT_QUERY_KEY);
+      queryClient.setQueryData<any>(USERS_POINT_QUERY_KEY, (old: unknown) => {
         // toArray: never .map a poisoned non-array users cache value.
         if (!Array.isArray(old)) return old;
         return old.map((u: any) => {
@@ -877,7 +881,7 @@ function GridTab() {
       // Откат + ВИДИМЫЙ фидбек (волна C): молчаливый откат перестановки
       // выглядел как «приложение не слушается» — без связи порядок тихо
       // прыгал обратно.
-      if (ctx) queryClient.setQueryData(['users'], ctx);
+      if (ctx) queryClient.setQueryData(USERS_POINT_QUERY_KEY, ctx);
       haptic('error');
       showQuickError('Не удалось сохранить порядок. Попробуйте ещё раз.');
     },
@@ -2149,8 +2153,8 @@ function RatingTab() {
     placeholderData: (prev) => prev,
   });
 
-  // ['users'] через общий хук — единая форма (`User[]`) у всех читателей слота.
-  const { data: usersData } = useUsers();
+  // ['users', 'point'] — команда текущего филиала (167), единая форма `User[]`.
+  const { data: usersData } = usePointUsers();
 
   // Same eligibility rule as the grid's activeUsers: owners (superadmin /
   // director / owner) не отображаются в графике — и в рейтинге тоже.
@@ -2524,8 +2528,8 @@ function SettingsTab() {
   // settings, work-modes, apply-work-mode → тот же ключ).
   const canEditSettings = hasPermission('schedule_manage');
 
-  // ['users'] через общий хук — единая форма (`User[]`) у всех читателей слота.
-  const { data: usersData } = useUsers();
+  // ['users', 'point'] — команда текущего филиала (167), единая форма `User[]`.
+  const { data: usersData } = usePointUsers();
 
   const { data: workModes } = useQuery<any[]>({
     queryKey: ['work-modes'],

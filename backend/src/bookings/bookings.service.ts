@@ -9,7 +9,7 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { UpdateBookingSettingsDto } from './dto/update-booking-settings.dto';
 import { getTenantTimezone } from '../common/timezone';
-import { actorPointId } from '../common/point-scope';
+import { actorPointId, assertRowPointForWrite } from '../common/point-scope';
 
 /**
  * Owner-class roles see ALL bookings in the tenant and may edit/cancel any.
@@ -56,6 +56,8 @@ export class BookingsService {
       createdAt: r.created_at,
       cancelledAt: r.cancelled_at ?? null,
       cancelledBy: r.cancelled_by ?? null,
+      // 167 — филиал записи (null только у тенантов без филиалов).
+      pointId: r.point_id ?? null,
     };
   }
 
@@ -75,13 +77,13 @@ export class BookingsService {
 
   // ─── List ──────────────────────────────────────────────────────────
   /**
-   * 161 — ЗАПИСИ ФИЛИАЛА. Собственной колонки у брони нет и не заводим:
-   * запись — это ещё не сделка (чека нет, денег нет), а «где обслужат» задаёт
-   * назначенный мастер. Поэтому филиал резолвится через НАЗНАЧЕНИЯ мастера
-   * (user_points) — тем же предикатом, что график и пикер мастеров.
-   *
-   * Бронь БЕЗ мастера видна на всех филиалах: приписать её некуда, а спрятать
-   * значило бы потерять запись клиента — худший исход из возможных.
+   * 167 — ЗАПИСИ ФИЛИАЛА: у записи есть СВОЙ point_id (штамп филиала сессии
+   * при создании), список филиала — строгое равенство, как у денег
+   * (common/point-scope). Раньше (161) филиал резолвился через назначения
+   * мастера (user_points), а запись без мастера была видна ВЕЗДЕ: у тенанта,
+   * не расставившего людей по филиалам, оба автосервиса показывали один и
+   * тот же список записей. Историю без филиала миграция 167 отдала филиалу
+   * чека (проведённые), живому назначению мастера, иначе основному сервису.
    */
   async list(user: JwtPayload, query: { scope?: string; from?: string; to?: string }) {
     const tenantId = user.tenantID;
@@ -95,16 +97,13 @@ export class BookingsService {
       params.push(user.userID);
     }
 
+    // Точка — всегда плейсхолдером; локальный idx общий с фильтрами ниже,
+    // поэтому кладём вручную, а не через pointFilterSql (он нумерует по
+    // params.length и разошёлся бы с idx).
     const bookingPointId = actorPointId(user);
     if (bookingPointId) {
       params.push(bookingPointId);
-      const pointPh = `$${idx++}`;
-      sql +=
-        ` AND (b.master_id IS NULL` +
-        ` OR NOT EXISTS (SELECT 1 FROM user_points up_none` +
-        ` WHERE up_none.user_id = b.master_id AND up_none.tenant_id = $1)` +
-        ` OR EXISTS (SELECT 1 FROM user_points up_at` +
-        ` WHERE up_at.user_id = b.master_id AND up_at.tenant_id = $1 AND up_at.point_id = ${pointPh}))`;
+      sql += ` AND b.point_id = $${idx++}`;
     }
 
     const scope = query.scope;
@@ -193,9 +192,10 @@ export class BookingsService {
 
     const notifyOnCreate = dto.notifyOnCreate ?? true;
 
+    // 167 — запись рождается в филиале сессии.
     const { rows } = await this.pool.query(
-      `INSERT INTO bookings (tenant_id, client_id, car_id, master_id, created_by, scheduled_at, comment, notify_on_create)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO bookings (tenant_id, client_id, car_id, master_id, created_by, scheduled_at, comment, notify_on_create, point_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         tenantId,
@@ -206,6 +206,7 @@ export class BookingsService {
         dto.scheduledAt,
         dto.comment ?? null,
         notifyOnCreate,
+        actorPointId(user),
       ],
     );
     const bookingId = rows[0].id;
@@ -266,8 +267,14 @@ export class BookingsService {
   }
 
   // ─── Update (reschedule / comment / reassign) ──────────────────────
+  /** Гейт записи по филиалу (167): запись чужого филиала правится как несуществующая. */
+  private assertOwnPoint(id: string, user: JwtPayload): Promise<void> {
+    return assertRowPointForWrite(this.pool, 'bookings', id, user.tenantID, actorPointId(user), 'Запись не найдена');
+  }
+
   async update(user: JwtPayload, id: string, dto: UpdateBookingDto) {
     const tenantId = user.tenantID;
+    await this.assertOwnPoint(id, user);
     const row = await this.getOwnedRow(id, tenantId);
 
     // Ownership: master may edit only own.
@@ -334,6 +341,7 @@ export class BookingsService {
   // ─── Cancel ────────────────────────────────────────────────────────
   async cancel(user: JwtPayload, id: string) {
     const tenantId = user.tenantID;
+    await this.assertOwnPoint(id, user);
     const row = await this.getOwnedRow(id, tenantId);
 
     // Server-enforced ownership: a master cancelling another's booking → 403.

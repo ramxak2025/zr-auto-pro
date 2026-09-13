@@ -3,6 +3,7 @@ import { PlanningService } from './planning.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // «Планирование / Постоянные расходы» — config that drives the ACCRUAL net
 // profit on the owner dashboard (reports v2). Матрица ролей АВТОРИТЕТНА (волна
@@ -20,28 +21,29 @@ export class PlanningController {
   // ── Fixed costs (планово-повторяющиеся, помесячно) ─────────────────────────
   @Get('fixed-costs')
   listFixedCosts(@CurrentUser() user: JwtPayload) {
-    return this.planningService.listFixedCosts(user.tenantID);
+    // 167 — план филиала сессии.
+    return this.planningService.listFixedCosts(user.tenantID, actorPointId(user));
   }
 
   @Post('fixed-costs')
   createFixedCost(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.planningService.createFixedCost(user.tenantID, dto);
+    return this.planningService.createFixedCost(user.tenantID, dto, actorPointId(user));
   }
 
   @Patch('fixed-costs/:id')
   updateFixedCost(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.planningService.updateFixedCost(id, user.tenantID, dto);
+    return this.planningService.updateFixedCost(id, user.tenantID, dto, actorPointId(user));
   }
 
   @Delete('fixed-costs/:id')
   removeFixedCost(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.planningService.removeFixedCost(id, user.tenantID);
+    return this.planningService.removeFixedCost(id, user.tenantID, actorPointId(user));
   }
 
   // ── Employee compensation (оклад / % с оборота / % с прибыли) ───────────────
   @Get('compensation')
   listCompensation(@CurrentUser() user: JwtPayload) {
-    return this.planningService.listCompensation(user.tenantID);
+    return this.planningService.listCompensation(user.tenantID, actorPointId(user));
   }
 
   // Upsert by (tenant, employee) — one config per employee (v1).
