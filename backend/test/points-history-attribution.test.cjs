@@ -301,7 +301,16 @@ test('состав разбираемых таблиц у кода и мигра
   const tables = [...PointsService.HISTORY_TABLES];
   // 167 — график, записи и план постоянки получили point_id и разбираются
   // той же привязкой (ATTRIBUTION-BLOCK-167 в миграции).
-  const POINT_TABLES_167 = ['schedule_entries', 'bookings', 'fixed_costs'];
+  const POINT_TABLES_167 = [
+    'schedule_entries',
+    'bookings',
+    'fixed_costs',
+    'storage_items',
+    'warehouses',
+    'deliveries',
+    'purchase_orders',
+    'supplier_payments',
+  ];
   assert.deepEqual(
     tables.slice().sort(),
     ['checks', 'clients', ...MONEY_TABLES, ...POINT_TABLES_167].sort(),

@@ -29,6 +29,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointIndicator from '../components/PointIndicator';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
 import SearchInput from '../components/SearchInput';
@@ -447,6 +448,8 @@ export default function InventoryScreen() {
           </TouchableOpacity>
         }
       />
+      {/* Автосервис (169): остатки — склада филиала сессии. Только подпись. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {/* Scope: warehouse chips + scan button */}
       <View style={styles.scopeRow}>
@@ -637,6 +640,7 @@ export default function InventoryScreen() {
 }
 
 const styles = StyleSheet.create({
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   safe: { flex: 1 },
   scopeRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], gap: spacing[2] },
   chipsScroll: { gap: spacing[2], paddingVertical: spacing[1], paddingRight: spacing[2], alignItems: 'center' },

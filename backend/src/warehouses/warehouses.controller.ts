@@ -1,10 +1,11 @@
-import { Controller, Get, Patch, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength, IsInt, Min } from 'class-validator';
 import { WarehousesService } from './warehouses.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // DTO is defined inline because the warehouses module has a tiny surface
 // (rename only) — splitting it into a dedicated dto/ folder would add files
@@ -31,14 +32,16 @@ export class WarehousesController {
   // 'warehouse_manage' below (ROLE-ONLY, волна «права как в Битрикс24»,
   // 2026-07: @Roles(d,a,sa) снят — «управляет складом» и есть переименование
   // складов; сиды — мастер false, админ true).
+  // 169 — склады ФИЛИАЛА сессии; `?scope=all` — всей сети (перемещение
+  // товара в другой филиал: пикер целевого склада).
   @Get()
-  list(@CurrentUser() user: JwtPayload) {
-    return this.warehousesService.listByTenant(user.tenantID);
+  list(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
+    return this.warehousesService.listByTenant(user.tenantID, actorPointId(user), scope === 'all' ? 'all' : 'point');
   }
 
   @RequirePermission('warehouse_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateWarehouseDto) {
-    return this.warehousesService.update(user.tenantID, id, dto);
+    return this.warehousesService.update(user.tenantID, id, dto, actorPointId(user));
   }
 }

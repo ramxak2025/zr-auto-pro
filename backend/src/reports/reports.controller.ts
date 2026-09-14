@@ -92,7 +92,7 @@ export class ReportsController {
    */
   @Get('defect-writeoff')
   getDefectWriteoff(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
-    return this.reportsService.getDefectWriteoffReport(user.tenantID, query);
+    return this.reportsService.getDefectWriteoffReport(user.tenantID, query, actorPointId(user));
   }
 
   @Get('call-funnel')

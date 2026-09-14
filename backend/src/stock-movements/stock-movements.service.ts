@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   InternalServerErrorException,
   Logger,
@@ -9,6 +10,9 @@ import {
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarehousesService, WarehouseKind } from '../warehouses/warehouses.service';
+import { pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
+import { userHasPermission } from '../common/guards/permissions.guard';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
 
 export type StockMovementType =
   | 'inventory'
@@ -18,6 +22,8 @@ export type StockMovementType =
   | 'defect_transfer'
   | 'used_transfer'
   | 'defect_return_to_supplier'
+  // 169 — перемещение товара в ДРУГОЙ филиал (склад другого филиала).
+  | 'point_transfer'
   // 'sale' — синтетический тип (волна G): продажа товара из чека. НЕ создаётся
   // через POST /stock-movements (в ALL_TYPES/DTO его нет), только подмешивается
   // в list() при includeSales для ленты «Движение товара» карточки товара.
@@ -31,6 +37,7 @@ const ALL_TYPES: StockMovementType[] = [
   'defect_transfer',
   'used_transfer',
   'defect_return_to_supplier',
+  'point_transfer',
 ];
 
 // Мусор от битых клиентов (' ', 'undefined', 'null') в uuid-фильтрах раньше
@@ -66,15 +73,21 @@ export class StockMovementsService {
     client: PoolClient,
     productId: string,
     tenantID: string,
+    pointId: string | null = null,
   ): Promise<{
     id: string;
     tenant_id: string;
     warehouse_id: string | null;
     cost_price: number;
   }> {
+    // 169 — товар обязан лежать на складе ФИЛИАЛА сессии: движение по чужому
+    // товару = «не найден» (существование чужой строки не подтверждаем).
     const { rows } = await client.query(
-      'SELECT id, tenant_id, warehouse_id, cost_price FROM products WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-      [productId, tenantID],
+      `SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price FROM products p WHERE p.id=$1 AND p.tenant_id=$2
+         AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))
+       LIMIT 1`,
+      [productId, tenantID, pointId],
     );
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Товар не найден' });
@@ -92,21 +105,28 @@ export class StockMovementsService {
     }
   }
 
+  /**
+   * 169 — явный склад обязан принадлежать ФИЛИАЛУ сессии, фолбэк по виду —
+   * склад того же филиала. `anyPoint` — единственное исключение: целевой
+   * склад перемещения товара В ДРУГОЙ ФИЛИАЛ (держатель user_management).
+   */
   private async resolveWarehouse(
     client: PoolClient,
     tenantID: string,
     warehouseId: string | undefined,
     fallbackKind: WarehouseKind,
+    pointId: string | null = null,
+    anyPoint = false,
   ): Promise<string> {
     if (warehouseId) {
-      const { rows } = await client.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-        warehouseId,
-        tenantID,
-      ]);
+      const { rows } = await client.query(
+        'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
+        [warehouseId, tenantID, anyPoint ? null : pointId],
+      );
       if (rows.length === 0) throw new BadRequestException({ message: 'Склад не найден' });
       return rows[0].id;
     }
-    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind);
+    const w = await this.warehouses.resolveByKind(tenantID, fallbackKind, pointId);
     return w.id;
   }
 
@@ -141,7 +161,13 @@ export class StockMovementsService {
    * расход обязан лечь в филиал того, кто списал. Остальные типы движений
    * денег не двигают и точку игнорируют.
    */
-  async create(tenantID: string, userID: string | null, dto: CreateMovementDto, pointId: string | null = null) {
+  async create(
+    tenantID: string,
+    userID: string | null,
+    dto: CreateMovementDto,
+    pointId: string | null = null,
+    actor?: JwtPayload,
+  ) {
     if (!dto || !dto.type) {
       throw new BadRequestException({ message: 'Тип операции обязателен' });
     }
@@ -191,11 +217,27 @@ export class StockMovementsService {
     try {
       await client.query('BEGIN');
 
-      const product = await this.assertProductInTenant(client, dto.productId, tenantID);
+      // 169 — товар и склады только ФИЛИАЛА сессии. Единственное исключение —
+      // целевой склад перемещения в ДРУГОЙ филиал: его вправе указать держатель
+      // user_management (владелец/директор/админ сети), потому что он и так
+      // распоряжается обоими автосервисами.
+      const product = await this.assertProductInTenant(client, dto.productId, tenantID, pointId);
       const purchasePrice =
         dto.purchasePrice !== undefined && dto.purchasePrice !== null
           ? parseFloat(String(dto.purchasePrice))
           : parseFloat(String(product.cost_price)) || 0;
+      const crossPoint = !!pointId && userHasPermission(actor, 'user_management');
+      // 169 — перемещение в другой филиал: только с явным целевым складом и
+      // только держателю user_management (владелец распоряжается обоими
+      // автосервисами; мастеру чужой склад недоступен).
+      if (dto.type === 'point_transfer') {
+        if (!dto.targetWarehouseId) {
+          throw new BadRequestException({ message: 'Укажите склад филиала, куда перенести товар' });
+        }
+        if (!crossPoint) {
+          throw new ForbiddenException({ message: 'Перемещать товар между филиалами может только руководитель' });
+        }
+      }
 
       let result: any;
 
@@ -203,19 +245,52 @@ export class StockMovementsService {
         case 'inventory':
         case 'income':
         case 'expense':
-          result = await this.applySingleWarehouse(client, tenantID, userID, dto, qty, purchasePrice);
+          result = await this.applySingleWarehouse(client, tenantID, userID, dto, qty, purchasePrice, pointId);
           break;
         case 'writeoff':
           result = await this.applyWriteoff(client, tenantID, userID, dto, qty, purchasePrice, pointId);
           break;
         case 'defect_transfer':
-          result = await this.applyTransfer(client, tenantID, userID, dto, qty, purchasePrice, 'defect');
+          result = await this.applyTransfer(
+            client,
+            tenantID,
+            userID,
+            dto,
+            qty,
+            purchasePrice,
+            'defect',
+            pointId,
+            crossPoint,
+          );
           break;
         case 'used_transfer':
-          result = await this.applyTransfer(client, tenantID, userID, dto, qty, purchasePrice, 'used');
+          result = await this.applyTransfer(
+            client,
+            tenantID,
+            userID,
+            dto,
+            qty,
+            purchasePrice,
+            'used',
+            pointId,
+            crossPoint,
+          );
+          break;
+        case 'point_transfer':
+          result = await this.applyTransfer(
+            client,
+            tenantID,
+            userID,
+            dto,
+            qty,
+            purchasePrice,
+            'point',
+            pointId,
+            crossPoint,
+          );
           break;
         case 'defect_return_to_supplier':
-          result = await this.applyDefectReturn(client, tenantID, userID, dto, qty, purchasePrice);
+          result = await this.applyDefectReturn(client, tenantID, userID, dto, qty, purchasePrice, pointId);
           break;
       }
 
@@ -280,6 +355,8 @@ export class StockMovementsService {
        * смена даты проведённой поставки перевезла движения склада на новую дату.
        */
       purchaseOrderId?: string | null;
+      /** 169 — филиал сессии: товар и склад прихода обязаны быть его. */
+      pointId?: string | null;
     },
   ): Promise<{ id: string; stockAfter: number; warehouseId: string }> {
     if (!params?.productId) {
@@ -290,7 +367,8 @@ export class StockMovementsService {
       throw new BadRequestException({ message: 'Количество должно быть положительным' });
     }
 
-    const product = await this.assertProductInTenant(client, params.productId, tenantID);
+    const pointId = params.pointId ?? null;
+    const product = await this.assertProductInTenant(client, params.productId, tenantID, pointId);
     const purchasePrice =
       params.purchasePrice !== undefined && params.purchasePrice !== null
         ? parseFloat(String(params.purchasePrice))
@@ -308,6 +386,7 @@ export class StockMovementsService {
       { type: 'income', productId: params.productId, quantity: qty, warehouseId, reason: params.reason },
       qty,
       purchasePrice,
+      pointId,
     );
 
     // Link the income movement to its supplier (the income INSERT in
@@ -351,8 +430,9 @@ export class StockMovementsService {
     dto: CreateMovementDto,
     qty: number,
     _purchasePrice: number,
+    pointId: string | null = null,
   ) {
-    const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main');
+    const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main', pointId);
 
     // FOR UPDATE on products row so concurrent stock updates serialise.
     const { rows } = await client.query('SELECT stock FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
@@ -406,7 +486,8 @@ export class StockMovementsService {
     // расход без филиала, невидимый ни одному филиальному срезу.
     expensePointId: string | null = null,
   ) {
-    const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main');
+    // 169 — склад списания — филиала сессии (тот же филиал, что у расхода).
+    const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main', expensePointId);
     const recordAsExpense = !!dto.recordAsExpense;
 
     const { rows } = await client.query('SELECT stock FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
@@ -472,10 +553,27 @@ export class StockMovementsService {
     dto: CreateMovementDto,
     qty: number,
     purchasePrice: number,
-    targetKind: 'defect' | 'used',
+    targetKind: 'defect' | 'used' | 'point',
+    pointId: string | null = null,
+    crossPoint = false,
   ) {
-    const sourceWarehouseId = await this.resolveWarehouse(client, tenantID, dto.sourceWarehouseId, 'main');
-    const targetWarehouseId = await this.resolveWarehouse(client, tenantID, dto.targetWarehouseId, targetKind);
+    // 'point' — перемещение в другой филиал: целевой склад всегда явный
+    // (проверено в create), фолбэк по виду не нужен.
+    const targetFallbackKind: WarehouseKind = targetKind === 'point' ? 'main' : targetKind;
+    const movementType: StockMovementType =
+      targetKind === 'defect' ? 'defect_transfer' : targetKind === 'used' ? 'used_transfer' : 'point_transfer';
+    // 169 — источник всегда в филиале сессии; приёмник — тоже, кроме
+    // перемещения в другой филиал держателем user_management (crossPoint):
+    // так владелец переносит товар из основного сервиса в филиал.
+    const sourceWarehouseId = await this.resolveWarehouse(client, tenantID, dto.sourceWarehouseId, 'main', pointId);
+    const targetWarehouseId = await this.resolveWarehouse(
+      client,
+      tenantID,
+      dto.targetWarehouseId,
+      targetFallbackKind,
+      pointId,
+      crossPoint,
+    );
 
     if (sourceWarehouseId === targetWarehouseId) {
       throw new BadRequestException({ message: 'Склад источника и приёма должны отличаться' });
@@ -593,7 +691,7 @@ export class StockMovementsService {
        RETURNING id`,
       [
         dto.productId,
-        targetKind === 'defect' ? 'defect_transfer' : 'used_transfer',
+        movementType,
         qty,
         stockBefore,
         stockAfter,
@@ -608,7 +706,7 @@ export class StockMovementsService {
 
     return {
       id: mvRows[0].id,
-      type: targetKind === 'defect' ? ('defect_transfer' as const) : ('used_transfer' as const),
+      type: movementType,
       stockAfter,
       sourceWarehouseId,
       targetWarehouseId,
@@ -624,13 +722,15 @@ export class StockMovementsService {
     dto: CreateMovementDto,
     qty: number,
     purchasePrice: number,
+    pointId: string | null = null,
   ) {
     if (!dto.supplierId) {
       throw new BadRequestException({ message: 'Поставщик обязателен' });
     }
     await this.assertSupplierInTenant(client, dto.supplierId, tenantID);
 
-    const defectWarehouse = await this.warehouses.resolveByKind(tenantID, 'defect');
+    // 169 — склад брака ФИЛИАЛА сессии.
+    const defectWarehouse = await this.warehouses.resolveByKind(tenantID, 'defect', pointId);
 
     const { rows } = await client.query(
       'SELECT stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
@@ -719,6 +819,7 @@ export class StockMovementsService {
       dateTo?: string;
       includeSales?: boolean | string;
     },
+    pointId: string | null = null,
   ) {
     let where = 'sm.tenant_id = $1';
     const params: any[] = [tenantID];
@@ -744,6 +845,9 @@ export class StockMovementsService {
       where += ` AND sm.created_at <= $${idx++}`;
       params.push(query.dateTo);
     }
+    // 169 — лента только по складам филиала сессии (последним: помощник
+    // нумерует плейсхолдер по params.length).
+    where += warehousePointFilterSql('sm', pointId, params);
 
     const { rows } = await this.pool.query(
       `SELECT sm.*, p.name as product_name, u.full_name as user_name,
@@ -802,18 +906,21 @@ export class StockMovementsService {
       return stockRows;
     }
 
+    // 169 — продажи только чеками филиала сессии.
+    const saleParams: unknown[] = [tenantID, query.productId.trim()];
+    const salePointFilter = pointFilterSql('c', pointId, saleParams);
     const { rows: saleRows } = await this.pool.query(
       `SELECT cpl.id AS line_id, cpl.product_id, cpl.name AS product_name, cpl.quantity,
               c.id AS check_id, c.number AS check_number,
               COALESCE(c.date, c.created_at) AS created_at,
               c.master_id, u.full_name AS master_name
          FROM check_product_lines cpl
-         JOIN checks c ON c.id = cpl.check_id AND c.tenant_id = $1 AND c.deleted_at IS NULL
+         JOIN checks c ON c.id = cpl.check_id AND c.tenant_id = $1 AND c.deleted_at IS NULL${salePointFilter}
          LEFT JOIN users u ON u.id = c.master_id
         WHERE cpl.product_id = $2
         ORDER BY COALESCE(c.date, c.created_at) DESC
         LIMIT 200`,
-      [tenantID, query.productId.trim()],
+      saleParams,
     );
 
     const sales = saleRows.map((row) => ({

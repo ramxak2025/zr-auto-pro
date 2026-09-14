@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 class WarehouseDocsQueryDto {
   @IsOptional()
@@ -55,6 +56,7 @@ export class JournalController {
 
   @Get('warehouse-docs')
   warehouseDocs(@CurrentUser() user: JwtPayload, @Query() q: WarehouseDocsQueryDto) {
-    return this.journal.getWarehouseDocs(user.tenantID, q);
+    // 169 — документы склада филиала сессии.
+    return this.journal.getWarehouseDocs(user.tenantID, q, actorPointId(user));
   }
 }

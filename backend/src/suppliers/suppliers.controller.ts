@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // ROLE-ONLY (консолидация 2026-07). Enforcement на сервере:
 //   • view   — список/детали поставщиков, поставок, оплат → 'suppliers_access';
@@ -36,13 +37,13 @@ export class SuppliersController {
   @RequirePermission('suppliers_access')
   @Get('deliveries')
   getDeliveries(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.suppliersService.getDeliveries(user.tenantID, query);
+    return this.suppliersService.getDeliveries(user.tenantID, query, actorPointId(user));
   }
 
   @RequirePermission('suppliers_access')
   @Get('payments')
   getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.suppliersService.getPayments(user.tenantID, query);
+    return this.suppliersService.getPayments(user.tenantID, query, actorPointId(user));
   }
 
   // Отчёт по оплатам поставщикам за период — для секции «Закупка товара (не
@@ -56,7 +57,7 @@ export class SuppliersController {
     if (!userHasPermission(user, 'can_add_expenses') && !userHasPermission(user, 'financial_reports')) {
       throw new ForbiddenException({ message: 'Недостаточно прав для этого действия' });
     }
-    return this.suppliersService.getPaymentsReport(user.tenantID, query);
+    return this.suppliersService.getPaymentsReport(user.tenantID, query, actorPointId(user));
   }
 
   @RequirePermission('suppliers_access')
@@ -75,7 +76,7 @@ export class SuppliersController {
   @RequirePermission('suppliers_manage')
   @Patch('deliveries/:id')
   updateDelivery(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateDeliveryDto) {
-    return this.suppliersService.updateDelivery(user.tenantID, user.userID, id, dto);
+    return this.suppliersService.updateDelivery(user.tenantID, user.userID, id, dto, actorPointId(user));
   }
 
   // Soft-delete поставки: строка остаётся с бейджем «Удалена», остатки и долг
@@ -83,7 +84,7 @@ export class SuppliersController {
   @RequirePermission('suppliers_manage')
   @Delete('deliveries/:id')
   deleteDelivery(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: DeleteDeliveryDto) {
-    return this.suppliersService.deleteDelivery(user.tenantID, user.userID, id, dto?.reason);
+    return this.suppliersService.deleteDelivery(user.tenantID, user.userID, id, dto?.reason, actorPointId(user));
   }
 
   @RequirePermission('suppliers_access')
@@ -101,13 +102,13 @@ export class SuppliersController {
   @RequirePermission('suppliers_manage')
   @Post('deliveries')
   createDelivery(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.suppliersService.createDelivery(user.tenantID, dto);
+    return this.suppliersService.createDelivery(user.tenantID, dto, actorPointId(user));
   }
 
   @RequirePermission('suppliers_manage')
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.suppliersService.createPayment(user.tenantID, dto, user.userID);
+    return this.suppliersService.createPayment(user.tenantID, dto, user.userID, actorPointId(user));
   }
 
   // ── Корректировка платежей (Round 14, миграция 144/145) ────────────────────
@@ -124,7 +125,7 @@ export class SuppliersController {
     // 149 — periodMonth ('YYYY-MM'): «за какой месяц» возврат, симметрично платежу.
     @Body() dto: { supplierId: string; amount: number; date?: string; comment?: string; periodMonth?: string },
   ) {
-    return this.suppliersService.createRefund(user.tenantID, user.userID, dto);
+    return this.suppliersService.createRefund(user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   // Сторно платежа: строка не удаляется — помечается reversed_at/by/reason,
@@ -146,7 +147,7 @@ export class SuppliersController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: { productId: string; qty: number; purchasePrice?: number; note?: string },
   ) {
-    return this.suppliersService.returnDefect(user.tenantID, user.userID, id, dto);
+    return this.suppliersService.returnDefect(user.tenantID, user.userID, id, dto, actorPointId(user));
   }
 
   // Used-purchase: buy a second-hand item from a client through the
@@ -161,7 +162,7 @@ export class SuppliersController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string },
   ) {
-    return this.suppliersService.usedPurchase(user.tenantID, user.userID, id, dto);
+    return this.suppliersService.usedPurchase(user.tenantID, user.userID, id, dto, actorPointId(user));
   }
 
   @RequirePermission('suppliers_manage')

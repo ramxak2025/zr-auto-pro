@@ -16,6 +16,8 @@ import { FlashList } from '@shopify/flash-list';
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointIndicator from '../components/PointIndicator';
+import { usePointAccess } from '../hooks/usePoints';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Pressable } from 'react-native';
@@ -360,6 +362,10 @@ export default function ProductsScreen() {
     [palette],
   );
   const { hasPermission } = useAuth();
+  // 169 — склад принадлежит филиалу. Перенос товара В ДРУГОЙ филиал доступен
+  // руководителю (user_management) и только у тенанта с филиалами.
+  const { currentPoint, multiPoint } = usePointAccess();
+  const canTransferToBranch = multiPoint && hasPermission('user_management');
   // ROLE-ONLY (консолидация 2026-07): УПРАВЛЕНИЕ складом (себестоимость + создание/
   // редактирование/цены/сток/инвентаризация/операции) — только warehouse_manage.
   // Просмотр товаров + добавление в чек — warehouse_access (гейт входа в раздел).
@@ -526,7 +532,9 @@ export default function ProductsScreen() {
   // Transfer dialog state — used for both defect_transfer and
   // used_transfer because the body shape is identical (only the
   // movement type differs).
-  const [transferTarget, setTransferTarget] = useState<'defect' | 'used' | null>(null);
+  const [transferTarget, setTransferTarget] = useState<'defect' | 'used' | 'point' | null>(null);
+  // 169 — целевой склад (основной склад другого филиала) для перемещения в филиал.
+  const [transferBranchWarehouseId, setTransferBranchWarehouseId] = useState<string | null>(null);
   const [transferProduct, setTransferProduct] = useState<Product | null>(null);
   const [transferQty, setTransferQty] = useState('');
   // Причина обязательна для defect_transfer (бэк требует) и валидируется
@@ -1817,18 +1825,38 @@ export default function ProductsScreen() {
     setSellPriceMutation.mutate({ id: sellPriceProduct.id, price });
   };
 
-  // --- Transfer handlers (main → defect / used) ----------------------
+  // 169 — склады ВСЕЙ сети (с названием филиала) — только для пикера
+  // «в какой филиал перенести». Обычный список складов — филиала сессии.
+  const { data: networkWarehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses', 'all'],
+    queryFn: async () => {
+      const res = await warehousesApi.list({ scope: 'all' });
+      return Array.isArray(res.data) ? res.data : [];
+    },
+    enabled: canTransferToBranch,
+    staleTime: 10 * 60_000,
+  });
+  const branchTargets = useMemo(
+    () =>
+      (networkWarehouses ?? []).filter(
+        (w) => w.kind === 'main' && !!w.pointId && w.pointId !== (currentPoint?.id ?? null),
+      ),
+    [networkWarehouses, currentPoint?.id],
+  );
+
+  // --- Transfer handlers (main → defect / used / другой филиал) --------
   // Long-press on a product row (main warehouse only) opens the action
   // sheet `actionsForProduct`. Selecting one of the transfer actions
   // populates `transferTarget` + `transferProduct` and opens the qty
   // dialog. On submit we POST a `defect_transfer` or `used_transfer`
   // stock movement and invalidate the products query so both the source
   // and (when the user switches) the target list refresh.
-  const openTransferDialog = (target: 'defect' | 'used', product: Product) => {
+  const openTransferDialog = (target: 'defect' | 'used' | 'point', product: Product) => {
     setTransferTarget(target);
     setTransferProduct(product);
     setTransferQty('');
     setTransferReason('');
+    setTransferBranchWarehouseId(branchTargets.length === 1 ? branchTargets[0].id : null);
     setActionsForProduct(null);
   };
 
@@ -1837,6 +1865,7 @@ export default function ProductsScreen() {
     setTransferProduct(null);
     setTransferQty('');
     setTransferReason('');
+    setTransferBranchWarehouseId(null);
   };
 
   const handleTransferSubmit = async () => {
@@ -1856,7 +1885,15 @@ export default function ProductsScreen() {
       return;
     }
     const source = warehouses.find((w) => w.kind === 'main');
-    const target = warehouses.find((w) => w.kind === transferTarget);
+    // 169 — в другой филиал: целевой склад — основной склад выбранного филиала.
+    const target =
+      transferTarget === 'point'
+        ? branchTargets.find((w) => w.id === transferBranchWarehouseId)
+        : warehouses.find((w) => w.kind === transferTarget);
+    if (transferTarget === 'point' && !target) {
+      Alert.alert('Ошибка', 'Выберите филиал, в который перенести товар');
+      return;
+    }
     if (!source || !target) {
       Alert.alert('Ошибка', 'Не удалось определить склад');
       return;
@@ -1880,8 +1917,10 @@ export default function ProductsScreen() {
           reason: reasonTrimmed,
         });
       } else {
+        // used_transfer — в Б/У своего филиала; point_transfer — в основной
+        // склад другого филиала (сервер пускает только руководителя).
         await stockMovementsApi.create({
-          type: 'used_transfer',
+          type: transferTarget === 'point' ? 'point_transfer' : 'used_transfer',
           sourceWarehouseId: source.id,
           targetWarehouseId: target.id,
           productId: transferProduct.id,
@@ -1895,7 +1934,12 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       // Перенос в брак / Б/У — документ склада в Журнале.
       queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
-      const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
+      const targetLabel =
+        transferTarget === 'defect'
+          ? 'брак'
+          : transferTarget === 'used'
+            ? 'Б/У'
+            : `филиал «${target.pointName ?? target.name}»`;
       const productName = transferProduct.name;
       closeTransferDialog();
       Alert.alert(
@@ -2224,6 +2268,8 @@ export default function ProductsScreen() {
           }
         />
       )}
+      {/* Автосервис (169): склад и остатки — филиала сессии. Только подпись. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
       {/* FreshnessBadge \u2014 HYBRID-perf plan. Pinned just under the header,
           driven by the products + warehouses queries. Hidden when there
           is no data yet (cold cache miss + first fetch) so we don't
@@ -3752,6 +3798,25 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
+        {/* 169 — перенос в другой филиал: руководителю у тенанта с филиалами.
+            Так владелец переносит товар из основного сервиса на склад филиала. */}
+        {canTransferToBranch && branchTargets.length > 0 ? (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => actionsForProduct && openTransferDialog('point', actionsForProduct)}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: 'rgba(79, 70, 229, 0.14)' }]}>
+              <Ionicons name="business-outline" size={22} color={palette.accent.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Перенести в филиал'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'На основной склад другого автосервиса'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
         {/* #60 — удаление товара. Видно только при праве «Удаление на складе»
             (или owner-class). Мягкое → в Корзину, обратимо. */}
         {canDeleteWarehouse ? (
@@ -3858,10 +3923,49 @@ export default function ProductsScreen() {
       <Modal
         visible={!!transferTarget && !!transferProduct}
         onClose={closeTransferDialog}
-        title={transferTarget === 'defect' ? 'Перенести в брак' : 'Перенести в Б/У'}
+        title={
+          transferTarget === 'defect'
+            ? 'Перенести в брак'
+            : transferTarget === 'used'
+              ? 'Перенести в Б/У'
+              : 'Перенести в филиал'
+        }
       >
         {transferProduct && (
           <>
+            {/* 169 — выбор филиала-получателя (основной склад того автосервиса). */}
+            {transferTarget === 'point' ? (
+              <View style={styles.formField}>
+                <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Куда'}</Text>
+                {branchTargets.map((w) => {
+                  const selected = w.id === transferBranchWarehouseId;
+                  return (
+                    <TouchableOpacity
+                      key={w.id}
+                      onPress={() => setTransferBranchWarehouseId(w.id)}
+                      style={[
+                        styles.branchTargetRow,
+                        {
+                          backgroundColor: selected ? palette.accent.primarySoft : palette.bg.muted,
+                          borderColor: selected ? palette.accent.primary : palette.border.subtle,
+                        },
+                      ]}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                    >
+                      <Ionicons
+                        name={selected ? 'radio-button-on' : 'radio-button-off'}
+                        size={20}
+                        color={selected ? palette.accent.primary : palette.text.tertiary}
+                      />
+                      <Text style={[styles.branchTargetName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {w.pointName ?? w.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
             <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
               <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
               <View style={{ flex: 1 }}>
@@ -3932,7 +4036,14 @@ export default function ProductsScreen() {
               <TouchableOpacity
                 style={[
                   styles.submitBtn,
-                  { backgroundColor: transferTarget === 'defect' ? colors.red[600] : colors.orange[600] },
+                  {
+                    backgroundColor:
+                      transferTarget === 'defect'
+                        ? colors.red[600]
+                        : transferTarget === 'used'
+                          ? colors.orange[600]
+                          : palette.accent.primary,
+                  },
                 ]}
                 onPress={handleTransferSubmit}
               >
@@ -4095,6 +4206,18 @@ export default function ProductsScreen() {
 }
 
 const styles = StyleSheet.create({
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
+  branchTargetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    marginBottom: spacing[2],
+  },
+  branchTargetName: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.medium },
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   // ── Массовое выделение (REQ A) ──────────────────────────────────────
   selectCircleWrap: {

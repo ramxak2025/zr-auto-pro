@@ -28,19 +28,23 @@ import { SetRateDto } from './dto/set-rate.dto';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
-  // 161 — `?scope=point` ЯВНО просит список сотрудников ТЕКУЩЕГО филиала (по
-  // назначениям user_points). Без параметра список прежний, на весь тенант:
-  // им резолвятся имена в журнале / расходах / зарплате и им же владелец
-  // назначает людей на точки. Скоуп просит ровно тот экран, где чужой
-  // сотрудник означает неверные деньги, — пикер мастера в Кассе.
+  // 168 — СПИСОК ПО УМОЛЧАНИЮ = ШТАТ ТЕКУЩЕГО ФИЛИАЛА. Филиал — отдельный
+  // автосервис под одним владельцем (требование владельца дословно), значит
+  // «Сотрудники», пикер мастера, фильтры журнала/расходов и график показывают
+  // людей ЭТОГО автосервиса: назначенных на него (user_points) плюс не
+  // назначенных никуда — это владелец/директор, у которого филиалов нет
+  // именно потому, что он владелец всех (миграция 168 приписала весь
+  // остальной штат к филиалам). Прежний дефолт «весь тенант» (161) остался
+  // за явным `?scope=all` — для управления составом филиалов. `?scope=point`
+  // принимается как синоним дефолта: клиенты 3.7.2 шлют его.
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
-    return this.usersService.getAll(user, scope === 'point' ? actorPointId(user) : null);
+    return this.usersService.getAll(user, scope === 'all' ? null : actorPointId(user));
   }
 
   @Get('masters')
   getMasters(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
-    return this.usersService.getMasters(user, scope === 'point' ? actorPointId(user) : null);
+    return this.usersService.getMasters(user, scope === 'all' ? null : actorPointId(user));
   }
 
   // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────
@@ -90,7 +94,8 @@ export class UsersController {
     const targetTenant = user.role === 'superadmin' && dto.tenantId ? dto.tenantId : user.tenantID;
     // user.permissions — эффективная (flatten) карта актора для потолка назначения
     // роли (E-6): нельзя назначить роль с правами выше своих (assertRoleAssignable).
-    return this.usersService.create(targetTenant, user.role, dto, user.permissions);
+    // 168 — новый сотрудник приписывается к филиалу сессии создателя.
+    return this.usersService.create(targetTenant, user.role, dto, user.permissions, actorPointId(user));
   }
 
   @RequirePermission('user_management')

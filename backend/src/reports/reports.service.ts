@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
-import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
+import { actorPointId, pointCacheSegment, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
 import { motivationPointFilterSql, premiumCashAmountExpr, premiumMonthExpr } from '../common/salary-extras-sql';
@@ -412,11 +412,18 @@ export class ReportsService {
    * If a product is later soft-deleted the row stays (product table is
    * kept around, only marked deleted_at), so the join still resolves.
    */
-  async getDefectWriteoffReport(tenantID: string, query: { from?: string; to?: string }) {
+  async getDefectWriteoffReport(
+    tenantID: string,
+    query: { from?: string; to?: string },
+    pointId: string | null = null,
+  ) {
     const dateFrom = this.safeDate(query?.from, this.firstOfMonth());
     const dateTo = this.safeDate(query?.to, this.todayISO());
     const tz = await getTenantTimezone(this.pool, tenantID);
 
+    // 169 — брак и списания только по складам филиала сессии.
+    const dwParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    const dwPointFilter = warehousePointFilterSql('sm', pointId, dwParams);
     const { rows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity ELSE 0 END), 0) as defect_qty,
@@ -432,8 +439,8 @@ export class ReportsService {
        WHERE sm.tenant_id = $1
          AND sm.created_at >= $2::date::timestamp AT TIME ZONE $4::text
          AND sm.created_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text
-         AND sm.type IN ('defect_transfer','writeoff','defect_return_to_supplier')`,
-      [tenantID, dateFrom, dateTo, tz],
+         AND sm.type IN ('defect_transfer','writeoff','defect_return_to_supplier')${dwPointFilter}`,
+      dwParams,
     );
 
     const r = rows[0];
@@ -1762,13 +1769,15 @@ export class ReportsService {
       link?: string;
     }> = [];
 
-    // Low-stock items (≤ min_stock AND min_stock > 0).
+    // Low-stock items (≤ min_stock AND min_stock > 0). 169 — склады филиала.
+    const lowParams: unknown[] = [tenantID];
+    const lowPointFilter = warehousePointFilterSql('p', pointId, lowParams);
     const { rows: low } = await this.pool.query(
-      `SELECT id, name, stock, min_stock FROM products
-        WHERE tenant_id=$1 AND deleted_at IS NULL
-          AND stock <= min_stock AND min_stock > 0
-        ORDER BY (min_stock - stock) DESC LIMIT 5`,
-      [tenantID],
+      `SELECT p.id, p.name, p.stock, p.min_stock FROM products p
+        WHERE p.tenant_id=$1 AND p.deleted_at IS NULL
+          AND p.stock <= p.min_stock AND p.min_stock > 0${lowPointFilter}
+        ORDER BY (p.min_stock - p.stock) DESC LIMIT 5`,
+      lowParams,
     );
     for (const p of low) {
       const sev = parseFloat(p.stock) <= 0 ? 'crit' : 'warn';

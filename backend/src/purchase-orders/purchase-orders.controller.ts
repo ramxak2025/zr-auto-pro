@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
@@ -28,7 +29,7 @@ export class PurchaseOrdersController {
   @RequirePermission('suppliers_access')
   @Get('suggestions')
   suggestions(@CurrentUser() user: JwtPayload) {
-    return this.purchaseOrders.suggestions(user.tenantID);
+    return this.purchaseOrders.suggestions(user.tenantID, actorPointId(user));
   }
 
   // ─── List ──────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ export class PurchaseOrdersController {
     @CurrentUser() user: JwtPayload,
     @Query() query: { status?: string; supplierId?: string; page?: string; limit?: string },
   ) {
-    return this.purchaseOrders.list(user.tenantID, query);
+    return this.purchaseOrders.list(user.tenantID, query, actorPointId(user));
   }
 
   // ─── Detail ────────────────────────────────────────────────────────────
@@ -52,28 +53,28 @@ export class PurchaseOrdersController {
   @RequirePermission('suppliers_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreatePurchaseOrderDto) {
-    return this.purchaseOrders.create(user.tenantID, user.userID, dto);
+    return this.purchaseOrders.create(user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   // ─── Edit (draft only) ─────────────────────────────────────────────────
   @RequirePermission('suppliers_manage')
   @Patch(':id')
   update(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: UpdatePurchaseOrderDto) {
-    return this.purchaseOrders.update(id, user.tenantID, dto);
+    return this.purchaseOrders.update(id, user.tenantID, dto, actorPointId(user));
   }
 
   // ─── Order (draft → ordered) ───────────────────────────────────────────
   @RequirePermission('suppliers_manage')
   @Post(':id/order')
   order(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.purchaseOrders.markOrdered(id, user.tenantID);
+    return this.purchaseOrders.markOrdered(id, user.tenantID, actorPointId(user));
   }
 
   // ─── Receive (full or partial) ─────────────────────────────────────────
   @RequirePermission('suppliers_manage')
   @Post(':id/receive')
   receive(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ReceivePurchaseOrderDto) {
-    return this.purchaseOrders.receive(id, user.tenantID, user.userID, dto);
+    return this.purchaseOrders.receive(id, user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   // ─── Смена даты проведённой поставки (159) ─────────────────────────────
@@ -85,13 +86,13 @@ export class PurchaseOrdersController {
   @RequirePermission('suppliers_manage')
   @Patch(':id/date')
   changeDate(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ChangePurchaseOrderDateDto) {
-    return this.purchaseOrders.changeReceivedDate(id, user.tenantID, user.userID, dto);
+    return this.purchaseOrders.changeReceivedDate(id, user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   // ─── Cancel (not yet received) ─────────────────────────────────────────
   @RequirePermission('suppliers_manage')
   @Post(':id/cancel')
   cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.purchaseOrders.cancel(id, user.tenantID);
+    return this.purchaseOrders.cancel(id, user.tenantID, actorPointId(user));
   }
 }

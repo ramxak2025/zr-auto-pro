@@ -25,21 +25,15 @@
  *   • Heavy sections (velocity, top-moving, top-margin) are sliced to
  *     top 10 client-side — backend already filters, this is defensive.
  */
-import React, { useCallback, useMemo, useState } from 'react';
-import {
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import Svg, { Defs, LinearGradient as SvgGrad, Path, Stop } from 'react-native-svg';
 
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointIndicator from '../components/PointIndicator';
 import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import FreshnessBadge from '../components/FreshnessBadge';
@@ -181,11 +175,7 @@ function WarehouseChipRow({ warehouses, selectedId, onSelect }: WarehouseChipRow
   };
 
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.whChipsRow}
-    >
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.whChipsRow}>
       {renderChip(null, 'Все')}
       {sorted.map((wh) => renderChip(wh.id, wh.name || KIND_LABEL[wh.kind]))}
     </ScrollView>
@@ -226,10 +216,8 @@ function buildSparkAreaPath(values: number[], w: number, h: number): string {
 // ────────────────────────────────────────────────────────────────────────
 
 function DeltaPill({ deltaPct, palette }: { deltaPct: number; palette: ReturnType<typeof useColors> }) {
-  const tone: 'up' | 'down' | 'flat' =
-    deltaPct > 0.5 ? 'up' : deltaPct < -0.5 ? 'down' : 'flat';
-  const colour =
-    tone === 'up' ? colors.green[700] : tone === 'down' ? colors.red[700] : palette.text.tertiary;
+  const tone: 'up' | 'down' | 'flat' = deltaPct > 0.5 ? 'up' : deltaPct < -0.5 ? 'down' : 'flat';
+  const colour = tone === 'up' ? colors.green[700] : tone === 'down' ? colors.red[700] : palette.text.tertiary;
   const bg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
   const iconName = tone === 'up' ? 'arrow-up' : tone === 'down' ? 'arrow-down' : 'remove';
   return (
@@ -280,6 +268,12 @@ export default function WarehouseAnalyticsScreen() {
     staleTime: 10 * 60_000,
     placeholderData: (prev) => prev,
   });
+  // 169 — склады принадлежат филиалу: выбранный склад прежнего филиала после
+  // переключения откатываем на «Все» (склады текущего филиала).
+  useEffect(() => {
+    if (!selectedWarehouseId || !warehouses || warehouses.length === 0) return;
+    if (!warehouses.some((w) => w.id === selectedWarehouseId)) setSelectedWarehouseId(null);
+  }, [warehouses, selectedWarehouseId]);
 
   // ── Analytics: summary (the hero query) ───────────────────────────
   const summaryParams = useMemo(
@@ -303,9 +297,11 @@ export default function WarehouseAnalyticsScreen() {
   const reorderQuery = useQuery<ReorderItem[]>({
     queryKey: ['warehouse-analytics-reorder', { warehouseId: selectedWarehouseId ?? undefined }],
     queryFn: async () =>
-      (await warehouseAnalyticsApi.reorderForecast({
-        warehouseId: selectedWarehouseId ?? undefined,
-      })).data,
+      (
+        await warehouseAnalyticsApi.reorderForecast({
+          warehouseId: selectedWarehouseId ?? undefined,
+        })
+      ).data,
     placeholderData: (prev) => prev,
     staleTime: 60_000,
   });
@@ -388,6 +384,8 @@ export default function WarehouseAnalyticsScreen() {
         onBack={() => navigation.goBack()}
         trailing={<MonthPeriodSwitcher value={period} onChange={setPeriod} />}
       />
+      {/* Автосервис (169): склад и аналитика — филиала сессии. Только подпись. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       <ScrollView
         contentContainerStyle={[
@@ -405,11 +403,7 @@ export default function WarehouseAnalyticsScreen() {
         removeClippedSubviews
         scrollEventThrottle={16}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={palette.accent.primary}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
       >
         {/* Warehouse switcher chip row */}
@@ -509,10 +503,7 @@ function HeroValueCard({
     return (
       <AnimatedCard
         index={index}
-        style={[
-          styles.heroCard,
-          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-        ]}
+        style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       >
         <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>Стоимость склада</Text>
         <EmptyState title="Нет данных" description="Загрузка снимков…" icon="cube" />
@@ -529,20 +520,13 @@ function HeroValueCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.heroCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.heroHeaderRow}>
-        <Text style={[iosSectionLabel, { color: palette.text.tertiary, marginBottom: 0 }]}>
-          Стоимость склада
-        </Text>
+        <Text style={[iosSectionLabel, { color: palette.text.tertiary, marginBottom: 0 }]}>Стоимость склада</Text>
         <DeltaPill deltaPct={summary.deltaPct} palette={palette} />
       </View>
-      <Text style={[styles.heroValue, { color: palette.text.primary }]}>
-        {formatMoney(summary.stockValueCurrent)}
-      </Text>
+      <Text style={[styles.heroValue, { color: palette.text.primary }]}>{formatMoney(summary.stockValueCurrent)}</Text>
       <Text style={[styles.heroCaption, { color: palette.text.secondary }]}>Денег в товаре</Text>
       <View style={styles.heroSpark}>
         {series.length > 1 && (
@@ -587,10 +571,7 @@ function DynamicsCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>Динамика</Text>
       <View style={styles.dynamicsRow}>
@@ -646,18 +627,11 @@ function ReorderCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>🤖 Рекомендуем заказать</Text>
       {rows.length === 0 ? (
-        <EmptyState
-          title="Запасы в порядке"
-          description="Срочных заказов нет — все товары достаточно."
-          icon="cube"
-        />
+        <EmptyState title="Запасы в порядке" description="Срочных заказов нет — все товары достаточно." icon="cube" />
       ) : (
         rows.map((r, i) => (
           <View
@@ -710,18 +684,11 @@ function OverstockedCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>⚠️ Затоварено</Text>
       {rows.length === 0 ? (
-        <EmptyState
-          title="Нет избыточных запасов"
-          description="Капитал не заморожен — товар движется."
-          icon="check"
-        />
+        <EmptyState title="Нет избыточных запасов" description="Капитал не заморожен — товар движется." icon="check" />
       ) : (
         <>
           {rows.map((r, i) => (
@@ -744,9 +711,7 @@ function OverstockedCard({
                 </Text>
               </View>
               <View style={styles.rowTrailing}>
-                <Text style={[styles.rowAmount, { color: colors.amber[700] }]}>
-                  {r.daysOfStock} дн.
-                </Text>
+                <Text style={[styles.rowAmount, { color: colors.amber[700] }]}>{r.daysOfStock} дн.</Text>
                 <Text variant="caption" style={[styles.rowAmountCap, { color: palette.text.tertiary }]}>
                   запаса
                 </Text>
@@ -785,10 +750,7 @@ function TopProductsCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>{title}</Text>
       <Text style={[styles.cardSubtitle, { color: palette.text.secondary }]}>{subtitle}</Text>
@@ -872,10 +834,7 @@ function AbcAnalysisCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>📊 ABC-анализ</Text>
       {totalCount === 0 ? (
@@ -897,12 +856,7 @@ function AbcAnalysisCard({
                   </Text>
                 </View>
                 <View style={[styles.abcBarTrack, { backgroundColor: palette.bg.muted }]}>
-                  <View
-                    style={[
-                      styles.abcBarFill,
-                      { width: `${widthPct}%`, backgroundColor: tierColor[row.tier] },
-                    ]}
-                  />
+                  <View style={[styles.abcBarFill, { width: `${widthPct}%`, backgroundColor: tierColor[row.tier] }]} />
                 </View>
               </View>
             );
@@ -957,18 +911,11 @@ function DeadStockCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>💀 Мёртвый сток</Text>
       {allEmpty ? (
-        <EmptyState
-          title="Мёртвого стока нет"
-          description="Каждый товар двигался за последние 30 дней."
-          icon="star"
-        />
+        <EmptyState title="Мёртвого стока нет" description="Каждый товар двигался за последние 30 дней." icon="star" />
       ) : (
         <>
           <View style={styles.deadStockRow}>
@@ -1026,22 +973,16 @@ function CategoryMarginCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>📈 Маржинальность по категориям</Text>
       {sorted.length === 0 ? (
-        <EmptyState
-          title="Нет данных"
-          description="За выбранный период категорий с продажами нет."
-          icon="chart-bar"
-        />
+        <EmptyState title="Нет данных" description="За выбранный период категорий с продажами нет." icon="chart-bar" />
       ) : (
         sorted.map((row, i) => {
           const widthPct = Math.max(2, Math.min(100, (Math.abs(row.marginPct) / maxPct) * 100));
-          const barColor = row.marginPct >= 30 ? colors.green[500] : row.marginPct >= 15 ? colors.amber[600] : colors.red[400];
+          const barColor =
+            row.marginPct >= 30 ? colors.green[500] : row.marginPct >= 15 ? colors.amber[600] : colors.red[400];
           return (
             <View
               key={row.category || `cat-${i}`}
@@ -1058,9 +999,7 @@ function CategoryMarginCard({
                 <Text style={[styles.categoryName, { color: palette.text.primary }]} numberOfLines={1}>
                   {row.category || 'Без категории'}
                 </Text>
-                <Text style={[styles.categoryPct, { color: palette.text.primary }]}>
-                  {row.marginPct.toFixed(1)}%
-                </Text>
+                <Text style={[styles.categoryPct, { color: palette.text.primary }]}>{row.marginPct.toFixed(1)}%</Text>
               </View>
               <View style={[styles.categoryBarTrack, { backgroundColor: palette.bg.muted }]}>
                 <View style={[styles.categoryBarFill, { width: `${widthPct}%`, backgroundColor: barColor }]} />
@@ -1096,18 +1035,11 @@ function VelocityCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>📦 Скорость оборачиваемости</Text>
       {sorted.length === 0 ? (
-        <EmptyState
-          title="Нет данных"
-          description="Нет товаров с движением за период."
-          icon="trend-up"
-        />
+        <EmptyState title="Нет данных" description="Нет товаров с движением за период." icon="trend-up" />
       ) : (
         sorted.map((row, i) => (
           <View
@@ -1168,10 +1100,7 @@ function GmroiCard({
   return (
     <AnimatedCard
       index={index}
-      style={[
-        styles.sectionCard,
-        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-      ]}
+      style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <Text style={[iosSectionLabel, { color: palette.text.tertiary }]}>💎 GMROI</Text>
       <View style={styles.gmroiRow}>
@@ -1192,6 +1121,7 @@ function GmroiCard({
 // ────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   safe: { flex: 1 },
   scrollContent: {
     padding: spacing[4],

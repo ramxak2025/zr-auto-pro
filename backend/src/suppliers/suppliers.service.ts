@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 import { capLimit } from '../common/cap-limit';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
@@ -40,18 +41,25 @@ export class SuppliersService {
     userID: string | null,
     supplierId: string,
     dto: { productId: string; qty: number; purchasePrice?: number; note?: string },
+    pointId: string | null = null,
   ) {
     if (!dto || !dto.productId) {
       throw new BadRequestException({ message: 'Товар обязателен' });
     }
-    return this.stockMovements.create(tenantID, userID, {
-      type: 'defect_return_to_supplier',
-      productId: dto.productId,
-      quantity: dto.qty,
-      purchasePrice: dto.purchasePrice,
-      supplierId,
-      reason: dto.note,
-    });
+    // 169 — склад брака и товар — филиала сессии.
+    return this.stockMovements.create(
+      tenantID,
+      userID,
+      {
+        type: 'defect_return_to_supplier',
+        productId: dto.productId,
+        quantity: dto.qty,
+        purchasePrice: dto.purchasePrice,
+        supplierId,
+        reason: dto.note,
+      },
+      pointId,
+    );
   }
 
   private mapSupplier(row: any) {
@@ -218,6 +226,7 @@ export class SuppliersService {
       category?: string;
       note?: string;
     },
+    pointId: string | null = null,
   ) {
     const productName = String(dto?.productName ?? '').trim();
     const qty = parseFloat(String(dto?.qty ?? ''));
@@ -263,7 +272,8 @@ export class SuppliersService {
         });
       }
 
-      const usedWarehouse = await this.warehouses.resolveByKind(tenantID, 'used');
+      // 169 — склад Б/У ФИЛИАЛА сессии.
+      const usedWarehouse = await this.warehouses.resolveByKind(tenantID, 'used', pointId);
 
       // Find an existing product with the same (name, category,
       // warehouse) so we bump stock instead of forking duplicates.
@@ -324,9 +334,9 @@ export class SuppliersService {
       // settles via supplier_payments later.
       const totalAmount = qty * purchasePrice;
       const { rows: delRows } = await client.query(
-        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id)
-         VALUES ($1, now(), $2, 'unpaid', $3, $4) RETURNING id`,
-        [supplierId, totalAmount, dto?.note ?? null, tenantID],
+        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id, point_id)
+         VALUES ($1, now(), $2, 'unpaid', $3, $4, $5) RETURNING id`,
+        [supplierId, totalAmount, dto?.note ?? null, tenantID, pointId],
       );
       const deliveryId = delRows[0].id;
 
@@ -379,7 +389,7 @@ export class SuppliersService {
 
   // Deliveries
 
-  async getDeliveries(tenantID: string, query: any) {
+  async getDeliveries(tenantID: string, query: any, pointId: string | null = null) {
     let where = 'd.tenant_id = $1';
     const params: any[] = [tenantID];
     let idx = 2;
@@ -388,6 +398,8 @@ export class SuppliersService {
       where += ` AND d.supplier_id = $${idx++}`;
       params.push(query.supplierId);
     }
+    // 169 — поставки ФИЛИАЛА сессии (последним: помощник нумерует по params.length).
+    where += pointFilterSql('d', pointId, params);
 
     // 154: удалённые поставки НЕ прячем (как reversed-платежи в getPayments) —
     // UI рисует бейдж «Удалена»; joins на users дают имена для аудита.
@@ -503,7 +515,7 @@ export class SuppliersService {
     return delivery;
   }
 
-  async createDelivery(tenantID: string, dto: any) {
+  async createDelivery(tenantID: string, dto: any, pointId: string | null = null) {
     if (!dto.supplierId || !dto.items || dto.items.length === 0) {
       throw new BadRequestException({ message: 'Поставщик и товары обязательны' });
     }
@@ -529,10 +541,11 @@ export class SuppliersService {
         totalAmount += (item.price || 0) * (item.quantity || 0);
       }
 
+      // 169 — поставка принимается В ФИЛИАЛ сессии.
       const { rows: delRows } = await client.query(
-        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id)
-         VALUES ($1, $2, $3, 'unpaid', $4, $5) RETURNING id`,
-        [dto.supplierId, dto.date || new Date().toISOString(), totalAmount, dto.comment, tenantID],
+        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id, point_id)
+         VALUES ($1, $2, $3, 'unpaid', $4, $5, $6) RETURNING id`,
+        [dto.supplierId, dto.date || new Date().toISOString(), totalAmount, dto.comment, tenantID, pointId],
       );
       const deliveryId = delRows[0].id;
 
@@ -553,12 +566,15 @@ export class SuppliersService {
         // `> 0`: пустая/нулевая цена не затирает известную себестоимость.
         if (item.productId) {
           const purchasePrice = Number(item.price) || 0;
+          // 169 — товар обязан лежать на складе филиала сессии.
           const upd = await client.query(
             `UPDATE products
                 SET stock = stock + $1,
                     cost_price = CASE WHEN $4::numeric > 0 THEN $4::numeric ELSE cost_price END
-              WHERE id = $2 AND tenant_id = $3`,
-            [item.quantity || 0, item.productId, tenantID, purchasePrice],
+              WHERE id = $2 AND tenant_id = $3
+                AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                       WHERE wpt.id = products.warehouse_id AND wpt.point_id = $5::uuid))`,
+            [item.quantity || 0, item.productId, tenantID, purchasePrice, pointId],
           );
           if (upd.rowCount === 0) {
             throw new BadRequestException({ message: `Товар ${item.productId} не найден` });
@@ -621,6 +637,7 @@ export class SuppliersService {
     deltas: Map<string, number>,
     reason: string,
     insufficientAction: string,
+    pointId: string | null = null,
   ) {
     const EPS = 1e-9;
     let mainWarehouseId: string | null = null;
@@ -643,7 +660,7 @@ export class SuppliersService {
       let warehouseId: string | null = p.warehouse_id ?? null;
       if (!warehouseId) {
         if (!mainWarehouseId) {
-          mainWarehouseId = (await this.warehouses.resolveByKind(tenantID, 'main')).id;
+          mainWarehouseId = (await this.warehouses.resolveByKind(tenantID, 'main', pointId)).id;
         }
         warehouseId = mainWarehouseId;
       }
@@ -700,7 +717,10 @@ export class SuppliersService {
     userID: string | null,
     id: string,
     dto: { date?: string; comment?: string; items?: Array<{ productId: string; quantity: number; price: number }> },
+    pointId: string | null = null,
   ) {
+    // 169 — поставка чужого филиала не правится (гейт ДО pool.connect()).
+    await assertRowPointForWrite(this.pool, 'deliveries', id, tenantID, pointId, 'Поставка не найдена');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -760,6 +780,7 @@ export class SuppliersService {
           deltas,
           'Корректировка поставки',
           'нельзя уменьшить поставку',
+          pointId,
         );
 
         // Связь строк с заказом (098) переживает перезапись: новая строка того
@@ -845,7 +866,14 @@ export class SuppliersService {
    * createDelivery: total_purchases/current_debt минус вся сумма (защиты от
    * ухода current_debt в минус сознательно нет — зеркальность важнее).
    */
-  async deleteDelivery(tenantID: string, userID: string | null, id: string, reason?: string) {
+  async deleteDelivery(
+    tenantID: string,
+    userID: string | null,
+    id: string,
+    reason?: string,
+    pointId: string | null = null,
+  ) {
+    await assertRowPointForWrite(this.pool, 'deliveries', id, tenantID, pointId, 'Поставка не найдена');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -880,6 +908,7 @@ export class SuppliersService {
         deltas,
         'Удаление поставки',
         'нельзя удалить поставку',
+        pointId,
       );
 
       const totalAmount = parseFloat(delivery.total_amount) || 0;
@@ -910,7 +939,7 @@ export class SuppliersService {
 
   // Payments
 
-  async getPayments(tenantID: string, query: any) {
+  async getPayments(tenantID: string, query: any, pointId: string | null = null) {
     let where = 'sp.tenant_id = $1';
     const params: any[] = [tenantID];
     let idx = 2;
@@ -919,6 +948,8 @@ export class SuppliersService {
       where += ` AND sp.supplier_id = $${idx++}`;
       params.push(query.supplierId);
     }
+    // 169 — оплаты ФИЛИАЛА сессии.
+    where += pointFilterSql('sp', pointId, params);
 
     const { rows } = await this.pool.query(
       `SELECT sp.* FROM supplier_payments sp WHERE ${where} ORDER BY sp.date DESC LIMIT 500`,
@@ -984,6 +1015,7 @@ export class SuppliersService {
   async getPaymentsReport(
     tenantID: string,
     query: any,
+    pointId: string | null = null,
   ): Promise<{
     total: number;
     items: Array<{
@@ -1008,11 +1040,14 @@ export class SuppliersService {
     const dateFrom = safeDate(query?.dateFrom, firstOfMonth);
     const dateTo = safeDate(query?.dateTo, todayISO);
 
+    // 169 — «Закупка товара» в расходах филиала — оплаты ЭТОГО филиала.
+    const reportParams: unknown[] = [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)];
+    const reportPointFilter = pointFilterSql('sp', pointId, reportParams);
     const { rows } = await this.pool.query(
       `SELECT sp.id, sp.amount, sp.date, sp.comment, sp.period_month, s.name AS supplier_name
          FROM supplier_payments sp
          LEFT JOIN suppliers s ON s.id = sp.supplier_id AND s.tenant_id = sp.tenant_id
-        WHERE sp.tenant_id = $1
+        WHERE sp.tenant_id = $1${reportPointFilter}
           AND sp.reversed_at IS NULL
           AND (
             (sp.period_month IS NULL
@@ -1024,7 +1059,7 @@ export class SuppliersService {
           )
         ORDER BY sp.date DESC
         LIMIT 500`,
-      [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)],
+      reportParams,
     );
 
     const items = rows.map((r) => ({
@@ -1039,7 +1074,7 @@ export class SuppliersService {
     return { total, items };
   }
 
-  async createPayment(tenantID: string, dto: any, userID: string | null = null) {
+  async createPayment(tenantID: string, dto: any, userID: string | null = null, pointId: string | null = null) {
     if (!dto.supplierId || !dto.amount) {
       throw new BadRequestException({ message: 'Поставщик и сумма обязательны' });
     }
@@ -1060,10 +1095,20 @@ export class SuppliersService {
         throw new BadRequestException({ message: 'Поставщик не найден' });
       }
 
+      // 169 — оплата уходит из кассы ФИЛИАЛА сессии.
       const { rows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, created_by, period_month)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [dto.supplierId, dto.amount, dto.date || new Date().toISOString(), dto.comment, tenantID, userID, periodMonth],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, created_by, period_month, point_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [
+          dto.supplierId,
+          dto.amount,
+          dto.date || new Date().toISOString(),
+          dto.comment,
+          tenantID,
+          userID,
+          periodMonth,
+          pointId,
+        ],
       );
 
       await client.query(
@@ -1189,6 +1234,7 @@ export class SuppliersService {
     tenantID: string,
     userID: string | null,
     dto: { supplierId?: string; amount?: number; date?: string; comment?: string; periodMonth?: string },
+    pointId: string | null = null,
   ) {
     const amount = parseFloat(String(dto?.amount ?? ''));
     if (!dto?.supplierId || !isFinite(amount) || amount <= 0) {
@@ -1223,8 +1269,8 @@ export class SuppliersService {
       }
 
       const { rows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by, period_month)
-         VALUES ($1, $2, $3, $4, $5, 'refund', $6, $7) RETURNING id`,
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by, period_month, point_id)
+         VALUES ($1, $2, $3, $4, $5, 'refund', $6, $7, $8) RETURNING id`,
         [
           dto.supplierId,
           -amount,
@@ -1233,6 +1279,7 @@ export class SuppliersService {
           tenantID,
           userID,
           periodMonth,
+          pointId,
         ],
       );
 
@@ -1298,6 +1345,8 @@ export class SuppliersService {
       /** Дата поставки (ISO). Пусто ⇒ now() — поведение до 159. */
       occurredAt?: string | null;
       lines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }>;
+      /** 169 — филиал заказа: поставка и авто-оплата принадлежат ему. */
+      pointId?: string | null;
     },
   ): Promise<{ deliveryId: string; paymentId: string | null; invoiceTotal: number }> {
     // Invoice total (стоимость накладной) = Σ received qty × purchase price.
@@ -1314,8 +1363,8 @@ export class SuppliersService {
     const occurredAt = params.occurredAt ?? null;
     const { rows: delRows } = await client.query(
       `INSERT INTO deliveries
-         (supplier_id, date, total_amount, payment_status, comment, tenant_id, purchase_order_id, received_by)
-       VALUES ($1, COALESCE($8::timestamptz, now()), $2, $3, $4, $5, $6, $7) RETURNING id`,
+         (supplier_id, date, total_amount, payment_status, comment, tenant_id, purchase_order_id, received_by, point_id)
+       VALUES ($1, COALESCE($8::timestamptz, now()), $2, $3, $4, $5, $6, $7, $9) RETURNING id`,
       [
         params.supplierId,
         invoiceTotal,
@@ -1325,6 +1374,7 @@ export class SuppliersService {
         params.purchaseOrderId,
         userID,
         occurredAt,
+        params.pointId ?? null,
       ],
     );
     const deliveryId = delRows[0].id;
@@ -1356,9 +1406,18 @@ export class SuppliersService {
     let paymentId: string | null = null;
     if (paid && invoiceTotal > 0) {
       const { rows: payRows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id, created_by)
-         VALUES ($1, $2, COALESCE($7::timestamptz, now()), $3, $4, $5, $6) RETURNING id`,
-        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId, userID, occurredAt],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id, created_by, point_id)
+         VALUES ($1, $2, COALESCE($7::timestamptz, now()), $3, $4, $5, $6, $8) RETURNING id`,
+        [
+          params.supplierId,
+          invoiceTotal,
+          'Оплата при приёмке заказа',
+          tenantID,
+          deliveryId,
+          userID,
+          occurredAt,
+          params.pointId ?? null,
+        ],
       );
       paymentId = payRows[0].id;
       await client.query(

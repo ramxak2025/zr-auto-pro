@@ -1,6 +1,7 @@
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { mainWarehouseOfPointSql } from '../common/point-scope';
 
 @Injectable()
 export class WarehouseService {
@@ -42,7 +43,11 @@ export class WarehouseService {
    * Public: reused by ProductsService.bulkMove to scope the mass move
    * to the same warehouse the folder tree lives in.
    */
-  async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
+  async resolveWarehouseId(
+    tenantID: string,
+    warehouseId?: string | null,
+    pointId: string | null = null,
+  ): Promise<string | null> {
     // Мусор от битых клиентов (' ', 'undefined', 'null', '' после trim) раньше
     // проходил truthy-проверку и падал в pg 22P02 «invalid input syntax for
     // type uuid» → 500 в Sentry (AUTEXA-BACKEND-2..7, 04.07). Не-UUID теперь
@@ -52,28 +57,43 @@ export class WarehouseService {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(warehouseId.trim());
     warehouseId = isUuid ? warehouseId!.trim() : null;
     if (warehouseId) {
-      const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-        warehouseId,
-        tenantID,
-      ]);
+      // 169 — склад обязан принадлежать ФИЛИАЛУ сессии.
+      const { rows } = await this.pool.query(
+        'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
+        [warehouseId, tenantID, pointId],
+      );
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
       }
       return rows[0].id;
     }
-    const { rows } = await this.pool.query(`SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`, [
-      tenantID,
-    ]);
-    return rows.length > 0 ? rows[0].id : null;
+    // 169 — «склад не указан» = основной склад филиала сессии.
+    const params: unknown[] = [tenantID];
+    const { rows } = await this.pool.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
+    return rows.length > 0 && rows[0].id ? rows[0].id : null;
   }
 
-  async getCategories(tenantID: string, warehouseId?: string) {
+  /**
+   * 169 — папка живёт на складе; править/удалять можно только папку склада
+   * СВОЕГО филиала. Папки без склада (легаси до 032) филиала не имеют — их
+   * не трогаем гейтом.
+   */
+  private async assertWarehouseInPoint(warehouseId: string | null, tenantID: string, pointId: string | null) {
+    if (!pointId || !warehouseId) return;
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM warehouses WHERE id=$1 AND tenant_id=$2 AND point_id=$3 LIMIT 1',
+      [warehouseId, tenantID, pointId],
+    );
+    if (rows.length === 0) throw new BadRequestException({ message: 'Категория не найдена' });
+  }
+
+  async getCategories(tenantID: string, warehouseId?: string, pointId: string | null = null) {
     // After 032_warehouse_categories_per_warehouse.sql every category
     // owns a `warehouse_id`. Filter strictly so brak / used / main
     // never bleed into each other. When no warehouseId is given we
     // fall back to the tenant's main warehouse to preserve the legacy
     // tenant-scoped behaviour for callers that haven't migrated yet.
-    const resolvedWarehouseId = await this.resolveWarehouseId(tenantID, warehouseId);
+    const resolvedWarehouseId = await this.resolveWarehouseId(tenantID, warehouseId, pointId);
     const { rows } = await this.pool.query(
       // deleted_at filter is forward-compatible; today categories are hard-deleted
       // but the column was added in migration 023 alongside products' trash bin.
@@ -88,9 +108,9 @@ export class WarehouseService {
     return rows;
   }
 
-  async createCategory(tenantID: string, path: string, warehouseId?: string) {
+  async createCategory(tenantID: string, path: string, warehouseId?: string, pointId: string | null = null) {
     if (!path) throw new BadRequestException({ message: 'Путь обязателен' });
-    const resolvedWarehouseId = await this.resolveWarehouseId(tenantID, warehouseId);
+    const resolvedWarehouseId = await this.resolveWarehouseId(tenantID, warehouseId, pointId);
     // The unique index (tenant_id, warehouse_id, path) replaces the old
     // (tenant_id, path) constraint, so the same folder name can live in
     // main and Б/У independently. We use a manual upsert because the
@@ -174,7 +194,13 @@ export class WarehouseService {
    *
    * Empty folders simply have their row soft-deleted (nothing to cascade).
    */
-  async removeCategory(id: string, tenantID: string, moveProductsTo?: string, deleteContents?: boolean) {
+  async removeCategory(
+    id: string,
+    tenantID: string,
+    moveProductsTo?: string,
+    deleteContents?: boolean,
+    pointId: string | null = null,
+  ) {
     // Find the path of the (live) category being deleted. An already-trashed
     // folder is a no-op — keeps the endpoint idempotent.
     // Resolve the folder's warehouse_id too (fix #2): a single folder id maps to
@@ -188,6 +214,7 @@ export class WarehouseService {
     if (catRows.length === 0) return { message: 'Не найдено' };
     const deletedPath = catRows[0].path;
     const deletedWarehouseId = (catRows[0].warehouse_id as string | null) ?? null;
+    await this.assertWarehouseInPoint(deletedWarehouseId, tenantID, pointId);
     // Subtree LIKE pattern, metacharacters escaped (fix #6). The folder itself is
     // matched by exact equality (category=$2); only descendants use LIKE.
     const subtreeLike = WarehouseService.escapeLike(deletedPath) + '/%';
@@ -315,15 +342,18 @@ export class WarehouseService {
     ids: string[],
     tenantID: string,
     client: PoolClient,
+    pointId: string | null = null,
   ): Promise<{ deletedProducts: number; deletedCategories: number }> {
     if (!ids || ids.length === 0) return { deletedProducts: 0, deletedCategories: 0 };
     // Keep each folder's warehouse_id (fix #2) so the cascade below stays scoped
     // to the warehouse the folder actually lives in — never the same-named folder
-    // in a sibling warehouse (Б/У / брак).
+    // in a sibling warehouse (Б/У / брак). 169 — только папки складов филиала.
     const { rows } = await client.query(
-      `SELECT path, warehouse_id FROM warehouse_categories
-        WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
-      [tenantID, ids],
+      `SELECT wc.path, wc.warehouse_id FROM warehouse_categories wc
+        WHERE wc.tenant_id=$1 AND wc.deleted_at IS NULL AND wc.id = ANY($2::uuid[])
+          AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                 WHERE wpt.id = wc.warehouse_id AND wpt.point_id = $3::uuid))`,
+      [tenantID, ids, pointId],
     );
     let deletedProducts = 0;
     for (const row of rows) {
@@ -337,16 +367,18 @@ export class WarehouseService {
     return { deletedProducts, deletedCategories: rows.length };
   }
 
-  async updateOrder(tenantID: string, orderedIds: string[]) {
+  async updateOrder(tenantID: string, orderedIds: string[], pointId: string | null = null) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       for (let i = 0; i < orderedIds.length; i++) {
-        await client.query('UPDATE warehouse_categories SET sort_order=$1 WHERE id=$2 AND tenant_id=$3', [
-          i,
-          orderedIds[i],
-          tenantID,
-        ]);
+        // 169 — переставлять можно только папки складов своего филиала.
+        await client.query(
+          `UPDATE warehouse_categories SET sort_order=$1 WHERE id=$2 AND tenant_id=$3
+             AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                    WHERE wpt.id = warehouse_categories.warehouse_id AND wpt.point_id = $4::uuid))`,
+          [i, orderedIds[i], tenantID, pointId],
+        );
       }
       await client.query('COMMIT');
     } catch (err) {
@@ -358,7 +390,7 @@ export class WarehouseService {
     return { message: 'OK' };
   }
 
-  async renameCategory(id: string, tenantID: string, newPath: string) {
+  async renameCategory(id: string, tenantID: string, newPath: string, pointId: string | null = null) {
     // Only a live folder can be renamed (trashed rows now exist after #60's
     // soft-delete and must not be reachable through rename).
     // The folder's warehouse_id is resolved too: a single folder id maps to
@@ -371,6 +403,7 @@ export class WarehouseService {
     if (catRows.length === 0) throw new BadRequestException({ message: 'Категория не найдена' });
     const oldPath = catRows[0].path;
     const warehouseId = (catRows[0].warehouse_id as string | null) ?? null;
+    await this.assertWarehouseInPoint(warehouseId, tenantID, pointId);
 
     newPath = WarehouseService.normalizeFolderPath(newPath);
     if (!newPath) throw new BadRequestException({ message: 'Название папки не может быть пустым' });

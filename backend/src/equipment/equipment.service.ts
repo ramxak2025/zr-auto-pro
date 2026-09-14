@@ -1,7 +1,8 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
-import { assertRowPointForWrite, PointScopeQueryable } from '../common/point-scope';
+import { assertRowPointForWrite, pointFilterSql, PointScopeQueryable } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 @Injectable()
 export class EquipmentService {
@@ -67,7 +68,18 @@ export class EquipmentService {
 
   // ─── Storage Items (подсобка) ─────────────────────────────────────
 
-  async getStorageItems(tenantId: string, query?: { categoryId?: string; search?: string }) {
+  /**
+   * Подсобка ФИЛИАЛА (168): имущество физически стоит в конкретном
+   * автосервисе (подъёмник «ТопГаза» не показывается в «ZR AUTO»), поэтому у
+   * строки свой point_id — штамп филиала сессии при создании, строгое
+   * равенство при чтении (common/point-scope). Справочник категорий остаётся
+   * общим на сеть.
+   */
+  async getStorageItems(
+    tenantId: string,
+    query?: { categoryId?: string; search?: string },
+    pointId: string | null = null,
+  ) {
     let where = 'si.tenant_id = $1';
     const params: any[] = [tenantId];
     let idx = 2;
@@ -79,6 +91,8 @@ export class EquipmentService {
       where += ` AND si.name ILIKE $${idx++}`;
       params.push(`%${query.search}%`);
     }
+    // Филиал — ПОСЛЕДНИМ: pointFilterSql нумерует по params.length.
+    where += pointFilterSql('si', pointId, params);
 
     const { rows } = await this.pool.query(
       `SELECT si.*, sc.name as category_name
@@ -97,6 +111,7 @@ export class EquipmentService {
       serviceLifeMonths: r.service_life_months,
       categoryId: r.category_id,
       categoryName: r.category_name,
+      pointId: r.point_id ?? null,
     }));
   }
 
@@ -128,9 +143,11 @@ export class EquipmentService {
     try {
       await client.query('BEGIN');
 
+      // 168 — имущество рождается в филиале сессии (тот же филиал, что у
+      // зеркального расхода ниже).
       const { rows } = await client.query(
-        `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months, point_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
         [
           tenantId,
           dto.categoryId || null,
@@ -141,6 +158,7 @@ export class EquipmentService {
           dto.quantity || 0,
           dto.unit || 'шт',
           dto.serviceLifeMonths || null,
+          pointId,
         ],
       );
       const item = rows[0];
@@ -219,6 +237,8 @@ export class EquipmentService {
     actorId: string | null = null,
     pointId: string | null = null,
   ) {
+    // 168 — имущество чужого филиала не правится (404, как у расходов).
+    await assertRowPointForWrite(this.pool, 'storage_items', id, tenantId, pointId, 'Имущество не найдено');
     const buildSets = () => {
       const sets: string[] = [];
       const vals: any[] = [];
@@ -361,6 +381,8 @@ export class EquipmentService {
    * ОБЕИХ: вопрос у них один — «этот расход моего филиала?».
    */
   async removeStorageItem(id: string, tenantId: string, reverseExpense = false, pointId: string | null = null) {
+    // 168 — гейт филиала ДО pool.connect() (см. common/point-scope).
+    await assertRowPointForWrite(this.pool, 'storage_items', id, tenantId, pointId, 'Имущество не найдено');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -411,6 +433,7 @@ export class EquipmentService {
       serviceLifeMonths: r.service_life_months,
       categoryId: r.category_id,
       categoryName: r.category_name,
+      pointId: r.point_id ?? null,
     };
   }
 
@@ -428,7 +451,10 @@ export class EquipmentService {
     return rows.map((r) => this.mapIssued(r));
   }
 
-  async getEmployeeSummary(tenantId: string) {
+  /** Сводка выданного — по ШТАТУ филиала (168): выданное следует за человеком. */
+  async getEmployeeSummary(tenantId: string, pointId: string | null = null) {
+    const params: unknown[] = [tenantId];
+    const teamFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT u.id, u.full_name, u.avatar, u.role,
               COUNT(ei.id) FILTER (WHERE ei.status = 'active') as active_count,
@@ -438,9 +464,9 @@ export class EquipmentService {
               COUNT(ei.id) FILTER (WHERE ei.expires_at < now() AND ei.status = 'active') as expired_count
        FROM users u
        LEFT JOIN equipment_issued ei ON ei.user_id = u.id AND ei.tenant_id = $1
-       WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
+       WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')${teamFilter}
        GROUP BY u.id ORDER BY u.full_name`,
-      [tenantId],
+      params,
     );
     return rows.map((r) => ({
       userId: r.id,

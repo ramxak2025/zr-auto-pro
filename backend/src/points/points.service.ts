@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { seedWarehousesForTenantPoints } from '../warehouses/warehouses.service';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { invalidateAuthUser } from '../common/auth-cache';
@@ -240,7 +241,100 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string, string]> = [
        FROM ${MAIN_FACTS_SQL}
       WHERE fc.point_id IS NULL AND fc.tenant_id = mp.tenant_id`,
   ],
+  // 168 — имущество: филиал зеркального расхода «Покупка имущества», иначе
+  // основной (ATTRIBUTION-BLOCK-168 миграции — тот же порядок).
+  [
+    'storage_items',
+    'si',
+    `UPDATE storage_items si
+        SET point_id = COALESCE(
+              (SELECT e.point_id FROM expenses e
+                WHERE e.storage_item_id = si.id AND e.tenant_id = si.tenant_id AND e.point_id IS NOT NULL
+                ORDER BY e.created_at DESC LIMIT 1),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE si.point_id IS NULL AND si.tenant_id = mp.tenant_id`,
+  ],
+  // 169 — СКЛАДЫ уходят основному сервису (вместе с товаром, папками и
+  // движениями — они привязаны к складу); поставки, заказы поставщикам и
+  // оплаты — по складу своего товара / по своей поставке, иначе основному.
+  // Порядок важен: сначала warehouses (свидетель для поставок и заказов),
+  // затем deliveries (свидетель для оплат). Тот же ATTRIBUTION-BLOCK-169.
+  [
+    'warehouses',
+    'w',
+    `UPDATE warehouses w
+        SET point_id = mp.main_id
+       FROM ${MAIN_FACTS_SQL}
+      WHERE w.point_id IS NULL AND w.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'deliveries',
+    'd',
+    `UPDATE deliveries d
+        SET point_id = COALESCE(
+              (SELECT w.point_id FROM delivery_items di
+                 JOIN products p ON p.id = di.product_id
+                 JOIN warehouses w ON w.id = p.warehouse_id AND w.point_id IS NOT NULL
+                WHERE di.delivery_id = d.id
+                ORDER BY di.id LIMIT 1),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE d.point_id IS NULL AND d.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'purchase_orders',
+    'po',
+    `UPDATE purchase_orders po
+        SET point_id = COALESCE(
+              (SELECT w.point_id FROM purchase_order_items poi
+                 JOIN products p ON p.id = poi.product_id
+                 JOIN warehouses w ON w.id = p.warehouse_id AND w.point_id IS NOT NULL
+                WHERE poi.purchase_order_id = po.id
+                ORDER BY poi.created_at LIMIT 1),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE po.point_id IS NULL AND po.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'supplier_payments',
+    'sp',
+    `UPDATE supplier_payments sp
+        SET point_id = COALESCE(
+              (SELECT d.point_id FROM deliveries d
+                WHERE d.id = sp.delivery_id AND d.tenant_id = sp.tenant_id AND d.point_id IS NOT NULL),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE sp.point_id IS NULL AND sp.tenant_id = mp.tenant_id`,
+  ],
 ];
+
+/**
+ * ШТАТ ПРИПИСЫВАЕТСЯ К ФИЛИАЛУ (168) — тот же STAFF-BLOCK-168, что в
+ * миграции, для тенанта, которому первый филиал заводят ПОСЛЕ её прогона.
+ * Каждый не-владелец без единого назначения получает филиал по свидетелям:
+ * последний чек как мастера → последняя смена → основной сервис. Владелец/
+ * директор и суперадмин не приписываются — они входят в любой филиал.
+ * $1 — тенант. Идемпотентно: только те, у кого назначений нет.
+ */
+const STAFF_ATTACH_SQL = `INSERT INTO user_points (user_id, point_id, tenant_id)
+SELECT u.id,
+       COALESCE(
+         (SELECT ch.point_id FROM checks ch
+           WHERE ch.tenant_id = u.tenant_id AND ch.master_id = u.id
+             AND ch.point_id IS NOT NULL AND ch.deleted_at IS NULL
+           ORDER BY ch.created_at DESC LIMIT 1),
+         (SELECT s.point_id FROM shifts s
+           WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.point_id IS NOT NULL
+           ORDER BY s.opened_at DESC LIMIT 1),
+         mp.main_id),
+       u.tenant_id
+  FROM users u
+  JOIN ${MAIN_FACTS_SQL} ON mp.tenant_id = u.tenant_id
+ WHERE u.role NOT IN ('director', 'superadmin')
+   AND u.purged_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM user_points up WHERE up.user_id = u.id AND up.tenant_id = u.tenant_id)
+ON CONFLICT DO NOTHING`;
 
 /**
  * Имя ОСНОВНОГО сервиса берётся из tenants.name. Этот запасной вариант нужен
@@ -943,6 +1037,17 @@ export class PointsService {
   }
 
   /**
+   * Приписать штат к филиалам (168) — зовётся из тех же двух дверей, что
+   * attachOrphanHistory, сразу после него и в той же транзакции. Внутри
+   * тенанта редко больше сотни сотрудников — порционность не нужна.
+   */
+  private async attachStaffToMain(db: HistoryAttachDb, tenantId: string) {
+    const res = await db.query(STAFF_ATTACH_SQL, [tenantId]);
+    const n = res.rowCount ?? 0;
+    if (n > 0) this.logger.log(`Штат тенанта ${tenantId} приписан к филиалам: ${n} сотрудников`);
+  }
+
+  /**
    * Создать точку тенанту (суперадмин). Дубль живого имени → 409.
    *
    * ИСТОРИЯ ДОСТАЁТСЯ ОСНОВНОМУ СЕРВИСУ, А НЕ ПЕРВОЙ ЗАВЕДЁННОЙ ТОЧКЕ.
@@ -1029,7 +1134,14 @@ export class PointsService {
       // ПРЯМО СЕЙЧАС и историю надо разобрать по филиалам. Хелпер находит
       // основной сервис тем же подзапросом, что и миграции 161/162: код и SQL
       // обязаны смотреть на одну и ту же строку.
-      if (!hadMain) await this.attachOrphanHistory(client, tenantId);
+      if (!hadMain) {
+        await this.attachOrphanHistory(client, tenantId);
+        await this.attachStaffToMain(client, tenantId);
+      }
+      // 169 — у каждого живого филиала свой набор складов: досеять
+      // недостающие (новому филиалу — все три; основному после привязки
+      // истории — ничего, его склады уже привязаны). Идемпотентно.
+      await seedWarehousesForTenantPoints(client, tenantId);
 
       await client.query('COMMIT');
       created = point;
@@ -1171,7 +1283,11 @@ export class PointsService {
         // мимо, а рядом родился бы дубль с тем же именем.
         await this.ensureMainPoint(client, tenantId, tenantName);
         await this.attachOrphanHistory(client, tenantId);
+        await this.attachStaffToMain(client, tenantId);
       }
+      // 169 — разархивированный филиал получает свой набор складов, если его
+      // ещё не было (архивировали до 169). Идемпотентно.
+      if (activating) await seedWarehousesForTenantPoints(client, tenantId);
 
       await client.query('COMMIT');
     } catch (err: any) {

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { assertRowPointForWrite, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
@@ -158,6 +159,7 @@ export class PurchaseOrdersService {
     client: PoolClient,
     tenantID: string,
     items: PurchaseOrderItemInputDto[],
+    pointId: string | null = null,
   ): Promise<{ rows: Array<{ productId: string; name: string; quantity: number; costPrice: number }>; total: number }> {
     if (!Array.isArray(items) || items.length === 0) {
       throw new BadRequestException({ message: 'Добавьте хотя бы одну позицию' });
@@ -176,9 +178,13 @@ export class PurchaseOrdersService {
         throw new BadRequestException({ message: 'Цена закупки не может быть отрицательной' });
       }
       // Product must live in the tenant (and not be trashed) — snapshot its name.
+      // 169 — и на складе ФИЛИАЛА сессии: филиал заказывает свой товар.
       const { rows } = await client.query(
-        'SELECT name FROM products WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL LIMIT 1',
-        [item.productId, tenantID],
+        `SELECT p.name FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL
+           AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                  WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))
+         LIMIT 1`,
+        [item.productId, tenantID, pointId],
       );
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Товар не найден' });
@@ -213,18 +219,19 @@ export class PurchaseOrdersService {
   }
 
   // ── create ──────────────────────────────────────────────────────────────
-  async create(tenantID: string, userID: string | null, dto: CreatePurchaseOrderDto) {
+  async create(tenantID: string, userID: string | null, dto: CreatePurchaseOrderDto, pointId: string | null = null) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
       await this.assertSupplierInTenant(client, dto.supplierId, tenantID);
-      const { rows: items, total } = await this.resolveItems(client, tenantID, dto.items);
+      const { rows: items, total } = await this.resolveItems(client, tenantID, dto.items, pointId);
 
+      // 169 — заказ принадлежит ФИЛИАЛУ сессии.
       const { rows: poRows } = await client.query(
-        `INSERT INTO purchase_orders (tenant_id, supplier_id, status, note, total, created_by)
-         VALUES ($1, $2, 'draft', $3, $4, $5) RETURNING id`,
-        [tenantID, dto.supplierId, dto.note ?? null, total, userID],
+        `INSERT INTO purchase_orders (tenant_id, supplier_id, status, note, total, created_by, point_id)
+         VALUES ($1, $2, 'draft', $3, $4, $5, $6) RETURNING id`,
+        [tenantID, dto.supplierId, dto.note ?? null, total, userID, pointId],
       );
       const poId = poRows[0].id;
 
@@ -250,7 +257,11 @@ export class PurchaseOrdersService {
   }
 
   // ── list ──────────────────────────────────────────────────────────────────
-  async list(tenantID: string, query: { status?: string; supplierId?: string; page?: any; limit?: any }) {
+  async list(
+    tenantID: string,
+    query: { status?: string; supplierId?: string; page?: any; limit?: any },
+    pointId: string | null = null,
+  ) {
     const page = parseInt(query.page) || 1;
     const limit = Math.min(parseInt(query.limit) || 50, 200);
     const offset = (page - 1) * limit;
@@ -267,6 +278,9 @@ export class PurchaseOrdersService {
       where += ` AND po.supplier_id = $${idx++}`;
       params.push(query.supplierId.trim());
     }
+    // 169 — заказы ФИЛИАЛА сессии.
+    where += pointFilterSql('po', pointId, params);
+    idx = params.length + 1;
 
     const countResult = await this.pool.query(
       `SELECT COUNT(*) AS total FROM purchase_orders po WHERE ${where}`,
@@ -306,7 +320,9 @@ export class PurchaseOrdersService {
    *     The supply/debt/payment rows of earlier partial receipts are untouched.
    *   • received / cancelled → not editable.
    */
-  async update(id: string, tenantID: string, dto: UpdatePurchaseOrderDto) {
+  async update(id: string, tenantID: string, dto: UpdatePurchaseOrderDto, pointId: string | null = null) {
+    // 169 — заказ чужого филиала не правится (гейт ДО pool.connect()).
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -474,7 +490,8 @@ export class PurchaseOrdersService {
   }
 
   // ── order (draft → ordered) ───────────────────────────────────────────────
-  async markOrdered(id: string, tenantID: string) {
+  async markOrdered(id: string, tenantID: string, pointId: string | null = null) {
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -541,7 +558,15 @@ export class PurchaseOrdersService {
    * она уже известна: older-cost не должен затирать более свежий last-cost (то
    * же правило, что у корректировки поставки — 154).
    */
-  async receive(id: string, tenantID: string, userID: string | null, dto: ReceivePurchaseOrderDto) {
+  async receive(
+    id: string,
+    tenantID: string,
+    userID: string | null,
+    dto: ReceivePurchaseOrderDto,
+    pointId: string | null = null,
+  ) {
+    // 169 — приёмка только заказа СВОЕГО филиала; приход и накладная — в него же.
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     // Дата поставки — до транзакции: кривая/будущая/древняя дата обязана дать
     // чистый 400, а не откат уже начатой приёмки. null ⇒ «сейчас».
     // Пояс тенанта читаем ДО pool.connect(): вторая коннекция под первой на
@@ -651,6 +676,7 @@ export class PurchaseOrdersService {
           // по этой связи смена даты проведённой поставки его перевезёт.
           occurredAt: receivedAtIso,
           purchaseOrderId: id,
+          pointId,
         });
 
         if (paymentMode) {
@@ -732,6 +758,7 @@ export class PurchaseOrdersService {
           // 159: накладная и авто-платёж датируются датой поставки.
           occurredAt: receivedAtIso,
           lines: supplyLines,
+          pointId,
         });
       }
 
@@ -781,7 +808,14 @@ export class PurchaseOrdersService {
    * (у каждой своя накладная и своя дата) — их правят точечно через
    * «Поставки» (PATCH /suppliers/deliveries/:id).
    */
-  async changeReceivedDate(id: string, tenantID: string, userID: string | null, dto: ChangePurchaseOrderDateDto) {
+  async changeReceivedDate(
+    id: string,
+    tenantID: string,
+    userID: string | null,
+    dto: ChangePurchaseOrderDateDto,
+    pointId: string | null = null,
+  ) {
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     // Пояс — ДО pool.connect() (см. receive выше): иначе чтение пояса заняло бы
     // вторую коннекцию, пока первая уже держит транзакцию.
     const tz = await getTenantTimezone(this.pool, tenantID);
@@ -874,7 +908,8 @@ export class PurchaseOrdersService {
   }
 
   // ── cancel (not yet received) ─────────────────────────────────────────────
-  async cancel(id: string, tenantID: string) {
+  async cancel(id: string, tenantID: string, pointId: string | null = null) {
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -910,7 +945,10 @@ export class PurchaseOrdersService {
    * under a null supplier so the UI can still surface them. `suggestedQuantity`
    * is a hint (restore at least to min stock) the UI may override.
    */
-  async suggestions(tenantID: string) {
+  async suggestions(tenantID: string, pointId: string | null = null) {
+    // 169 — подсказки по складам ФИЛИАЛА сессии.
+    const params: unknown[] = [tenantID];
+    const pointFilter = warehousePointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT p.id, p.name, p.stock, p.min_stock, p.cost_price,
               p.supplier_id, s.name AS supplier_name
@@ -919,9 +957,9 @@ export class PurchaseOrdersService {
         WHERE p.tenant_id = $1
           AND p.deleted_at IS NULL
           AND p.min_stock > 0
-          AND p.stock <= p.min_stock
+          AND p.stock <= p.min_stock${pointFilter}
         ORDER BY s.name NULLS LAST, p.name`,
-      [tenantID],
+      params,
     );
 
     const groups = new Map<string, { supplierId: string | null; supplierName: string | null; items: any[] }>();

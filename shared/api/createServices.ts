@@ -1444,7 +1444,8 @@ export function createPlanningApi(api: HttpClient) {
 
 export function createWarehousesApi(api: HttpClient) {
   return {
-    list: () => api.get<Warehouse[]>('/warehouses'),
+    /** Склады филиала сессии (169); `{ scope: 'all' }` — всей сети (для перемещения в другой филиал). */
+    list: (params?: { scope?: 'all' }) => api.get<Warehouse[]>('/warehouses', { params }),
     update: (id: string, body: { name?: string; sortOrder?: number }) =>
       api.patch<Warehouse>(`/warehouses/${id}`, body),
   };
@@ -1502,7 +1503,9 @@ export function createStockMovementsApi(api: HttpClient) {
         | 'writeoff'
         | 'defect_transfer'
         | 'used_transfer'
-        | 'defect_return_to_supplier';
+        | 'defect_return_to_supplier'
+        /** 169 — в другой филиал: `targetWarehouseId` = склад того филиала (только user_management). */
+        | 'point_transfer';
       productId: string;
       quantity: number;
       purchasePrice?: number;

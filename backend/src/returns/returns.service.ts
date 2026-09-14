@@ -299,10 +299,12 @@ export class ReturnsService {
       }
 
       // Resolve target warehouse once.
+      // 169 — склад приёма возврата — ФИЛИАЛА сессии (чек возвращается там,
+      // где его пробили: гейт филиала чека стоит выше).
       const targetWh =
         dto.destination === 'warehouse'
-          ? await this.warehouses.resolveByKind(tenantID, 'main')
-          : await this.warehouses.resolveByKind(tenantID, 'defect');
+          ? await this.warehouses.resolveByKind(tenantID, 'main', actorPointId(actor))
+          : await this.warehouses.resolveByKind(tenantID, 'defect', actorPointId(actor));
 
       // NEW-4 (защита от взаимоблокировки): цикл ниже лочит по строке-источнику
       // на позицию, а для возврата в брак ещё и строку-копию того же SKU на

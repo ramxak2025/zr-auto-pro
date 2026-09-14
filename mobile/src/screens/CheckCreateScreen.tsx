@@ -894,9 +894,14 @@ export default function CheckCreateScreen() {
   // the rest of the screen's lifetime — we only seed the default when
   // `pickerWarehouseId` is still null.
   useEffect(() => {
-    if (pickerWarehouseId || !warehouses || warehouses.length === 0) return;
+    if (!warehouses || warehouses.length === 0) return;
+    // 169 — склады принадлежат филиалу: после мгновенной смены филиала список
+    // другой, а экран Кассы остаётся смонтированным. Устаревший id склада
+    // прежнего филиала обязан откатиться на основной склад НОВОГО, иначе
+    // пикер и прогрев кеша ходили бы за товаром другого автосервиса.
+    if (pickerWarehouseId && warehouses.some((w) => w.id === pickerWarehouseId)) return;
     const main = warehouses.find((w) => w.kind === 'main') ?? warehouses[0];
-    if (main) setPickerWarehouseId(main.id);
+    if (main && main.id !== pickerWarehouseId) setPickerWarehouseId(main.id);
   }, [warehouses, pickerWarehouseId]);
 
   // Активный склад пикера — питает mount-prefetch ниже (лейбл свитчера

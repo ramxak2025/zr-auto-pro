@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // ROLE-ONLY (консолидация 2026-07). Дерево категорий склада:
 //   • view   — чтение дерева (нужно кассе / product picker) → 'warehouse_access';
@@ -21,7 +22,7 @@ export class WarehouseController {
   @RequirePermission('warehouse_access')
   @Get('categories')
   getCategories(@CurrentUser() user: JwtPayload, @Query('warehouseId') warehouseId?: string) {
-    return this.warehouseService.getCategories(user.tenantID, warehouseId);
+    return this.warehouseService.getCategories(user.tenantID, warehouseId, actorPointId(user));
   }
 
   @RequirePermission('warehouse_manage')
@@ -31,7 +32,7 @@ export class WarehouseController {
     @Body('path') path: string,
     @Body('warehouseId') warehouseId?: string,
   ) {
-    return this.warehouseService.createCategory(user.tenantID, path, warehouseId);
+    return this.warehouseService.createCategory(user.tenantID, path, warehouseId, actorPointId(user));
   }
 
   // Delete a folder — EMPTY or FULL. Soft-delete only (reversible): the category
@@ -52,18 +53,19 @@ export class WarehouseController {
       user.tenantID,
       moveTo,
       deleteContents === 'true' || deleteContents === '1',
+      actorPointId(user),
     );
   }
 
   @RequirePermission('warehouse_manage')
   @Patch('categories/order')
   updateOrder(@CurrentUser() user: JwtPayload, @Body('orderedIds') orderedIds: string[]) {
-    return this.warehouseService.updateOrder(user.tenantID, orderedIds);
+    return this.warehouseService.updateOrder(user.tenantID, orderedIds, actorPointId(user));
   }
 
   @RequirePermission('warehouse_manage')
   @Patch('categories/:id/rename')
   renameCategory(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body('newPath') newPath: string) {
-    return this.warehouseService.renameCategory(id, user.tenantID, newPath);
+    return this.warehouseService.renameCategory(id, user.tenantID, newPath, actorPointId(user));
   }
 }

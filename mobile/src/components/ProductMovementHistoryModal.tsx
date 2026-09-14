@@ -55,6 +55,7 @@ const MOVEMENT_VISUALS: Record<StockMovementType, MovementVisual> = {
   inventory: { icon: 'checkmark-circle', color: colors.blue[600], label: 'Инвентаризация', sign: '' },
   defect_transfer: { icon: 'arrow-forward-circle', color: colors.red[600], label: 'В брак', sign: '−' },
   used_transfer: { icon: 'arrow-forward-circle', color: colors.amber[600], label: 'В б/у', sign: '−' },
+  point_transfer: { icon: 'arrow-forward-circle', color: colors.blue[600], label: 'В другой филиал', sign: '−' },
   defect_return_to_supplier: {
     icon: 'arrow-undo-circle',
     color: colors.purple[600],

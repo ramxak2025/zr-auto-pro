@@ -58,6 +58,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointIndicator from '../components/PointIndicator';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -1773,6 +1774,8 @@ export default function EquipmentScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
       <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} trailing={headerTrailing} />
+      {/* Автосервис (168): подсобка и штат — филиала сессии. Только подпись. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       <View style={styles.segmentWrap}>
         <SegmentedTabs value={tab} onChange={setTab} />
@@ -1839,6 +1842,7 @@ export function EquipmentEmployeeScreen() {
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   // ── Segmented control ──
   segmentWrap: {
     paddingHorizontal: spacing[4],

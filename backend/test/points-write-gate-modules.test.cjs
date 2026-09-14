@@ -78,7 +78,7 @@ const bodyBetween = (src, from, to) => {
 
 test('списание со склада (обе ручки) штампует расход филиалом сессии', () => {
   for (const [name, src, body] of [
-    ['stock-movements', stockMovements, bodyBetween(stockMovements, '  async create(tenantID: string', 'BEGIN')],
+    ['stock-movements', stockMovements, bodyBetween(stockMovements, '  async create(', 'BEGIN')],
     ['products/:id/stock', products, bodyBetween(products, '  async updateStock(id: string', 'BEGIN')],
   ]) {
     const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');

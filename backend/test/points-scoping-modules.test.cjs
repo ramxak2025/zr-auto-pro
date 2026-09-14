@@ -570,14 +570,20 @@ test('рассылки режутся филиалом отправителя, �
 
 // ── 9. Пикер мастера ───────────────────────────────────────────────────────
 
-test('список сотрудников скоупится ЯВНО, чтобы не сломать резолв имён', () => {
+test('список сотрудников по умолчанию — штат филиала сессии, весь тенант — только ?scope=all (168)', () => {
   // Актор нужен списку не только ради филиала: от него же зависит ОБЪЁМ строки
   // (ПДн и деньги — только руководителю кадров и самому сотруднику).
   assert.ok(/async getAll\(actor: JwtPayload, pointId: string \| null = null\)/.test(users));
   assert.ok(/async getMasters\(actor: JwtPayload, pointId: string \| null = null\)/.test(users));
   const controller = read('src/users/users.controller.ts');
-  assert.ok(
-    /scope === 'point' \? actorPointId\(user\) : null/.test(controller),
-    'скоуп обязан включаться параметром запроса, а не менять поведение всех экранов',
+  // Филиал — отдельный автосервис (владелец, 2026-09-14): «свои мастера».
+  // Дефолт списка — штат текущего филиала; сеть целиком — явно `scope=all`.
+  assert.equal(
+    (controller.match(/scope === 'all' \? null : actorPointId\(user\)/g) ?? []).length,
+    2,
+    'оба списка (все / мастера) обязаны по умолчанию отдавать штат филиала сессии',
   );
+  // Новый сотрудник приписывается к филиалу сессии создателя.
+  assert.ok(/INSERT INTO user_points \(user_id, point_id, tenant_id\)\s+SELECT \$1, p\.id, \$2 FROM tenant_points p/.test(users));
+  assert.ok(/create\(targetTenant, user\.role, dto, user\.permissions, actorPointId\(user\)\)/.test(controller));
 });

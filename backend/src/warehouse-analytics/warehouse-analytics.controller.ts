@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 class SummaryQueryDto {
   @IsOptional()
@@ -55,37 +56,40 @@ export class WarehouseAnalyticsController {
 
   @Get('summary')
   summary(@CurrentUser() user: JwtPayload, @Query() q: SummaryQueryDto) {
-    return this.analytics.getSummary(user.tenantID, {
-      warehouseId: q.warehouseId,
-      period: q.period,
-    });
+    // 169 — аналитика склада филиала сессии.
+    return this.analytics.getSummary(
+      user.tenantID,
+      { warehouseId: q.warehouseId, period: q.period },
+      actorPointId(user),
+    );
   }
 
   @Get('velocity')
   velocity(@CurrentUser() user: JwtPayload, @Query() q: SummaryQueryDto) {
-    return this.analytics.getVelocity(user.tenantID, {
-      warehouseId: q.warehouseId,
-      period: q.period,
-    });
+    return this.analytics.getVelocity(
+      user.tenantID,
+      { warehouseId: q.warehouseId, period: q.period },
+      actorPointId(user),
+    );
   }
 
   @Get('reorder-forecast')
   reorderForecast(@CurrentUser() user: JwtPayload, @Query() q: ReorderForecastQueryDto) {
-    return this.analytics.getReorderForecast(user.tenantID, { warehouseId: q.warehouseId });
+    return this.analytics.getReorderForecast(user.tenantID, { warehouseId: q.warehouseId }, actorPointId(user));
   }
 
   @Get('category-margin')
   categoryMargin(@CurrentUser() user: JwtPayload, @Query() q: CategoryMarginQueryDto) {
-    return this.analytics.getCategoryMargin(user.tenantID, { period: q.period });
+    return this.analytics.getCategoryMargin(user.tenantID, { period: q.period }, actorPointId(user));
   }
 
   @Get('top-moving')
   topMoving(@CurrentUser() user: JwtPayload, @Query() q: TopQueryDto) {
-    return this.analytics.getTopMoving(user.tenantID, { period: q.period, limit: q.limit });
+    return this.analytics.getTopMoving(user.tenantID, { period: q.period, limit: q.limit }, actorPointId(user));
   }
 
   @Get('top-margin')
   topMargin(@CurrentUser() user: JwtPayload, @Query() q: TopQueryDto) {
-    return this.analytics.getTopMargin(user.tenantID, { period: q.period, limit: q.limit });
+    return this.analytics.getTopMargin(user.tenantID, { period: q.period, limit: q.limit }, actorPointId(user));
   }
 }

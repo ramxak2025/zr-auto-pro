@@ -35,6 +35,8 @@ const points = read('src/points/points.service.ts');
 const migration160 = read('migrations/160_points_scoping.sql');
 const migration161 = read('migrations/161_points_scoping_modules.sql');
 const migration167 = read('migrations/167_schedule_planning_bookings_point.sql');
+const migration168 = read('migrations/168_staff_and_storage_per_point.sql');
+const migration169 = read('migrations/169_warehouses_per_point.sql');
 
 const { PointsService } = require('../dist/points/points.service');
 
@@ -165,11 +167,13 @@ function historyTablesOfMigration(sql) {
   ].map((m) => m[1]);
 }
 
-test('состав привязки один в один с миграциями 160, 161 и 167', () => {
+test('состав привязки один в один с миграциями 160, 161, 167, 168 и 169', () => {
   const fromMigrations = [
     ...historyTablesOfMigration(migration160),
     ...historyTablesOfMigration(migration161),
     ...historyTablesOfMigration(migration167),
+    ...historyTablesOfMigration(migration168),
+    ...historyTablesOfMigration(migration169),
   ];
   assert.ok(fromMigrations.length >= 12, 'парсер миграций сломался — сверять список не с чем');
   assert.deepEqual(

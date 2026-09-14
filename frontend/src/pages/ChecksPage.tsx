@@ -69,6 +69,12 @@ const movementTypeConfig: Record<string, { label: string; color: string; bg: str
     bg: 'bg-blue-50 border-blue-200',
     icon: Recycle,
   },
+  point_transfer: {
+    label: 'Перемещение в другой филиал',
+    color: 'text-indigo-600',
+    bg: 'bg-indigo-50 border-indigo-200',
+    icon: ArrowLeftRight,
+  },
   defect_return_to_supplier: {
     label: 'Возврат поставщику',
     color: 'text-red-700',

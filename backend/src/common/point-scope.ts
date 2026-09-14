@@ -146,7 +146,58 @@ export type PointScopedTable =
   // и тот же гейт записи: день / план / запись чужого филиала не правятся.
   | 'schedule_entries'
   | 'fixed_costs'
-  | 'bookings';
+  | 'bookings'
+  // 168 — имущество (подсобка) филиала.
+  | 'storage_items'
+  // 169 — документы поставщиков филиала.
+  | 'deliveries'
+  | 'purchase_orders'
+  | 'supplier_payments';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// СКЛАД ФИЛИАЛА (169): склад принадлежит филиалу, товар — складу.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * SQL-фрагмент «товар/движение лежит на складе ЭТОГО филиала» + push точки в
+ * `params`. Пустая строка без точки (тенант без филиалов — запрос прежний).
+ *
+ * Филиал у товара НЕ денормализован (products.point_id нет и не будет):
+ * единственный источник правды — warehouses.point_id, и перемещение товара
+ * между складами (stock_movements.transfer) автоматически переводит его в
+ * другой филиал вместе со складом. Отдельная колонка разъезжалась бы с
+ * реальным местом хранения при первом же перемещении.
+ *
+ * `alias` — алиас таблицы с колонкой warehouse_id ('p' у products, 'sm' у
+ * stock_movements). Точка — всегда плейсхолдером.
+ */
+export function warehousePointFilterSql(alias: string, pointId: string | null, params: unknown[]): string {
+  if (!pointId) return '';
+  params.push(pointId);
+  return ` AND EXISTS (SELECT 1 FROM warehouses wpt WHERE wpt.id = ${alias}.warehouse_id AND wpt.point_id = $${params.length})`;
+}
+
+/**
+ * Подзапрос «основной склад филиала» для подстановки в SQL там, где клиент
+ * склад не указал. `tenantPh` — готовый плейсхолдер тенанта в запросе
+ * вызывающего; точка кладётся в `params` здесь. Без точки — прежний
+ * `kind = 'main'` тенанта (у тенанта без филиалов он один).
+ */
+export function mainWarehouseOfPointSql(tenantPh: string, pointId: string | null, params: unknown[]): string {
+  if (pointId) {
+    params.push(pointId);
+    return `(SELECT id FROM warehouses WHERE tenant_id = ${tenantPh} AND kind = 'main' AND point_id = $${params.length} LIMIT 1)`;
+  }
+  // Без точки: у тенанта без филиалов — его единственный основной склад
+  // (point_id IS NULL); у тенанта с филиалами сессия без точки по инварианту
+  // 163 не бывает, но если такой запрос всё же пришёл (внутренний вызов) —
+  // основной склад ОСНОВНОГО сервиса, а не первый попавшийся.
+  return (
+    `(SELECT w.id FROM warehouses w LEFT JOIN tenant_points tp ON tp.id = w.point_id` +
+    ` WHERE w.tenant_id = ${tenantPh} AND w.kind = 'main' AND (w.point_id IS NULL OR tp.is_main)` +
+    ` ORDER BY (w.point_id IS NULL) DESC LIMIT 1)`
+  );
+}
 
 /**
  * ГЕЙТ ЗАПИСИ ПО ФИЛИАЛУ: строку ЧУЖОГО филиала изменить нельзя.

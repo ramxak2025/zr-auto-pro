@@ -908,7 +908,7 @@ export class AuthService {
            ($1, 'Основной склад', 'main',   0),
            ($1, 'Склад брака',    'defect', 1),
            ($1, 'Склад Б/У',      'used',   2)
-         ON CONFLICT (tenant_id, kind) DO NOTHING`,
+         ON CONFLICT (tenant_id, point_id, kind) DO NOTHING`,
         [tenantID],
       );
 

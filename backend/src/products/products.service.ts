@@ -13,11 +13,14 @@ import { parseFields, filterShape } from '../common/field-filter';
 import { NO_TENANT_ID } from '../common/auth-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { WarehouseService } from '../warehouse/warehouse.service';
+import { actorPointId, mainWarehouseOfPointSql, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
-type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
+type ProductActor =
+  | { role?: string; permissions?: Record<string, boolean>; currentPointId?: string | null }
+  | undefined;
 
 // Мусор от битых клиентов (' ', 'undefined', 'null') в query.warehouseId раньше
 // уходил в uuid-колонку и падал в pg 22P02 → 500 в Sentry (тот же класс, что
@@ -88,12 +91,16 @@ export class ProductsService {
     tenantID: string,
     warehouseId?: string | null,
     opts: { forCreate?: boolean } = {},
+    pointId: string | null = null,
   ): Promise<string | null> {
     if (warehouseId) {
-      const { rows } = await this.pool.query('SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-        warehouseId,
-        tenantID,
-      ]);
+      // 169 — склад обязан быть складом ФИЛИАЛА сессии: устаревший id склада
+      // другого филиала (экран пережил переключение) — «не найден», а не
+      // тихая запись в чужой автосервис.
+      const { rows } = await this.pool.query(
+        'SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
+        [warehouseId, tenantID, pointId],
+      );
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
       }
@@ -102,10 +109,27 @@ export class ProductsService {
       }
       return rows[0].id;
     }
-    const { rows } = await this.pool.query(`SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`, [
-      tenantID,
-    ]);
-    return rows.length > 0 ? rows[0].id : null;
+    // Склад не указан → ОСНОВНОЙ склад филиала сессии (169).
+    const params: unknown[] = [tenantID];
+    const { rows } = await this.pool.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
+    return rows.length > 0 && rows[0].id ? rows[0].id : null;
+  }
+
+  /**
+   * 169 — товар обязан лежать на складе ФИЛИАЛА сессии, иначе для мутации он
+   * «не найден» (существование чужого товара не подтверждаем — та же
+   * конвенция, что у common/point-scope.assertRowPointForWrite). Без филиала
+   * (тенант без филиалов) гейта нет.
+   */
+  private async assertProductInPoint(id: string, tenantID: string, pointId: string | null): Promise<void> {
+    if (!pointId) return;
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM products p
+        WHERE p.id = $1 AND p.tenant_id = $2
+          AND EXISTS (SELECT 1 FROM warehouses wpt WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3)`,
+      [id, tenantID, pointId],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
   }
 
   async getAll(tenantID: string, query: any, actor?: ProductActor) {
@@ -132,6 +156,7 @@ export class ProductsService {
     // FE can opt-in to other warehouses by setting `warehouseId=...`.
     // `warehouseId=all` short-circuits the filter entirely. Non-UUID garbage
     // is treated as «склад не указан» (see isUuid above) instead of 22P02→500.
+    const pointId = actorPointId(actor);
     const warehouseId = typeof query.warehouseId === 'string' ? query.warehouseId.trim() : '';
     if (warehouseId !== 'all') {
       if (isUuid(warehouseId)) {
@@ -139,9 +164,15 @@ export class ProductsService {
         params.push(warehouseId);
         idx++;
       } else {
-        where += ` AND p.warehouse_id = (SELECT id FROM warehouses WHERE tenant_id = $1 AND kind = 'main' LIMIT 1)`;
+        // 169 — «склад не указан» = ОСНОВНОЙ склад филиала сессии.
+        where += ` AND p.warehouse_id = ${mainWarehouseOfPointSql('$1', pointId, params)}`;
       }
     }
+    // 169 — в любом режиме (включая `all` и явный склад) видны только склады
+    // ФИЛИАЛА сессии: устаревший id склада другого филиала даёт пустоту, а не
+    // чужой товар.
+    where += warehousePointFilterSql('p', pointId, params);
+    idx = params.length + 1;
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM products p WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
@@ -166,18 +197,25 @@ export class ProductsService {
 
   async getLowStock(tenantID: string, actor?: ProductActor) {
     const canSeeCost = this.canSeeCost(actor);
+    // 169 — только склады филиала сессии.
+    const params: unknown[] = [tenantID];
+    const pointFilter = warehousePointFilterSql('p', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL
-         AND p.stock <= p.min_stock AND p.min_stock > 0
+         AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
        ORDER BY p.name`,
-      [tenantID],
+      params,
     );
     return rows.map((r) => this.mapProduct(r, canSeeCost));
   }
 
-  async getMovements(tenantID: string, query?: { masterId?: string; dateFrom?: string; dateTo?: string }) {
+  async getMovements(
+    tenantID: string,
+    query?: { masterId?: string; dateFrom?: string; dateTo?: string },
+    pointId: string | null = null,
+  ) {
     let where = 'sm.tenant_id = $1';
     const params: any[] = [tenantID];
     let idx = 2;
@@ -197,6 +235,9 @@ export class ProductsService {
       params.push(query.dateTo);
       idx++;
     }
+    // 169 — движения только по складам филиала сессии (последним: помощник
+    // нумерует плейсхолдер по params.length).
+    where += warehousePointFilterSql('sm', pointId, params);
 
     const { rows } = await this.pool.query(
       `SELECT sm.*, p.name as product_name, u.full_name as user_name
@@ -222,14 +263,17 @@ export class ProductsService {
     }));
   }
 
-  async getWarehouseStats(tenantID: string) {
+  /** 169 — стоимость остатков по складам филиала, себестоимость продаж — по чекам филиала. */
+  async getWarehouseStats(tenantID: string, pointId: string | null = null) {
+    const stockParams: unknown[] = [tenantID];
+    const stockPointFilter = warehousePointFilterSql('p', pointId, stockParams);
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(cost_price * stock), 0) as total_cost_value,
-         COALESCE(SUM(sell_price * stock), 0) as total_sell_value,
-         COALESCE(SUM(stock), 0) as total_items
-       FROM products WHERE tenant_id = $1 AND deleted_at IS NULL`,
-      [tenantID],
+         COALESCE(SUM(p.cost_price * p.stock), 0) as total_cost_value,
+         COALESCE(SUM(p.sell_price * p.stock), 0) as total_sell_value,
+         COALESCE(SUM(p.stock), 0) as total_items
+       FROM products p WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${stockPointFilter}`,
+      stockParams,
     );
 
     const now = new Date();
@@ -237,16 +281,20 @@ export class ProductsService {
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
     const lastMonthEnd = monthStart;
 
+    const mcParams: unknown[] = [tenantID, monthStart];
+    const mcPointFilter = pointFilterSql(null, pointId, mcParams);
     const { rows: mcRows } = await this.pool.query(
       `SELECT COALESCE(SUM(product_cost_total), 0) as month_cost
-       FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false AND deleted_at IS NULL`,
-      [tenantID, monthStart],
+       FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false AND deleted_at IS NULL${mcPointFilter}`,
+      mcParams,
     );
 
+    const lmcParams: unknown[] = [tenantID, lastMonthStart, lastMonthEnd];
+    const lmcPointFilter = pointFilterSql(null, pointId, lmcParams);
     const { rows: lmcRows } = await this.pool.query(
       `SELECT COALESCE(SUM(product_cost_total), 0) as last_month_cost
-       FROM checks WHERE tenant_id=$1 AND date >= $2 AND date < $3 AND is_deferred=false AND deleted_at IS NULL`,
-      [tenantID, lastMonthStart, lastMonthEnd],
+       FROM checks WHERE tenant_id=$1 AND date >= $2 AND date < $3 AND is_deferred=false AND deleted_at IS NULL${lmcPointFilter}`,
+      lmcParams,
     );
 
     return {
@@ -269,12 +317,13 @@ export class ProductsService {
     return this.mapProduct(rows[0], this.canSeeCost(actor));
   }
 
-  async create(tenantID: string, dto: any) {
+  async create(tenantID: string, dto: any, pointId: string | null = null) {
     // If a supplier is referenced, it must belong to the caller's tenant.
     if (dto.supplierId) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
-    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true });
+    // 169 — склад филиала сессии (явный или его основной).
+    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId);
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     const { rows } = await this.pool.query(
       `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
@@ -331,7 +380,9 @@ export class ProductsService {
     }
   }
 
-  async update(id: string, tenantID: string, dto: any, userID?: string) {
+  async update(id: string, tenantID: string, dto: any, userID?: string, pointId: string | null = null) {
+    // 169 — товар чужого филиала не правится.
+    await this.assertProductInPoint(id, tenantID, pointId);
     if (dto.supplierId !== undefined && dto.supplierId !== null) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
@@ -412,7 +463,7 @@ export class ProductsService {
       vals.push(dto.supplierId);
     }
     if (dto.warehouseId !== undefined) {
-      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId);
+      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId);
       sets.push(`warehouse_id=$${idx++}`);
       vals.push(resolved);
     }
@@ -539,7 +590,8 @@ export class ProductsService {
    * defaulted to the purchase price (sell price unknown at intake time) and
    * needs to be set later when the owner decides what to charge.
    */
-  async setSellPrice(id: string, tenantID: string, sellPrice: number, userID?: string) {
+  async setSellPrice(id: string, tenantID: string, sellPrice: number, userID?: string, pointId: string | null = null) {
+    await this.assertProductInPoint(id, tenantID, pointId);
     if (sellPrice === undefined || sellPrice === null) {
       throw new BadRequestException({ message: 'Цена продажи обязательна' });
     }
@@ -615,6 +667,7 @@ export class ProductsService {
       rounding?: { mode: 'none' | 'up' | 'down'; step: number };
       dryRun?: boolean;
     },
+    pointId: string | null = null,
   ) {
     const factor = dto.direction === 'increase' ? 1 + dto.percent / 100 : 1 - dto.percent / 100;
     const mode: 'none' | 'up' | 'down' = dto.rounding?.mode ?? 'none';
@@ -628,7 +681,9 @@ export class ProductsService {
 
     const params: any[] = [tenantID];
     let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
-    let idx = 2;
+    // 169 — любой scope (в т.ч. 'all') ограничен складами филиала сессии.
+    where += warehousePointFilterSql('p', pointId, params);
+    let idx = params.length + 1;
 
     if (dto.scope === 'products') {
       const ids = dto.productIds ?? [];
@@ -769,7 +824,8 @@ export class ProductsService {
   // Soft delete — moves to trash. The row stays in the table; checks that
   // reference this product keep working because check_product_lines stores
   // a snapshot (name + prices) at the time of sale.
-  async remove(id: string, tenantID: string) {
+  async remove(id: string, tenantID: string, pointId: string | null = null) {
+    await this.assertProductInPoint(id, tenantID, pointId);
     const result = await this.pool.query(
       'UPDATE products SET deleted_at = NOW() WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
       [id, tenantID],
@@ -801,6 +857,7 @@ export class ProductsService {
   async bulkSoftDelete(
     tenantID: string,
     dto: BulkDeleteDto,
+    pointId: string | null = null,
   ): Promise<{ deletedProducts: number; deletedCategories: number }> {
     const productIds = dto.productIds ?? [];
     const categoryIds = dto.categoryIds ?? [];
@@ -812,19 +869,24 @@ export class ProductsService {
       let deletedProducts = 0;
       let deletedCategories = 0;
 
+      // 169 — все три ветки ограничены складами филиала сессии
+      // ($3::uuid IS NULL — тенант без филиалов, предикат выключен).
+      const inPoint = `($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                          WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))`;
+
       // 1) Explicit product ids.
       if (productIds.length > 0) {
         const res = await client.query(
           `UPDATE products SET deleted_at = NOW()
-           WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
-          [tenantID, productIds],
+           WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[]) AND ${inPoint}`,
+          [tenantID, productIds, pointId],
         );
         deletedProducts += res.rowCount ?? 0;
       }
 
       // 2) Folder ids → reuse the WarehouseService cascade on this same client.
       if (categoryIds.length > 0) {
-        const cat = await this.warehouseService.softDeleteCategories(categoryIds, tenantID, client);
+        const cat = await this.warehouseService.softDeleteCategories(categoryIds, tenantID, client, pointId);
         deletedProducts += cat.deletedProducts;
         deletedCategories += cat.deletedCategories;
       }
@@ -836,8 +898,8 @@ export class ProductsService {
         const res = await client.query(
           `UPDATE products SET deleted_at = NOW()
            WHERE tenant_id=$1 AND deleted_at IS NULL
-             AND ($2::uuid IS NULL OR warehouse_id = $2::uuid)`,
-          [tenantID, warehouseId],
+             AND ($2::uuid IS NULL OR warehouse_id = $2::uuid) AND ${inPoint}`,
+          [tenantID, warehouseId, pointId],
         );
         deletedProducts += res.rowCount ?? 0;
       }
@@ -869,11 +931,16 @@ export class ProductsService {
    * Returns { movedProducts } — число реально переписанных строк; трэшнутые
    * товары и товары чужого склада отфильтрованы предикатом и не считаются.
    */
-  async bulkMove(tenantID: string, dto: BulkMoveDto): Promise<{ movedProducts: number }> {
+  async bulkMove(
+    tenantID: string,
+    dto: BulkMoveDto,
+    pointId: string | null = null,
+  ): Promise<{ movedProducts: number }> {
     const target = WarehouseService.normalizeFolderPath(dto.targetCategory);
-    const warehouseId = await this.warehouseService.resolveWarehouseId(tenantID, dto.warehouseId);
+    // 169 — склад филиала сессии (явный или его основной).
+    const warehouseId = await this.warehouseService.resolveWarehouseId(tenantID, dto.warehouseId, pointId);
     if (target) {
-      await this.warehouseService.createCategory(tenantID, target, warehouseId ?? undefined);
+      await this.warehouseService.createCategory(tenantID, target, warehouseId ?? undefined, pointId);
     }
     const client = await this.pool.connect();
     try {
@@ -898,17 +965,21 @@ export class ProductsService {
   // List items currently in trash, newest first.
   async getTrash(tenantID: string, actor?: ProductActor) {
     const canSeeCost = this.canSeeCost(actor);
+    // 169 — корзина филиала сессии.
+    const params: unknown[] = [tenantID];
+    const pointFilter = warehousePointFilterSql('p', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-       WHERE p.tenant_id = $1 AND p.deleted_at IS NOT NULL
+       WHERE p.tenant_id = $1 AND p.deleted_at IS NOT NULL${pointFilter}
        ORDER BY p.deleted_at DESC`,
-      [tenantID],
+      params,
     );
     return rows.map((r) => this.mapProduct(r, canSeeCost));
   }
 
-  async restore(id: string, tenantID: string) {
+  async restore(id: string, tenantID: string, pointId: string | null = null) {
+    await this.assertProductInPoint(id, tenantID, pointId);
     const result = await this.pool.query(
       'UPDATE products SET deleted_at = NULL WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL',
       [id, tenantID],
@@ -920,7 +991,8 @@ export class ProductsService {
   }
 
   // Permanently delete a single trashed item.
-  async hardDelete(id: string, tenantID: string) {
+  async hardDelete(id: string, tenantID: string, pointId: string | null = null) {
+    await this.assertProductInPoint(id, tenantID, pointId);
     const result = await this.pool.query(
       'DELETE FROM products WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL',
       [id, tenantID],
@@ -932,19 +1004,26 @@ export class ProductsService {
   }
 
   // Drain the trash. Only ever touches rows with deleted_at IS NOT NULL.
-  async emptyTrash(tenantID: string) {
-    const result = await this.pool.query('DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL', [
-      tenantID,
-    ]);
+  async emptyTrash(tenantID: string, pointId: string | null = null) {
+    // 169 — очищается корзина ФИЛИАЛА сессии.
+    const result = await this.pool.query(
+      `DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL
+         AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                WHERE wpt.id = products.warehouse_id AND wpt.point_id = $2::uuid))`,
+      [tenantID, pointId],
+    );
     return { message: 'Корзина очищена', count: result.rowCount ?? 0 };
   }
 
-  async exportCsv(tenantID: string) {
+  async exportCsv(tenantID: string, pointId: string | null = null) {
+    // 169 — выгрузка склада филиала сессии.
+    const params: unknown[] = [tenantID];
+    const pointFilter = warehousePointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT name, category, unit, sell_price, cost_price, stock, min_stock
-       FROM products WHERE tenant_id = $1 AND deleted_at IS NULL
-       ORDER BY category, name`,
-      [tenantID],
+      `SELECT p.name, p.category, p.unit, p.sell_price, p.cost_price, p.stock, p.min_stock
+       FROM products p WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${pointFilter}
+       ORDER BY p.category, p.name`,
+      params,
     );
     const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток';
     const lines = rows.map((r) => {
@@ -962,7 +1041,7 @@ export class ProductsService {
     return [header, ...lines].join('\n');
   }
 
-  async importCsv(tenantID: string, items: unknown) {
+  async importCsv(tenantID: string, items: unknown, pointId: string | null = null) {
     this.logger.log(`[importCsv] received ${Array.isArray(items) ? items.length : 0} items for tenant ${tenantID}`);
 
     // Top-level try/catch so we always return a meaningful error instead of 500.
@@ -1048,7 +1127,8 @@ export class ProductsService {
       // main warehouse resolves to null — we still insert (warehouse_id NULL),
       // matching legacy behaviour, and migration 130 backfills such rows once a
       // main warehouse exists.
-      const importWarehouseId = await this.resolveWarehouseId(tenantID, null);
+      // 169 — импорт ложится на основной склад ФИЛИАЛА сессии.
+      const importWarehouseId = await this.resolveWarehouseId(tenantID, null, {}, pointId);
 
       const client = await this.pool.connect();
       try {
@@ -1164,9 +1244,13 @@ export class ProductsService {
     try {
       await client.query('BEGIN');
 
+      // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
-        'SELECT stock, warehouse_id, cost_price FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
-        [id, tenantID],
+        `SELECT stock, warehouse_id, cost_price FROM products WHERE id=$1 AND tenant_id=$2
+           AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                  WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))
+         FOR UPDATE`,
+        [id, tenantID, pointId],
       );
       if (rows.length === 0) {
         await client.query('ROLLBACK');

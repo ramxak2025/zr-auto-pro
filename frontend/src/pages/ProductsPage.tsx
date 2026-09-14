@@ -1254,6 +1254,7 @@ const MOVEMENT_LABELS: Record<string, { label: string; color: string }> = {
   inventory: { label: 'Инвентаризация', color: 'text-purple-600 bg-purple-50' },
   defect_transfer: { label: 'В брак', color: 'text-amber-600 bg-amber-50' },
   used_transfer: { label: 'В Б/У', color: 'text-blue-600 bg-blue-50' },
+  point_transfer: { label: 'В другой филиал', color: 'text-indigo-600 bg-indigo-50' },
   defect_return_to_supplier: { label: 'Поставщику', color: 'text-red-700 bg-red-50' },
   customer_return: { label: 'Возврат клиента', color: 'text-teal-700 bg-teal-50' },
 };
@@ -1808,17 +1809,21 @@ export default function ProductsPage() {
   }, [inventoryMovements]);
 
   // Fetch persisted empty warehouse categories
+  // Папки — ВЫБРАННОГО склада (169): раньше запрос шёл без склада и сервер
+  // отдавал папки основного, даже когда открыт брак/Б/У; с филиалами это ещё и
+  // папки другого автосервиса. Ключ несёт склад, чтобы переключение не
+  // показывало чужое дерево из кеша.
   const { data: warehouseCats } = useQuery<Array<{ id: string; path: string }>>({
-    queryKey: ['warehouse-categories'],
+    queryKey: ['warehouse-categories', activeWarehouseId || 'main'],
     queryFn: async () => {
-      const res = await warehouseCategoriesApi.getAll();
+      const res = await warehouseCategoriesApi.getAll(activeWarehouseId || undefined);
       return res.data;
     },
     staleTime: 30_000,
   });
 
   const createCategoryMutation = useMutation({
-    mutationFn: (path: string) => warehouseCategoriesApi.create(path),
+    mutationFn: (path: string) => warehouseCategoriesApi.create(path, activeWarehouseId || undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
     },

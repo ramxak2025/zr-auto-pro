@@ -1,6 +1,7 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 
 export interface JournalDoc {
   id: string;
@@ -65,6 +66,7 @@ export class JournalService {
   async getWarehouseDocs(
     tenantID: string,
     params: { from?: string; to?: string; type?: JournalDoc['kind'] | string },
+    pointId: string | null = null,
   ): Promise<JournalDoc[]> {
     const type = params.type;
     const out: JournalDoc[] = [];
@@ -80,6 +82,9 @@ export class JournalService {
       baseConds.push(`sm.created_at <= ($${idx++}::date + 1)::timestamptz`);
       baseParams.push(params.to);
     }
+    // 169 — складские документы только по складам ФИЛИАЛА сессии.
+    const smPointFilter = warehousePointFilterSql('sm', pointId, baseParams);
+    if (smPointFilter) baseConds.push(smPointFilter.slice(' AND '.length));
 
     // Pull stock_movements first; we map type → kind below.
     const wantStockMovements =
@@ -163,6 +168,9 @@ export class JournalService {
         spConds.push(`sp.date <= ($${spIdx++}::date + 1)::timestamptz`);
         spParams.push(params.to);
       }
+      // 169 — оплаты поставщикам ФИЛИАЛА сессии (supplier_payments.point_id).
+      const spPointFilter = pointFilterSql('sp', pointId, spParams);
+      if (spPointFilter) spConds.push(spPointFilter.slice(' AND '.length));
       const { rows: payRows } = await this.pool.query(
         `SELECT sp.id, sp.amount, sp.date, sp.comment, sp.created_at, sp.kind, s.name as supplier_name
          FROM supplier_payments sp

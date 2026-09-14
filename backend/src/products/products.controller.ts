@@ -39,7 +39,7 @@ export class ProductsController {
 
   @Get('movements')
   getMovements(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.productsService.getMovements(user.tenantID, query);
+    return this.productsService.getMovements(user.tenantID, query, actorPointId(user));
   }
 
   // Складская сводка ВКЛЮЧАЕТ себестоимость (total_cost_value, month/lastMonth
@@ -49,7 +49,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Get('warehouse-stats')
   getWarehouseStats(@CurrentUser() user: JwtPayload) {
-    return this.productsService.getWarehouseStats(user.tenantID);
+    return this.productsService.getWarehouseStats(user.tenantID, actorPointId(user));
   }
 
   // CSV-\u0432\u044B\u0433\u0440\u0443\u0437\u043A\u0430 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0430 \u0432\u043A\u043B\u044E\u0447\u0430\u0435\u0442 \u0441\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u2192 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u0443\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u044F \u0441\u043A\u043B\u0430\u0434\u043E\u043C
@@ -57,7 +57,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Get('export-csv')
   async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
-    const csv = await this.productsService.exportCsv(user.tenantID);
+    const csv = await this.productsService.exportCsv(user.tenantID, actorPointId(user));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="products.csv"');
     res.send('\uFEFF' + csv);
@@ -67,7 +67,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post('import-csv')
   importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
-    return this.productsService.importCsv(user.tenantID, dto.items);
+    return this.productsService.importCsv(user.tenantID, dto.items, actorPointId(user));
   }
 
   // Mass sell-price change (raise / lower by a percent, optional rounding).
@@ -79,7 +79,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post('bulk-adjust-price')
   bulkAdjustPrice(@CurrentUser() user: JwtPayload, @Body() dto: BulkAdjustPriceDto) {
-    return this.productsService.bulkAdjustPrice(user.tenantID, dto);
+    return this.productsService.bulkAdjustPrice(user.tenantID, dto, actorPointId(user));
   }
 
   // Bulk soft-delete (move to Корзина) — products by id, folders (cascade), or
@@ -90,7 +90,7 @@ export class ProductsController {
   @RequirePermission('warehouse_delete')
   @Post('bulk-delete')
   bulkDelete(@CurrentUser() user: JwtPayload, @Body() dto: BulkDeleteDto) {
-    return this.productsService.bulkSoftDelete(user.tenantID, dto);
+    return this.productsService.bulkSoftDelete(user.tenantID, dto, actorPointId(user));
   }
 
   // Bulk move of products into another folder (targetCategory=''→ в корень),
@@ -102,7 +102,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post('bulk-move')
   bulkMove(@CurrentUser() user: JwtPayload, @Body() dto: BulkMoveDto) {
-    return this.productsService.bulkMove(user.tenantID, dto);
+    return this.productsService.bulkMove(user.tenantID, dto, actorPointId(user));
   }
 
   // ── Trash bin ──────────────────────────────────────────────────────────
@@ -121,19 +121,19 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Delete('trash/empty')
   emptyTrash(@CurrentUser() user: JwtPayload) {
-    return this.productsService.emptyTrash(user.tenantID);
+    return this.productsService.emptyTrash(user.tenantID, actorPointId(user));
   }
 
   @RequirePermission('warehouse_manage')
   @Post(':id/restore')
   restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.productsService.restore(id, user.tenantID);
+    return this.productsService.restore(id, user.tenantID, actorPointId(user));
   }
 
   @RequirePermission('warehouse_manage')
   @Delete(':id/hard')
   hardDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.productsService.hardDelete(id, user.tenantID);
+    return this.productsService.hardDelete(id, user.tenantID, actorPointId(user));
   }
 
   @Get(':id')
@@ -144,7 +144,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
-    return this.productsService.create(user.tenantID, dto);
+    return this.productsService.create(user.tenantID, dto, actorPointId(user));
   }
 
   @Get(':id/movements')
@@ -160,7 +160,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateProductDto) {
-    return this.productsService.update(id, user.tenantID, dto, user.userID);
+    return this.productsService.update(id, user.tenantID, dto, user.userID, actorPointId(user));
   }
 
   // Set just the sell price on an existing product. Designed for the
@@ -170,7 +170,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Patch(':id/sell-price')
   setSellPrice(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() body: { sellPrice: number }) {
-    return this.productsService.setSellPrice(id, user.tenantID, body?.sellPrice, user.userID);
+    return this.productsService.setSellPrice(id, user.tenantID, body?.sellPrice, user.userID, actorPointId(user));
   }
 
   // Soft-delete (move to Корзина). Gated by the grantable `warehouse_delete`
@@ -181,7 +181,7 @@ export class ProductsController {
   @RequirePermission('warehouse_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.productsService.remove(id, user.tenantID);
+    return this.productsService.remove(id, user.tenantID, actorPointId(user));
   }
 
   // Инвентаризация / корректировка остатка конкретного товара — управление складом.

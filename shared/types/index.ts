@@ -1617,6 +1617,13 @@ export interface Warehouse {
   name: string;
   kind: 'main' | 'defect' | 'used';
   sortOrder: number;
+  /**
+   * Филиал склада (169): у каждого филиала свой набор из трёх складов. Список
+   * `GET /warehouses` отдаёт склады филиала сессии; `?scope=all` (владелец,
+   * перемещение между филиалами) — всей сети с названием филиала.
+   */
+  pointId?: string | null;
+  pointName?: string | null;
 }
 
 export interface WarrantyClaim {
@@ -2791,6 +2798,8 @@ export type StockMovementType =
   | 'defect_transfer'
   | 'used_transfer'
   | 'defect_return_to_supplier'
+  // 169 — перемещение товара в другой филиал (склад другого филиала).
+  | 'point_transfer'
   // Inbound leg of a customer return to the main warehouse. Distinct from
   // 'income' (supplier purchase) so the journal renders «Возврат клиента».
   | 'customer_return'

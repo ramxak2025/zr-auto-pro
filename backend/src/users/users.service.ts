@@ -362,7 +362,21 @@ export class UsersService {
     return rows[0];
   }
 
-  async create(tenantID: string, actorRole: string, dto: any, actorPermissions?: Record<string, boolean>) {
+  /**
+   * 168 — НОВЫЙ СОТРУДНИК ПРИПИСЫВАЕТСЯ К ФИЛИАЛУ СЕССИИ того, кто его завёл
+   * (`pointId`). Филиал — отдельный автосервис: мастер, заведённый в
+   * «ТопГазе», работает в «ТопГазе» и в основном сервисе не показывается.
+   * Владелец/директор (owner-class) не приписывается — у него филиалов нет
+   * потому, что он владелец всех. `pointId` null (тенант без филиалов /
+   * суперадмин из ЛК) — как раньше, без назначения.
+   */
+  async create(
+    tenantID: string,
+    actorRole: string,
+    dto: any,
+    actorPermissions?: Record<string, boolean>,
+    pointId: string | null = null,
+  ) {
     if (!dto.phone || !dto.password || !dto.fullName) {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
@@ -452,6 +466,17 @@ export class UsersService {
          RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, roleId, tenantID],
       );
+      // 168 — приписка к филиалу сессии. Живой филиал СВОЕГО тенанта — иначе
+      // строка молча не вставится (JOIN), и сотрудник останется «везде».
+      if (pointId && role !== 'director' && role !== 'superadmin') {
+        await this.pool.query(
+          `INSERT INTO user_points (user_id, point_id, tenant_id)
+           SELECT $1, p.id, $2 FROM tenant_points p
+            WHERE p.id = $3 AND p.tenant_id = $2 AND p.is_active
+           ON CONFLICT DO NOTHING`,
+          [rows[0].id, tenantID, pointId],
+        );
+      }
       // Создание/правка/корзина живут под 'user_management' — актору полный
       // состав строки положен по определению.
       return this.mapUser(rows[0], true);

@@ -72,16 +72,20 @@ export class StockMovementsController {
   @RequirePermission('warehouse_access')
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.movementsService.list(user.tenantID, {
-      warehouseId: query.warehouseId,
-      productId: query.productId,
-      type: query.type,
-      dateFrom: query.dateFrom,
-      dateTo: query.dateTo,
-      // Подмешать продажи товара в ленту (только при валидном productId) —
-      // «Движение товара» в карточке одного товара показывает и продажи (волна G).
-      includeSales: query.includeSales,
-    });
+    return this.movementsService.list(
+      user.tenantID,
+      {
+        warehouseId: query.warehouseId,
+        productId: query.productId,
+        type: query.type,
+        dateFrom: query.dateFrom,
+        dateTo: query.dateTo,
+        // Подмешать продажи товара в ленту (только при валидном productId) —
+        // «Движение товара» в карточке одного товара показывает и продажи (волна G).
+        includeSales: query.includeSales,
+      },
+      actorPointId(user),
+    );
   }
 
   // Инвентаризация / списание / перемещения — требуют управления складом.
@@ -89,7 +93,8 @@ export class StockMovementsController {
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateStockMovementDto) {
     // Филиал автора — для зеркального расхода списания (161).
-    return this.movementsService.create(user.tenantID, user.userID, dto, actorPointId(user));
+    // Актор целиком (169): право user_management разрешает целевой склад другого филиала.
+    return this.movementsService.create(user.tenantID, user.userID, dto, actorPointId(user), user);
   }
 
   // Convenience: ergonomic shortcut for "transfer to defect" so the FE
@@ -103,12 +108,18 @@ export class StockMovementsController {
     @CurrentUser() user: JwtPayload,
     @Body() body: { productId: string; fromWarehouseId: string; quantity: number; reason: string },
   ) {
-    return this.movementsService.create(user.tenantID, user.userID, {
-      type: 'defect_transfer',
-      productId: body?.productId,
-      quantity: body?.quantity,
-      sourceWarehouseId: body?.fromWarehouseId,
-      reason: body?.reason,
-    });
+    return this.movementsService.create(
+      user.tenantID,
+      user.userID,
+      {
+        type: 'defect_transfer',
+        productId: body?.productId,
+        quantity: body?.quantity,
+        sourceWarehouseId: body?.fromWarehouseId,
+        reason: body?.reason,
+      },
+      actorPointId(user),
+      user,
+    );
   }
 }

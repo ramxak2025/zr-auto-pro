@@ -258,6 +258,20 @@ function parseCheckCursor(raw: unknown): { date: string; createdAt: string; id: 
   }
 }
 
+/**
+ * 169 — СПИСАНИЕ ОСТАТКА ПРОДАЖЕЙ ТОЛЬКО В ФИЛИАЛЕ ЧЕКА. Склад принадлежит
+ * филиалу (warehouses.point_id); чек — тоже (checks.point_id). Товар со склада
+ * другого филиала в чеке этого филиала остаток НЕ трогает: предикат сравнивает
+ * филиал склада товара с филиалом чека и отсекает несовпадение. У тенанта без
+ * филиалов оба NULL — предикат выключен, поведение прежнее. $1 — qty,
+ * $2 — товар, $3 — тенант, $4 — чек.
+ */
+const STOCK_DECREMENT_IN_CHECK_POINT_SQL = `UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3
+  AND NOT EXISTS (SELECT 1 FROM warehouses wpt JOIN checks cpt ON cpt.id = $4
+                   WHERE wpt.id = products.warehouse_id
+                     AND wpt.point_id IS NOT NULL AND cpt.point_id IS NOT NULL
+                     AND wpt.point_id <> cpt.point_id)`;
+
 @Injectable()
 export class ChecksService {
   private readonly logger = new Logger('ChecksService');
@@ -496,11 +510,7 @@ export class ChecksService {
     for (const r of prodRows) {
       const qty = parseFloat(r.qty) || 0;
       if (qty <= 0) continue;
-      await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
-        qty,
-        r.product_id,
-        tenantID,
-      ]);
+      await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, r.product_id, tenantID, checkId]);
     }
 
     // ── 1b) «Мотивация»: accrue promo-product bonuses (095) ────────────────
@@ -938,13 +948,19 @@ export class ChecksService {
     client: PoolClient,
     tenantID: string,
     productIds: string[],
+    pointId: string | null = null,
   ): Promise<Record<string, number>> {
     const map: Record<string, number> = {};
     if (productIds.length === 0) return map;
-    const { rows } = await client.query(`SELECT id, sell_price FROM products WHERE id = ANY($1) AND tenant_id = $2`, [
-      productIds,
-      tenantID,
-    ]);
+    // 169 — цены берутся только у товара СВОЕГО филиала (склад филиала
+    // сессии); товар чужого филиала для чека — «нет на складе» (цена клиента,
+    // остаток не трогается — см. stockDecrementInCheckPointSql).
+    const { rows } = await client.query(
+      `SELECT p.id, p.sell_price FROM products p WHERE p.id = ANY($1) AND p.tenant_id = $2
+         AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))`,
+      [productIds, tenantID, pointId],
+    );
     for (const r of rows) {
       const price = parseFloat(r.sell_price);
       if (Number.isFinite(price) && price > 0) map[r.id] = price;
@@ -974,13 +990,16 @@ export class ChecksService {
     client: PoolClient,
     tenantID: string,
     productIds: string[],
+    pointId: string | null = null,
   ): Promise<Record<string, number>> {
     const map: Record<string, number> = {};
     if (productIds.length === 0) return map;
-    const { rows } = await client.query(`SELECT id, cost_price FROM products WHERE id = ANY($1) AND tenant_id = $2`, [
-      productIds,
-      tenantID,
-    ]);
+    const { rows } = await client.query(
+      `SELECT p.id, p.cost_price FROM products p WHERE p.id = ANY($1) AND p.tenant_id = $2
+         AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                WHERE wpt.id = p.warehouse_id AND wpt.point_id = $3::uuid))`,
+      [productIds, tenantID, pointId],
+    );
     for (const r of rows) {
       const cost = parseFloat(r.cost_price);
       map[r.id] = Number.isFinite(cost) && cost > 0 ? cost : 0;
@@ -2991,11 +3010,21 @@ export class ChecksService {
       }
 
       // Product price lock: warehouse sell_price is authoritative (see helper).
-      const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+      const warehouseSellMap = await this.loadWarehouseSellPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        actorPointId(actor),
+      );
       // Product cost lock (round-11 #10): warehouse cost_price is authoritative
       // too, so a master (no warehouse_manage → client cost is 0) can no longer
       // store a zero cost and inflate profit.
-      const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
+      const warehouseCostMap = await this.loadWarehouseCostPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        actorPointId(actor),
+      );
 
       for (const prod of products) {
         // Lock the SELL price to the current warehouse value when the product is
@@ -3265,10 +3294,11 @@ export class ChecksService {
         // требованию владельца): оверселл записывает дефицит, а не блокирует
         // продажу. Симметрично восстановлению стока при возврате/удалении чека.
         if (prod.productId && !effectiveIsDeferred) {
-          await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
+          await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [
             prod.quantity || 1,
             prod.productId,
             tenantID,
+            checkId,
           ]);
         }
       }
@@ -4503,9 +4533,19 @@ export class ChecksService {
       }
 
       // Product price lock (same rule as create): warehouse sell_price wins.
-      const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+      const warehouseSellMap = await this.loadWarehouseSellPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        actorPointId(actor),
+      );
       // Product cost lock (round-11 #10): warehouse cost_price wins too.
-      const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
+      const warehouseCostMap = await this.loadWarehouseCostPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        actorPointId(actor),
+      );
 
       for (const prod of products) {
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
@@ -4898,9 +4938,19 @@ export class ChecksService {
       for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
     }
 
-    const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+    const warehouseSellMap = await this.loadWarehouseSellPrices(
+      client,
+      tenantID,
+      referencedProductIds,
+      (prior?.point_id as string | null) ?? null,
+    );
     // Product cost lock (round-11 #10): warehouse cost_price wins too.
-    const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
+    const warehouseCostMap = await this.loadWarehouseCostPrices(
+      client,
+      tenantID,
+      referencedProductIds,
+      (prior?.point_id as string | null) ?? null,
+    );
 
     for (const prod of products) {
       const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
@@ -5459,11 +5509,7 @@ export class ChecksService {
       }
       for (const [productId, qty] of Object.entries(newAgg)) {
         if (qty <= 0) continue;
-        await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
-          qty,
-          productId,
-          tenantID,
-        ]);
+        await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [qty, productId, tenantID, id]);
       }
 
       // ── 5) Motivation — idempotent re-accrual from the new lines + master ───
@@ -5821,11 +5867,7 @@ export class ChecksService {
         });
       }
       for (const x of toDeduct) {
-        await client.query('UPDATE products SET stock = stock - $1 WHERE id=$2 AND tenant_id=$3', [
-          x.qty,
-          x.productId,
-          tenantID,
-        ]);
+        await client.query(STOCK_DECREMENT_IN_CHECK_POINT_SQL, [x.qty, x.productId, tenantID, id]);
       }
     }
 

@@ -41,7 +41,8 @@ export class EquipmentController {
   @RequirePermission('equipment_view')
   @Get('storage')
   getStorageItems(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.service.getStorageItems(user.tenantID, query);
+    // 168 — подсобка филиала сессии.
+    return this.service.getStorageItems(user.tenantID, query, actorPointId(user));
   }
 
   @RequirePermission('equipment_manage')
@@ -79,7 +80,8 @@ export class EquipmentController {
   @RequirePermission('equipment_view')
   @Get('summary')
   getSummary(@CurrentUser() user: JwtPayload) {
-    return this.service.getEmployeeSummary(user.tenantID);
+    // 168 — сводка по штату филиала сессии.
+    return this.service.getEmployeeSummary(user.tenantID, actorPointId(user));
   }
 
   // ─── My Equipment (for masters) ───────────────────────────────────

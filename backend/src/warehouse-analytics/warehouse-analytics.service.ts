@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { listTenantTimezones, zonedDateKey } from '../common/timezone';
 
 export type Period = 'week' | 'month' | 'quarter' | 'year';
@@ -96,12 +97,17 @@ export class WarehouseAnalyticsService {
    * undefined / null / "all" as "no filter" so the calling routes don't have
    * to repeat the same guard.
    */
-  private async assertWarehouseInTenant(tenantID: string, warehouseId?: string): Promise<string | null> {
+  private async assertWarehouseInTenant(
+    tenantID: string,
+    warehouseId?: string,
+    pointId: string | null = null,
+  ): Promise<string | null> {
     if (!warehouseId || warehouseId === 'all') return null;
-    const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-      warehouseId,
-      tenantID,
-    ]);
+    // 169 — склад обязан принадлежать филиалу сессии.
+    const { rows } = await this.pool.query(
+      'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id = $3::uuid) LIMIT 1',
+      [warehouseId, tenantID, pointId],
+    );
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Склад не найден' });
     }
@@ -187,17 +193,27 @@ export class WarehouseAnalyticsService {
 
   // ── /summary ──────────────────────────────────────────────────────────────
 
-  async getSummary(tenantID: string, params: { warehouseId?: string; period?: Period }): Promise<WarehouseSummary> {
-    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
+  async getSummary(
+    tenantID: string,
+    params: { warehouseId?: string; period?: Period },
+    pointId: string | null = null,
+  ): Promise<WarehouseSummary> {
+    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId, pointId);
     const period = params.period ?? 'month';
     const days = periodDays(period);
     const periodStart = new Date(Date.now() - days * DAY_MS);
     const periodStartIso = periodStart.toISOString();
     const periodStartDate = periodStartIso.slice(0, 10);
 
-    const productFilter = warehouseId ? 'AND p.warehouse_id = $2' : '';
+    // 169 — «все склады» = все склады ФИЛИАЛА сессии, а не всей сети.
     const productParams: any[] = [tenantID];
-    if (warehouseId) productParams.push(warehouseId);
+    let productFilter = '';
+    if (warehouseId) {
+      productParams.push(warehouseId);
+      productFilter = 'AND p.warehouse_id = $2';
+    } else {
+      productFilter = warehousePointFilterSql('p', pointId, productParams);
+    }
 
     // Current totals
     const { rows: currentRows } = await this.pool.query(
@@ -213,20 +229,38 @@ export class WarehouseAnalyticsService {
     const itemsCount = parseInt(currentRows[0].items_count) || 0;
 
     // Historical stock value at period start (most recent snapshot on or before periodStartDate)
-    const snapshotConds: string[] = ['tenant_id = $1', 'snapshot_date <= $2'];
-    const snapshotParams: any[] = [tenantID, periodStartDate];
-    if (warehouseId) {
-      snapshotConds.push('warehouse_id = $3');
-      snapshotParams.push(warehouseId);
+    let histRows: any[];
+    if (!warehouseId && pointId) {
+      // 169 — «все склады филиала»: агрегатной строки на филиал у снимков нет
+      // (warehouse_id IS NULL — вся сеть), поэтому суммируем построчные снимки
+      // складов филиала за последнюю дату снимка не позже начала периода.
+      const res = await this.pool.query(
+        `SELECT SUM(s.total_cost_value) AS total_cost_value
+           FROM stock_value_snapshots s
+          WHERE s.tenant_id = $1
+            AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM stock_value_snapshots
+                                    WHERE tenant_id = $1 AND snapshot_date <= $2 AND warehouse_id IS NOT NULL)
+            AND EXISTS (SELECT 1 FROM warehouses w WHERE w.id = s.warehouse_id AND w.point_id = $3)`,
+        [tenantID, periodStartDate, pointId],
+      );
+      histRows = res.rows[0]?.total_cost_value === null || res.rows[0]?.total_cost_value === undefined ? [] : res.rows;
     } else {
-      snapshotConds.push('warehouse_id IS NULL');
+      const snapshotConds: string[] = ['tenant_id = $1', 'snapshot_date <= $2'];
+      const snapshotParams: any[] = [tenantID, periodStartDate];
+      if (warehouseId) {
+        snapshotConds.push('warehouse_id = $3');
+        snapshotParams.push(warehouseId);
+      } else {
+        snapshotConds.push('warehouse_id IS NULL');
+      }
+      const res = await this.pool.query(
+        `SELECT total_cost_value FROM stock_value_snapshots
+          WHERE ${snapshotConds.join(' AND ')}
+          ORDER BY snapshot_date DESC LIMIT 1`,
+        snapshotParams,
+      );
+      histRows = res.rows;
     }
-    const { rows: histRows } = await this.pool.query(
-      `SELECT total_cost_value FROM stock_value_snapshots
-        WHERE ${snapshotConds.join(' AND ')}
-        ORDER BY snapshot_date DESC LIMIT 1`,
-      snapshotParams,
-    );
     const stockValueStart = histRows.length > 0 ? parseFloat(histRows[0].total_cost_value) || 0 : stockValueCurrent;
     const stockValueDelta = stockValueCurrent - stockValueStart;
     const deltaPct = stockValueStart > 0 ? (stockValueDelta / stockValueStart) * 100 : 0;
@@ -237,7 +271,11 @@ export class WarehouseAnalyticsService {
     if (warehouseId) {
       salesParams.push(warehouseId);
       salesFilter = `AND p.warehouse_id = $${salesParams.length}`;
+    } else {
+      salesFilter = warehousePointFilterSql('p', pointId, salesParams);
     }
+    // 169 — продажи считаются чеками ФИЛИАЛА (ch.point_id), не всей сети.
+    const salesCheckPoint = pointFilterSql('ch', pointId, salesParams);
     // round-11 #10 / FIX #3: the check filters (not-returned / not-deferred /
     // not-deleted / in-window) live in the SECOND LEFT JOIN's ON clause, so a
     // non-matching check only NULLs ch.* while the cpl row is retained. We must
@@ -259,7 +297,7 @@ export class WarehouseAnalyticsService {
          MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2${salesCheckPoint}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL ${salesFilter}
        GROUP BY p.id, p.name, p.stock, p.cost_price`,
       salesParams,
@@ -278,12 +316,15 @@ export class WarehouseAnalyticsService {
     if (warehouseId) {
       lastSaleParams.push(warehouseId);
       lastSaleFilter = `AND p.warehouse_id = $${lastSaleParams.length}`;
+    } else {
+      lastSaleFilter = warehousePointFilterSql('p', pointId, lastSaleParams);
     }
+    const lastSaleCheckPoint = pointFilterSql('ch', pointId, lastSaleParams);
     const { rows: lastSaleRows } = await this.pool.query(
       `SELECT p.id, p.stock, p.cost_price, MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL${lastSaleCheckPoint}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL ${lastSaleFilter}
        GROUP BY p.id, p.stock, p.cost_price`,
       lastSaleParams,
@@ -394,8 +435,12 @@ export class WarehouseAnalyticsService {
 
   // ── /velocity ─────────────────────────────────────────────────────────────
 
-  async getVelocity(tenantID: string, params: { warehouseId?: string; period?: Period }): Promise<VelocityRow[]> {
-    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
+  async getVelocity(
+    tenantID: string,
+    params: { warehouseId?: string; period?: Period },
+    pointId: string | null = null,
+  ): Promise<VelocityRow[]> {
+    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId, pointId);
     const period = params.period ?? 'month';
     const days = periodDays(period);
     const periodStartIso = new Date(Date.now() - days * DAY_MS).toISOString();
@@ -405,7 +450,11 @@ export class WarehouseAnalyticsService {
     if (warehouseId) {
       conds.push(`p.warehouse_id = $3`);
       sqlParams.push(warehouseId);
+    } else {
+      const f = warehousePointFilterSql('p', pointId, sqlParams);
+      if (f) conds.push(f.slice(' AND '.length));
     }
+    const checkPoint = pointFilterSql('ch', pointId, sqlParams);
 
     const { rows } = await this.pool.query(
       `SELECT
@@ -415,7 +464,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.quantity), 0) as sold_qty
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2${checkPoint}
        WHERE ${conds.join(' AND ')}
        GROUP BY p.id, p.name, p.stock
        ORDER BY sold_qty DESC NULLS LAST, p.name`,
@@ -440,14 +489,22 @@ export class WarehouseAnalyticsService {
 
   // ── /reorder-forecast ─────────────────────────────────────────────────────
 
-  async getReorderForecast(tenantID: string, params: { warehouseId?: string }): Promise<ReorderItem[]> {
-    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
+  async getReorderForecast(
+    tenantID: string,
+    params: { warehouseId?: string },
+    pointId: string | null = null,
+  ): Promise<ReorderItem[]> {
+    const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId, pointId);
     const conds: string[] = ['p.tenant_id = $1', 'p.deleted_at IS NULL'];
     const sqlParams: any[] = [tenantID];
     if (warehouseId) {
       conds.push(`p.warehouse_id = $2`);
       sqlParams.push(warehouseId);
+    } else {
+      const f = warehousePointFilterSql('p', pointId, sqlParams);
+      if (f) conds.push(f.slice(' AND '.length));
     }
+    const checkPoint = pointFilterSql('ch', pointId, sqlParams);
 
     const days30Iso = new Date(Date.now() - 30 * DAY_MS).toISOString();
     const days60Iso = new Date(Date.now() - 60 * DAY_MS).toISOString();
@@ -468,7 +525,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(CASE WHEN ch.date >= $${days90Idx} THEN cpl.quantity ELSE 0 END), 0) as sold_90
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL${checkPoint}
        WHERE ${conds.join(' AND ')}
        GROUP BY p.id, p.name, p.stock`,
       sqlParams,
@@ -515,21 +572,28 @@ export class WarehouseAnalyticsService {
 
   // ── /category-margin ──────────────────────────────────────────────────────
 
-  async getCategoryMargin(tenantID: string, params: { period?: Period }): Promise<CategoryMarginRow[]> {
+  async getCategoryMargin(
+    tenantID: string,
+    params: { period?: Period },
+    pointId: string | null = null,
+  ): Promise<CategoryMarginRow[]> {
     const period = params.period ?? 'month';
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
 
+    // 169 — чеки филиала сессии.
+    const sqlParams: unknown[] = [tenantID, periodStartIso];
+    const checkPoint = pointFilterSql('ch', pointId, sqlParams);
     const { rows } = await this.pool.query(
       `SELECT
          COALESCE(p.category, '—') as category,
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_cost), 0) as cost
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2${checkPoint}
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.category
        ORDER BY revenue DESC`,
-      [tenantID, periodStartIso],
+      sqlParams,
     );
 
     return rows.map((r) => {
@@ -543,11 +607,19 @@ export class WarehouseAnalyticsService {
 
   // ── /top-moving ───────────────────────────────────────────────────────────
 
-  async getTopMoving(tenantID: string, params: { period?: Period; limit?: number }): Promise<TopProductRow[]> {
+  async getTopMoving(
+    tenantID: string,
+    params: { period?: Period; limit?: number },
+    pointId: string | null = null,
+  ): Promise<TopProductRow[]> {
     const period = params.period ?? 'month';
     const limit = Math.max(1, Math.min(parseInt(String(params.limit ?? 10), 10) || 10, 100));
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
 
+    // 169 — чеки филиала сессии; лимит — последним плейсхолдером.
+    const sqlParams: unknown[] = [tenantID, periodStartIso];
+    const checkPoint = pointFilterSql('ch', pointId, sqlParams);
+    sqlParams.push(limit);
     const { rows } = await this.pool.query(
       `SELECT
          p.id,
@@ -556,12 +628,12 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2${checkPoint}
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY sold_qty DESC
-       LIMIT $3`,
-      [tenantID, periodStartIso, limit],
+       LIMIT $${sqlParams.length}`,
+      sqlParams,
     );
 
     return rows.map((r) => ({
@@ -575,11 +647,19 @@ export class WarehouseAnalyticsService {
 
   // ── /top-margin ───────────────────────────────────────────────────────────
 
-  async getTopMargin(tenantID: string, params: { period?: Period; limit?: number }): Promise<TopProductRow[]> {
+  async getTopMargin(
+    tenantID: string,
+    params: { period?: Period; limit?: number },
+    pointId: string | null = null,
+  ): Promise<TopProductRow[]> {
     const period = params.period ?? 'month';
     const limit = Math.max(1, Math.min(parseInt(String(params.limit ?? 10), 10) || 10, 100));
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
 
+    // 169 — чеки филиала сессии; лимит — последним плейсхолдером.
+    const sqlParams: unknown[] = [tenantID, periodStartIso];
+    const checkPoint = pointFilterSql('ch', pointId, sqlParams);
+    sqlParams.push(limit);
     const { rows } = await this.pool.query(
       `SELECT
          p.id,
@@ -588,12 +668,12 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2${checkPoint}
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY profit DESC
-       LIMIT $3`,
-      [tenantID, periodStartIso, limit],
+       LIMIT $${sqlParams.length}`,
+      sqlParams,
     );
 
     return rows.map((r) => ({
