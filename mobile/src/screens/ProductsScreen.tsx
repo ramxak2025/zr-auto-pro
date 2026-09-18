@@ -4567,7 +4567,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     height: 76,
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
+    // 8, а не 10: содержимое строки в максимуме — 58 pt (название в две строки
+    // 19×2 + метастрока 18 + зазор 2). При полях 10 оно не помещалось в 76 и
+    // упиралось в разделитель. 8 даёт 60 pt поля и 2 pt запаса.
+    paddingVertical: spacing[2],
     justifyContent: 'center',
   },
   productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
