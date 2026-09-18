@@ -129,7 +129,12 @@ const UserCard = React.memo(function UserCard({
       <TouchableOpacity style={styles.userRow} onPress={() => onEdit(user)} activeOpacity={0.7}>
         <View style={styles.avatarWrap}>
           {avatarUrl ? (
-            <CachedImage source={{ uri: avatarUrl }} style={styles.avatarImage} />
+            <CachedImage
+              source={{ uri: avatarUrl }}
+              style={[styles.avatarImage, { backgroundColor: palette.bg.muted }]}
+              variant="thumb"
+              recyclingKey={user.id}
+            />
           ) : (
             <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
               <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
@@ -425,7 +430,7 @@ export default function UsersScreen() {
   if (!hasPermission('user_management')) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Сотрудники" onBack={() => navigation.goBack()} />
+        <IosScreenHeader title="Пользователи" onBack={() => navigation.goBack()} />
         <EmptyState title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
       </View>
     );
@@ -558,7 +563,7 @@ export default function UsersScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title="Сотрудники"
+        title="Пользователи"
         subtitle={users.length ? `Всего: ${users.length}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={

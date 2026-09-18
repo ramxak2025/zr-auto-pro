@@ -41,10 +41,13 @@ import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
-import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import type { Product, PaginatedResponse, Warehouse } from '../../../shared/types';
 
-const LIMIT = 500;
+// Тот же лимит, что у «Склада»: пересчёт по неполной номенклатуре «сходился»
+// на хвосте каталога, которого просто не было в выдаче, — и недостача с
+// излишком считались от неполного списка. Это уже деньги, а не косметика.
+const LIMIT = PRODUCT_LIST_LIMIT;
 
 function formatMoney(v: number): string {
   return (

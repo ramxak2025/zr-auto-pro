@@ -464,6 +464,21 @@ export function isEmptyCollection(data: unknown): boolean {
     // No pages at all → empty. Otherwise empty only if EVERY page is empty.
     return data.pages.every((page) => isEmptyPage(page));
   }
+  // PaginatedResponse<T> = { data, total, page, limit } — форма ВСЕХ наших
+  // списочных запросов (склад, журнал, поставщики). Раньше она проваливалась
+  // сюда как «не коллекция»: пустой снимок склада писался на диск и воскресал
+  // на холодном старте, и экран бодро сообщал «Нет товаров» складу, полному
+  // товара. Касса от этого защищена (её ключ отдаёт плоский массив) — Склад
+  // не был.
+  //
+  // Признаём пустым ТОЛЬКО при подтверждённом контракте пагинации (пустой
+  // `data` + числовой `total`), иначе под правило случайно попала бы карточка
+  // детали со своим полем `data`, и мы молча потеряли бы её мгновенный
+  // холодный старт.
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    if (Array.isArray(o.data) && o.data.length === 0 && typeof o.total === 'number') return true;
+  }
   return false;
 }
 

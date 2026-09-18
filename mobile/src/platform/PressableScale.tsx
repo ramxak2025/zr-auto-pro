@@ -71,12 +71,22 @@ export function PressableScale({
         }}
         style={[style, animatedStyle]}
       >
-        {typeof children === 'function' ? null : (children as React.ReactNode)}
-        {typeof children === 'function' ? (
-          // Pressable callable children are not supported inside Animated.Pressable
-          // in TS types; fall back to wrapper
-          <View />
-        ) : null}
+        {/* Callable children (`{({pressed}) => …}`) в Animated.Pressable не
+            поддержаны типами, и раньше эта ветка рисовала ПУСТОЙ <View> —
+            то есть содержимое кнопки молча исчезало. Теперь такой случай
+            громко сообщает о себе в разработке, а в проде рендерится как есть:
+            потерять контент хуже, чем не анимировать нажатие. */}
+        {typeof children === 'function'
+          ? (() => {
+              if (__DEV__) {
+                console.warn(
+                  'PressableScale: функция вместо детей не поддерживается — передайте элементы. ' +
+                    'Для реакции на нажатие используйте роль/стиль компонента.',
+                );
+              }
+              return (children as (state: { pressed: boolean }) => React.ReactNode)({ pressed: false });
+            })()
+          : (children as React.ReactNode)}
       </AnimatedPressable>
     );
   }

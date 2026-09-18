@@ -38,7 +38,7 @@ import { productsApi, warehouseCategoriesApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
-import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import type { Product, PaginatedResponse } from '../../../shared/types';
 
 interface FolderPickerModalProps {
@@ -116,12 +116,12 @@ export default function FolderPickerModal({
   });
 
   const { data: productsData, isLoading } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', { search: '', limit: 500, warehouseId: warehouseId ?? null }],
+    queryKey: ['products', { search: '', limit: PRODUCT_LIST_LIMIT, warehouseId: warehouseId ?? null }],
     queryFn: async () => {
       const res = await productsApi.getAll({
         search: '',
         page: 1,
-        limit: 500,
+        limit: PRODUCT_LIST_LIMIT,
         fields: PRODUCT_LIST_FIELDS,
         ...(warehouseId ? { warehouseId } : {}),
       } as Parameters<typeof productsApi.getAll>[0] & { fields: string });

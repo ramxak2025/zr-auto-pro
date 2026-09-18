@@ -132,7 +132,13 @@ const DismissedRow = React.memo(function DismissedRow({ user, palette, onRestore
       {/* Avatar (desaturated — dismissed) */}
       <View style={styles.avatarWrap}>
         {avatarUrl ? (
-          <CachedImage source={{ uri: avatarUrl }} style={styles.avatar} resizeMode="cover" />
+          <CachedImage
+            source={{ uri: avatarUrl }}
+            style={[styles.avatar, { backgroundColor: palette.bg.muted }]}
+            resizeMode="cover"
+            variant="thumb"
+            recyclingKey={user.id}
+          />
         ) : (
           <LinearGradient colors={avatarColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatar}>
             <Text style={styles.avatarInitials}>{getInitials(user.fullName)}</Text>

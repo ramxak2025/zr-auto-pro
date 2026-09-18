@@ -45,7 +45,7 @@ import {
   type QueueOwner,
 } from '../utils/offlineCheckQueue';
 import { toLocalISODate } from '../utils/dates';
-import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import {
   commitAuthenticatedSession,
   createSessionEpochRuntime,
@@ -321,7 +321,7 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   qc.prefetchQuery({
     queryKey: ['all-products-check'],
     queryFn: async () => {
-      const res = await productsApi.getAll({ search: '', page: 1, limit: 500 });
+      const res = await productsApi.getAll({ search: '', page: 1, limit: PRODUCT_LIST_LIMIT });
       return (res.data as { data?: unknown }).data ?? res.data;
     },
     staleTime: 5 * 60_000,
@@ -357,7 +357,7 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
         }).catch(() => {});
 
         // Склад first-open cache HIT. ProductsScreen reads
-        //   ['products', { search: '', limit: 500, warehouseId: <main.id> }]
+        //   ['products', { search: '', limit: PRODUCT_LIST_LIMIT, warehouseId: <main.id> }]
         // (it defaults to the main warehouse). Warming the EXACT
         // warehouse-scoped key here makes the first Склад open instant.
         // `fields` mirrors the screen's slim `?fields=` projection (shared
@@ -366,12 +366,12 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
         // the prefetch pulled the heavy unprojected shape (bundle_items
         // JSONB, nested supplier) the list never renders.
         qc.prefetchQuery({
-          queryKey: ['products', { search: '', limit: 500, warehouseId: main.id }],
+          queryKey: ['products', { search: '', limit: PRODUCT_LIST_LIMIT, warehouseId: main.id }],
           queryFn: async () => {
             const res = await productsApi.getAll({
               search: '',
               page: 1,
-              limit: 500,
+              limit: PRODUCT_LIST_LIMIT,
               warehouseId: main.id,
               fields: PRODUCT_LIST_FIELDS,
             } as Parameters<typeof productsApi.getAll>[0] & { fields: string });

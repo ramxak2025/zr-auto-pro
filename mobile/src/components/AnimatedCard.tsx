@@ -60,10 +60,20 @@ export default function AnimatedCard({
   activeOpacity = 0.7,
   disableEntrance = false,
 }: AnimatedCardProps) {
-  // Decide ONCE per mount whether this instance animates. If we skip
-  // the animation, we render as a plain View — no Animated wrappers,
-  // no per-frame UI-thread updates, no native animation handles.
-  const skipAnimation = disableEntrance || reduceMotionEnabled || index >= STAGGER_LIMIT;
+  // РЕШЕНИЕ ПРИНИМАЕТСЯ ОДИН РАЗ НА МОНТИРОВАНИЕ И БОЛЬШЕ НЕ МЕНЯЕТСЯ.
+  //
+  // Почему ref, а не обычное выражение: в переиспользуемом списке (FlashList)
+  // ОДИН смонтированный инстанс получает то index=3, то index=40. Если решение
+  // «анимировать или нет» пересчитывать на каждый рендер, оно скачет через
+  // STAGGER_LIMIT туда-обратно — и вместе с ним скакала ФОРМА ДЕРЕВА (см. ниже).
+  // React видел другой тип корневого элемента, размонтировал поддерево строки
+  // целиком и монтировал заново — вместе с превью товара. Глазом это и есть
+  // «карточки мигают, когда листаешь».
+  const decidedRef = useRef<boolean | null>(null);
+  if (decidedRef.current === null) {
+    decidedRef.current = disableEntrance || reduceMotionEnabled || index >= STAGGER_LIMIT;
+  }
+  const skipAnimation = decidedRef.current;
 
   // Premium entry = calm opacity fade-in. No scale-up, no Y-translation
   // bounce — those read as "springy" / "bouncy" and clash with the iOS-
@@ -71,41 +81,30 @@ export default function AnimatedCard({
   // appear sequentially, just calmly.
   const fadeAnim = useRef(new Animated.Value(skipAnimation ? 1 : 0)).current;
 
+  // Вход играется РОВНО ОДИН РАЗ за монтирование. Пустой массив зависимостей —
+  // не забывчивость: пере-запуск на смене index означал бы, что переиспользованная
+  // строка проявляется заново при каждом обороте скролла.
   useEffect(() => {
     if (skipAnimation) return;
     const delay = Math.min(index * 40, 240);
-    Animated.timing(fadeAnim, {
+    const anim = Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 180,
       delay,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
-    // Anim values are stable refs; we intentionally only depend on
-    // `skipAnimation` and `index` so we don't re-fire on parent re-renders.
+    });
+    anim.start();
+    return () => anim.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skipAnimation, index]);
+  }, []);
 
-  if (skipAnimation) {
-    if (onPress) {
-      return (
-        <TouchableOpacity
-          style={style}
-          onPress={onPress}
-          onPressIn={onPressIn}
-          onLongPress={onLongPress}
-          activeOpacity={activeOpacity}
-        >
-          {children}
-        </TouchableOpacity>
-      );
-    }
-    return <Animated.View style={style}>{children}</Animated.View>;
-  }
-
-  const animatedStyle = {
-    opacity: fadeAnim,
-  };
+  // ФОРМА ДЕРЕВА — ИНВАРИАНТ. Один и тот же корень (Animated.View) при любом
+  // index, при любом skipAnimation, на любом обороте переиспользования. Раньше
+  // корень менялся с Animated.View на TouchableOpacity и обратно, и React
+  // пересобирал строку целиком. Когда анимации нет, opacity просто равен 1 —
+  // нативный драйвер по такому значению не делает ни одного кадра работы.
+  const animatedStyle = { opacity: fadeAnim };
 
   if (onPress) {
     return (

@@ -51,6 +51,24 @@ describe('isEmptyCollection', () => {
     expect(isEmptyCollection({})).toBe(false);
   });
 
+  // Форма PaginatedResponse<T> = { data, total, page, limit }. Пустой снимок
+  // склада раньше проходил как «не коллекция», писался на диск и воскресал на
+  // холодном старте: экран показывал «Нет товаров» складу, полному товара.
+  it('считает пустую страницу PaginatedResponse пустой (склад, журнал)', () => {
+    expect(isEmptyCollection({ data: [], total: 0, page: 1, limit: 10000 })).toBe(true);
+    // Страница за концом выдачи — тоже пустая: данных на ней нет.
+    expect(isEmptyCollection({ data: [], total: 37, page: 2, limit: 20 })).toBe(true);
+  });
+
+  it('считает непустую страницу PaginatedResponse НЕ пустой', () => {
+    expect(isEmptyCollection({ data: [{ id: 1 }], total: 1, page: 1, limit: 10000 })).toBe(false);
+  });
+
+  it('карточка детали со своим полем data, но без total — НЕ пустая', () => {
+    // Иначе мы молча потеряли бы мгновенный холодный старт таких экранов.
+    expect(isEmptyCollection({ id: 7, name: 'Иван', data: [] })).toBe(false);
+  });
+
   it('treats scalars / null / undefined as NOT empty', () => {
     expect(isEmptyCollection(null)).toBe(false);
     expect(isEmptyCollection(undefined)).toBe(false);

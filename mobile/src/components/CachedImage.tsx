@@ -17,6 +17,18 @@ type LegacyImageProps = Omit<ImageProps, 'source' | 'style'> & {
   source: ImageSource | number | { uri?: string | null } | null | undefined;
   style?: StyleProp<ImageStyle>;
   resizeMode?: 'cover' | 'contain' | 'stretch' | 'center';
+  /**
+   * РОЛЬ КАРТИНКИ. Решает, уместен ли фейд и плейсхолдер.
+   *
+   *   • 'hero'  (дефолт) — картинка монтируется ОДИН раз и живёт: лайтбокс,
+   *     карточка товара, фото в форме. Плавное появление уместно.
+   *   • 'thumb' — превью в ПЕРЕИСПОЛЬЗУЕМОМ списке. Ни фейда, ни blurhash:
+   *     ячейка переиспользуется на каждом обороте скролла, и 200-мс кросс-фейд
+   *     со светлым плейсхолдером читается как МЕРЦАНИЕ («карточки мигают при
+   *     листании» — жалоба владельца). Подложка совпадает с карточкой, так что
+   *     до прихода битмапа видно ровно прямоугольник карточки, а не вспышку.
+   */
+  variant?: 'thumb' | 'hero';
 };
 
 const RESIZE_MAP: Record<NonNullable<LegacyImageProps['resizeMode']>, ImageProps['contentFit']> = {
@@ -43,8 +55,11 @@ const CachedImage = React.memo(function CachedImage({
   style,
   placeholder,
   transition,
+  variant = 'hero',
+  recyclingKey,
   ...rest
 }: LegacyImageProps) {
+  const isThumb = variant === 'thumb';
   // Normalize `{ uri: null }` and falsy sources to undefined so expo-image
   // renders nothing instead of trying to fetch an empty string.
   const normalizedSource = React.useMemo(() => {
@@ -62,8 +77,14 @@ const CachedImage = React.memo(function CachedImage({
       source={normalizedSource}
       contentFit={RESIZE_MAP[resizeMode]}
       cachePolicy="memory-disk"
-      transition={transition ?? 200}
-      placeholder={placeholder ?? { blurhash: DEFAULT_BLURHASH }}
+      // ПЕРЕИСПОЛЬЗОВАНИЕ ЯЧЕЕК. Списки (FlashList) отдают ОДНОМУ смонтированному
+      // <Image> новый source на каждом обороте скролла. Без recyclingKey
+      // expo-image считает это сменой картинки в том же вью и делает кросс-фейд
+      // со СТАРОГО кадра — по списку бежит «призрак» предыдущего товара. Ключ
+      // говорит «это другая ячейка»: содержимое сбрасывается мгновенно.
+      recyclingKey={recyclingKey}
+      transition={transition ?? (isThumb ? 0 : 200)}
+      placeholder={isThumb ? null : (placeholder ?? { blurhash: DEFAULT_BLURHASH })}
       placeholderContentFit={RESIZE_MAP[resizeMode]}
       style={style as ImageProps['style']}
       {...rest}

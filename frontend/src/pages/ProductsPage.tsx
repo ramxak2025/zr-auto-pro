@@ -1720,9 +1720,13 @@ export default function ProductsPage() {
     isFetching,
     refetch,
   } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', { limit: 1000, warehouseId: activeWarehouseId || 'all' }],
+    // Тот же класс дефекта, что на телефоне: сервер сортирует по названию, и
+    // лимит молча срезал алфавитный хвост каталога — товар «есть, а в списке
+    // нет». Берём потолок сервера (capLimit 10000) одной страницей: дерево
+    // папок и суммы на этой странице считаются по всему массиву.
+    queryKey: ['products', { limit: 10000, warehouseId: activeWarehouseId || 'all' }],
     queryFn: async () => {
-      const params: { limit: number; warehouseId?: string } = { limit: 1000 };
+      const params: { limit: number; warehouseId?: string } = { limit: 10000 };
       if (activeWarehouseId) params.warehouseId = activeWarehouseId;
       const res = await productsApi.getAll(params);
       return res.data;

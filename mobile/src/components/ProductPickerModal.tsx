@@ -171,7 +171,13 @@ const PickerProductRow = React.memo(function PickerProductRow({
     >
       <View style={styles.productRow}>
         {photoUrl ? (
-          <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} resizeMode="cover" />
+          <CachedImage
+            source={{ uri: photoUrl }}
+            style={[styles.productPhoto, { backgroundColor: palette.bg.muted }]}
+            resizeMode="cover"
+            variant="thumb"
+            recyclingKey={product.id}
+          />
         ) : (
           <View style={[styles.productPhotoPlaceholder, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="cube-outline" size={24} color={palette.text.tertiary} />
@@ -619,6 +625,9 @@ export default function ProductPickerModal({
   );
 
   const keyExtractor = useCallback((item: Product) => item.id, []);
+  // Раздельные пулы для строк с фото и без: у них разная форма поддерева, и
+  // общий пул давал пересборку узла картинки на каждом обороте скролла.
+  const getItemType = useCallback((item: Product) => (item.photo ? 'photo' : 'plain'), []);
 
   // First-load skeleton fires ONLY when there is no data at all yet
   // (`data === undefined`). When `data` is `[]` we trust the query and
@@ -855,9 +864,9 @@ export default function ProductPickerModal({
                   data={visibleProducts}
                   renderItem={renderItem}
                   keyExtractor={keyExtractor}
+                  getItemType={getItemType}
                   keyboardShouldPersistTaps="handled"
                   contentContainerStyle={styles.listContent}
-                  removeClippedSubviews
                   refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
                   }

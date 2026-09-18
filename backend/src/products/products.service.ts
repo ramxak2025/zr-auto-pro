@@ -13,6 +13,7 @@ import { parseFields, filterShape } from '../common/field-filter';
 import { NO_TENANT_ID } from '../common/auth-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { WarehouseService } from '../warehouse/warehouse.service';
+import { seedWarehousesForPoint } from '../warehouses/warehouses.service';
 import { actorPointId, mainWarehouseOfPointSql, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
@@ -112,7 +113,23 @@ export class ProductsService {
     // Склад не указан → ОСНОВНОЙ склад филиала сессии (169).
     const params: unknown[] = [tenantID];
     const { rows } = await this.pool.query(`SELECT ${mainWarehouseOfPointSql('$1', pointId, params)} AS id`, params);
-    return rows.length > 0 && rows[0].id ? rows[0].id : null;
+    if (rows.length > 0 && rows[0].id) return rows[0].id as string;
+
+    // НАБОРА СКЛАДОВ У ФИЛИАЛА ЕЩЁ НЕТ — САМОЛЕЧИМСЯ, А НЕ РОЖДАЕМ СИРОТУ.
+    // Молчаливый null создавал товар с warehouse_id = NULL, а такая строка
+    // после 169 невидима ВЕЗДЕ (список, корзина, экспорт, мало на складе) и
+    // не чинится через API: правка, восстановление и перемещение проходят
+    // через гейт филиала и отвечают «Товар не найден». Единственной дверью
+    // внутрь оставалась карточка товара — отсюда «товар есть, а на складе
+    // его нет». Сеем набор тем же SQL, что и модуль складов, и перечитываем.
+    if (tenantID === NO_TENANT_ID) return null; // sentinel-тенант не может владеть складом (FK)
+    await seedWarehousesForPoint(this.pool, tenantID, pointId);
+    const retryParams: unknown[] = [tenantID];
+    const { rows: retry } = await this.pool.query(
+      `SELECT ${mainWarehouseOfPointSql('$1', pointId, retryParams)} AS id`,
+      retryParams,
+    );
+    return retry.length > 0 && retry[0].id ? (retry[0].id as string) : null;
   }
 
   /**
@@ -1106,11 +1123,25 @@ export class ProductsService {
 
       this.logger.log(`[importCsv] normalized ${normalized.length} unique products`);
 
+      // Resolve the tenant's "main" warehouse ONCE so imported products land
+      // there exactly like manual `create` does. 169 — импорт ложится на
+      // основной склад ФИЛИАЛА сессии.
+      const importWarehouseId = await this.resolveWarehouseId(tenantID, null, {}, pointId);
+
       // One SELECT to find all existing names at once.
+      //
+      // 169 — ДУБЛЬ ИЩЕМ ТОЛЬКО НА СКЛАДЕ ИМПОРТА. Одноимённый товар другого
+      // филиала — это ДРУГОЙ товар другого автосервиса. Без этого предиката
+      // загрузка прайса в филиале уходила в ветку UPDATE и переписывала
+      // категорию, цены и ОСТАТОК товара основного сервиса, а в филиале
+      // появлялись только позиции с новыми названиями: «импорт прошёл», а
+      // половины товара на складе нет.
       const names = normalized.map((r) => r.name);
       const { rows: existingRows } = await this.pool.query(
-        `SELECT id, name FROM products WHERE tenant_id = $1 AND name = ANY($2::text[]) AND deleted_at IS NULL`,
-        [tenantID, names],
+        `SELECT id, name FROM products
+          WHERE tenant_id = $1 AND name = ANY($2::text[]) AND deleted_at IS NULL
+            AND warehouse_id IS NOT DISTINCT FROM $3::uuid`,
+        [tenantID, names, importWarehouseId],
       );
       const existingMap = new Map<string, string>();
       for (const row of existingRows) existingMap.set(row.name, row.id);
@@ -1119,16 +1150,6 @@ export class ProductsService {
       let updated = 0;
       let skipped = 0;
       const errors: string[] = [];
-
-      // Resolve the tenant's "main" warehouse ONCE so imported products land
-      // there exactly like manual `create` does. Without this the INSERT left
-      // warehouse_id NULL, and the default `getAll` view (which filters on the
-      // main warehouse) hid every imported row. Edge case: a tenant with no
-      // main warehouse resolves to null — we still insert (warehouse_id NULL),
-      // matching legacy behaviour, and migration 130 backfills such rows once a
-      // main warehouse exists.
-      // 169 — импорт ложится на основной склад ФИЛИАЛА сессии.
-      const importWarehouseId = await this.resolveWarehouseId(tenantID, null, {}, pointId);
 
       const client = await this.pool.connect();
       try {

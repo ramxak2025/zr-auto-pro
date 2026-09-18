@@ -41,6 +41,7 @@ import CachedImage from '../components/CachedImage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { usersApi, scheduleApi, checksApi, employeesApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
@@ -136,7 +137,15 @@ const EmployeeRow = React.memo(function EmployeeRow({
       {/* Avatar */}
       <View style={styles.avatarWrap}>
         {user.avatar ? (
-          <CachedImage source={{ uri: user.avatar }} style={styles.avatar} resizeMode="cover" />
+          <CachedImage
+            // getImageUrl обязателен: в базе лежит относительный путь, и без
+            // него аватар сотрудника молча не грузился совсем.
+            source={{ uri: getImageUrl(user.avatar) }}
+            style={[styles.avatar, { backgroundColor: palette.bg.muted }]}
+            resizeMode="cover"
+            variant="thumb"
+            recyclingKey={user.id}
+          />
         ) : (
           <LinearGradient colors={avatarColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatar}>
             <Text style={styles.avatarInitials}>{getInitials(user.fullName)}</Text>

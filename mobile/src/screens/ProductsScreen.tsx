@@ -49,7 +49,7 @@ import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/Barcode
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, parseQtyInput, unitLabel } from '../utils/units';
 import { parseMoneyInput, readNumericField } from '../utils/numberInput';
 import { extractApiErrorMessage } from '../utils/apiError';
@@ -201,6 +201,18 @@ const FolderRow = React.memo(function FolderRow({
   );
 });
 
+// ТИП ЯЧЕЙКИ = ЕСТЬ ЛИ У ТОВАРА ФОТО.
+//
+// Строка с фото рисует <CachedImage>, строка без фото — <View> с иконкой. Это
+// РАЗНЫЕ поддеревья. Пока тип был один, список переиспользовал ячейку «с фото»
+// под товар «без фото» и обратно, и React каждый раз сносил и собирал этот
+// узел заново — ещё один источник мигания при листании. С раздельными пулами
+// ячейка переиспользуется только под строку своей формы.
+//
+// Ссылка стабильна на уровне модуля: новая стрелка на каждый рендер
+// заставляла бы список заново раскладывать пул.
+const PRODUCT_ITEM_TYPE = (item: Product) => (item.photo ? 'photo' : 'plain');
+
 // ── ProductRow ────────────────────────────────────────────────────────
 // Memoised row for the warehouse list. Module-scope so `React.memo` can
 // short-circuit re-renders to "props unchanged" without per-screen
@@ -208,7 +220,9 @@ const FolderRow = React.memo(function FolderRow({
 // parent render (search keystroke, SWR refetch, filter chip toggle).
 interface ProductRowProps {
   item: Product;
-  index: number;
+  // `index` строке НЕ нужен: входа нет (disableEntrance), а меняющийся проп
+  // гарантированно промахивал React.memo на каждом обороте переиспользования —
+  // строка целиком перерисовывалась прямо во время скролла.
   hideCategory: boolean;
   canSeeCostPrice: boolean;
   /** Row tap — opens the dedicated ProductDetailScreen. */
@@ -229,7 +243,6 @@ interface ProductRowProps {
   /** Palette tokens — passed in so the memoised row picks up dark mode
    *  without subscribing to the theme context itself. */
   rowBg: string;
-  separatorColor: string;
   textPrimary: string;
   textTertiary: string;
   photoPlaceholderBg: string;
@@ -237,11 +250,12 @@ interface ProductRowProps {
    *  a translucent amber glow in dark (washed amber[50] reads dirty on the
    *  dark canvas). Computed by the parent so the row stays prop-driven. */
   pricelessCtaBg: string;
+  /** Фон пилюли «мало / нет в наличии» — тема-зависимый тинт красного. */
+  lowStockPillBg: string;
   accentColor: string;
 }
 const ProductRow = React.memo(function ProductRow({
   item,
-  index,
   hideCategory,
   canSeeCostPrice,
   onOpenDetail,
@@ -252,22 +266,27 @@ const ProductRow = React.memo(function ProductRow({
   selected,
   onToggleSelect,
   rowBg,
-  separatorColor,
   textPrimary,
   textTertiary,
   photoPlaceholderBg,
   pricelessCtaBg,
+  lowStockPillBg,
   accentColor,
 }: ProductRowProps) {
-  const lowStock = item.stock <= item.minStock && item.minStock > 0;
+  // «Мало» = кончилось ИЛИ упало до минимума. Раньше товар с нулём и без
+  // заданного минимума выглядел как обычный — при нуле на складе.
+  const lowStock = item.stock <= 0 || (item.minStock > 0 && item.stock <= item.minStock);
   const pUri = getImageUrl(item.photo);
   // Товар «без цены» — пустой или нулевой sellPrice. Б/У-склад часто
   // заводит товары с null'ом, чтобы владелец выставил цену позже.
   const missingSellPrice = onSetSellPrice && (item.sellPrice == null || item.sellPrice === 0);
   return (
     <AnimatedCard
-      index={index}
-      style={[styles.productCard, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
+      // В ПЕРЕИСПОЛЬЗУЕМОМ СПИСКЕ ВХОДА НЕТ. Проявление строки — ровно то, что
+      // владелец называет «карточки появляются»: при листании ячейка не
+      // рождается заново, она уже была, и её «вход» читается как мигание.
+      disableEntrance
+      style={[styles.productCard, { backgroundColor: rowBg }]}
       onPress={() => (selectMode && onToggleSelect ? onToggleSelect(item) : onOpenDetail(item))}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
@@ -293,7 +312,20 @@ const ProductRow = React.memo(function ProductRow({
           }}
         >
           {pUri ? (
-            <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
+            <CachedImage
+              source={{ uri: pUri }}
+              // Подложка обязательна: ключ переиспользования гасит старый
+              // битмап тем же кадром, а плейсхолдера у thumb нет — без фона
+              // в строке на кадр зияла бы дырка. Это ровно поведение нативной
+              // ячейки таблицы: постоянная плитка, картинка ложится поверх.
+              style={[styles.productPhoto, { backgroundColor: photoPlaceholderBg }]}
+              resizeMode="cover"
+              // Строка живёт в переиспользуемом списке: без роли и ключа
+              // expo-image делал кросс-фейд со СТАРОГО товара, и по списку
+              // бежала полоса вспышек.
+              variant="thumb"
+              recyclingKey={item.id}
+            />
           ) : (
             <View style={[styles.productPhotoPlaceholder, { backgroundColor: photoPlaceholderBg }]}>
               <Ionicons name="cube-outline" size={22} color={textTertiary} />
@@ -304,9 +336,6 @@ const ProductRow = React.memo(function ProductRow({
           <Text style={[styles.productName, { color: textPrimary }]} numberOfLines={2}>
             {item.name}
           </Text>
-          {item.category && !hideCategory && (
-            <Text style={[styles.productCategory, { color: textTertiary }]}>{item.category.split('/').pop()}</Text>
-          )}
           <View style={styles.productPrices}>
             {missingSellPrice ? (
               <TouchableOpacity
@@ -319,22 +348,45 @@ const ProductRow = React.memo(function ProductRow({
                 <Text style={styles.pricelessCtaText}>Установить цену</Text>
               </TouchableOpacity>
             ) : (
-              <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
+              // Цена — обычным текстом, не синим: синий в приложении означает
+              // «на это можно нажать», а цена в строке не нажимается.
+              <Text style={[styles.productSellPrice, { color: textPrimary }]}>{formatMoney(item.sellPrice)}</Text>
             )}
-            {canSeeCostPrice && (
-              <Text style={[styles.productCostPrice, { color: textTertiary }]}>
-                Себест. {formatMoney(item.costPrice)}
+            {/* Второй слот метастроки: в поиске — где лежит товар (иначе две
+                одинаковые «Прокладки» из разных папок неразличимы), в обычном
+                режиме — себестоимость владельцу. Ровно один, поэтому высота
+                строки не зависит от режима. */}
+            {hideCategory ? (
+              canSeeCostPrice ? (
+                <Text style={[styles.productCostPrice, { color: textTertiary }]} numberOfLines={1}>
+                  с/с {formatMoney(item.costPrice)}
+                </Text>
+              ) : null
+            ) : item.category ? (
+              <Text style={[styles.productCostPrice, { color: textTertiary }]} numberOfLines={1}>
+                {item.category.split('/').slice(-2).join(' › ')}
               </Text>
-            )}
+            ) : null}
           </View>
         </View>
         <View style={styles.productStockWrap}>
-          {lowStock && <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />}
-          <Text style={[styles.productStock, { color: textPrimary }, lowStock && styles.productStockLow]}>
-            {formatQty(item.stock)}
-          </Text>
-          <Text style={[styles.productStockLabel, { color: textTertiary }]}>{unitLabel(item.unit)}</Text>
+          {/* ОДИН цветной сигнал на строку: тревога по остатку. Пилюля видна с
+              вытянутой руки, в отличие от 14-пиксельной иконки. */}
+          {lowStock ? (
+            <View style={[styles.stockPill, { backgroundColor: lowStockPillBg }]}>
+              <Text style={styles.stockPillValue}>{item.stock <= 0 ? 'Нет' : formatQty(item.stock)}</Text>
+              {item.stock > 0 ? <Text style={styles.stockPillUnit}>{unitLabel(item.unit)}</Text> : null}
+            </View>
+          ) : (
+            <>
+              <Text style={[styles.productStock, { color: textPrimary }]}>{formatQty(item.stock)}</Text>
+              <Text style={[styles.productStockLabel, { color: textTertiary }]}>{unitLabel(item.unit)}</Text>
+            </>
+          )}
         </View>
+        {/* Шеврон — нативный признак того, что строка ОТКРЫВАЕТ экран. В режиме
+            выделения его нет: там тап переключает выбор, а не навигирует. */}
+        {!selectMode && <Ionicons name="chevron-forward" size={14} color={textTertiary} />}
       </View>
     </AnimatedCard>
   );
@@ -382,7 +434,8 @@ export default function ProductsScreen() {
   const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const [search, setSearch] = useState('');
-  const limit = 500;
+  // Весь каталог склада одной страницей — см. PRODUCT_LIST_LIMIT.
+  const limit = PRODUCT_LIST_LIMIT;
   // Slim list payload (audit #5) — `?fields=` projection. The field set now
   // lives in src/constants/productFields.ts (PRODUCT_LIST_FIELDS), shared
   // with the AuthContext login prefetch so the warmed cache entry is
@@ -943,6 +996,10 @@ export default function ProductsScreen() {
   // имеют, чтобы не подкидывать нестабильный gesture-стек.
 
   const allProducts = Array.isArray(data?.data) ? data.data : [];
+  // СЕРВЕР СКАЗАЛ, СКОЛЬКО ТОВАРА ВСЕГО — и это число раньше выбрасывалось.
+  // Если выдача обрезана лимитом, владелец обязан это ВИДЕТЬ: немое усечение
+  // и есть «товар на складе иногда не показывается, хотя он там есть».
+  const listTruncated = typeof data?.total === 'number' && data.total > allProducts.length;
 
   // Compute folder annotations: last inventory date per folder
   const inventoryAnnotations = useMemo(() => {
@@ -2090,12 +2147,21 @@ export default function ProductsScreen() {
   // выставил её позже. На основном складе цена всегда задаётся при
   // создании, поэтому CTA не показываем.
   const isUsedWarehouse = activeWarehouse?.kind === 'used';
+  // Разделитель строк — у списка, а не у карточки: только так линию можно
+  // увести под текст (нативные таблицы iOS не режут линией аватар/фото).
+  const ProductSeparator = useCallback(
+    () => <View style={[styles.productSeparator, { backgroundColor: palette.border.subtle }]} />,
+    [palette.border.subtle],
+  );
+
   const renderProductItem = useCallback(
-    ({ item, index }: { item: Product; index: number }) => (
+    ({ item }: { item: Product }) => (
       <ProductRow
         item={item}
-        index={index}
-        hideCategory={!!search}
+        // Папку прячем, когда мы ВНУТРИ неё (она одна и та же у всех строк —
+        // чистый шум), и показываем в поиске, где строки приходят из разных
+        // папок и их надо различать. Раньше условие стояло наоборот.
+        hideCategory={!search}
         canSeeCostPrice={canSeeCostPrice}
         onOpenDetail={openDetail}
         onOpenPhoto={setFullscreenPhoto}
@@ -2121,11 +2187,11 @@ export default function ProductsScreen() {
         selected={selectedProductIds.has(item.id)}
         onToggleSelect={toggleProductSelect}
         rowBg={palette.bg.card}
-        separatorColor={palette.border.subtle}
         textPrimary={palette.text.primary}
         textTertiary={palette.text.tertiary}
         photoPlaceholderBg={palette.bg.muted}
         pricelessCtaBg={palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50]}
+        lowStockPillBg={softTint(colors.red[600], palette.mode)}
         accentColor={palette.accent.primary}
       />
     ),
@@ -2203,7 +2269,11 @@ export default function ProductsScreen() {
         <IosScreenHeader
           title={activeWarehouse?.name || '\u0421\u043A\u043B\u0430\u0434'}
           subtitle={
-            data === undefined ? undefined : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
+            data === undefined
+              ? undefined
+              : listTruncated
+                ? `${allProducts.length} \u0438\u0437 ${data?.total} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
+                : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
           }
           leading={
             warehouses && warehouses.length > 1 ? (
@@ -2287,7 +2357,10 @@ export default function ProductsScreen() {
           title-press hook, so we overlay an invisible Pressable that
           covers the title text region. Pinned to insetsTop so it sits
           right over the title row regardless of device safe area. */}
-      {warehouses && warehouses.length > 1 && (
+      {/* В режиме выделения НЕ рендерим: оверлей лежит поверх шапки и
+          перехватывал тап по «Отмена» и по счётчику «Выбрано N» — вместо выхода
+          из выделения открывалась шторка выбора склада. */}
+      {warehouses && warehouses.length > 1 && !selectMode && (
         <Pressable
           onPress={() => setShowWarehouseSwitcher(true)}
           style={[styles.titleTapZone, { top: insetsTop + spacing[2] }]}
@@ -2355,6 +2428,19 @@ export default function ProductsScreen() {
         </View>
       )}
 
+      {/* Список обрезан лимитом — говорим об этом прямо и подсказываем выход.
+          Поиск на этом экране серверный, он видит весь каталог. */}
+      {listTruncated && (
+        <View
+          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="warning-outline" size={16} color={colors.orange[600]} />
+          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
+            {`Показаны ${allProducts.length} из ${data?.total} товаров. Остальные найдутся поиском.`}
+          </Text>
+        </View>
+      )}
+
       {/* Render gate \u2014 EVERY branch terminates in content, EmptyState or
           QueryErrorState. Never an eternal skeleton:
             1. data !== undefined           \u2192 list / EmptyState (stale-while-revalidate);
@@ -2364,7 +2450,10 @@ export default function ProductsScreen() {
                transient because the query has no `enabled` gate \u2014 a fetch
                is in flight or about to start, and its terminal states are
                exactly branches 1 and 2. */}
-      {data === undefined && isError ? (
+      {/* Пустой (в т.ч. поднятый с диска и устаревший) список при ошибке — это
+          ОШИБКА, а не «склад пуст». Непустой устаревший список продолжаем
+          показывать: stale-while-revalidate не ломаем. */}
+      {(data === undefined || allProducts.length === 0) && isError ? (
         <QueryErrorState
           title={
             '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043a\u043b\u0430\u0434'
@@ -2422,10 +2511,25 @@ export default function ProductsScreen() {
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
-          // Each product row carries a heavy CachedImage thumbnail.
-          // Explicitly enable clipped-subview removal so Android
-          // doesn't keep them mounted off-screen while flinging.
-          removeClippedSubviews
+          // ПОЧЕМУ ЗДЕСЬ НЕТ removeClippedSubviews. Флага в пропсах FlashList v2
+          // нет — он проваливается в ScrollView под списком, а там ячейки
+          // спозиционированы абсолютно, и штатное отсечение по клип-ректу
+          // конфликтует с собственным рециклингом списка: строка на миг
+          // отцепляется и возвращается. Это и есть «карточки мигают, когда
+          // листаешь». На Клиентах и в Журнале флаг по этой же причине уже
+          // выключен явным `={false}` — Склад просто не получил тот фикс.
+          //
+          // Дистанция отрисовки: платформенный дефолт 250 pt — это ~3 строки,
+          // и на быстром флике палец их догоняет. 500 pt (~6 строк в обе
+          // стороны) закрывает это, не утраивая число живых нативных картинок.
+          // Осознанный размен «память ↔ пустота на флике», а не догма.
+          drawDistance={500}
+          getItemType={PRODUCT_ITEM_TYPE}
+          ItemSeparatorComponent={ProductSeparator}
+          // Нативный список с активным поиском прячет клавиатуру, как только
+          // палец потянул содержимое. Пикеры товара это уже делают, Склад — нет.
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -4454,33 +4558,77 @@ const styles = StyleSheet.create({
   // Products
   // Compact iOS-style list rows — flat white surface with hairline separators,
   // matches the look of native Settings / Mail lists on iPhone.
+  // ── Строка товара ──────────────────────────────────────────────────────
+  // ПОСТОЯННАЯ ВЫСОТА — это и есть ответ на «листать неудобно». Раньше строка
+  // дышала в зависимости от того, есть ли у товара папка, вторая строка
+  // названия и цена, и вертикальная ось списка ломалась на каждой карточке.
+  // Теперь 76 pt всегда: 2 строки названия (19×2) + метастрока (18) + поля.
   productCard: {
     backgroundColor: colors.white,
-    paddingHorizontal: spacing[3],
+    height: 76,
+    paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.gray[200],
+    justifyContent: 'center',
   },
   productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  productPhoto: { width: 42, height: 42, borderRadius: borderRadius.md },
+  productPhoto: { width: 56, height: 56, borderRadius: borderRadius.xl },
   productPhotoPlaceholder: {
-    width: 42,
-    height: 42,
-    borderRadius: borderRadius.md,
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius.xl,
     backgroundColor: colors.gray[100],
     alignItems: 'center',
     justifyContent: 'center',
   },
   productInfo: { flex: 1, minWidth: 0 },
-  productName: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.1 },
-  productCategory: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
-  productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
-  productSellPrice: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[700] },
-  productCostPrice: { fontSize: 11, color: colors.gray[400] },
-  productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 44, paddingLeft: spacing[1] },
-  productStock: { fontSize: 16, fontWeight: '700' as const, color: colors.gray[900], letterSpacing: -0.3 },
+  productName: {
+    fontSize: fontSize.base,
+    lineHeight: 19,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    letterSpacing: -0.2,
+  },
+  productCategory: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 1 },
+  productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2, height: 18 },
+  // Цифры денег — табличные: иначе цена «дышит» по ширине при пересчёте и
+  // колонка не выстраивается по вертикали.
+  productSellPrice: {
+    fontSize: 15,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    fontVariant: ['tabular-nums'],
+  },
+  productCostPrice: { fontSize: 13, color: colors.gray[400], flexShrink: 1, fontVariant: ['tabular-nums'] },
+  productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 52, paddingLeft: spacing[1] },
+  productStock: {
+    fontSize: 17,
+    fontWeight: '700' as const,
+    color: colors.gray[900],
+    letterSpacing: -0.3,
+    fontVariant: ['tabular-nums'],
+  },
   productStockLow: { color: colors.red[500] },
-  productStockLabel: { fontSize: 10, color: colors.gray[400], marginTop: -1 },
+  productStockLabel: { fontSize: 11, color: colors.gray[400], marginTop: -1 },
+  // Пилюля тревоги — единственный цвет в строке.
+  stockPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[2],
+    paddingVertical: 4,
+    borderRadius: borderRadius.md,
+    minWidth: 44,
+  },
+  stockPillValue: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: colors.red[600],
+    letterSpacing: -0.2,
+    fontVariant: ['tabular-nums'],
+  },
+  stockPillUnit: { fontSize: 10, color: colors.red[600], marginTop: -2 },
+  // Разделитель списка — с отступом под текст, как в нативных таблицах iOS:
+  // линия начинается там же, где название, а не режет фотографию.
+  productSeparator: { height: StyleSheet.hairlineWidth, marginLeft: spacing[4] + 56 + spacing[3] },
   // Photo section in form
   photoSection: { marginBottom: spacing[4], alignItems: 'center' },
   photoPickerWrap: {

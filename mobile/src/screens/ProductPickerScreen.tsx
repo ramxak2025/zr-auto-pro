@@ -157,7 +157,13 @@ const PickerProductRow = React.memo(function PickerProductRow({
     >
       <View style={styles.productRow}>
         {photoUrl ? (
-          <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} resizeMode="cover" />
+          <CachedImage
+            source={{ uri: photoUrl }}
+            style={[styles.productPhoto, { backgroundColor: palette.bg.muted }]}
+            resizeMode="cover"
+            variant="thumb"
+            recyclingKey={product.id}
+          />
         ) : (
           <View style={[styles.productPhotoPlaceholder, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="cube-outline" size={24} color={palette.text.tertiary} />
@@ -227,9 +233,11 @@ const PickerProductRow = React.memo(function PickerProductRow({
               <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
             ) : null}
             <Text style={[styles.productStock, { color: palette.text.primary }, lowStock && styles.productStockLow]}>
-              {product.stock}
+              {formatQty(product.stock)}
             </Text>
-            <Text style={[styles.productStockLabel, { color: palette.text.tertiary }]}>{'шт'}</Text>
+            {/* Реальная единица товара, а не жёсткое «шт»: масло в литрах
+                показывалось как «5 шт» прямо в денежном потоке. */}
+            <Text style={[styles.productStockLabel, { color: palette.text.tertiary }]}>{unitLabel(product.unit)}</Text>
           </View>
         )}
       </View>
@@ -585,7 +593,13 @@ export default function ProductPickerScreen() {
   );
 
   const keyExtractor = useCallback((item: PickerListRow) => item.key, []);
-  const getItemType = useCallback((item: PickerListRow) => item.type, []);
+  // Тип ячейки делит пул переиспользования: папка / товар с фото / товар без
+  // фото — три разные формы поддерева. Общий пул заставлял React пересобирать
+  // узел картинки при каждом обороте скролла (мигание превью).
+  const getItemType = useCallback(
+    (item: PickerListRow) => (item.type === 'product' ? (item.product.photo ? 'product-photo' : 'product') : 'folder'),
+    [],
+  );
 
   const warehouseLabel = useMemo(() => {
     const w = warehouseId ? warehouses.find((x) => x.id === warehouseId) : warehouses.find((x) => x.kind === 'main');
@@ -736,7 +750,6 @@ export default function ProductPickerScreen() {
             getItemType={getItemType}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
-            removeClippedSubviews
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
