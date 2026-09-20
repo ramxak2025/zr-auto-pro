@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
+
+import { refreshTriggersSoon } from './gsap';
 
 interface OptionalImageProps {
   src: string;
@@ -26,6 +28,23 @@ interface OptionalImageProps {
 export default function OptionalImage({ src, alt, width, height, className }: OptionalImageProps) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+
+  // Слот меняет высоту уже ПОСЛЕ того, как ScrollTrigger померил позиции.
+  // Там, где файла на сервере ещё нет, 404 убирает зарезервированные ~270 px
+  // (на планшете — вдвое больше), и все reveal'ы ниже остаются с offset'ами от
+  // старого layout: их start оказывается выше реального, секция проходит мимо
+  // триггера и текст не проявляется НИКОГДА. Пересчитываем триггеры на любое
+  // изменение состояния слота — на первом рендере (оба null) делать нечего.
+  // Именно Soon-вариант: форсированный refresh() прогоняет окно через
+  // scrollTo(0) и обратно, а FeatureDetailPage при смене раздела как раз
+  // запускает плавную прокрутку наверх — 404 картинки прилетал в середину
+  // и обрывал её, оставляя читателя посреди статьи. Отложенный замер сам
+  // дожидается конца скролла.
+  useLayoutEffect(() => {
+    if (failedSrc === null && loadedSrc === null) return;
+    refreshTriggersSoon();
+  }, [failedSrc, loadedSrc]);
+
   if (failedSrc === src) return null;
   const loaded = loadedSrc === src;
   return (

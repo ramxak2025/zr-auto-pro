@@ -159,10 +159,18 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
       {/* Шторка: flex-колонка — заголовок и WhatsApp-кнопка закреплены,
           скроллится только сетка разделов между ними. slide-up/down на transform. */}
       <div
-        className={`absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl transition-transform duration-[250ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none ${
+        className={`absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl transition-transform duration-[250ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none ${
           visible ? 'translate-y-0' : 'translate-y-full'
         }`}
-        style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
+        // max-height задаётся дважды намеренно: в классе — vh, инлайном — dvh.
+        // dvh это Chrome 108 / Safari 15.4 / Firefox 101; на всём, что старше,
+        // объявление невалидно и отбрасывается парсером, max-height становится
+        // none — шторка вырастает по контенту (~780 px), а прижата она к
+        // bottom-0, поэтому уезжает ВВЕРХ за край экрана вместе с заголовком и
+        // крестиком, а внутренний список перестаёт скроллиться. Закрыть её было
+        // нечем: панель во всю ширину перекрывает и скрим. Инлайн перебивает
+        // класс там, где dvh поддержан, и молча игнорируется там, где нет.
+        style={{ maxHeight: '85dvh', paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
       >
         {/* Ручка-граб */}
         <div aria-hidden className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-slate-300" />

@@ -84,7 +84,13 @@ export default function Roles() {
             const rx = gsap.quickTo(card, 'rotationX', { duration: 0.5, ease: 'power3' });
             const ry = gsap.quickTo(card, 'rotationY', { duration: 0.5, ease: 'power3' });
             const ty = gsap.quickTo(card, 'y', { duration: 0.5, ease: 'power3' });
-            const sc = gsap.quickTo(card, 'scale', { duration: 0.5, ease: 'power3' });
+            // scaleX/scaleY по отдельности, а не 'scale': resetTo() ищет в твине
+            // PropTween ровно с таким именем, а CSSPlugin раскладывает scale на
+            // scaleX+scaleY — совпадения нет, поэтому gsap на КАЖДОМ mousemove
+            // писал в консоль «scale not eligible for reset» и заново собирал
+            // твин, а карточка не масштабировалась вообще.
+            const scx = gsap.quickTo(card, 'scaleX', { duration: 0.5, ease: 'power3' });
+            const scy = gsap.quickTo(card, 'scaleY', { duration: 0.5, ease: 'power3' });
             const onMove = (e: MouseEvent) => {
               const r = card.getBoundingClientRect();
               const px = (e.clientX - r.left) / r.width - 0.5;
@@ -92,13 +98,15 @@ export default function Roles() {
               ry(px * 6);
               rx(-py * 6);
               ty(-6);
-              sc(1.012);
+              scx(1.012);
+              scy(1.012);
             };
             const onLeave = () => {
               rx(0);
               ry(0);
               ty(0);
-              sc(1);
+              scx(1);
+              scy(1);
             };
             card.addEventListener('mousemove', onMove);
             card.addEventListener('mouseleave', onLeave);
@@ -137,8 +145,19 @@ export default function Roles() {
 
         // Пиковая карточка (ближайшая к центру вьюпорта скроллера) — крупнее и
         // ярче соседних. Passive-слушатель + rAF: transform/opacity, 60fps.
+        //
+        // ВАЖНО: quickSetter НЕЛЬЗЯ звать с 'scale'. gsap-core прогоняет имя
+        // через карту алиасов CSSPlugin, где scale → строка "scaleX,scaleY";
+        // getSetter подставляет алиас, только если в нём НЕТ запятой, поэтому
+        // "scaleX,scaleY" проваливается мимо transform-ветки до _setterAttribute
+        // и gsap зовёт el.setAttribute('scaleX,scaleY', v). WebKit на это кидает
+        // InvalidCharacterError «Invalid qualified name: 'scaleX,scaleY'» — и
+        // так как первый update() идёт синхронно в useLayoutEffect, исключение
+        // всплывало в React и подменяло ВЕСЬ сайт экраном ErrorBoundary.
+        // scaleX/scaleY — настоящие transform-props без алиаса, они безопасны.
         const setters = cells.map((c) => ({
-          s: gsap.quickSetter(c, 'scale'),
+          sx: gsap.quickSetter(c, 'scaleX'),
+          sy: gsap.quickSetter(c, 'scaleY'),
           o: gsap.quickSetter(c, 'opacity'),
         }));
         let raf = 0;
@@ -149,7 +168,9 @@ export default function Roles() {
           cells.forEach((c, i) => {
             const r = c.getBoundingClientRect();
             const f = Math.min(Math.abs(r.left + r.width / 2 - center) / r.width, 1);
-            setters[i].s(1 - 0.07 * f);
+            const s = 1 - 0.07 * f;
+            setters[i].sx(s);
+            setters[i].sy(s);
             setters[i].o(1 - 0.2 * f);
           });
         };
@@ -158,7 +179,15 @@ export default function Roles() {
         };
         scroller.addEventListener('scroll', onScroll, { passive: true });
         window.addEventListener('resize', onScroll);
-        update();
+        // Первый прогон — синхронный, внутри useGSAP (useLayoutEffect): любое
+        // исключение отсюда всплывает в React и кладёт весь сайт. Эмфаза
+        // декоративная, поэтому на сбое молча снимаем инлайн-стили и оставляем
+        // ленту как есть — страница обязана открыться в любом случае.
+        try {
+          update();
+        } catch {
+          gsap.set(cells, { clearProps: 'transform,opacity' });
+        }
         return () => {
           scroller.removeEventListener('scroll', onScroll);
           window.removeEventListener('resize', onScroll);

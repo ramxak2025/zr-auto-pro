@@ -27,6 +27,7 @@ import type {
 } from '../../types';
 import type { SettingsSection } from './MarketingSettingsView';
 import { EmptyState, LoadingBlock, SectionCard, Toggle, lastVisitLabel, plural } from './marketingKit';
+import { newUuid } from '../../utils/uuid';
 
 const PROVIDER_LABELS: Record<string, string> = {
   moizvonki: 'Мои Звонки',
@@ -253,7 +254,11 @@ function ManualBroadcast() {
   // отправка возможна только после него. НИЧЕГО не отправляет.
   const [preview, setPreview] = useState<BroadcastPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const idempotencyKey = useRef<string>(crypto.randomUUID());
+  // newUuid, а не голый crypto.randomUUID(): вызов вычисляется в теле
+  // компонента на каждом рендере, и там, где API нет (iOS < 15.4, любой
+  // не-secure origin), TypeError падал прямо в рендер и подменял страницу
+  // экраном ErrorBoundary.
+  const idempotencyKey = useRef<string>(newUuid());
 
   // Connected messaging channels (telephony excluded).
   const { data: integrations = [] } = useQuery({
@@ -299,7 +304,7 @@ function ManualBroadcast() {
     onSuccess: (res) => {
       setResult(res);
       setPreview(null);
-      idempotencyKey.current = crypto.randomUUID(); // fresh key for the next distinct send
+      idempotencyKey.current = newUuid(); // fresh key for the next distinct send
       qc.invalidateQueries({ queryKey: ['marketing', 'winback'] });
     },
     onError: () => toast.error('Не удалось отправить рассылку'),

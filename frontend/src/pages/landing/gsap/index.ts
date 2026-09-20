@@ -6,7 +6,7 @@
  * параллакс, переходы страниц). framer-motion из секций лендинга убран, чтобы
  * не грузить две анимационные библиотеки на первом заходе.
  */
-export { gsap, ScrollTrigger, useGSAP, EASE, DUR, refreshTriggers } from './setup';
+export { gsap, ScrollTrigger, useGSAP, EASE, DUR, refreshTriggers, refreshTriggersSoon } from './setup';
 
 export { useReveal } from './useReveal';
 export type { UseRevealOptions, RevealType } from './useReveal';

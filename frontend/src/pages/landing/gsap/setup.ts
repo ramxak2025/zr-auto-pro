@@ -61,9 +61,38 @@ if (typeof document !== 'undefined' && 'fonts' in document) {
   document.fonts.ready.then(() => ScrollTrigger.refresh()).catch(() => {});
 }
 
-/** Ручной пересчёт позиций триггеров — вызывать после позднего async-контента. */
+/**
+ * Ручной пересчёт позиций триггеров — вызывать после позднего async-контента.
+ *
+ * ВНИМАНИЕ: форсированный. ScrollTrigger.refresh() без аргумента идёт в
+ * _refreshAll(true), а тот в обход собственной защиты «не мерить во время
+ * скролла» прогоняет все скроллеры через scrollTo(0) и обратно. Любая
+ * плавная прокрутка, идущая в этот момент, по спеке CSSOM-View обрывается.
+ * Если вызов может совпасть со скроллом — берите refreshTriggersSoon().
+ */
 export function refreshTriggers(): void {
   ScrollTrigger.refresh();
+}
+
+/**
+ * Отложенный и безопасный пересчёт: ScrollTrigger.refresh(true) уходит в
+ * _onResize(true) → _resizeDelay.restart(true) — это delayedCall на 0.2 с,
+ * который вызывает _refreshAll УЖЕ БЕЗ force, а значит срабатывает штатная
+ * защита: пока страница скроллится, замер откладывается до 'scrollEnd'.
+ * Именно это нужно, когда layout меняется по событию (загрузка/404 картинки)
+ * и может попасть в середину плавной прокрутки.
+ *
+ * Глотаем исключение осознанно: вызывается из layout-эффекта, а оттуда любой
+ * throw всплывает в React и подменяет страницу экраном ошибки — ровно тот
+ * класс поломки, ради которого всё это и чинится. Промах замера стоит
+ * неидеальных offset'ов, а не упавшего сайта.
+ */
+export function refreshTriggersSoon(): void {
+  try {
+    ScrollTrigger.refresh(true);
+  } catch (e) {
+    console.error('ScrollTrigger: отложенный refresh не удался', e);
+  }
 }
 
 export { gsap, ScrollTrigger, useGSAP };

@@ -31,11 +31,29 @@ window.addEventListener('unhandledrejection', (event) => {
   }
 });
 
-// Clear chunk reload guards on successful page load so future errors can trigger reload
+// Снимаем guard'ы автоперезагрузки — но НЕ сразу по 'load'.
+//
+// Раньше здесь стояло мгновенное removeItem на событии 'load', и это ломало
+// ровно ту защиту, ради которой guard заводился: перезагрузка, вызванная
+// упавшим чанком, сама порождает новый 'load', который стирает отметку — и
+// если чанк падает детерминированно (деплой снёс хешированный файл, прокси
+// оператора режет /assets/*.js, SW отдаёт HTML вместо JS), получался
+// бесконечный цикл перезагрузок: у человека сайт просто не открывался.
+//
+// Отложенный сброс сохраняет исходный смысл (спустя время в этой же вкладке
+// новая, уже другая, ошибка чанка снова имеет право на одну перезагрузку), но
+// цикл разрывает: повторное падение происходит через ~0.5 с после загрузки,
+// когда отметка ещё жива, поэтому второй перезагрузки не будет — сработает
+// ErrorBoundary с экраном «Приложение обновилось».
+const CHUNK_RELOAD_GUARDS = ['eb_chunk_reload', 'lazy_chunk_reload', 'global_chunk_reload'];
 window.addEventListener('load', () => {
-  sessionStorage.removeItem('eb_chunk_reload');
-  sessionStorage.removeItem('lazy_chunk_reload');
-  sessionStorage.removeItem('global_chunk_reload');
+  setTimeout(() => {
+    try {
+      CHUNK_RELOAD_GUARDS.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+      // Safari Private Mode / отключённые куки — guard'ов просто нет, это ок.
+    }
+  }, 10000);
 });
 
 // ─── Safety net: detect stuck body.overflow ──────────────────────────────────

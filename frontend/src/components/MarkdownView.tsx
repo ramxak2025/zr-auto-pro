@@ -1,121 +1,79 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Component, lazy, Suspense } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 
-interface MarkdownViewProps {
-  children: string;
-  className?: string;
+import type { MarkdownViewProps } from './MarkdownViewRich';
+
+const MarkdownViewRich = lazy(() => import('./MarkdownViewRich'));
+
+/**
+ * Обёртка над markdown-рендером статей: держит тяжёлый react-markdown +
+ * remark-gfm в ОТДЕЛЬНОМ чанке и гарантирует, что его отказ не уносит экран.
+ *
+ * Зачем: remark-gfm содержит regex-литерал с lookbehind, который Safari ниже
+ * 16.4 не может даже разобрать — весь чанк падает с SyntaxError. Раньше он
+ * лежал статическим импортом внутри чанка «Базы знаний», поэтому на старых
+ * iPhone раздел не открывался: import() отклонялся навсегда, lazyWithRetry
+ * дожимал до перезагрузки, и человек видел экран ошибки вместо статьи.
+ *
+ * Теперь отказ локализован: и ошибка загрузки чанка, и ошибка рендера внутри
+ * него ловятся здесь же и деградируют до читаемого текста статьи. Никакой
+ * автоперезагрузки — глобальный ErrorBoundary для chunk-ошибок её запускает,
+ * а здесь она бессмысленна: на старом Safari чанк не соберётся и со второго
+ * раза.
+ */
+
+/** Читаемый фолбэк: markdown как обычный текст, переносы сохранены. */
+function PlainText({ children, className = '' }: MarkdownViewProps) {
+  return (
+    <div className={`text-[15px] leading-relaxed text-gray-800 ${className}`}>
+      <div className="whitespace-pre-wrap break-words">{children}</div>
+    </div>
+  );
+}
+
+/** Скелет на время загрузки чанка — без мигания сырым markdown'ом. */
+function Skeleton({ className = '' }: { className?: string }) {
+  return (
+    <div className={`animate-pulse space-y-2.5 ${className}`} aria-hidden>
+      <div className="h-4 w-3/4 rounded bg-gray-200" />
+      <div className="h-4 w-full rounded bg-gray-200" />
+      <div className="h-4 w-5/6 rounded bg-gray-200" />
+    </div>
+  );
+}
+
+interface BoundaryProps {
+  fallback: ReactNode;
+  children: ReactNode;
 }
 
 /**
- * Safe markdown renderer for Knowledge Base article bodies.
- *
- * react-markdown does NOT render raw HTML by default (no rehype-raw plugin),
- * so embedded <script>/<img onerror>/etc. in the markdown source are treated
- * as plain text — this is the sanitization the codebase relies on. We only
- * enable GitHub-flavoured markdown (tables, task lists, strikethrough,
- * autolinks). External links open in a new tab with noopener/noreferrer.
- *
- * No Tailwind `prose` plugin is installed, so each element is styled
- * explicitly via the `components` map to match the rest of the web app.
+ * Локальная граница — намеренно НЕ переиспользуем components/ErrorBoundary:
+ * тот на chunk-ошибке перезагружает страницу, а нам нужна тихая деградация.
  */
+class MarkdownBoundary extends Component<BoundaryProps, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('MarkdownView: рендер статьи деградирован до простого текста', error, info);
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 export default function MarkdownView({ children, className = '' }: MarkdownViewProps) {
+  const plain = <PlainText className={className}>{children}</PlainText>;
   return (
-    <div className={`text-[15px] leading-relaxed text-gray-800 ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          h1: ({ node: _node, children, ...props }) => (
-            <h1 className="mt-6 mb-3 text-2xl font-bold text-gray-900 first:mt-0" {...props}>
-              {children}
-            </h1>
-          ),
-          h2: ({ node: _node, children, ...props }) => (
-            <h2 className="mt-6 mb-3 text-xl font-bold text-gray-900 first:mt-0" {...props}>
-              {children}
-            </h2>
-          ),
-          h3: ({ node: _node, children, ...props }) => (
-            <h3 className="mt-5 mb-2 text-lg font-semibold text-gray-900 first:mt-0" {...props}>
-              {children}
-            </h3>
-          ),
-          h4: ({ node: _node, children, ...props }) => (
-            <h4 className="mt-4 mb-2 text-base font-semibold text-gray-900 first:mt-0" {...props}>
-              {children}
-            </h4>
-          ),
-          p: ({ node: _node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
-          a: ({ node: _node, href, children, ...props }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-600 underline underline-offset-2 hover:text-primary-700 break-words"
-              {...props}
-            >
-              {children}
-            </a>
-          ),
-          ul: ({ node: _node, ...props }) => (
-            <ul className="my-3 list-disc space-y-1 pl-6" {...props} />
-          ),
-          ol: ({ node: _node, ...props }) => (
-            <ol className="my-3 list-decimal space-y-1 pl-6" {...props} />
-          ),
-          li: ({ node: _node, ...props }) => <li className="pl-1" {...props} />,
-          blockquote: ({ node: _node, ...props }) => (
-            <blockquote
-              className="my-4 border-l-4 border-primary-200 bg-primary-50/50 py-2 pl-4 pr-3 text-gray-700 italic rounded-r-lg"
-              {...props}
-            />
-          ),
-          hr: ({ node: _node, ...props }) => <hr className="my-6 border-gray-200" {...props} />,
-          code: ({ node: _node, className: cls, children: codeChildren, ...props }) => {
-            const isBlock = /\n/.test(String(codeChildren));
-            if (isBlock) {
-              return (
-                <code
-                  className={`block overflow-x-auto rounded-lg bg-gray-900 p-3 text-[13px] text-gray-100 ${cls || ''}`}
-                  {...props}
-                >
-                  {codeChildren}
-                </code>
-              );
-            }
-            return (
-              <code
-                className="rounded bg-gray-100 px-1.5 py-0.5 text-[13px] font-mono text-pink-700"
-                {...props}
-              >
-                {codeChildren}
-              </code>
-            );
-          },
-          pre: ({ node: _node, ...props }) => <pre className="my-4" {...props} />,
-          table: ({ node: _node, ...props }) => (
-            <div className="my-4 overflow-x-auto rounded-lg border border-gray-200">
-              <table className="w-full text-sm" {...props} />
-            </div>
-          ),
-          th: ({ node: _node, ...props }) => (
-            <th
-              className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs font-semibold text-gray-600"
-              {...props}
-            />
-          ),
-          td: ({ node: _node, ...props }) => (
-            <td className="border-b border-gray-100 px-3 py-2 text-gray-700" {...props} />
-          ),
-          img: ({ node: _node, ...props }) => (
-            <img className="my-4 max-w-full rounded-lg" loading="lazy" alt="" {...props} />
-          ),
-          strong: ({ node: _node, ...props }) => (
-            <strong className="font-semibold text-gray-900" {...props} />
-          ),
-        }}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
+    <MarkdownBoundary fallback={plain}>
+      <Suspense fallback={<Skeleton className={className} />}>
+        <MarkdownViewRich className={className}>{children}</MarkdownViewRich>
+      </Suspense>
+    </MarkdownBoundary>
   );
 }

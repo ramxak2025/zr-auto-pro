@@ -69,6 +69,7 @@ import LastVisitBadge from '../components/LastVisitBadge';
 import Modal from '../components/Modal';
 import ClientSearchAutocomplete from '../components/ClientSearchAutocomplete';
 import { TemplatePickerModal, SaveTemplateModal } from '../components/CheckTemplatesModals';
+import { newUuid } from '../utils/uuid';
 
 const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' \u20BD';
@@ -82,15 +83,7 @@ const formatCurrency = (value: number): string => {
  * \u0441\u043E\u0437\u0434\u0430\u043D\u043D\u044B\u0439 \u0447\u0435\u043A \u0432\u043C\u0435\u0441\u0442\u043E \u0434\u0443\u0431\u043B\u044F. \u0411\u044D\u043A\u0435\u043D\u0434 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 hex-UUID \u0444\u043E\u0440\u043C\u0443 (\u0438\u043D\u0430\u0447\u0435 400).
  */
 function generateClientRequestId(): string {
-  const cryptoObj = typeof crypto !== 'undefined' ? (crypto as { randomUUID?: () => string }) : undefined;
-  if (typeof cryptoObj?.randomUUID === 'function') return cryptoObj.randomUUID();
-  // \u0424\u043E\u043B\u0431\u044D\u043A \u0434\u043B\u044F \u0441\u0442\u0430\u0440\u044B\u0445 WebView \u0431\u0435\u0437 randomUUID \u2014 \u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u0430\u044F UUID v4-\u0444\u043E\u0440\u043C\u0430
-  // (\u0437\u0435\u0440\u043A\u0430\u043B\u0438\u0442 mobile/src/utils/offlineCheckQueue.ts::uuidV4FromRandom).
-  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
-  const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return newUuid();
 }
 
 /** Мерные единицы — только они получают дробный шаг 0.5 при добавлении. */

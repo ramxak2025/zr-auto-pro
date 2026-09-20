@@ -179,7 +179,17 @@ export default function FeatureDetailPage() {
   const related = [1, 2, 3].map((offset) => features[(idx + offset) % features.length]);
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased md:pb-0">
+    // key={section.slug} обязателен. «Смотрите также» и лист разделов ведут на
+    // ТОТ ЖЕ роут /f/:slug, поэтому без ключа React переиспользует и компонент,
+    // и DOM-узлы. useGSAP из useReveal вешается с { scope } без deps: коллбэк
+    // отрабатывает один раз на маунте и откатывает from-состояние только на
+    // анмаунте. При смене slug без ремаунта на переиспользованных узлах
+    // оставался инлайновый autoAlpha:0 (visibility:hidden; opacity:0) от
+    // предыдущей страницы, а ScrollTrigger'ы держали старые, уже неверные
+    // offset'ы — заголовки секций и CTA-карточка не показывались НИКОГДА.
+    // Ключ заставляет поддерево размонтироваться: GSAP делает revert/clearProps
+    // и заново меряет триггеры на свежем layout.
+    <div key={section.slug} className="min-h-screen bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased md:pb-0">
       {/* Хлебные крошки */}
       <div className="border-b border-slate-200 bg-white/80 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
