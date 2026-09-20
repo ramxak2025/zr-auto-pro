@@ -18,6 +18,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product } from '../../../shared/types';
+import { apiErrorMessage } from '@shared/utils/apiError';
 
 const formatMoney = (v: number): string =>
   Math.round(v)
@@ -69,12 +70,26 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   const hardDeleteMut = useMutation({
     mutationFn: (id: string) => productsApi.hardDelete(id),
     onSuccess: invalidateAll,
-    onError: () => Alert.alert('Ошибка', 'Не удалось удалить'),
+    // 409 приходит с объяснением: товар держат складские документы, заказ
+    // поставщику или возврат — физически стереть его нельзя, иначе поедет учёт
+    // за закрытые периоды. Показываем текст сервера, а не глухое «не удалось».
+    onError: (err: unknown) => Alert.alert('Нельзя удалить', apiErrorMessage(err) || 'Не удалось удалить'),
   });
 
   const emptyMut = useMutation({
     mutationFn: () => productsApi.emptyTrash(),
-    onSuccess: invalidateAll,
+    onSuccess: (res) => {
+      invalidateAll();
+      const kept = res.data.kept ?? 0;
+      // Часть товаров остаётся намеренно. Без объяснения человек видит
+      // непустую корзину после «Очистить» и считает, что кнопка не работает.
+      if (kept > 0) {
+        Alert.alert(
+          'Корзина очищена частично',
+          `Удалено ${res.data.count}. Оставлено ${kept}: по этим товарам есть складские документы — они нужны отчётам за прошлые периоды.`,
+        );
+      }
+    },
     onError: () => Alert.alert('Ошибка', 'Не удалось очистить'),
   });
 

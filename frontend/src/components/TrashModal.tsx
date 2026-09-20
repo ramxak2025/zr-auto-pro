@@ -17,6 +17,7 @@ import EmptyState from './EmptyState';
 import LoadingSpinner from './LoadingSpinner';
 import { productsApi } from '../api/services';
 import type { Product } from '../types';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 interface TrashModalProps {
   isOpen: boolean;
@@ -24,14 +25,18 @@ interface TrashModalProps {
 }
 
 const formatMoney = (v: number): string =>
-  Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+  Math.round(v)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
 const formatDate = (iso?: string): string => {
   if (!iso) return '';
   const d = new Date(iso);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
-    + ' '
-    + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return (
+    d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  );
 };
 
 export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
@@ -41,7 +46,10 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
 
   const { data: items, isLoading } = useQuery<Product[]>({
     queryKey: ['products-trash'],
-    queryFn: async () => { const res = await productsApi.getTrash(); return res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getTrash();
+      return res.data;
+    },
     enabled: isOpen,
   });
 
@@ -59,22 +67,43 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
 
   const restoreMut = useMutation({
     mutationFn: (id: string) => productsApi.restore(id),
-    onSuccess: () => { invalidateAll(); toast.success('Восстановлено'); },
+    onSuccess: () => {
+      invalidateAll();
+      toast.success('Восстановлено');
+    },
     onError: () => toast.error('Не удалось восстановить'),
   });
 
   const hardDeleteMut = useMutation({
     mutationFn: (id: string) => productsApi.hardDelete(id),
-    onSuccess: () => { invalidateAll(); toast.success('Удалено навсегда'); },
-    onError: () => toast.error('Не удалось удалить'),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success('Удалено навсегда');
+    },
+    // 409 приходит с объяснением: товар держат складские документы, заказ
+    // поставщику или возврат — стереть его физически нельзя, иначе учёт за
+    // закрытые периоды поедет. Показываем ИМЕННО текст сервера, иначе человек
+    // видит «не удалось» и не понимает, что делать.
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) || 'Не удалось удалить'),
   });
 
   const emptyMut = useMutation({
     mutationFn: () => productsApi.emptyTrash(),
-    onSuccess: (res: { data: { count: number } }) => {
+    onSuccess: (res: { data: { count: number; kept?: number } }) => {
       invalidateAll();
       setConfirmEmpty(false);
-      toast.success(`Корзина очищена (${res.data.count} шт)`);
+      const kept = res.data.kept ?? 0;
+      // Часть товаров намеренно остаётся: по ним есть учётные документы.
+      // Без этой строчки человек видит непустую корзину после «Очистить» и
+      // решает, что кнопка сломалась.
+      if (kept > 0) {
+        toast.success(
+          `Удалено ${res.data.count} шт. Оставлено ${kept} — по ним есть складские документы, они нужны отчётам.`,
+          { duration: 6000 },
+        );
+      } else {
+        toast.success(`Корзина очищена (${res.data.count} шт)`);
+      }
     },
     onError: () => toast.error('Не удалось очистить'),
   });
@@ -101,9 +130,11 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
           <EmptyState
             icon={Trash2}
             title={items && items.length > 0 ? 'Ничего не найдено' : 'Корзина пуста'}
-            description={items && items.length > 0
-              ? 'Попробуйте изменить поиск.'
-              : 'Удалённые товары сохраняются здесь и могут быть восстановлены.'}
+            description={
+              items && items.length > 0
+                ? 'Попробуйте изменить поиск.'
+                : 'Удалённые товары сохраняются здесь и могут быть восстановлены.'
+            }
           />
         ) : (
           <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-1">
@@ -169,14 +200,8 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
             {confirmEmpty ? (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
                 <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                <p className="text-sm text-red-700 flex-1">
-                  Удалить все {items.length} товаров навсегда?
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setConfirmEmpty(false)}
-                  className="btn-ghost btn-sm"
-                >
+                <p className="text-sm text-red-700 flex-1">Удалить все {items.length} товаров навсегда?</p>
+                <button type="button" onClick={() => setConfirmEmpty(false)} className="btn-ghost btn-sm">
                   Отмена
                 </button>
                 <button
@@ -189,11 +214,7 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmEmpty(true)}
-                className="btn-ghost w-full text-red-500"
-              >
+              <button type="button" onClick={() => setConfirmEmpty(true)} className="btn-ghost w-full text-red-500">
                 <Trash2 className="h-4 w-4" />
                 Очистить корзину ({items.length})
               </button>
