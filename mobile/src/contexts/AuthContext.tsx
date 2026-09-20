@@ -28,6 +28,7 @@ import {
 import api, {
   beginSessionReissueWindow,
   createCapturedAuthRequester,
+  isSessionCleared,
   onApiRouteReady,
   onAuthExpired,
   onRequestSucceeded,
@@ -221,6 +222,54 @@ function isAuthExpiry(err: unknown): boolean {
 // через POST /auth/refresh. Порог 7 дней: продление редкое (не на каждый
 // старт), но с огромным запасом до 30-дневного exp.
 const SESSION_REFRESH_AGE_MS = 7 * 86_400_000;
+
+/** Паузы между попытками продления. Три попытки, ~0,55 с суммарного ожидания. */
+const SESSION_REFRESH_RETRY_DELAYS_MS = [150, 400];
+
+/**
+ * Идущее продление. Обмен токена ОДНОРАЗОВЫЙ: сервер «клеймит» jti через
+ * ON CONFLICT DO NOTHING, поэтому два параллельных /auth/refresh — это
+ * гарантированный проигрыш одного из них с «Токен отозван». Держим
+ * единственный полёт и отдаём его всем желающим.
+ */
+let sessionRefreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Продлить сессию. Возвращает новый токен или null.
+ *
+ * Почему с ретраями. Сервер продлевает по схеме «сначала погасить, потом
+ * выдать» (backend/src/auth/auth.service.ts): старый токен уходит в blacklist
+ * ДО того, как новый уедет на телефон. Значит потерянный ответ — это не
+ * «попробуем в следующий раз», а мёртвая сессия: у клиента на руках токен,
+ * который сервер уже считает отозванным, и человека выбросит на вход через
+ * AUTH_CACHE_TTL плюс grace. Раньше здесь была ровно ОДНА попытка с пустым
+ * catch, а комментарий рядом уверял, что «текущий токен остаётся валидным до
+ * своего exp» — это было неправдой.
+ *
+ * Повторяем ТОЛЬКО транспортные отказы: если ответ не доехал, есть шанс, что и
+ * запрос не дошёл — тогда повтор спасает. На 401 повтор бессмысленен: наш jti
+ * уже заклеймён, второй раз его не обменять.
+ */
+async function refreshSessionToken(): Promise<string | null> {
+  if (!sessionRefreshInFlight) {
+    sessionRefreshInFlight = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await authApi.refresh();
+          const next = res.data?.token;
+          return typeof next === 'string' && next ? next : null;
+        } catch (err) {
+          if (isAuthExpiry(err)) return null;
+          if (attempt >= SESSION_REFRESH_RETRY_DELAYS_MS.length) return null;
+          await sleep(SESSION_REFRESH_RETRY_DELAYS_MS[attempt]);
+        }
+      }
+    })().finally(() => {
+      sessionRefreshInFlight = null;
+    });
+  }
+  return sessionRefreshInFlight;
+}
 
 /**
  * iat-клейм JWT в миллисекундах. Payload декодируется БЕЗ верификации подписи
@@ -624,6 +673,17 @@ export async function registerPushToken(): Promise<void> {
       console.warn('[push] EAS projectId missing from expo config — skipping push registration');
       return;
     }
+    // Регистрация живёт дольше сессии, и это надо проверять.
+    //
+    // Функция запускается «выстрелил и забыл» из prefetchAfterLogin, а внутри —
+    // диалог разрешений (человек может думать сколько угодно) и лестница
+    // ретраев к Expo почти на 35 секунд. За это время сессия успевает
+    // кончиться: человек вышел, токен протух, сняли доступ. Раньше мы этого не
+    // замечали и всё равно стреляли POST /api/push/token — уже без сессии.
+    // Прилетал 401, и он уходил в Sentry как ошибка приложения: 71 событие,
+    // которые три с половиной месяца маскировали настоящую историю с
+    // разлогинами. Проверяем перед каждым дорогим шагом.
+    if (isSessionCleared()) return;
     // Transient-ретрай вокруг ОДНОГО шага — похода к Expo push service за
     // токеном. Не-transient ошибки (APNs entitlement, projectId mismatch)
     // пробрасываются с первой попытки и уходят в catch как раньше.
@@ -635,8 +695,10 @@ export async function registerPushToken(): Promise<void> {
       } catch (err) {
         if (!isTransientPushError(err) || attempt >= PUSH_TOKEN_RETRY_DELAYS_MS.length) throw err;
         await sleep(PUSH_TOKEN_RETRY_DELAYS_MS[attempt]);
+        if (isSessionCleared()) return;
       }
     }
+    if (isSessionCleared()) return;
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
     const response = await pushApi.register(tokenData.data, platform);
     // A 200 is NOT proof of registration: the server's token-hijack guard can
@@ -667,6 +729,20 @@ export async function registerPushToken(): Promise<void> {
         message: 'push token fetch failed after retries (transient)',
         level: 'warning',
         data: { code: (err as { code?: string } | null)?.code },
+      });
+      return;
+    }
+    // 401 здесь — не ошибка приложения, а «пока мы возились, сессия кончилась».
+    // Проверки isSessionCleared выше ловят подавляющее большинство случаев, но
+    // остаётся щель: сессия могла умереть уже ПОСЛЕ последней проверки, пока
+    // POST был в полёте. Такой исход — крошка, а не событие: именно из-за него
+    // в Sentry накопился 71 ложный AxiosError.
+    if (isAuthExpiry(err)) {
+      console.warn('[push] token registration skipped — сессия кончилась');
+      addSentryBreadcrumb({
+        category: 'push',
+        message: 'push token registration skipped — session ended mid-flight',
+        level: 'info',
       });
       return;
     }
@@ -838,9 +914,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           if (issuedAt !== null && Date.now() - issuedAt > SESSION_REFRESH_AGE_MS) {
             void (async () => {
               try {
-                const refreshRes = await authApi.refresh();
-                const newToken = refreshRes.data?.token;
-                if (typeof newToken !== 'string' || !newToken) return;
+                const newToken = await refreshSessionToken();
+                if (!newToken) return;
                 await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
                   if (!isCurrent()) return;
                   setAuthToken(newToken);
@@ -852,8 +927,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
                   });
                 });
               } catch {
-                // Тихо: не удалось продлить — текущий токен остаётся валидным
-                // до своего exp, следующий bootstrap попробует снова.
+                // Сюда доходит только сбой записи сессии: сам обмен свои
+                // транспортные отказы уже отретраил и на любом исходе вернул
+                // токен либо null. И честно: «не продлили» НЕ означает «старый
+                // токен ещё жив» — сервер гасит его раньше, чем выдаёт новый,
+                // поэтому при потерянном ответе сессия доживает лишь остаток
+                // grace-окна. Это цена одноразового обмена, ради неё выше и
+                // стоят ретраи.
               }
             })();
           }

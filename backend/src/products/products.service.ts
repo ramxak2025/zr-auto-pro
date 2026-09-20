@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -1007,14 +1008,86 @@ export class ProductsService {
     return { message: 'Восстановлено' };
   }
 
+  // ── ЖЁСТКИЕ ССЫЛКИ: что запрещает стирать товар физически ─────────────────
+  //
+  // Физическое удаление товара НЕ нейтрально. Внешние ключи на products(id)
+  // делятся на две породы, и это надо держать в голове:
+  //
+  //   • «товарные» — price_history, product_commissions, motivation_promo_products:
+  //     CASCADE, и это правильно. Уходит товар — уходит его же обвязка.
+  //   • «учётные» — их терять нельзя. И вот здесь был тихий баг: у
+  //     stock_movements.product_id стоит ON DELETE CASCADE (001_init.sql),
+  //     а stock_movements — это НЕ метаданные товара, это РЕЕСТР СКЛАДСКИХ
+  //     ДОКУМЕНТОВ: из него journal.service строит «Журнал → Документы склада»,
+  //     из него же считаются стоимость склада и маржа. Записи туда попадают
+  //     только от реальных операций — поставка, инвентаризация, перемещение,
+  //     возврат.
+  //
+  // То есть каждая УСПЕШНАЯ очистка корзины молча уносила все складские
+  // документы товара и его историю цен. Следов не оставалось: HTTP 200, в
+  // Sentry ничего. Заметить можно было только сверкой закрытого месяца.
+  // Единственное, что этому мешало, — ошибка FK purchase_order_items
+  // (там NO ACTION), и именно она попадала в Sentry как «баг».
+  //
+  // Поэтому: товар, у которого есть хоть одна учётная ссылка, физически НЕ
+  // удаляется НИКОГДА — он остаётся в корзине. Из корзины он не мешает:
+  // deleted_at скрывает его из склада, поиска и подбора.
+  //
+  // check_return_lines попал в список отдельно: у него внешнего ключа нет
+  // ВООБЩЕ (040_returns_and_defect.sql), поэтому физическое удаление
+  // оставляло там висячий product_id — строку возврата, которая больше ни на
+  // что не ссылается. Считаем его жёсткой ссылкой на тех же основаниях.
+  //
+  // ПОЧЕМУ НЕ МИГРАЦИЯ с CASCADE → SET NULL: journal.service делает
+  // INNER JOIN products и берёт оттуда имя и цены, так что движение с пустым
+  // product_id пропадёт из журнала ровно так же — только ещё незаметнее.
+  // Лечить надо не ключ, а само удаление.
+  private static readonly NO_HARD_REFS_SQL = `NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id)
+       AND NOT EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id)
+       AND NOT EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id)`;
+
+  /** Те же три ссылки, но флагами — чтобы объяснить человеку, что держит товар. */
+  private static readonly HARD_REF_FLAGS_SQL = `EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.product_id = p.id) AS has_movements,
+              EXISTS (SELECT 1 FROM purchase_order_items poi WHERE poi.product_id = p.id) AS has_orders,
+              EXISTS (SELECT 1 FROM check_return_lines crl WHERE crl.product_id = p.id) AS has_returns`;
+
+  private static describeHardRefs(row: {
+    has_movements?: boolean;
+    has_orders?: boolean;
+    has_returns?: boolean;
+  }): string {
+    const parts: string[] = [];
+    if (row.has_movements) parts.push('есть движения по складу');
+    if (row.has_orders) parts.push('есть заказ поставщику');
+    if (row.has_returns) parts.push('есть возврат');
+    return parts.join(', ') || 'на товар ссылаются учётные документы';
+  }
+
   // Permanently delete a single trashed item.
   async hardDelete(id: string, tenantID: string, pointId: string | null = null) {
     await this.assertProductInPoint(id, tenantID, pointId);
+    // Проверка стоит ВНУТРИ DELETE, а не отдельным SELECT перед ним: иначе
+    // между проверкой и удалением может прилететь новое движение по складу, и
+    // мы сотрём документ, который появился секунду назад.
     const result = await this.pool.query(
-      'DELETE FROM products WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL',
+      `DELETE FROM products AS p
+        WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL
+          AND ${ProductsService.NO_HARD_REFS_SQL}`,
       [id, tenantID],
     );
     if (result.rowCount === 0) {
+      // Различаем «нет в корзине» и «лежит, но держат документы»: иначе человек
+      // видит «товар не найден» у строки, которая прямо перед ним на экране.
+      const { rows } = await this.pool.query(
+        `SELECT ${ProductsService.HARD_REF_FLAGS_SQL}
+           FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL`,
+        [id, tenantID],
+      );
+      if (rows.length) {
+        throw new ConflictException({
+          message: `Нельзя удалить навсегда: ${ProductsService.describeHardRefs(rows[0])}. Товар останется в корзине — складские документы по нему нужны для отчётов.`,
+        });
+      }
       throw new NotFoundException({ message: 'Товар не найден в корзине' });
     }
     return { message: 'Удалено навсегда' };
@@ -1022,14 +1095,55 @@ export class ProductsService {
 
   // Drain the trash. Only ever touches rows with deleted_at IS NOT NULL.
   async emptyTrash(tenantID: string, pointId: string | null = null) {
-    // 169 — очищается корзина ФИЛИАЛА сессии.
-    const result = await this.pool.query(
-      `DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL
-         AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
-                WHERE wpt.id = products.warehouse_id AND wpt.point_id = $2::uuid))`,
-      [tenantID, pointId],
-    );
-    return { message: 'Корзина очищена', count: result.rowCount ?? 0 };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // 1. Что лежит в корзине филиала сессии (169) и что именно его держит.
+      //    Нужен для отчёта человеку; сам запрет живёт в DELETE ниже.
+      const { rows: trashed } = await client.query(
+        `SELECT p.id, p.name,
+                ${ProductsService.HARD_REF_FLAGS_SQL}
+           FROM products p
+          WHERE p.tenant_id=$1 AND p.deleted_at IS NOT NULL
+            AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
+                   WHERE wpt.id = p.warehouse_id AND wpt.point_id = $2::uuid))`,
+        [tenantID, pointId],
+      );
+      let deletedIds: string[] = [];
+      if (trashed.length) {
+        // Удаляем ОДНИМ запросом и только то, что действительно свободно.
+        // Раньше здесь стоял голый DELETE без условий: он либо уносил реестр,
+        // либо целиком падал на FK заказов поставщику — и корзина застревала
+        // навсегда, потому что и поштучное удаление упиралось в то же самое.
+        const del = await client.query(
+          `DELETE FROM products AS p
+            WHERE p.id = ANY($1::uuid[]) AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL
+              AND ${ProductsService.NO_HARD_REFS_SQL}
+          RETURNING p.id`,
+          [trashed.map((r) => r.id), tenantID],
+        );
+        deletedIds = del.rows.map((r) => r.id as string);
+      }
+      await client.query('COMMIT');
+      const deleted = new Set(deletedIds);
+      const keptItems = trashed
+        .filter((r) => !deleted.has(r.id))
+        .map((r) => ({ id: r.id as string, name: r.name as string, reason: ProductsService.describeHardRefs(r) }));
+      return {
+        message: keptItems.length
+          ? `Удалено ${deletedIds.length}. Оставлено ${keptItems.length} — по ним есть учётные документы.`
+          : 'Корзина очищена',
+        count: deletedIds.length,
+        kept: keptItems.length,
+        keptItems,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      this.logger.error(`emptyTrash failed: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException({ message: 'Не удалось очистить корзину' });
+    } finally {
+      client.release();
+    }
   }
 
   async exportCsv(tenantID: string, pointId: string | null = null) {

@@ -765,7 +765,20 @@ export function createProductsApi(api: HttpClient) {
     getTrash: () => api.get<Product[]>('/products/trash'),
     restore: (id: string) => api.post<{ message: string }>(`/products/${id}/restore`),
     hardDelete: (id: string) => api.delete<{ message: string }>(`/products/${id}/hard`),
-    emptyTrash: () => api.delete<{ message: string; count: number }>('/products/trash/empty'),
+    /**
+     * Очистка корзины. `count` — сколько удалено физически, `kept`/`keptItems` —
+     * что осталось и почему: товар, на который ссылаются складские движения,
+     * заказ поставщику или возврат, НЕ стирается (его документы нужны отчётам
+     * за закрытые периоды). Поля добавлены сверху старого контракта, поэтому
+     * клиенты, которые их не читают, работают как раньше.
+     */
+    emptyTrash: () =>
+      api.delete<{
+        message: string;
+        count: number;
+        kept?: number;
+        keptItems?: { id: string; name: string; reason: string }[];
+      }>('/products/trash/empty'),
     updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
     getProductMovements: (id: string) => api.get<any[]>(`/products/${id}/movements`),
     getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),

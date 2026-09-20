@@ -134,11 +134,39 @@ export function initSentry(): void {
 
   // Make forced logouts (a wave of 401s the axios layer collapses into one
   // `onAuthExpired`) searchable as breadcrumb-rich warning events. The
-  // emitter takes a no-arg listener and returns an unsubscribe fn (unused —
-  // app-lifetime subscription).
-  onAuthExpired(() => {
+  // emitter returns an unsubscribe fn (unused — app-lifetime subscription).
+  //
+  // ПОЧЕМУ ЗДЕСЬ ТЕГИ. Раньше слушатель принимал ноль аргументов и слал голое
+  // `captureMessage`. Причину axios честно вычислял и отдавал — а мы её молча
+  // выбрасывали. Итог: 229 событий за 3,5 месяца, из которых невозможно было
+  // понять, что сработало: истечение 30-дневного токена, смена пароля
+  // (sessions_valid_from), увольнение, деактивация, снятый доступ к филиалу,
+  // выход на другом устройстве — или наш баг. Каждая из этих причин в
+  // backend/src/auth/jwt.strategy.ts своя и осмысленная, но снаружи они
+  // выглядели одинаково.
+  //
+  // Кладём в ТЕГИ то, по чему нужно группировать (причина, хост, статус, путь),
+  // и в extra — человеческий текст. Ничего секретного: bearer и тело запроса
+  // сюда не попадают by construction — axios отдаёт только эти четыре поля.
+  onAuthExpired((reason, details) => {
     if (!enabled) return;
-    Sentry.captureMessage('auth_expired_forced_logout', 'warning');
+    Sentry.captureMessage('auth_expired_forced_logout', {
+      level: 'warning',
+      tags: {
+        auth_expired_server_message: details?.serverMessage ?? 'нет текста',
+        auth_expired_host: details?.host ?? 'неизвестен',
+        auth_expired_status: String(details?.status ?? 'нет ответа'),
+        auth_expired_path: details?.path ?? 'неизвестен',
+        auth_expired_point_lost: reason ? 'да' : 'нет',
+      },
+      extra: {
+        reason: reason ?? null,
+        serverMessage: details?.serverMessage ?? null,
+        host: details?.host ?? null,
+        status: details?.status ?? null,
+        path: details?.path ?? null,
+      },
+    });
   });
 }
 

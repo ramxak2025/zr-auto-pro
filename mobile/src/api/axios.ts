@@ -624,6 +624,27 @@ function isSessionReissueRequest(cfg: InternalAxiosRequestConfig): boolean {
   return /(^|\/)auth\/switch-point\/?$/.test(cfg.url || '');
 }
 
+/**
+ * Это POST /auth/refresh — ТИХОЕ ПРОДЛЕНИЕ СЕССИИ?
+ *
+ * Сервер продлевает по схеме «сначала погасить, потом выдать»
+ * (backend/src/auth/auth.service.ts): старый токен уходит в blacklist ДО того,
+ * как новый уедет на телефон. Значит 401 на самом продлении — это нормальный
+ * исход гонки, а не «сессия кончилась»: у нас на руках может быть уже мёртвый
+ * токен, но за ним стоит живой аккаунт, и решать, что делать, должен вызывающий
+ * (AuthContext), а не универсальный убийца сессии.
+ *
+ * ВАЖНО: соблазнительно добавить /auth/refresh в isSessionReissueRequest — это
+ * БАГ. Проверка ниже читается как `if (sessionReissueDepth > 0 &&
+ * !isSessionReissueRequest(cfg)) return reject`, то есть совпадение сделало бы
+ * refresh ЕДИНСТВЕННЫМ запросом, который проваливается в fireAuthExpired.
+ * Нужно ровно обратное — освобождение, как у isLoginRequest.
+ */
+function isSessionRefreshRequest(cfg: InternalAxiosRequestConfig): boolean {
+  if ((cfg.method || 'get').toLowerCase() !== 'post') return false;
+  return /(^|\/)auth\/refresh\/?$/.test(cfg.url || '');
+}
+
 // ── ОКНО ПЕРЕВЫПУСКА СЕССИИ (мгновенная смена филиала, 167) ─────────────────
 // Перевыпуск гасит СТАРЫЙ токен на сервере РАНЬШЕ, чем ответ с новым доедет до
 // телефона. Всё, что улетело с прежним bearer'ом и приходит в эту щель (медленный
@@ -805,6 +826,20 @@ function readAuthTokenWithDeadline(): Promise<string | null> {
  * (`setAuthToken(token)`), logout and the 401 handler (`setAuthToken(null)`).
  * Passing `null` clears the bearer for every subsequent request.
  */
+/**
+ * Сессия ТОЧНО погашена? (`null`, а не «ещё не загружали»).
+ *
+ * Нужен фоновым лестницам ретраев, которые живут десятки секунд и могут
+ * пережить разлогин: регистрация push-токена раньше досиживала свои ~35 с и
+ * стреляла POST /api/push/token уже без сессии — ловила 401 и уезжала в Sentry
+ * как ошибка приложения (71 событие), хотя это просто «пока мы ждали, человек
+ * вышел». Отличаем именно `null` от `undefined`: `undefined` — токен ещё не
+ * прочитан из хранилища, прерывать по нему нельзя.
+ */
+export function isSessionCleared(): boolean {
+  return cachedAuthToken === null;
+}
+
 export function setAuthToken(token: string | null): void {
   if (cachedAuthToken !== token) {
     authTokenEpoch += 1;
@@ -1029,8 +1064,43 @@ api.interceptors.request.use(async (config) => {
 // истечению токена, а потому что филиал сессии закрыли или у сотрудника сняли
 // к нему доступ. Без него мастера просто «выкидывало» без объяснения, и он
 // звонил владельцу вместо того, чтобы войти в доступный филиал.
-type AuthListener = (reason?: string) => void;
+/**
+ * Диагностика разлогина — ВТОРОЙ аргумент, отдельно от `reason`.
+ *
+ * `reason` показывается человеку, поэтому там лежит только текст про потерянный
+ * филиал. Всё остальное — почему именно погасили сессию — раньше никуда не
+ * доезжало: axios вычислял причину, sentry.ts её выбрасывал и слал голое
+ * `captureMessage`. В результате 229 событий за три с половиной месяца не могли
+ * ответить на простой вопрос «это протухший токен, смена пароля, увольнение,
+ * снятый филиал — или наш баг». Теперь причина едет отдельным объектом.
+ *
+ * Здесь НЕ должно быть ничего секретного: ни bearer'а, ни тела запроса.
+ */
+export type AuthExpiredDetails = {
+  /** HTTP-статус ответа, который погасил сессию (обычно 401). */
+  status?: number;
+  /** Хост кольца, с которого пришёл отказ, — какой именно апстрим ответил. */
+  host?: string;
+  /** Путь запроса с вычищенными id — иначе тег будет уникальным на каждое событие. */
+  path?: string;
+  /** Текст сервера из тела ответа: «Токен отозван», «Аккаунт уволен», … */
+  serverMessage?: string;
+};
+
+type AuthListener = (reason?: string, details?: AuthExpiredDetails) => void;
 const authListeners: AuthListener[] = [];
+
+/** Схлопывает id в пути до «:id» — теги Sentry должны группироваться. */
+function normalizeAuthPath(url?: string): string | undefined {
+  if (!url) return undefined;
+  const path = url.replace(/^https?:\/\/[^/]+/i, '').split('?')[0];
+  return path
+    .split('/')
+    .map((seg) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg) || /^\d+$/.test(seg) ? ':id' : seg,
+    )
+    .join('/');
+}
 
 export function onAuthExpired(listener: AuthListener) {
   authListeners.push(listener);
@@ -1080,14 +1150,14 @@ function fireNetworkListeners(listeners: NetworkListener[]): void {
   }
 }
 
-function fireAuthExpired(reason?: string) {
+function fireAuthExpired(reason?: string, details?: AuthExpiredDetails) {
   // Token/epoch matching in the 401 handler is the coalescer: the first 401
   // clears the current bearer, so every parallel response from that bearer is
   // stale and ignored. A wall-clock debounce would be unsafe because a newly
   // logged-in session can legitimately expire inside the old 2s window.
   authListeners.forEach((fn) => {
     try {
-      fn(reason);
+      fn(reason, details);
     } catch {
       // Listener errors must not block other listeners or the next
       // 401 from firing the chain.
@@ -1356,7 +1426,24 @@ api.interceptors.response.use(
     // delete B from memory/storage. Anonymous/public 401s are ignored too.
     const authSnapshotIsCurrent =
       !!cfg?._authToken && cfg._authEpoch === authTokenEpoch && cfg._authToken === cachedAuthToken;
-    if (status === 401 && cfg && !isLoginRequest(cfg) && authSnapshotIsCurrent) {
+    // `!htmlErrorResponse` — обязателен. Весь файл трактует HTML вместо JSON как
+    // подмену от промежуточного узла (портал оператора, WAF, корпоративный
+    // прокси), и только эта ветка раньше его игнорировала: 401 с HTML-страницей
+    // в теле выкидывал человека из ЖИВОЙ сессии, хотя наш сервер этого ответа
+    // даже не видел.
+    //
+    // `!isSessionRefreshRequest(cfg)` — тоже. Сервер при продлении гасит старый
+    // токен РАНЬШЕ, чем выдаёт новый, поэтому 401 самого продления — штатная
+    // гонка. Раньше он шёл сюда и убивал сессию окончательно; теперь решение за
+    // AuthContext, который умеет повторить попытку.
+    if (
+      status === 401 &&
+      cfg &&
+      !isLoginRequest(cfg) &&
+      !isSessionRefreshRequest(cfg) &&
+      !htmlErrorResponse &&
+      authSnapshotIsCurrent
+    ) {
       // Идёт перевыпуск сессии (167): старый токен уже мёртв, новый ещё в пути.
       // 401 чужого запроса в этой щели — ожидаемое следствие переключения, а не
       // конец сессии. Гасим только по 401 самого перевыпуска: для него это
@@ -1372,7 +1459,12 @@ api.interceptors.response.use(
       // Текст отдаём ТОЛЬКО для отказов «филиал сессии больше не ваш» (163) —
       // обычное истечение токена человеку и так понятно, а лишний диалог на
       // входе после каждой протухшей сессии превратился бы в шум.
-      fireAuthExpired(sessionPointLostMessage(error) ?? undefined);
+      fireAuthExpired(sessionPointLostMessage(error) ?? undefined, {
+        status,
+        host: typeof cfg.baseURL === 'string' ? cfg.baseURL : activeBaseUrl,
+        path: normalizeAuthPath(cfg.url),
+        serverMessage: typeof error.response?.data?.message === 'string' ? error.response.data.message : undefined,
+      });
     }
 
     return Promise.reject(error);

@@ -143,3 +143,103 @@ describe('axios — 401 в окне перевыпуска сессии', () => 
     unsubscribe();
   });
 });
+
+// ── 401, который НЕ должен гасить сессию ───────────────────────────────────
+// Sentry: auth_expired_forced_logout, 229 событий у 15 человек. Разбор показал
+// две дыры, каждая из которых выкидывает человека из ЖИВОЙ сессии.
+function http401Html(config: InternalAxiosRequestConfig): Error {
+  return Object.assign(new Error('401'), {
+    isAxiosError: true,
+    code: 'ERR_BAD_REQUEST',
+    config,
+    response: {
+      status: 401,
+      statusText: 'Unauthorized',
+      data: '<!doctype html><html><body>Portal</body></html>',
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+      config,
+    },
+  });
+}
+
+describe('axios — 401, который не означает конец сессии', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    mockStorageRemoveItem.mockClear();
+  });
+
+  it('401 с HTML в теле НЕ гасит сессию — это подмена от узла оператора, а не наш сервер', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const expired = jest.fn();
+    const unsubscribe = mod.onAuthExpired(expired);
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw http401Html(config);
+    };
+
+    await expect(mod.default.get('/checks/deferred-reminders')).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(expired).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('401 самого /auth/refresh НЕ гасит сессию — решение за вызывающим', async () => {
+    // Сервер продлевает «сначала погасить, потом выдать», поэтому 401 на
+    // обмене — штатная гонка. Раньше он шёл в общий убийца сессии, и одна
+    // потерянная ротация выкидывала человека окончательно.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const expired = jest.fn();
+    const unsubscribe = mod.onAuthExpired(expired);
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw http401(config);
+    };
+
+    await expect(mod.default.post('/auth/refresh')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).not.toHaveBeenCalled();
+
+    // Контроль: обычный запрос с тем же мёртвым токеном сессию гасит — иначе
+    // мы бы починили симптом ценой залипшей навсегда сессии.
+    await expect(mod.default.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('разлогин несёт диагностику: причина, хост, статус и путь без id', async () => {
+    // Без этого три с половиной месяца событий не могли назвать причину.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const seen: { reason?: string; details?: Record<string, unknown> }[] = [];
+    const unsubscribe = mod.onAuthExpired((reason, details) => {
+      seen.push({ reason, details: details as unknown as Record<string, unknown> });
+    });
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw Object.assign(new Error('401'), {
+        isAxiosError: true,
+        code: 'ERR_BAD_REQUEST',
+        config,
+        response: {
+          status: 401,
+          statusText: 'Unauthorized',
+          data: { message: 'Токен отозван' },
+          headers: {},
+          config,
+        },
+      });
+    };
+
+    await expect(mod.default.get('/schedule/7a1d3f2e-0000-4000-a000-0000000000aa')).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].details).toMatchObject({ status: 401, serverMessage: 'Токен отозван' });
+    // uuid в пути схлопнут — иначе тег в Sentry уникален на каждое событие.
+    expect(seen[0].details?.path).toBe('/schedule/:id');
+    expect(typeof seen[0].details?.host).toBe('string');
+    unsubscribe();
+  });
+});

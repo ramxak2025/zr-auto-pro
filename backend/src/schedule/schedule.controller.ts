@@ -3,6 +3,7 @@ import { ScheduleService } from './schedule.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { ParseUuidParam } from '../common/parse-uuid.pipe';
 
 // Матрица ролей АВТОРИТЕТНА (волна «права как в Битрикс24», 2026-07):
 //   • 'schedule_view' (schedule.view) — чтение графика команды. Сид true у
@@ -76,15 +77,19 @@ export class ScheduleController {
     return this.scheduleService.updateWorkMode(id, user.tenantID, dto);
   }
 
+  // ParseUuidParam здесь не украшение: именно на этот маршрут мобилка слала
+  // локальный плейсхолдер строки («temp-<userId>-<date>»), Postgres спотыкался
+  // на приведении к uuid, и человек получал 500 вместо внятного отказа.
+  // Клиент починен, но проверка остаётся — отсекаем на границе, до SQL.
   @RequirePermission('schedule_manage')
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+  update(@Param('id', ParseUuidParam) id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.update(id, user.tenantID, dto, user);
   }
 
   @RequirePermission('schedule_manage')
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+  remove(@Param('id', ParseUuidParam) id: string, @CurrentUser() user: JwtPayload) {
     return this.scheduleService.remove(id, user.tenantID, user);
   }
 }

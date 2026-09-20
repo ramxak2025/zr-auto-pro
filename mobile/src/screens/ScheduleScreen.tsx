@@ -952,8 +952,9 @@ function GridTab() {
           return arr.map((e) => (e.id === existingEntry.id ? ({ ...e, ...payload } as ScheduleEntry) : e));
         }
         const temp = {
-          // Temp id — replaced by the real row on the post-success refetch.
-          id: `temp-${userId}-${date}`,
+          // Локальный id строки, которой на сервере ещё нет. Заменяется ответом
+          // create'а (см. quickAction) — не «когда-нибудь на refetch».
+          id: placeholderId(userId, date),
           tenantId: '',
           userId,
           date,
@@ -999,6 +1000,15 @@ function GridTab() {
       // Guard against a double-tap firing two DELETEs (the 2nd 404s and is
       // swallowed, but it's a wasted round-trip and a race).
       if (deleteMutation.isPending) return;
+      // Плейсхолдер на сервере не существует — DELETE по нему упал бы на
+      // приведении к uuid. Строка ещё не доехала: убираем её локально.
+      if (isPlaceholderId(entry.id)) {
+        queryClient.setQueryData(scheduleQueryKey, (old: unknown) =>
+          toArray<ScheduleEntry>(old).filter((e) => e.id !== entry.id),
+        );
+        setQuickPopup(null);
+        return;
+      }
       deleteMutation.mutate(entry.id);
       return;
     }
@@ -1094,10 +1104,36 @@ function GridTab() {
     setQuickPopup(null);
     cellInFlight.current.add(cellKey);
     const previous = applyOptimistic(userId, date, base, entry);
+    // id, под которым строка сейчас лежит в кэше: либо настоящий с сервера,
+    // либо наш плейсхолдер. Нужен ниже, чтобы заменить его ответом сервера.
+    const optimisticId = entry?.id ?? placeholderId(userId, date);
     void (async () => {
       try {
-        if (entry?.id) await scheduleApi.update(entry.id, base);
-        else await scheduleApi.create(base);
+        // ВАЖНО: PATCH только по НАСТОЯЩЕМУ id.
+        //
+        // Раньше условие было просто `if (entry?.id)`, а плейсхолдер — такой же
+        // id, как любой другой. Если человек успевал тапнуть второй раз до
+        // того, как долетал невыжидаемый invalidate, в PATCH уходило
+        // «temp-<userId>-<date>»: сервер спотыкался на приведении к uuid,
+        // отвечал 500, и catch ниже откатывал ячейку с «Не удалось
+        // сохранить» — хотя день на сервере был сохранён. Владелец видел, как
+        // отметка прихода отскакивает назад, и решал, что график сломан.
+        if (entry?.id && !isPlaceholderId(entry.id)) {
+          await scheduleApi.update(entry.id, base);
+        } else {
+          // Сверяемся по ОТВЕТУ, а не по последующему refetch: плейсхолдер
+          // перестаёт существовать в тот момент, когда сервер ответил, а не
+          // когда-нибудь потом. Это и закрывает гонку в корне.
+          const created = await scheduleApi.create(base);
+          const saved = created?.data;
+          if (saved?.id) {
+            queryClient.setQueryData(scheduleQueryKey, (old: unknown) =>
+              toArray<ScheduleEntry>(old).map((e) =>
+                e.id === optimisticId ? ({ ...e, ...saved } as ScheduleEntry) : e,
+              ),
+            );
+          }
+        }
         queryClient.invalidateQueries({ queryKey: ['schedule'] });
         queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
       } catch {
@@ -3079,6 +3115,18 @@ function SettingsTab() {
 }
 
 // ============== MAIN SCREEN ==============
+/**
+ * Префикс локальных строк расписания, которых на сервере ещё нет.
+ *
+ * Такой id НЕЛЬЗЯ отправлять ни в PATCH, ни в DELETE: серверный маршрут
+ * приводит :id к uuid и падает. Держим генерацию и проверку рядом, одной
+ * парой, чтобы они не разъехались.
+ */
+const SCHEDULE_PLACEHOLDER_PREFIX = 'temp-';
+const placeholderId = (userId: string, date: string): string => `${SCHEDULE_PLACEHOLDER_PREFIX}${userId}-${date}`;
+const isPlaceholderId = (id: string | undefined | null): boolean =>
+  typeof id === 'string' && id.startsWith(SCHEDULE_PLACEHOLDER_PREFIX);
+
 export default function ScheduleScreen() {
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
