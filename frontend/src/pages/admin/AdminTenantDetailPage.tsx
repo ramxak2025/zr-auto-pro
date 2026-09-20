@@ -440,6 +440,12 @@ export default function AdminTenantDetailPage() {
       tenantId: id,
     };
 
+    // Та же политика, что на сервере и в мобильной админке — 8 символов.
+    if (userForm.password && userForm.password.length < 8) {
+      toast.error('Пароль должен быть не менее 8 символов');
+      return;
+    }
+
     if (editingUser) {
       if (userForm.password) payload.password = userForm.password;
       updateUserMutation.mutate({ userId: editingUser.id, data: payload });

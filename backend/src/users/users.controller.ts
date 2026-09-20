@@ -8,6 +8,7 @@ import { actorPointId } from '../common/point-scope';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetRateDto } from './dto/set-rate.dto';
+import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 
 // Управление сотрудниками (create / update / delete / reorder /
 // per-product commissions) — под матричным ключом 'user_management' (волна
@@ -56,6 +57,23 @@ export class UsersController {
     return this.usersService.listDismissed(user.tenantID);
   }
 
+  // @AllowNoTenant — ОБЯЗАТЕЛЕН, иначе суперадмин не может вести сотрудников.
+  //
+  // Глобальный TenantWriteGuardInterceptor режет ЛЮБУЮ мутацию от суперадмина
+  // без своего тенанта (его users.tenant_id = NULL, jwt подставляет
+  // NO_TENANT_ID) — отвечает 409 «Действие недоступно без выбранного
+  // автосервиса» ДО хендлера, пайпа и любой бизнес-логики. Для /users это было
+  // ложное срабатывание: ни один хендлер ниже не пишет под sentinel-тенант, все
+  // они резолвят тенант ЦЕЛИ через resolveTenantForTarget (а create — из
+  // dto.tenantId). Регрессия: 7d55744 (08.07) починил суперадмину ведение
+  // сотрудников, df2e3ba (09.07) добавил интерцептор и молча сломал это снова —
+  // смена пароля сотруднику, владельцу автосервиса и тенанту перестала работать
+  // и с сайта, и из приложения.
+  //
+  // Помечаем ПОштучно, а не весь контроллер: @Post('order') и
+  // @Post(':id/product-commissions') скоупятся тенантом АКТОРА, и для
+  // tenant-less суперадмина их блокировка — правильное поведение.
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Post(':id/restore')
   async restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
@@ -64,6 +82,7 @@ export class UsersController {
   }
 
   // "Delete completely" — keeps the row (FK/history) but hides it forever.
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Post(':id/purge')
   async purge(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
@@ -83,6 +102,7 @@ export class UsersController {
     return this.usersService.getById(id, tenantID, user);
   }
 
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
@@ -98,6 +118,7 @@ export class UsersController {
     return this.usersService.create(targetTenant, user.role, dto, user.permissions, actorPointId(user));
   }
 
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Patch(':id')
   async update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
@@ -106,6 +127,7 @@ export class UsersController {
     return this.usersService.update(id, tenantID, user.role, user.userID, dto, user.permissions);
   }
 
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Delete(':id')
   async remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
@@ -118,6 +140,7 @@ export class UsersController {
   // начислений новой ставкой; текущий — плюс UPDATE users.* (запекание новых
   // чеков); будущий — история + cron-перенос при наступлении месяца.
 
+  @AllowNoTenant()
   @RequirePermission('user_management')
   @Patch(':id/rate')
   async setRate(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SetRateDto) {

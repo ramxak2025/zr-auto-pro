@@ -217,9 +217,24 @@ export default function AdminTenantsScreen() {
       setEditing(null);
       invalidate();
     },
-    onError: () => {
+    // Показываем ПРИЧИНУ с сервера, а не глухое «Не удалось сохранить».
+    // Именно так осмысленный отказ («Пароль должен быть не менее 8 символов»,
+    // «Действие недоступно без выбранного автосервиса») превращался для
+    // владельца в бессодержательное «ошибка выходит». Зеркалит разбор ошибки
+    // в AdminTenantDetailScreen: message может прийти массивом от
+    // ValidationPipe — тогда склеиваем строки.
+    onError: (error: unknown) => {
       haptic('error');
-      Alert.alert('Ошибка', editing?.id ? 'Не удалось сохранить изменения' : 'Не удалось создать автосервис');
+      const msg = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+      const reason = Array.isArray(msg) ? msg.filter((m): m is string => typeof m === 'string').join('\n') : msg;
+      Alert.alert(
+        'Ошибка',
+        typeof reason === 'string' && reason.trim()
+          ? reason
+          : editing?.id
+            ? 'Не удалось сохранить изменения'
+            : 'Не удалось создать автосервис',
+      );
     },
     onSettled: () => setSaving(false),
   });
@@ -292,9 +307,9 @@ export default function AdminTenantsScreen() {
           Alert.alert('Неверный телефон директора', 'Введите корректный номер телефона владельца.');
           return;
         }
-        if (editing.directorPassword.length < 6) {
+        if (editing.directorPassword.length < 8) {
           haptic('error');
-          Alert.alert('Нужен пароль директора', 'Пароль владельца — минимум 6 символов.');
+          Alert.alert('Нужен пароль директора', 'Пароль владельца — минимум 8 символов.');
           return;
         }
       }
@@ -610,7 +625,7 @@ export default function AdminTenantsScreen() {
                     <Field label="Пароль" palette={palette} surface={surface}>
                       <TextInput
                         style={[styles.input, { color: palette.text.primary }]}
-                        placeholder="Минимум 6 символов"
+                        placeholder="Минимум 8 символов"
                         placeholderTextColor={palette.text.tertiary}
                         secureTextEntry
                         autoCapitalize="none"

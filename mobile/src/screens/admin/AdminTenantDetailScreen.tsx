@@ -500,14 +500,14 @@ export default function AdminTenantDetailScreen() {
       Alert.alert('Неверный телефон', 'Введите корректный номер телефона.');
       return;
     }
-    if (!editingUser.id && editingUser.password.length < 6) {
+    if (!editingUser.id && editingUser.password.length < 8) {
       haptic('error');
-      Alert.alert('Нужен пароль', 'При создании сотрудника укажите пароль (минимум 6 символов).');
+      Alert.alert('Нужен пароль', 'При создании сотрудника укажите пароль (минимум 8 символов).');
       return;
     }
-    if (editingUser.id && editingUser.password && editingUser.password.length < 6) {
+    if (editingUser.id && editingUser.password && editingUser.password.length < 8) {
       haptic('error');
-      Alert.alert('Слабый пароль', 'Пароль должен быть не короче 6 символов.');
+      Alert.alert('Слабый пароль', 'Пароль должен быть не менее 8 символов.');
       return;
     }
     saveUserMutation.mutate(editingUser);
@@ -1217,7 +1217,7 @@ export default function AdminTenantDetailScreen() {
                   <View style={[styles.inputWrap, styles.pwRow, surface.cardCompact]}>
                     <TextInput
                       style={[styles.sheetInput, styles.pwInput, { color: palette.text.primary }]}
-                      placeholder="Минимум 6 символов"
+                      placeholder="Минимум 8 символов"
                       placeholderTextColor={palette.text.tertiary}
                       secureTextEntry={!pwVisible}
                       autoCapitalize="none"

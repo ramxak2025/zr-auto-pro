@@ -6,7 +6,7 @@ export class RegisterDto {
   phone!: string;
 
   @IsString()
-  @MinLength(6)
+  @MinLength(8, { message: 'Пароль должен быть не менее 8 символов' })
   password!: string;
 
   @IsString()

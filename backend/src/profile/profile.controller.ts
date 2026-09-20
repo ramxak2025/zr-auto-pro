@@ -6,6 +6,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { ProfileService } from './profile.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 
 /**
  * «Мой профиль» — self profile edit, self password change, and the approval
@@ -31,12 +32,18 @@ export class ProfileController {
    * admin/master → creates a pending change-request. Response discriminates via
    * `status` ('applied' | 'requested').
    */
+  // @AllowNoTenant: свой профиль и свой пароль не имеют отношения к тенанту —
+  // оба хендлера ключуются по userID актора. Без метки глобальный
+  // TenantWriteGuardInterceptor отвечал суперадмину 409 даже на смену
+  // СОБСТВЕННОГО пароля: 'profile' нет в ALLOWED_PREFIXES.
+  @AllowNoTenant()
   @Patch()
   updateProfile(@CurrentUser() user: JwtPayload, @Body() dto: UpdateProfileDto) {
     return this.profile.updateProfile(user, dto);
   }
 
   /** Change own password — self-service for every role. */
+  @AllowNoTenant()
   @Post('password')
   changePassword(@CurrentUser() user: JwtPayload, @Body() dto: ChangePasswordDto) {
     return this.profile.changePassword(user, dto);

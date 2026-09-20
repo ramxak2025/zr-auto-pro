@@ -9,8 +9,15 @@ export class UpdateUserDto {
   @IsOptional()
   fullName?: string;
 
+  // 8, а не 6. Политика в проекте — восемь (profile/change-password,
+  // registration, auth.service), и users.service тоже проверяет >= 8. Здесь же
+  // годами стояло 6: пароль из 6–7 символов проходил DTO и отлетал уже в
+  // сервисе, а клиенты при этом писали человеку «минимум 6 символов». Явный
+  // message обязателен — без него class-validator отвечает по-английски
+  // («password must be longer than or equal to 8 characters»), и этот текст
+  // фильтр исключений отдаёт прямо в интерфейс.
   @IsString()
-  @MinLength(6)
+  @MinLength(8, { message: 'Пароль должен быть не менее 8 символов' })
   @IsOptional()
   password?: string;
 
