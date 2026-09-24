@@ -1,6 +1,8 @@
 import api, { loginAcrossHosts, postPublicAcrossHosts } from './axios';
 import {
   createAuthApi,
+  createVinApi,
+  createReportBuilderApi,
   createRegistrationApi,
   createProfileApi,
   createUsersApi,
@@ -118,6 +120,8 @@ export const subscriptionApi = createSubscriptionApi(api);
 export const voiceApi = createVoiceApi(api);
 export const clientsApi = createClientsApi(api);
 export const carsApi = createCarsApi(api);
+/** 171 — VIN: расшифровка и настройки опции (см. shared/api/createServices createVinApi). */
+export const vinApi = createVinApi(api);
 export const productsApi = createProductsApi(api);
 export const servicesApi = createServicesApi(api);
 export const checksApi = createChecksApi(api);
@@ -138,6 +142,8 @@ export const motivationApi = createMotivationApi(api);
 // расходы» в разделе «Ещё → Финансы», owner-only).
 export const planningApi = createPlanningApi(api);
 export const reportsApi = createReportsApi(api);
+/** Конструктор отчётов (2026-09-25) — раздел «Отчёты», каталог в shared/reports/catalog.ts. */
+export const reportBuilderApi = createReportBuilderApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);
 export const expensesApi = createExpensesApi(api);

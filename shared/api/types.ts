@@ -341,6 +341,12 @@ export interface CreateCarRequest {
   clientId: string;
   /** 059 — register the car "без номера"; plate is stored empty. */
   noPlate?: boolean;
+  /**
+   * 171 — VIN (17 символов, нормализуется сервером через normalizeVin). Принимается
+   * только при включённой опции Tenant.vinEnabled; дубликат VIN внутри тенанта →
+   * 409 {code:'VIN_DUPLICATE', carId, clientId, clientName}.
+   */
+  vin?: string | null;
 }
 
 export interface UpdateCarRequest {
@@ -350,6 +356,8 @@ export interface UpdateCarRequest {
   clientId?: string;
   /** 059 — toggle "без номера". When true, the stored plate is cleared. */
   noPlate?: boolean;
+  /** 171 — VIN; null/'' — очистить. См. CreateCarRequest.vin. */
+  vin?: string | null;
 }
 
 /**

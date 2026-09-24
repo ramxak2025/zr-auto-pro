@@ -123,6 +123,15 @@ export interface Tenant {
    */
   voiceMinutesExtra?: number;
   /**
+   * 171 (2026-09-25) — опция «VIN-код автомобиля» включена у тенанта. По
+   * умолчанию false. Приезжает и с GET /my-company, и внутри `User.tenant`
+   * из /auth/login и /auth/me — ЛЮБОЙ роли (как timezone): мастеру в Кассе
+   * нужно знать, показывать ли поле VIN и режим поиска по VIN, а /my-company
+   * закрыт ключом company_manage. Мутируется через PATCH /vin/settings
+   * (см. {@link VinSettings}). Absent на легаси-payload'ах → считать false.
+   */
+  vinEnabled?: boolean;
+  /**
    * 122 — самая свежая строка реестра продлений подписки (subscription_payments),
    * или null, если тенант ни разу не продлевался через ledger-путь. Позволяет
    * списку тенантов бейджить «оплачено до …» / «бесплатно до …». Absent на
@@ -3393,6 +3402,20 @@ export interface PushToken {
   platform: 'ios' | 'android';
 }
 
+/**
+ * GET /reports/call-funnel — воронка обращений по РЕАЛЬНЫМ звонкам
+ * (2026-09-25: раньше считалась по sms_history, и у тенантов без СМС-рассылок
+ * всегда была нулевой). Источник — подключённая телефония: «Мои Звонки»
+ * (live-API) или Mango (таблица calls). Без телефонии — нули и
+ * telephony.connected=false: клиенты показывают «Подключите телефонию»
+ * вместо нулей.
+ *
+ * Старые поля сохранили имена, смысл — суперсет: totalCalls = ВХОДЯЩИЕ звонки
+ * за период; uniqueCallers — уникальные номера среди них; arrivedClients /
+ * createdChecks / totalRevenue — клиенты, чей номер звонил в период и у кого
+ * после звонка (в пределах периода) появился чек; выручка — по общим формулам
+ * (гарантия денег не приносит). Все новые поля optional — старый бэкенд их не шлёт.
+ */
 export interface CallFunnel {
   totalCalls: number;
   uniqueCallers: number;
@@ -3401,8 +3424,25 @@ export interface CallFunnel {
   totalRevenue: number;
   avgCheckValue: number;
   repeatClients: number;
+  /** Доля уникальных звонивших номеров, доехавших до сервиса, в процентах (0–100). */
   conversionRate: number;
   period: { from: string; to: string };
+  /** Состояние телефонии. Absent — старый бэкенд. */
+  telephony?: {
+    connected: boolean;
+    provider: 'moizvonki' | 'mango' | null;
+    /** Телефония подключена, но звонки получить не удалось (ошибка провайдера) — текст для UI. */
+    error?: string | null;
+  };
+  answeredCalls?: number;
+  missedCalls?: number;
+  /** Пропущенные входящие, по которым так и не перезвонили. */
+  notCalledBack?: number;
+  outgoingCalls?: number;
+  /** Уникальные звонившие номера, которые уже есть в базе клиентов. */
+  knownCallers?: number;
+  /** Уникальные звонившие номера, которых в базе нет (потенциальные новые клиенты). */
+  newCallers?: number;
 }
 
 export interface ReminderSettings {
@@ -5037,4 +5077,267 @@ export interface ProfileChangeRequest {
   /** The владелец who approved/rejected, once decided. */
   decidedBy?: string;
   decidedAt?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VIN (171, 2026-09-25) — VIN-код автомобиля. Опция тенанта (Tenant.vinEnabled),
+//  по умолчанию ВЫКЛЮЧЕНА: поле VIN у машины, расшифровка марки/модели и поиск
+//  клиента по VIN появляются в UI только при включённой опции. Чистые хелперы
+//  (нормализация, валидация, формат) — shared/utils/vin.ts.
+//
+//  Источники расшифровки (сервер пробует по очереди, первый успешный побеждает):
+//    1. платный сервис по ключу КЛИЕНТА (provider + credentials в /vin/settings) —
+//       Autexa за запросы не платит;
+//    2. бесплатный справочник NHTSA vPIC (марка + модель, хорошо знает машины
+//       рынка США; из РФ может быть недоступен — тогда молча дальше);
+//    3. офлайн-таблица WMI (первые 3 символа → производитель) + модельный год.
+//  Модель может остаться null — пользователь допишет руками.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Откуда взяты марка/модель при расшифровке. */
+export type VinDecodeSource = 'paid' | 'nhtsa' | 'wmi' | 'none';
+
+/** POST /vin/decode { vin } → результат. Доступен любой роли тенанта. */
+export interface VinDecodeResult {
+  /** Канонический VIN (normalizeVin). */
+  vin: string;
+  /** Синтаксически корректен: 17 символов допустимого алфавита. */
+  valid: boolean;
+  /** Марка («Kia», «Lada»). null — определить не удалось. */
+  make: string | null;
+  /** Модель («Rio», «Vesta»). null — не определена (частый случай у бесплатных источников). */
+  model: string | null;
+  /** Модельный год. */
+  year: number | null;
+  /** Готовая строка для поля «Марка и модель»: «Kia Rio» / «Kia» / null. */
+  makeModel: string | null;
+  /** Источник марки/модели. 'none' — ничего не нашли (valid при этом может быть true). */
+  source: VinDecodeSource;
+  /** Доп. поля, когда источник их отдаёт (платный сервис / NHTSA). */
+  bodyType?: string | null;
+  engine?: string | null;
+  fuel?: string | null;
+  /** Пояснения для UI («Платный сервис не ответил — использован справочник производителей»). */
+  notes?: string[];
+}
+
+/** Поле учётных данных платного сервиса (ключ, секрет, логин…). */
+export interface VinProviderField {
+  key: string;
+  label: string;
+  /** Секрет — в UI поле пароля; сервер никогда не возвращает сохранённое значение. */
+  secret?: boolean;
+  placeholder?: string;
+}
+
+/**
+ * Описание платного сервиса расшифровки VIN. Список отдаёт сервер в
+ * VinSettings.providers — клиенты провайдеров НЕ хардкодят: новый провайдер
+ * появляется в настройках без обновления приложений.
+ */
+export interface VinProviderInfo {
+  id: string;
+  name: string;
+  description?: string;
+  /** Где клиент получает ключ (сайт сервиса). */
+  site?: string;
+  fields: VinProviderField[];
+}
+
+/** GET /vin/settings — настройки VIN текущего тенанта (ключ company_manage). */
+export interface VinSettings {
+  enabled: boolean;
+  /** id провайдера из providers, либо null — только бесплатные источники. */
+  provider: string | null;
+  /** Учётные данные провайдера сохранены (сами значения не возвращаются). */
+  hasCredentials: boolean;
+  providers: VinProviderInfo[];
+}
+
+/**
+ * PATCH /vin/settings (company_manage). credentials: объект — сохранить/заменить;
+ * null — удалить сохранённые; undefined — не трогать. Смена provider без
+ * credentials сбрасывает сохранённые учётные данные (они от другого сервиса).
+ */
+export interface UpdateVinSettingsRequest {
+  enabled?: boolean;
+  provider?: string | null;
+  credentials?: Record<string, string> | null;
+}
+
+/** GET /cars/lookup-by-vin?vin= — как lookupByPlate, но по VIN (и с полем vin). */
+export interface CarLookupResult {
+  id: string;
+  plateNumber: string;
+  makeModel: string;
+  vin: string | null;
+  clientId: string | null;
+  createdAt: string;
+  client: { id: string; fullName: string; phone: string } | null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  КОНСТРУКТОР ОТЧЁТОВ (2026-09-25) — раздел «Отчёты»: владелец выбирает тип
+//  отчёта, период и фильтры, сервер отдаёт ЕДИНУЮ структуру ReportResult:
+//  KPI-плитки + основная таблица (колонки/строки/итого) + доп. секции. Клиенты
+//  (web и mobile) рендерят её ОДНИМ универсальным экраном и одним экспортом
+//  (Excel/PDF) — новый отчёт = новый SQL на сервере + строка в каталоге
+//  shared/reports/catalog.ts, без новых экранов.
+//
+//  Маршруты (контроллер reports/builder, literal-пути объявлены ДО :reportId):
+//    GET /reports/builder/catalog            → ReportCatalogResponse
+//    GET /reports/builder/filters/:kind      → ReportFilterOptions
+//    GET /reports/builder/:reportId?dateFrom&dateTo&ids=a,b&groupBy= → ReportResult
+//  Период ≤ 366 дней (иначе 400). Все отчёты считаются в поясе тенанта и в
+//  скоупе текущего филиала (кроме 'points' — сравнение филиалов, owner-class).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type ReportId =
+  | 'summary'
+  | 'masters'
+  | 'salary'
+  | 'suppliers'
+  | 'clients'
+  | 'products'
+  | 'services'
+  | 'payments'
+  | 'expenses'
+  | 'bookings'
+  | 'points';
+
+/** Тип значения колонки/KPI — определяет форматирование на клиенте и в экспорте. */
+export type ReportColumnType = 'text' | 'money' | 'number' | 'int' | 'percent' | 'date' | 'datetime';
+
+export interface ReportColumn {
+  key: string;
+  title: string;
+  type: ReportColumnType;
+  /** По умолчанию: text — слева, числа — справа. */
+  align?: 'left' | 'right' | 'center';
+  /** Подсказка к заголовку («Прибыль = выручка − себестоимость товаров»). */
+  hint?: string;
+  /**
+   * Знаковая величина: отрицательные значения подсвечивать красным, положительные
+   * зелёным (долг/переплата, остаток к выплате/перерасход).
+   */
+  signed?: boolean;
+  /** Относительная ширина в таблице (1 = базовая). */
+  width?: number;
+}
+
+export type ReportCell = string | number | null;
+
+/**
+ * Строка таблицы: значения по column.key. Зарезервированные служебные ключи
+ * начинаются с '_' и в таблицу не выводятся:
+ *   _id    — id сущности (мастер/поставщик/клиент/товар…),
+ *   _href  — маршрут web для перехода («/clients/…»), mobile маппит сам,
+ *   _tone  — 'positive' | 'negative' | 'warning' — подсветка всей строки.
+ */
+export interface ReportRow {
+  [key: string]: ReportCell;
+}
+
+export type ReportTone = 'default' | 'positive' | 'negative' | 'warning';
+
+/** Крупная цифра над таблицей. */
+export interface ReportKpi {
+  key: string;
+  title: string;
+  value: number | string | null;
+  type: ReportColumnType;
+  hint?: string;
+  tone?: ReportTone;
+  /** Изменение к предыдущему такому же периоду, в процентах (если сервер посчитал). */
+  deltaPercent?: number | null;
+}
+
+/** Дополнительная таблица под основной («Залежавшиеся товары», «Топ-5 услуг»). */
+export interface ReportSection {
+  key: string;
+  title: string;
+  description?: string;
+  columns: ReportColumn[];
+  rows: ReportRow[];
+  totals?: ReportRow | null;
+  /** Текст пустого состояния секции. */
+  emptyText?: string;
+}
+
+/** Эхо применённых фильтров — для шапки PDF/Excel и заголовка экрана. */
+export interface ReportAppliedFilters {
+  /** Выбранные сущности (мастера/сотрудники/поставщики/филиалы). Пусто = все. */
+  entityIds?: string[];
+  entityLabels?: string[];
+  groupBy?: string | null;
+  groupByLabel?: string | null;
+}
+
+export interface ReportResult {
+  reportId: ReportId;
+  /** Заголовок отчёта на языке продукта («Отчёт по мастерам»). */
+  title: string;
+  period: { from: string; to: string };
+  /** ISO-момент формирования (пояс сервера, для подписи «сформирован …»). */
+  generatedAt: string;
+  filters: ReportAppliedFilters;
+  kpis: ReportKpi[];
+  columns: ReportColumn[];
+  rows: ReportRow[];
+  /** Итоговая строка по тем же ключам, что columns. null/absent — без итога. */
+  totals?: ReportRow | null;
+  sections?: ReportSection[];
+  /** Оговорки методики («Гарантийные чеки не входят в выручку», «Долг: + мы должны, − нам должны»). */
+  notes?: string[];
+  meta?: {
+    /** Название филиала, в скоупе которого посчитан отчёт; null — вся сеть. */
+    pointName?: string | null;
+    scope?: 'point' | 'all';
+    /** Строк больше лимита — таблица усечена. */
+    truncated?: boolean;
+    rowLimit?: number;
+    /** Название компании — для шапки экспорта. */
+    companyName?: string;
+  };
+}
+
+/** Параметры запуска отчёта. ids на проводе — CSV в query `ids`. */
+export interface ReportQuery {
+  dateFrom: string;
+  dateTo: string;
+  ids?: string[];
+  groupBy?: string | null;
+}
+
+/** Вид сущностного фильтра — какой список выбирать. */
+export type ReportFilterKind = 'masters' | 'employees' | 'suppliers' | 'points';
+
+export interface ReportFilterOption {
+  id: string;
+  label: string;
+  /** Подстрока («мастер», «уволен 12.08», телефон поставщика). */
+  sublabel?: string;
+}
+
+/** GET /reports/builder/filters/:kind */
+export interface ReportFilterOptions {
+  kind: ReportFilterKind;
+  /** Подпись фильтра («Мастера», «Поставщики»). */
+  label: string;
+  multi: boolean;
+  options: ReportFilterOption[];
+}
+
+/**
+ * GET /reports/builder/catalog — какие отчёты доступны ТЕКУЩЕМУ пользователю
+ * (права из матрицы ролей, owner-class для 'points', наличие ≥2 филиалов).
+ * Описания отчётов (названия, фильтры) — в shared/reports/catalog.ts.
+ */
+export interface ReportCatalogResponse {
+  reports: Array<{
+    id: ReportId;
+    available: boolean;
+    /** Почему недоступен («Нужно право «Зарплата»», «У компании один филиал»). */
+    reason?: string | null;
+  }>;
 }
