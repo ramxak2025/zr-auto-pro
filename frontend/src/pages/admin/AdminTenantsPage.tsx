@@ -1,24 +1,41 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Building2, Loader2, UserPlus, Users, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Building2, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO, isPast } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { tenantsApi, plansApi } from '../../api/services';
 import { Tenant, Plan } from '../../types';
+import { formatMoney } from '../../../../shared/utils/formatters';
+import { formatPhone } from '../../../../shared/validation/phone';
+import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import QueryState from '../../components/QueryState';
+import Pagination from '../../components/Pagination';
+import SearchInput from '../../components/SearchInput';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
-import { AdminPageHeader, Chip } from '../../components/admin/adminUi';
+import { Button } from '../../ui/Button';
+import { DataTable, type DataTableColumn } from '../../ui/DataTable';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { Money } from '../../ui/Money';
+import { RadioGroup } from '../../ui/RadioGroup';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Select } from '../../ui/Select';
+import { Textarea } from '../../ui/Textarea';
+import { Toolbar } from '../../ui/Toolbar';
+import { cn } from '../../ui/cn';
+import { TenantStatusBadges, isTenantExpired } from '../../components/admin/adminUi';
 
 /*
  * Список автосервисов: плотная таблица с поиском, фильтрами по статусу/тарифу
  * и клиентской пагинацией (getAll отдаёт весь список — режем на страницы на
  * клиенте). Редактор тенанта ЕДИНЫЙ и живёт только на странице «Подробнее»
  * (AdminTenantDetailPage) — здесь только просмотр, создание и удаление.
+ * Поиск, фильтры и страница — в URL: F5 и «Назад» их сохраняют.
  */
 
 interface TenantFormData {
@@ -52,45 +69,49 @@ const emptyForm: TenantFormData = {
 const PAGE_SIZE = 20;
 
 type StatusFilter = 'all' | 'active' | 'expired' | 'inactive';
+const STATUS_KEYS: StatusFilter[] = ['all', 'active', 'expired', 'inactive'];
 
-const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
-  { key: 'all', label: 'Все' },
-  { key: 'active', label: 'Активные' },
-  { key: 'expired', label: 'Истёкшие' },
-  { key: 'inactive', label: 'Отключённые' },
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: 'Все' },
+  { value: 'active', label: 'Активные' },
+  { value: 'expired', label: 'Истёкшие' },
+  { value: 'inactive', label: 'Отключённые' },
 ];
 
-function formatPhone(raw: string): string {
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length > 0 && digits[0] === '8') {
-    digits = '7' + digits.slice(1);
-  }
-  if (digits.length === 0) return '';
-  if (digits.length <= 1) return `+${digits}`;
-  if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
-  if (digits.length <= 7) return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
-  if (digits.length <= 9)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-  return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
-}
-
-function isTenantExpired(t: Tenant): boolean {
-  return !!t.subscriptionEnd && isPast(parseISO(t.subscriptionEnd));
-}
+const userCountOf = (t: Tenant) => t.userCount ?? t.users?.length ?? 0;
 
 export default function AdminTenantsPage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const uid = useId();
+  const formId = `${uid}-tenant-form`;
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<TenantFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  // Поиск / фильтры / страница
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [planFilter, setPlanFilter] = useState('');
-  const [page, setPage] = useState(1);
+  // Поиск / фильтры / страница — в URL
+  const [params, setParams] = useSearchParams();
+  const search = params.get('q') ?? '';
+  const rawStatus = params.get('status');
+  const statusFilter: StatusFilter = STATUS_KEYS.includes(rawStatus as StatusFilter)
+    ? (rawStatus as StatusFilter)
+    : 'all';
+  const planFilter = params.get('plan') ?? '';
+  const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
+
+  const patch = (changes: Record<string, string | null>) => {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(changes)) {
+          if (v === null || v === '' || (k === 'status' && v === 'all') || (k === 'page' && v === '1')) next.delete(k);
+          else next.set(k, v);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['tenants'],
@@ -104,12 +125,12 @@ export default function AdminTenantsPage() {
     select: (res) => res.data as Plan[],
   });
 
-  const tenants = data ?? [];
+  const tenants = useMemo(() => data ?? [], [data]);
   const activePlans = (plansData ?? []).filter((p) => p.isActive);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (data ?? []).filter((t) => {
+    return tenants.filter((t) => {
       if (q) {
         const hay = `${t.name} ${t.phone ?? ''} ${t.email ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -120,19 +141,13 @@ export default function AdminTenantsPage() {
       if (planFilter && t.planId !== planFilter) return false;
       return true;
     });
-  }, [data, search, statusFilter, planFilter]);
+  }, [tenants, search, statusFilter, planFilter]);
 
   // Клампим страницу вместо useEffect-сброса: смена фильтра сразу показывает 1-ю.
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pageItems = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-  const applyFilter =
-    <T,>(setter: (v: T) => void) =>
-    (v: T) => {
-      setter(v);
-      setPage(1);
-    };
+  const isFiltered = filtered.length !== tenants.length;
 
   const createMutation = useMutation({
     mutationFn: (payload: any) => tenantsApi.create(payload),
@@ -206,459 +221,346 @@ export default function AdminTenantsPage() {
   };
 
   const isSaving = createMutation.isPending;
+  const deleteTarget = deleteId ? tenants.find((t) => t.id === deleteId) : undefined;
 
-  const renderStatus = (tenant: Tenant) => (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {tenant.isActive ? <span className="badge-green">Активна</span> : <span className="badge-red">Отключена</span>}
-      {isTenantExpired(tenant) && tenant.isActive && <span className="badge-yellow">Истекла</span>}
-    </div>
-  );
+  const columns: DataTableColumn<Tenant>[] = [
+    {
+      key: 'name',
+      header: 'Автосервис',
+      primary: true,
+      // max-w-0 + truncate: колонка забирает остаток ширины и режет длинное
+      // название многоточием, а не выталкивает «Статус» за край экрана на 375 px.
+      truncate: true,
+      sortable: true,
+      sortValue: (t) => t.name,
+      render: (t) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+            <Building2 className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate font-medium text-ink">{t.name}</span>
+            <span className="block truncate text-xs font-normal text-ink-3">
+              {t.phone ? formatPhone(t.phone) : t.email || '—'}
+            </span>
+          </span>
+        </span>
+      ),
+    },
+    { key: 'status', header: 'Статус', render: (t) => <TenantStatusBadges tenant={t} /> },
+    {
+      key: 'plan',
+      header: 'Тариф',
+      hideBelow: 'md',
+      sortable: true,
+      sortValue: (t) => t.plan?.name ?? '',
+      render: (t) =>
+        t.plan?.name ? (
+          <span className="block">
+            <span className="block text-ink">{t.plan.name}</span>
+            <span className="block text-xs tabular-nums text-ink-3">
+              <Money value={t.monthlyPrice} />
+              /мес
+            </span>
+          </span>
+        ) : (
+          <span className="text-ink-3">Не назначен</span>
+        ),
+    },
+    {
+      key: 'users',
+      header: 'Сотрудники',
+      numeric: true,
+      hideBelow: 'lg',
+      sortable: true,
+      sortValue: (t) => userCountOf(t),
+      render: (t) => (
+        <span className="text-ink-2">
+          {userCountOf(t)} <span className="text-ink-3">/ {t.maxUsers}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'subscription',
+      header: 'Подписка',
+      hideBelow: 'md',
+      sortable: true,
+      sortValue: (t) => t.subscriptionEnd ?? '',
+      render: (t) => (
+        <span className="flex flex-col items-start gap-1">
+          {t.subscriptionEnd ? (
+            <span className={cn('tabular-nums', isTenantExpired(t) ? 'font-medium text-bad-text' : 'text-ink-2')}>
+              до {format(parseISO(t.subscriptionEnd), 'd MMM yyyy', { locale: ru })}
+            </span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          )}
+          <SubscriptionPeriodBadge kind={t.currentPeriodKind} until={t.subscriptionEnd} size="sm" />
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: '',
+      interactive: true,
+      width: 48,
+      render: (t) => (
+        <IconButton
+          label={`Удалить «${t.name}»`}
+          icon={Trash2}
+          variant="danger"
+          size="sm"
+          onClick={() => setDeleteId(t.id)}
+        />
+      ),
+    },
+  ];
 
   return (
-    <div>
-      <AdminPageHeader
+    <div className="space-y-5">
+      <PageHeader
         title="Автосервисы"
+        icon={Building2}
         subtitle={`Всего: ${tenants.length}`}
         actions={
-          <button onClick={openCreate} className="btn-primary">
-            <Plus className="w-4 h-4" />
+          <Button icon={Plus} onClick={openCreate}>
             Новый автосервис
-          </button>
+          </Button>
         }
       />
 
-      {/* Toolbar: поиск + фильтры */}
-      <div className="mb-4 space-y-3">
-        <div className="relative max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            type="search"
-            className="input pl-9"
-            value={search}
-            onChange={(e) => applyFilter<string>(setSearch)(e.target.value)}
-            placeholder="Поиск: название, телефон, email"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {STATUS_FILTERS.map((f) => (
-            <Chip
-              key={f.key}
-              active={statusFilter === f.key}
-              onClick={() => applyFilter<StatusFilter>(setStatusFilter)(f.key)}
-            >
-              {f.label}
-            </Chip>
-          ))}
-          {(plansData ?? []).length > 0 && (
-            <select
-              className="input w-auto py-1.5 text-sm"
-              value={planFilter}
-              onChange={(e) => applyFilter<string>(setPlanFilter)(e.target.value)}
-              aria-label="Фильтр по тарифу"
-            >
-              <option value="">Все тарифы</option>
-              {(plansData ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {filtered.length !== tenants.length && (
-            <span className="text-sm text-gray-500">
-              Найдено: <span className="font-semibold tabular-nums">{filtered.length}</span>
+      <Toolbar
+        end={
+          isFiltered ? (
+            <span className="text-sm text-ink-3">
+              Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
             </span>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+      >
+        <SearchInput
+          value={search}
+          onChange={(v) => patch({ q: v, page: null })}
+          placeholder="Название, телефон, email…"
+          aria-label="Поиск автосервисов"
+          className="w-full sm:w-72"
+        />
+        <SegmentedControl<StatusFilter>
+          aria-label="Статус"
+          value={statusFilter}
+          onChange={(v) => patch({ status: v, page: null })}
+          options={STATUS_FILTERS}
+        />
+        {(plansData ?? []).length > 0 && (
+          <Select
+            aria-label="Тариф"
+            value={planFilter}
+            onChange={(e) => patch({ plan: e.target.value, page: null })}
+            className="w-44"
+          >
+            <option value="">Все тарифы</option>
+            {(plansData ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Toolbar>
 
-      <QueryState
+      <DataTable
+        caption="Автосервисы платформы"
+        rows={pageItems}
+        rowKey={(t) => t.id}
+        rowHref={(t) => `/admin/tenants/${t.id}`}
+        rowLabel={(t) => `Открыть карточку «${t.name}»`}
+        columns={columns}
         isLoading={isLoading}
         isError={isError}
-        onRetry={refetch}
+        onRetry={() => refetch()}
         isFetching={isFetching}
         errorTitle="Не удалось загрузить автосервисы"
-        isEmpty={tenants.length === 0}
-        empty={{
-          icon: Building2,
-          title: 'Нет автосервисов',
-          description: 'Создайте первый автосервис',
-          action: { label: 'Создать', onClick: openCreate },
-        }}
-        minHeight="min-h-[40vh]"
-      >
-        {filtered.length === 0 ? (
-          <div className="card flex flex-col items-center justify-center gap-2 py-12 text-center">
-            <Search className="h-8 w-8 text-gray-300" />
-            <p className="text-sm text-gray-500">Ничего не найдено — измените поиск или фильтры.</p>
-          </div>
-        ) : (
+        emptyState={
+          tenants.length === 0
+            ? {
+                icon: Building2,
+                title: 'Нет автосервисов',
+                description: 'Создайте первый автосервис',
+                action: { label: 'Создать', onClick: openCreate },
+              }
+            : {
+                icon: Building2,
+                title: 'Ничего не найдено',
+                description: 'Измените поиск или фильтры.',
+                action: {
+                  label: 'Сбросить фильтры',
+                  onClick: () => patch({ q: null, status: null, plan: null, page: null }),
+                },
+              }
+        }
+      />
+      <Pagination
+        page={currentPage}
+        total={filtered.length}
+        limit={PAGE_SIZE}
+        onChange={(p) => patch({ page: String(p) })}
+      />
+
+      {/* Создание — редактирование существующего тенанта только в карточке */}
+      <Modal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        title="Новый автосервис"
+        size="lg"
+        footer={
           <>
-            {/* Desktop: плотная таблица */}
-            <div className="table-container hidden md:block">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Автосервис</th>
-                    <th>Статус</th>
-                    <th>Тариф</th>
-                    <th>Сотрудники</th>
-                    <th>Подписка</th>
-                    <th className="w-24 text-right">Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageItems.map((tenant) => {
-                    const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
-                    return (
-                      <tr
-                        key={tenant.id}
-                        onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
-                        className="cursor-pointer"
-                      >
-                        <td>
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50">
-                              <Building2 className="h-4 w-4 text-primary-600" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-gray-900">{tenant.name}</p>
-                              <p className="truncate text-xs text-gray-500">{tenant.phone || tenant.email || '—'}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td>{renderStatus(tenant)}</td>
-                        <td>
-                          {tenant.plan?.name ? (
-                            <div>
-                              <p className="text-gray-900">{tenant.plan.name}</p>
-                              <p className="text-xs tabular-nums text-gray-500">
-                                {tenant.monthlyPrice.toLocaleString('ru-RU')} ₽/мес
-                              </p>
-                            </div>
-                          ) : (
-                            <span className="text-gray-400">Не назначен</span>
-                          )}
-                        </td>
-                        <td>
-                          <span className="inline-flex items-center gap-1.5 tabular-nums text-gray-700">
-                            <Users className="h-3.5 w-3.5 text-gray-400" />
-                            {userCount} / {tenant.maxUsers}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="flex flex-col gap-1">
-                            {tenant.subscriptionEnd ? (
-                              <span
-                                className={`tabular-nums ${
-                                  isTenantExpired(tenant) ? 'font-medium text-red-600' : 'text-gray-700'
-                                }`}
-                              >
-                                до {format(parseISO(tenant.subscriptionEnd), 'd MMM yyyy', { locale: ru })}
-                              </span>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
-                            <SubscriptionPeriodBadge
-                              kind={tenant.currentPeriodKind}
-                              until={tenant.subscriptionEnd}
-                              size="sm"
-                            />
-                          </div>
-                        </td>
-                        <td onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
-                              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-primary-600"
-                              title="Подробнее"
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => setDeleteId(tenant.id)}
-                              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                              title="Удалить"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Mobile: карточки */}
-            <div className="space-y-2.5 md:hidden">
-              {pageItems.map((tenant) => {
-                const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
-                return (
-                  <button
-                    key={tenant.id}
-                    type="button"
-                    onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
-                    className="card w-full p-4 text-left"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50">
-                          <Building2 className="h-4 w-4 text-primary-600" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-gray-900">{tenant.name}</p>
-                          <p className="truncate text-xs text-gray-500">
-                            {tenant.plan?.name || 'Тариф не назначен'} ·{' '}
-                            <span className="tabular-nums">
-                              {userCount}/{tenant.maxUsers}
-                            </span>{' '}
-                            польз.
-                          </p>
-                        </div>
-                      </div>
-                      <ChevronRight className="h-5 w-5 flex-shrink-0 text-gray-400" />
-                    </div>
-                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                      {renderStatus(tenant)}
-                      <SubscriptionPeriodBadge
-                        kind={tenant.currentPeriodKind}
-                        until={tenant.subscriptionEnd}
-                        size="sm"
-                      />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Пагинация */}
-            {totalPages > 1 && (
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-sm text-gray-500">
-                  Стр. <span className="tabular-nums">{currentPage}</span> из{' '}
-                  <span className="tabular-nums">{totalPages}</span> ·{' '}
-                  <span className="tabular-nums">{filtered.length}</span> автосервисов
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPage(currentPage - 1)}
-                    disabled={currentPage <= 1}
-                    className="btn-secondary btn-sm"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Назад
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPage(currentPage + 1)}
-                    disabled={currentPage >= totalPages}
-                    className="btn-secondary btn-sm"
-                  >
-                    Вперёд
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            )}
+            <Button variant="secondary" onClick={closeModal} disabled={isSaving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={formId} loading={isSaving}>
+              Создать
+            </Button>
           </>
-        )}
-      </QueryState>
-
-      {/* Create Modal — редактирование существующего тенанта только в «Подробнее» */}
-      <Modal isOpen={modalOpen} onClose={closeModal} title="Новый автосервис" size="lg">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Название</label>
-            <input
-              type="text"
-              className="input"
+        }
+      >
+        <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="Название" htmlFor={`${uid}-name`} required>
+            <Input
+              id={`${uid}-name`}
+              name="organization"
+              autoComplete="organization"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="ООО Автосервис"
+              placeholder="ООО «Автосервис»"
               required
             />
-          </div>
+          </Field>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Телефон автосервиса</label>
-              <input
+            <Field label="Телефон автосервиса" htmlFor={`${uid}-phone`}>
+              <Input
+                id={`${uid}-phone`}
                 type="tel"
-                className="input"
+                inputMode="tel"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
                 placeholder="+7 (XXX) XXX-XX-XX"
               />
-            </div>
-            <div>
-              <label className="label">Email</label>
-              <input
+            </Field>
+            <Field label="Email" htmlFor={`${uid}-email`}>
+              <Input
+                id={`${uid}-email`}
                 type="email"
-                className="input"
+                inputMode="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
                 placeholder="info@example.com"
               />
-            </div>
+            </Field>
           </div>
 
-          <div>
-            <label className="label">Адрес</label>
-            <input
-              type="text"
-              className="input"
+          <Field label="Адрес" htmlFor={`${uid}-address`}>
+            <Input
+              id={`${uid}-address`}
+              autoComplete="street-address"
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
               placeholder="Город, улица, дом"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Описание</label>
-            <textarea
-              className="input"
+          <Field label="Описание" htmlFor={`${uid}-desc`}>
+            <Textarea
+              id={`${uid}-desc`}
               rows={2}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="Краткое описание"
             />
-          </div>
+          </Field>
 
           {/* Директор — владелец нового автосервиса */}
-          <div className="space-y-3 rounded-xl border border-primary-100 bg-primary-50 p-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-primary-700">
-              <UserPlus className="h-4 w-4" />
-              Директор (владелец автосервиса)
-            </div>
-
-            <div>
-              <label className="label">ФИО директора</label>
-              <input
-                type="text"
-                className="input"
+          <fieldset className="space-y-3 rounded-lg border border-line bg-surface-2 p-4">
+            <legend className="px-1 text-sm font-semibold text-ink">Директор — владелец автосервиса</legend>
+            <Field label="ФИО директора" htmlFor={`${uid}-dname`}>
+              <Input
+                id={`${uid}-dname`}
+                autoComplete="off"
                 value={form.directorName}
                 onChange={(e) => setForm({ ...form, directorName: e.target.value })}
                 placeholder="Иванов Иван Иванович"
               />
+            </Field>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Телефон директора (логин)" htmlFor={`${uid}-dphone`} required>
+                <Input
+                  id={`${uid}-dphone`}
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={form.directorPhone}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setForm({ ...form, directorPhone: formatPhone(digits) });
+                  }}
+                  placeholder="+7 (XXX) XXX-XX-XX"
+                  required
+                />
+              </Field>
+              <Field label="Пароль директора" htmlFor={`${uid}-dpass`} required hint="Минимум 4 символа">
+                <Input
+                  id={`${uid}-dpass`}
+                  type="text"
+                  autoComplete="off"
+                  value={form.directorPassword}
+                  onChange={(e) => setForm({ ...form, directorPassword: e.target.value })}
+                  required
+                />
+              </Field>
             </div>
-
-            <div>
-              <label className="label">Телефон директора (для входа) *</label>
-              <input
-                type="tel"
-                inputMode="numeric"
-                className="input"
-                value={form.directorPhone}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/\D/g, '');
-                  setForm({ ...form, directorPhone: formatPhone(digits) });
-                }}
-                placeholder="+7 (XXX) XXX-XX-XX"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="label">Пароль директора *</label>
-              <input
-                type="text"
-                className="input"
-                value={form.directorPassword}
-                onChange={(e) => setForm({ ...form, directorPassword: e.target.value })}
-                placeholder="Минимум 4 символа"
-                required
-              />
-            </div>
-          </div>
+          </fieldset>
 
           {/* Тариф — задаёт лимит сотрудников и цену */}
-          <div>
-            <label className="label">Тариф</label>
-            {activePlans.length > 0 ? (
-              <div className="space-y-2">
-                {activePlans.map((plan) => {
-                  const isSelected = form.planId === plan.id;
-                  return (
-                    <button
-                      key={plan.id}
-                      type="button"
-                      onClick={() => setForm({ ...form, planId: isSelected ? '' : plan.id })}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all ${
-                        isSelected
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div>
-                        <p className={`text-sm font-semibold ${isSelected ? 'text-primary-700' : 'text-gray-900'}`}>
-                          {plan.name}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          До {plan.maxUsers} сотрудников
-                          {plan.description && ` · ${plan.description}`}
-                        </p>
-                      </div>
-                      <span
-                        className={`text-sm font-bold tabular-nums ${isSelected ? 'text-primary-600' : 'text-gray-700'}`}
-                      >
-                        {plan.monthlyPrice.toLocaleString('ru-RU')} ₽/мес
-                      </span>
-                    </button>
-                  );
-                })}
-                <p className="text-xs text-gray-500">Лимит сотрудников и стоимость берутся из выбранного тарифа.</p>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">
-                Нет доступных тарифов. Создайте тариф в разделе &laquo;Тарифы&raquo;.
-              </p>
-            )}
-          </div>
+          {activePlans.length > 0 ? (
+            <RadioGroup
+              label="Тариф"
+              value={form.planId}
+              onChange={(v) => setForm({ ...form, planId: v })}
+              options={[
+                { value: '', label: 'Без тарифа', description: 'Лимит 5 сотрудников, 0 ₽/мес — назначить можно позже' },
+                ...activePlans.map((plan) => ({
+                  value: plan.id,
+                  label: `${plan.name} — ${formatMoney(plan.monthlyPrice)}/мес`,
+                  description: `До ${plan.maxUsers} сотрудников${plan.description ? ` · ${plan.description}` : ''}`,
+                })),
+              ]}
+            />
+          ) : (
+            <p className="text-sm text-ink-3">Нет доступных тарифов. Создайте тариф в разделе «Тарифы».</p>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Подписка до</label>
-              <input
+            <Field label="Подписка до" htmlFor={`${uid}-sub-end`}>
+              <Input
+                id={`${uid}-sub-end`}
                 type="date"
-                className="input"
+                className="tabular-nums"
                 value={form.subscriptionEnd}
                 onChange={(e) => setForm({ ...form, subscriptionEnd: e.target.value })}
               />
-            </div>
-            <div>
-              <label className="label">Примечание к подписке</label>
-              <input
-                type="text"
-                className="input"
+            </Field>
+            <Field label="Примечание к подписке" htmlFor={`${uid}-sub-note`}>
+              <Input
+                id={`${uid}-sub-note`}
                 value={form.subscriptionNote}
                 onChange={(e) => setForm({ ...form, subscriptionNote: e.target.value })}
-                placeholder="Например: Оплачено до марта"
+                placeholder="Например: оплачено до марта"
               />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={isSaving} className="btn-primary">
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                'Создать'
-              )}
-            </button>
+            </Field>
           </div>
         </form>
       </Modal>
 
-      {/* Delete Confirmation */}
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
@@ -667,7 +569,7 @@ export default function AdminTenantsPage() {
           setDeleteId(null);
         }}
         title="Удалить автосервис"
-        message="Вы уверены, что хотите удалить этот автосервис? Все данные будут потеряны. Это действие нельзя отменить."
+        message={`Автосервис «${deleteTarget?.name ?? ''}» и все его данные будут удалены безвозвратно. Это действие нельзя отменить.`}
         confirmText="Удалить"
         variant="danger"
       />

@@ -47,6 +47,8 @@ import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import QtyInput from '../components/QtyInput';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
+import VinInput from '../components/VinInput';
+import VinText from '../components/VinText';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
@@ -60,10 +62,13 @@ import { toYmd, formatYmdHuman } from '../components/installments/installmentUi'
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
+import { carVin, type CarWithVin } from '../utils/vinUi';
+import { isValidVin } from '../../../shared/utils/vin';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useVinEnabled } from '../hooks/useVinEnabled';
 import { usePosSettings } from '../hooks/usePosSettings';
 import {
   claimProductPickerSession,
@@ -93,6 +98,7 @@ import type {
   ChecksBoard,
   VoiceUsage,
   TenantLocation,
+  CarLookupResult,
 } from '../../../shared/types';
 // Домен шаблонов (round 8 #3): помощники и инлайн-пикер папок живут в
 // TemplatesScreen — единый источник правил «что общий / как строить дерево»
@@ -561,8 +567,14 @@ export default function CheckCreateScreen() {
   // 'plate' — прежний путь (RU/INT маска), байт-в-байт. 'phone' — отдельный
   // числовой TextInput мимо маски: результаты — КЛИЕНТЫ, тап подставляет
   // клиента (+ авто: 0 авто — без машины, 1 — сразу, ≥2 — ClientCarPickerSheet).
-  const [searchMode, setSearchMode] = useState<'plate' | 'phone'>('plate');
+  const [searchMode, setSearchMode] = useState<'plate' | 'phone' | 'vin'>('plate');
   const [phoneSearch, setPhoneSearch] = useState('');
+  // ── 171: четвёртый режим «VIN» — только при включённой опции тенанта ─────
+  // Ввод — VinInput (нормализация, счётчик 12/17), поиск — один точный
+  // lookupByVin по 17 валидным символам; найденная пара клиент+авто уходит в
+  // чек тем же setClientId/setCarId путём, что и подсказки по госномеру.
+  const vinEnabled = useVinEnabled();
+  const [vinSearch, setVinSearch] = useState('');
   // Клиент с ≥2 авто, ожидающий выбора машины (phone-режим). null = закрыт.
   const [carPickerClient, setCarPickerClient] = useState<Client | null>(null);
 
@@ -657,6 +669,9 @@ export default function CheckCreateScreen() {
   // typing "Р332РА05" fires one request, not eight (RNPERF-5).
   const normalizedSearch = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
   const isPhoneMode = searchMode === 'phone';
+  // Опцию могли выключить, пока режим 'vin' остался в стейте: тогда UI ведёт
+  // себя как поиск по номеру, а первый тап по RU/INT переключит стейт.
+  const isVinMode = vinEnabled && searchMode === 'vin';
   // ── Phone-aware client search (#57 progressive + Round 7 #8 explicit) ─────
   // Digit-bearing raw input: the EXPLICIT phone mode (TASK B) has its own
   // TextInput that bypasses the plate mask entirely; the plate tabs keep the
@@ -755,6 +770,33 @@ export default function CheckCreateScreen() {
     enabled: !isPhoneMode && debouncedHasLetters && networkSearch.length >= 2,
     placeholderData: (prev) => prev,
   });
+
+  // ── 171: поиск по VIN (режим «VIN», только при Tenant.vinEnabled) ────────
+  // Один точный запрос lookupByVin, когда набраны все 17 валидных символов
+  // (debounce 300 мс, как у номера). Сервер отвечает null и на некорректный
+  // VIN, и на «не найдено» — без 400. Ключ содержит сам VIN, поэтому смена
+  // номера = новый слот кеша; isPlaceholderData отсекает «чужой» результат,
+  // который глобальный placeholderData подставляет на время загрузки.
+  const debouncedVin = useDebouncedValue(vinSearch, 300);
+  const vinLookupActive = isVinMode && isValidVin(debouncedVin);
+  const {
+    data: vinLookup,
+    isFetching: isFetchingVin,
+    isError: isErrorVin,
+    fetchStatus: fetchStatusVin,
+    isPlaceholderData: isPlaceholderVin,
+    refetch: refetchVin,
+  } = useQuery<CarLookupResult | null>({
+    queryKey: ['car-vin-lookup', debouncedVin],
+    queryFn: async () => (await carsApi.lookupByVin(debouncedVin)).data ?? null,
+    enabled: vinLookupActive,
+    staleTime: 30_000,
+  });
+  // Результат «устоялся»: набранный VIN совпал с debounce-снимком, запрос не в
+  // полёте и это не placeholder от предыдущего номера.
+  const vinSettled = vinLookupActive && debouncedVin === vinSearch && !isFetchingVin && !isPlaceholderVin;
+  const vinFound = vinSettled && vinLookup ? vinLookup : null;
+  const vinNetworkError = isErrorVin || fetchStatusVin === 'paused' || !onlineManager.isOnline();
 
   // ── Сетевой сбой поиска клиента (баг владельца) ───────────────────────
   // Если поисковый запрос УПАЛ по сети (нет ответа / 5xx после failover)
@@ -1301,12 +1343,13 @@ export default function CheckCreateScreen() {
    *  очищаются — чистый старт в новом режиме, ни маска, ни телефонные цифры
    *  не перетекают между полями. */
   const switchSearchMode = React.useCallback(
-    (next: 'plate' | 'phone') => {
+    (next: 'plate' | 'phone' | 'vin') => {
       if (searchMode === next) return;
       animateClientToggle();
       setSearchMode(next);
       setPlateSearch('');
       setPhoneSearch('');
+      setVinSearch('');
     },
     [searchMode, animateClientToggle],
   );
@@ -1328,8 +1371,55 @@ export default function CheckCreateScreen() {
       setCarId(cars[0]?.id ?? '');
       setPlateSearch('');
       setPhoneSearch('');
+      setVinSearch('');
     },
     [animateClientToggle],
+  );
+
+  /** 171 — тап по машине, найденной по VIN: та же пара клиент+авто и тот же
+   *  setClientId/setCarId путь, что у подсказок по госномеру. Карточку клиента
+   *  засеваем из ответа lookup'а с updatedAt: 0 — карточка появляется сразу
+   *  (без мигания поиском), а ['client-detail'] тут же перечитывается целиком:
+   *  seed помечен устаревшим и не задерживает свежие данные на staleTime. */
+  const handleVinResultTap = React.useCallback(
+    (found: CarLookupResult) => {
+      if (!found.client) {
+        haptic('warning');
+        Alert.alert(
+          'Автомобиль без владельца',
+          'Этот VIN записан у машины, не привязанной к клиенту. Привяжите её к клиенту в разделе «Клиенты» и повторите поиск.',
+        );
+        return;
+      }
+      const owner = found.client;
+      const seededCar: CarWithVin = {
+        id: found.id,
+        plateNumber: found.plateNumber,
+        makeModel: found.makeModel,
+        clientId: owner.id,
+        createdAt: found.createdAt,
+        vin: found.vin,
+      };
+      queryClient.setQueryData<Client>(
+        ['client-detail', owner.id],
+        (prev) =>
+          prev ?? {
+            id: owner.id,
+            fullName: owner.fullName,
+            phone: owner.phone,
+            createdAt: found.createdAt,
+            cars: [seededCar],
+          },
+        { updatedAt: 0 },
+      );
+      animateClientToggle();
+      setClientId(owner.id);
+      setCarId(found.id);
+      setPlateSearch('');
+      setPhoneSearch('');
+      setVinSearch('');
+    },
+    [animateClientToggle, queryClient],
   );
 
   /** Round 8 #1 — «Сменить» на карточке выбранного авто: осознанная смена
@@ -2975,6 +3065,7 @@ export default function CheckCreateScreen() {
                     setCarId('');
                     setPlateSearch('');
                     setPhoneSearch('');
+                    setVinSearch('');
                   }}
                   hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                   style={[styles.selectedCardClose, { backgroundColor: palette.bg.muted }]}
@@ -2994,6 +3085,10 @@ export default function CheckCreateScreen() {
                     <Text style={[styles.selectedCarLabelKey, { color: palette.text.tertiary }]}>Автомобиль: </Text>
                     {selectedCar.makeModel || '—'}
                   </Text>
+                  {/* 171 — VIN моноширинным под маркой (только при включённой опции). */}
+                  {vinEnabled && carVin(selectedCar) ? (
+                    <VinText vin={carVin(selectedCar)!} size={12} color={palette.text.tertiary} />
+                  ) : null}
                   {selectedCar.comment && (
                     <Text style={[styles.selectedCarComment, { color: palette.text.tertiary }]} numberOfLines={1}>
                       {selectedCar.comment}
@@ -3075,22 +3170,47 @@ export default function CheckCreateScreen() {
                   style={[styles.sectionSubLabel, styles.plateLabelShrink, { color: palette.text.secondary }]}
                   numberOfLines={1}
                 >
-                  {isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
+                  {isVinMode ? 'ПОИСК ПО VIN' : isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
                 </Text>
-                <PlateModeSwitcher
-                  value={plateMode}
-                  onChange={(m) => {
-                    // Тап по RU/INT из phone-режима возвращает поиск по
-                    // номеру (switch no-op'ится, когда режим уже 'plate').
-                    switchSearchMode('plate');
-                    setPlateMode(m);
-                  }}
-                  phoneActive={isPhoneMode}
-                  onPhoneSelect={() => switchSearchMode('phone')}
-                />
+                {!vinEnabled && (
+                  <PlateModeSwitcher
+                    value={plateMode}
+                    onChange={(m) => {
+                      // Тап по RU/INT из phone-режима возвращает поиск по
+                      // номеру (switch no-op'ится, когда режим уже 'plate').
+                      switchSearchMode('plate');
+                      setPlateMode(m);
+                    }}
+                    phoneActive={isPhoneMode}
+                    onPhoneSelect={() => switchSearchMode('phone')}
+                  />
+                )}
               </View>
+              {vinEnabled && (
+                /* 171 — с четвёртым сегментом «VIN» переключатель стоит на
+                   своей строке ПОД подписью: четыре сегмента рядом с подписью
+                   на SE/mini не помещаются (см. PlateModeSwitcher, dense). */
+                <View style={styles.searchModeRow}>
+                  <PlateModeSwitcher
+                    value={plateMode}
+                    onChange={(m) => {
+                      switchSearchMode('plate');
+                      setPlateMode(m);
+                    }}
+                    phoneActive={isPhoneMode}
+                    onPhoneSelect={() => switchSearchMode('phone')}
+                    vinActive={isVinMode}
+                    onVinSelect={() => switchSearchMode('vin')}
+                  />
+                </View>
+              )}
 
-              {isPhoneMode ? (
+              {isVinMode ? (
+                /* 171 — поиск по VIN: VinInput нормализует ввод и считает
+                     символы; расшифровку здесь не зовём (decode={false}) —
+                     Касса ищет УЖЕ заведённую машину через lookupByVin. */
+                <VinInput variant="search" decode={false} value={vinSearch} onChangeText={setVinSearch} />
+              ) : isPhoneMode ? (
                 /* Числовой поиск по телефону — отдельный TextInput МИМО
                      маски номера. Форматирование не навязываем: владелец может
                      набрать и «8988…», и хвост номера — trunk-варианты (TASK C)
@@ -3235,17 +3355,77 @@ export default function CheckCreateScreen() {
                   ))}
                 </View>
               )}
+              {/* 171 — VIN-режим: пока ищем — спиннер; нашли — одна строка
+                    (номер, марка, владелец, VIN), тап подставляет пару в чек. */}
+              {isVinMode && vinLookupActive && (isFetchingVin || isPlaceholderVin) && (
+                <View style={styles.vinSearchingRow}>
+                  <ActivityIndicator size="small" color={palette.accent.primary} />
+                  <Text style={[styles.inlineResultSub, { color: palette.text.tertiary, marginTop: 0 }]}>
+                    Ищем автомобиль по VIN…
+                  </Text>
+                </View>
+              )}
+              {isVinMode && vinFound && (
+                <View
+                  style={[
+                    styles.inlineResults,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
+                    onPress={() => handleVinResultTap(vinFound)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Выбрать ${vinFound.makeModel || 'автомобиль'}${
+                      vinFound.client ? `, клиент ${vinFound.client.fullName}` : ''
+                    }`}
+                  >
+                    {!!vinFound.plateNumber && (
+                      <View
+                        style={[
+                          styles.plateChip,
+                          isDark && {
+                            backgroundColor: softTint(colors.primary[600], 'dark'),
+                            borderColor: 'rgba(79, 131, 232, 0.35)',
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.plateChipText, isDark && { color: colors.primary[300] }]}>
+                          {vinFound.plateNumber}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {vinFound.makeModel || vinFound.client?.fullName || 'Автомобиль'}
+                      </Text>
+                      <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        {vinFound.client ? vinFound.client.fullName : 'Без владельца'}
+                      </Text>
+                      <VinText
+                        vin={carVin(vinFound) || debouncedVin}
+                        size={11}
+                        color={palette.text.tertiary}
+                        style={{ marginTop: 2 }}
+                      />
+                    </View>
+                    <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                </View>
+              )}
               {/* Show "not found" only after search completed — i.e. the
                     debounced snapshot has caught up with what's typed AND the
                     request settled. During the 300ms debounce window the
-                    state must not flash (RNPERF-5). */}
-              {(isPhoneMode
-                ? isPhoneSearch && phoneClientResults.length === 0
-                : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
-                networkSearch === currentSearch &&
-                !isFetchingPlate &&
-                !isFetchingCars &&
-                (searchNetworkError ? (
+                    state must not flash (RNPERF-5). VIN-режим (171): тот же
+                    блок, своя готовность (vinSettled) и свой сетевой флаг. */}
+              {(isVinMode
+                ? vinSettled && !vinLookup
+                : isPhoneMode
+                  ? isPhoneSearch && phoneClientResults.length === 0
+                  : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
+                (isVinMode || (networkSearch === currentSearch && !isFetchingPlate && !isFetchingCars)) &&
+                ((isVinMode ? vinNetworkError : searchNetworkError) ? (
                   // Приоритетная ветка: проблема в СЕТИ, а не в отсутствии
                   // клиента. Без «Создать клиента» — создание тоже упадёт /
                   // риск дубля. Только «Повторить» (перезапуск обоих запросов).
@@ -3266,6 +3446,10 @@ export default function CheckCreateScreen() {
                       ]}
                       onPress={() => {
                         haptic('tap');
+                        if (isVinMode) {
+                          void refetchVin();
+                          return;
+                        }
                         void refetchPlate();
                         if (!isPhoneMode) void refetchCars();
                       }}
@@ -3312,9 +3496,11 @@ export default function CheckCreateScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>Розничный покупатель</Text>
                   <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
-                    {isPhoneMode
-                      ? 'Наберите телефон, чтобы привязать клиента'
-                      : 'Наберите госномер — или телефон через переключатель ТЕЛ'}
+                    {isVinMode
+                      ? 'Наберите 17 символов VIN — найдём автомобиль и владельца'
+                      : isPhoneMode
+                        ? 'Наберите телефон, чтобы привязать клиента'
+                        : 'Наберите госномер — или телефон через переключатель ТЕЛ'}
                   </Text>
                 </View>
               </View>
@@ -4922,9 +5108,11 @@ export default function CheckCreateScreen() {
       <QuickClientCreateSheet
         visible={showQuickCreate}
         onClose={() => setShowQuickCreate(false)}
-        initialPlate={isPhoneMode ? '' : plateSearch}
+        initialPlate={isPhoneMode || isVinMode ? '' : plateSearch}
         initialPlateMode={plateMode}
         initialPhone={isPhoneMode ? phoneSearch : ''}
+        // 171 — из режима VIN клиент создаётся с уже заполненным VIN.
+        initialVin={isVinMode ? vinSearch : ''}
         onCreated={(client, car) => {
           setShowQuickCreate(false);
           // Засеваем кеш карточки клиента, чтобы selected-card появилась
@@ -4938,6 +5126,7 @@ export default function CheckCreateScreen() {
           if (car) setCarId(car.id);
           setPlateSearch('');
           setPhoneSearch('');
+          setVinSearch('');
         }}
         onSelectExisting={(existingClientId, existingCarId) => {
           setShowQuickCreate(false);
@@ -4946,6 +5135,7 @@ export default function CheckCreateScreen() {
           if (existingCarId) setCarId(existingCarId);
           setPlateSearch('');
           setPhoneSearch('');
+          setVinSearch('');
         }}
       />
 
@@ -4992,6 +5182,7 @@ export default function CheckCreateScreen() {
           setCarId(car.id);
           setPlateSearch('');
           setPhoneSearch('');
+          setVinSearch('');
         }}
       />
 
@@ -5464,6 +5655,20 @@ const styles = StyleSheet.create({
   // Подпись секции ужимается первой — переключатель RU|INT|ТЕЛ всегда целиком.
   plateLabelShrink: {
     flexShrink: 1,
+  },
+  // 171 — четырёхсегментный переключатель (RU|INT|ТЕЛ|VIN) на своей строке под
+  // подписью: на SE/mini четыре сегмента рядом с подписью не помещаются.
+  searchModeRow: {
+    alignItems: 'flex-start',
+    marginBottom: spacing[2],
+  },
+  // Строка «Ищем автомобиль по VIN…» под полем.
+  vinSearchingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[1],
   },
   // ── Явный поиск по телефону (Round 7 #8) ──────────────────────────────
   // Отдельная строка-инпут МИМО маски номера: та же «primary» роль, что и

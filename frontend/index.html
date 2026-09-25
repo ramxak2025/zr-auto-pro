@@ -15,6 +15,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="mobile-web-app-capable" content="yes" />
     <link rel="manifest" href="/manifest.json" />
+    <!-- Onest — единый шрифт лендинга и админки (self-hosted, unicode-range
+         сабсеты в index.css). Предзагружаем два основных сабсета русского
+         интерфейса; crossorigin обязателен — шрифты грузятся в CORS-режиме. -->
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/onest-cyrillic.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/onest-latin.woff2" crossorigin />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/icon-152.png" />
     <link rel="apple-touch-icon" sizes="144x144" href="/icon-144.png" />

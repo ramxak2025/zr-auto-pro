@@ -45,6 +45,18 @@ export class CarsController {
     return this.carsService.findByPlate(user.tenantID, plate || '', actorPointId(user));
   }
 
+  /**
+   * 171 — Look up an existing car by VIN in the current tenant (shared
+   * CarLookupResult | null). Только при включённой опции тенанта; некорректный
+   * VIN или выключенная опция → null, не 400 — Касса в режиме «VIN» зовёт
+   * ручку на каждом вводе. Литеральный путь объявлен ДО ':id'.
+   */
+  @RequirePermission('clients_view')
+  @Get('lookup-by-vin')
+  lookupByVin(@CurrentUser() user: JwtPayload, @Query('vin') vin: string) {
+    return this.carsService.findByVin(user.tenantID, vin || '', actorPointId(user));
+  }
+
   @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {

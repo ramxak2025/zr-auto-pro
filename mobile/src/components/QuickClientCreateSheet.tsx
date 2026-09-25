@@ -23,7 +23,7 @@
  * «Всё равно создать» для телефона нет — бэкенд дубликат по номеру не создаёт.
  * Пустое имя → дружелюбный 400.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -32,6 +32,10 @@ import { BottomSheet } from './BottomSheet';
 import RussianPlateInput from './RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from './PlateModeSwitcher';
 import DuplicateWarningDialog from './DuplicateWarningDialog';
+import VinInput, { type VinInputHandle } from './VinInput';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { vinDuplicateError, vinLengthError } from '../utils/vinUi';
+import { formatVin, isValidVin } from '../../../shared/utils/vin';
 import { formatPhone } from '../../../shared/validation/phone';
 import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
@@ -48,6 +52,8 @@ interface QuickClientCreateSheetProps {
   /** Предзаполнение из поиска по ТЕЛЕФОНУ (Round 7 #8) — как набрано в Кассе.
    *  Пустая строка / undefined → поведение байт-в-байт прежнее. */
   initialPhone?: string;
+  /** 171 — предзаполнение из поиска по VIN в Кассе (только при включённой опции). */
+  initialVin?: string;
   /** Клиент (и опционально авто) созданы — родитель подставляет их в чек. */
   onCreated: (client: Client, car: Car | null) => void;
   /** Найден существующий клиент/владелец — родитель подставляет его в чек. */
@@ -60,6 +66,8 @@ type DuplicateCar = {
   makeModel: string;
   clientId: string | null;
   client: { id: string; fullName: string; phone: string } | null;
+  /** 171 — приходит от lookupByVin. */
+  vin?: string | null;
 };
 
 export default function QuickClientCreateSheet({
@@ -68,6 +76,7 @@ export default function QuickClientCreateSheet({
   initialPlate,
   initialPlateMode,
   initialPhone,
+  initialVin,
   onCreated,
   onSelectExisting,
 }: QuickClientCreateSheetProps) {
@@ -80,8 +89,15 @@ export default function QuickClientCreateSheet({
   const [plateMode, setPlateMode] = useState<PlateMode>('ru');
   const [makeModel, setMakeModel] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // 171 — VIN: поле и payload только при включённой опции тенанта.
+  const vinEnabled = useVinEnabled();
+  const [vin, setVin] = useState('');
+  const [vinError, setVinError] = useState<string | null>(null);
+  const vinRef = useRef<VinInputHandle>(null);
 
   const [duplicateCar, setDuplicateCar] = useState<DuplicateCar | null>(null);
+  // По чему нашли дубликат: по номеру (как раньше) или по VIN (171).
+  const [duplicateBy, setDuplicateBy] = useState<'plate' | 'vin'>('plate');
 
   // Каждое открытие — чистая форма с номером из поиска (в текущем режиме
   // RU/INT), чтобы не перенабирать то, что уже введено в Кассе. Из поиска по
@@ -103,9 +119,37 @@ export default function QuickClientCreateSheet({
     setMakeModel('');
     setPlate(initialPlate);
     setPlateMode(initialPlateMode);
+    // `vinEnabled` намеренно НЕ в зависимостях: переключение опции при
+    // открытой шторке не должно стирать уже набранную форму. Гейт по опции
+    // стоит на выходе (carVinPayload) — при выключенной VIN в запрос не попадёт.
+    setVin(initialVin ?? '');
+    setVinError(null);
     setDuplicateCar(null);
+    setDuplicateBy('plate');
     setSubmitting(false);
-  }, [visible, initialPlate, initialPlateMode, initialPhone]);
+  }, [visible, initialPlate, initialPlateMode, initialPhone, initialVin]);
+
+  // 171 — VIN в payload машины ТОЛЬКО при включённой опции и непустом поле:
+  // иначе запросы байт-в-байт прежние.
+  const carVinPayload = vinEnabled && vin ? { vin } : null;
+
+  /** 171 — 409 VIN_DUPLICATE: текст с именем клиента под полем + «Выбрать в
+   *  чек» владельца (пара клиент+авто из ответа сервера). */
+  const handleVinDuplicate = (err: unknown): boolean => {
+    const dup = vinDuplicateError(err);
+    if (!dup) return false;
+    haptic('warning');
+    setVinError(dup.message);
+    if (dup.clientId) {
+      const ownerId = dup.clientId;
+      const ownerCarId = dup.carId ?? undefined;
+      Alert.alert('VIN уже записан', dup.message, [
+        { text: 'Понятно', style: 'cancel' },
+        { text: 'Выбрать в чек', onPress: () => onSelectExisting(ownerId, ownerCarId) },
+      ]);
+    }
+    return true;
+  };
 
   /** 409 по ТЕЛЕФОНУ, но пользователь ввёл авто: вместо тупика «просто перейти
    *  к клиенту» привязываем машину к УЖЕ существующему клиенту и сразу
@@ -132,13 +176,18 @@ export default function QuickClientCreateSheet({
         plateNumber: cleanPlate,
         makeModel: makeModel.trim(),
         clientId: existingClientId,
+        ...carVinPayload,
       });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
+      // 171 — поиск Кассы по VIN кэширует «не найдено» на 30 с: новая машина
+      // должна находиться сразу.
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       haptic('success');
       onSelectExisting(existingClientId, carRes.data.id);
     } catch (e: any) {
+      if (handleVinDuplicate(e)) return;
       const d = e?.response?.data;
       const friendly =
         (d && typeof d.message === 'string' && d.message) ||
@@ -154,6 +203,7 @@ export default function QuickClientCreateSheet({
    *  Дубликат по ТЕЛЕФОНУ возвращает сам бэкенд (409) — ловим в catch. */
   const submitFlow = async (opts?: { forceCar?: boolean }) => {
     const cleanPlate = plate.trim();
+    const hasVin = !!carVinPayload;
     setSubmitting(true);
     try {
       // Дубликат по номеру важен только когда номер реально введён.
@@ -161,6 +211,23 @@ export default function QuickClientCreateSheet({
         try {
           const res = await carsApi.lookupByPlate(cleanPlate);
           if (res.data) {
+            setDuplicateBy('plate');
+            setDuplicateCar(res.data);
+            return;
+          }
+        } catch {
+          // best-effort — при сбое проверки продолжаем создание.
+        }
+      }
+      // 171 — VIN уникален внутри тенанта (сервер ответит 409): проверяем ДО
+      // создания клиента, иначе клиент уже создан, а машина — нет. «Всё равно
+      // создать» для VIN не предлагаем — сервер дубликат не примет, поэтому
+      // forceCar (обход дубликата по ГОСНОМЕРУ) эту проверку не пропускает.
+      if (hasVin && isValidVin(vin)) {
+        try {
+          const res = await carsApi.lookupByVin(vin);
+          if (res.data) {
+            setDuplicateBy('vin');
             setDuplicateCar(res.data);
             return;
           }
@@ -171,11 +238,12 @@ export default function QuickClientCreateSheet({
 
       const clientRes = await clientsApi.create({ fullName: fullName.trim(), phone });
       let car: Car | null = null;
-      if (cleanPlate.length > 0 || makeModel.trim().length > 0) {
+      if (cleanPlate.length > 0 || makeModel.trim().length > 0 || hasVin) {
         const carRes = await carsApi.create({
           plateNumber: cleanPlate,
           makeModel: makeModel.trim(),
           clientId: clientRes.data.id,
+          ...carVinPayload,
         });
         car = carRes.data;
       }
@@ -184,9 +252,15 @@ export default function QuickClientCreateSheet({
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      // 171 — иначе поиск Кассы по этому VIN ещё 30 с отдаёт кэшированное
+      // «не найдено» (staleTime у ['car-vin-lookup', vin]).
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       haptic('success');
       onCreated(clientRes.data, car);
     } catch (err: any) {
+      // 171 — дубликат VIN (клиент к этому моменту мог быть уже создан —
+      // машина к нему не привязалась; текст объясняет, у кого VIN).
+      if (handleVinDuplicate(err)) return;
       const status = err?.response?.status;
       const data = err?.response?.data;
       // 409 — клиент с этим телефоном уже есть. Бэкенд дубликат по номеру не
@@ -198,10 +272,10 @@ export default function QuickClientCreateSheet({
         const existingPhone = (data?.client && typeof data.client.phone === 'string' && data.client.phone) || '';
         // Пользователь ввёл авто → не тупик: предлагаем привязать этот
         // автомобиль к найденному клиенту и сразу подставить пару в чек.
-        const hasCar = cleanPlate.length > 0 || makeModel.trim().length > 0;
+        const hasCar = cleanPlate.length > 0 || makeModel.trim().length > 0 || hasVin;
         if (hasCar) {
           haptic('warning');
-          const plateLabel = cleanPlate || makeModel.trim();
+          const plateLabel = cleanPlate || makeModel.trim() || (hasVin ? `VIN ${formatVin(vin)}` : '');
           Alert.alert(
             'Клиент уже есть',
             `${existingName} уже есть в базе${existingPhone ? ` (номер ${formatPhone(existingPhone)})` : ''}. ` +
@@ -251,6 +325,15 @@ export default function QuickClientCreateSheet({
   const handleSubmit = () => {
     if (!fullName.trim()) {
       Alert.alert('Ошибка', 'Укажите имя клиента');
+      return;
+    }
+    // 171 — неполный VIN сервер отклонит 400 уже ПОСЛЕ создания клиента
+    // (двухшаговый поток): клиент остался бы без машины. Блокируем здесь.
+    const vinLen = vinEnabled ? vinLengthError(vin) : null;
+    if (vinLen) {
+      haptic('warning');
+      setVinError(vinLen);
+      vinRef.current?.focus();
       return;
     }
     if (!phone.trim()) {
@@ -342,6 +425,26 @@ export default function QuickClientCreateSheet({
           />
         </View>
 
+        {/* 171 — VIN под маркой/моделью, только при включённой опции.
+            Расшифровка подставляет марку/модель в пустое поле молча, в
+            заполненное — чипом «По VIN: … · Заменить». */}
+        {vinEnabled && (
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
+            <VinInput
+              ref={vinRef}
+              value={vin}
+              onChangeText={(v) => {
+                setVin(v);
+                setVinError(null);
+              }}
+              makeModel={makeModel}
+              onMakeModel={setMakeModel}
+              error={vinError}
+            />
+          </View>
+        )}
+
         <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
           <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={onClose}>
             <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
@@ -369,15 +472,21 @@ export default function QuickClientCreateSheet({
         onClose={() => setDuplicateCar(null)}
         onCreateAnyway={handleCreateCarAnyway}
         onOpenExisting={handleSelectCarOwner}
-        title="Такой автомобиль уже есть"
+        title={duplicateBy === 'vin' ? 'Такой VIN уже есть' : 'Такой автомобиль уже есть'}
         description={
-          duplicateCar?.client
-            ? `Госномер ${duplicateCar.plateNumber} уже привязан к клиенту.`
-            : `Госномер ${duplicateCar?.plateNumber || ''} уже существует.`
+          duplicateBy === 'vin'
+            ? duplicateCar?.client
+              ? `VIN ${formatVin(duplicateCar.vin || vin)} уже привязан к клиенту.`
+              : `VIN ${formatVin(duplicateCar?.vin || vin)} уже существует.`
+            : duplicateCar?.client
+              ? `Госномер ${duplicateCar.plateNumber} уже привязан к клиенту.`
+              : `Госномер ${duplicateCar?.plateNumber || ''} уже существует.`
         }
         existingLabel={duplicateCar?.makeModel || duplicateCar?.plateNumber || ''}
         existingSubtitle={duplicateCar?.client ? `Клиент: ${duplicateCar.client.fullName}` : duplicateCar?.plateNumber}
         openExistingLabel={duplicateCar?.client ? 'Выбрать в чек' : 'Закрыть'}
+        // 171 — VIN уникален внутри тенанта: «Всё равно создать» сервер отклонит (409).
+        hideCreateAnyway={duplicateBy === 'vin'}
       />
     </>
   );

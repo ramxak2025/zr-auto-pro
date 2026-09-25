@@ -3,6 +3,8 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { phoneSearchKey } from '../common/normalize-phone';
+import { VinService } from '../vin/vin.service';
+import { normalizeVin } from '../vin/vin.util';
 
 // Format-agnostic phone key expression, mirrors `phoneSearchKey` (JS) and the
 // functional indexes in migration 104. Normalises the stored value to its
@@ -12,7 +14,11 @@ const PHONE_KEY_SQL = `right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)`;
 
 @Injectable()
 export class ClientsService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    // 171 — поиск клиента по VIN его машин включается опцией тенанта.
+    private vin: VinService,
+  ) {}
 
   /**
    * Find an existing client by phone within the current tenant.
@@ -85,6 +91,8 @@ export class ClientsService {
       clientId: row.client_id,
       // 059_cars_no_plate — present on rows selected with `cars.*`.
       noPlate: !!row.no_plate,
+      // 171 — VIN (нормализованный) или null; UI показывает только при включённой опции.
+      vin: row.vin ?? null,
       createdAt: row.created_at,
     };
   }
@@ -190,6 +198,15 @@ export class ClientsService {
       ors.push(
         `EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND REPLACE(ca.plate_number, ' ', '') ILIKE $${params.length})`,
       );
+
+      // 171 — VIN машин клиента: полное совпадение или подстрока ≥ 4 символов
+      // после normalizeVin (кириллица → латиница, регистр не важен) — ТОЛЬКО
+      // при включённой опции тенанта; иначе запрос дословно прежний.
+      const vinFragment = normalizeVin(search);
+      if (vinFragment.length >= 4 && (await this.vin.isEnabled(tenantID))) {
+        params.push(`%${vinFragment}%`);
+        ors.push(`EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND ca.vin ILIKE $${params.length})`);
+      }
 
       where += ` AND (${ors.join(' OR ')})`;
     }

@@ -28,7 +28,7 @@ function formatDate(iso: string): string {
 
 export default function LastVisitBadge({ clientId, carId, variant = 'block' }: LastVisitBadgeProps) {
   const enabled = !!clientId || !!carId;
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['last-visit', { clientId, carId }],
     queryFn: async () => {
       const res = await checksApi.getLastVisit({ clientId, carId });
@@ -42,16 +42,25 @@ export default function LastVisitBadge({ clientId, carId, variant = 'block' }: L
   if (!enabled) return null;
   if (isLoading) {
     return (
-      <div className="mt-2 text-xs text-gray-400 flex items-center gap-1.5">
-        <Clock className="w-3 h-3" />
+      <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-3" role="status">
+        <Clock className="h-3 w-3" aria-hidden="true" />
         Ищем последний визит…
+      </div>
+    );
+  }
+  // Ошибка ≠ «первый визит»: молчим, а не выдаём постоянного клиента за нового.
+  if (isError) {
+    return (
+      <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-3">
+        <Clock className="h-3 w-3" aria-hidden="true" />
+        История визитов недоступна
       </div>
     );
   }
   if (!data) {
     return (
-      <div className="mt-2 text-xs text-gray-500 flex items-center gap-1.5">
-        <Clock className="w-3 h-3" />
+      <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-3">
+        <Clock className="h-3 w-3" aria-hidden="true" />
         Это первый визит клиента
       </div>
     );
@@ -59,28 +68,29 @@ export default function LastVisitBadge({ clientId, carId, variant = 'block' }: L
 
   if (variant === 'inline') {
     return (
-      <div className="text-xs text-gray-600 flex items-center gap-1.5">
-        <Clock className="w-3 h-3" />
-        Последний визит: {formatDate(data.date)} · {formatMoney(data.totalRevenue)} ₽
+      <div className="flex items-center gap-1.5 text-xs text-ink-2">
+        <Clock className="h-3 w-3 text-ink-3" aria-hidden="true" />
+        Последний визит: {formatDate(data.date)} ·{' '}
+        <span className="tabular-nums">{formatMoney(data.totalRevenue)}</span>
       </div>
     );
   }
 
   return (
-    <div className="mt-2 pt-2 border-t border-green-200/70 text-xs">
-      <div className="flex items-center gap-1.5 text-gray-700 font-medium">
-        <Clock className="w-3.5 h-3.5 text-gray-500" />
+    <div className="mt-2 border-t border-line/80 pt-2 text-xs">
+      <div className="flex items-center gap-1.5 font-medium text-ink-2">
+        <Clock className="h-3.5 w-3.5 text-ink-3" aria-hidden="true" />
         Последний визит
       </div>
-      <div className="mt-0.5 text-gray-600">
+      <div className="mt-0.5 text-ink-2">
         {formatDate(data.date)}
         {data.masterName && <> · мастер {data.masterName}</>}
         {' · '}
-        <span className="font-semibold text-gray-900">{formatMoney(data.totalRevenue)} ₽</span>
+        <span className="font-semibold tabular-nums text-ink">{formatMoney(data.totalRevenue)}</span>
         {data.carPlate && (
           <>
             {' · '}
-            <span className="font-mono">{data.carPlate}</span>
+            <span className="tabular-nums tracking-wide">{data.carPlate}</span>
             {data.carMakeModel && <> ({data.carMakeModel})</>}
           </>
         )}

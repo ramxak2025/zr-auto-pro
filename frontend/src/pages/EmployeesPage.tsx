@@ -1,66 +1,95 @@
 /**
- * EmployeesPage — premium grouped roster with attendance, salary,
- * achievements and a per-period switcher.
- *
- *   Period switcher  Сегодня | Вчера | Неделя | Месяц | Прошлый месяц
- *   ──────────────────────────────────────────────
- *   Group: "Диагносты"  ✎     ‹click to rename›
- *     ┌────────────────────────────────┐ ┌────...
- *     │ Avatar  Имя  · роль · группа  ✎│ │
- *     │                                │ │
- *     │ Посещения: 12/15  ⏱ 2 опозд.  │ │
- *     │ ЗП: 64 200 ₽  · среднее 5 350  │ │
- *     │ Сравнение: +12% к пред. месяцу│ │
- *     │ 🏆 Рекордсмен · 💎 Премиум     │ │
- *     │ [ Чеки сотрудника → ]          │ │
- *     └────────────────────────────────┘ └─...
- *
- * Achievements + period numbers are computed across the whole active
- * roster for the same period, so they shift when the owner switches the
- * period selector.
+ * EmployeesPage — карточки сотрудников по группам с посещаемостью, заработком,
+ * достижениями и переключателем периода (Сегодня · Вчера · Неделя · Месяц ·
+ * Прошлый месяц). Достижения и цифры периода считаются по всей активной
+ * команде за один и тот же период, поэтому меняются вместе с переключателем.
  */
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
-import { Calendar, ChevronRight, Clock, Pencil, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { usersApi, scheduleApi, salaryApi } from '../api/services';
-import { useTenantCalendar } from '../hooks/useTenantTimezone';
-import EmptyState from '../components/EmptyState';
-import LoadingSpinner from '../components/LoadingSpinner';
-import PageHeader from '../components/PageHeader';
-import type { User, ScheduleEntry, MasterSalary } from '../types';
-import { roleLabels, formatMoney } from '../../../shared/utils/formatters';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  PERIOD_OPTIONS,
+  Calendar,
+  ChevronRight,
+  Clock,
+  Pencil,
+  Receipt,
+  TrendingDown,
+  TrendingUp,
+  UserCircle,
+  Users,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+
+import { salaryApi, scheduleApi, usersApi } from '../api/services';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
+import {
+  Badge,
+  Card,
+  IconButton,
+  Input,
+  Money,
+  PageHeader,
+  QueryState,
+  SegmentedControl,
+  SkeletonCard,
+  StatCard,
+  cn,
+} from '../ui';
+import { focusRing } from '../ui/tokens';
+import RoleBadge from '../components/company/RoleBadge';
+import UserAvatar from '../components/company/UserAvatar';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
+import type { MasterSalary, ScheduleEntry, User } from '../types';
+import { roleLabels } from '../../../shared/utils/formatters';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
+import {
   PERIOD_LABEL_CASUAL,
-  resolvePeriod,
+  PERIOD_OPTIONS,
   aggregateAttendance,
+  resolvePeriod,
   type PeriodKey,
 } from '../utils/employeePeriod';
 import { computeAchievements, type Achievement, type AchievementInput } from '../utils/employeeAchievements';
 
-const roleBadgeColors: Record<string, string> = {
-  superadmin: 'bg-red-50 text-red-700',
-  director: 'bg-purple-50 text-purple-700',
-  admin: 'bg-blue-50 text-blue-700',
-  master: 'bg-green-50 text-green-700',
-};
-
 const NO_GROUP = '__NO_GROUP__';
+const PERIOD_KEYS = new Set<string>(PERIOD_OPTIONS.map((p) => p.key));
+const ROLE_ORDER = ['master', 'admin', 'director', 'superadmin'];
+
+type AttendanceMap = ReturnType<typeof aggregateAttendance>;
+type AttendanceRow = AttendanceMap extends Map<string, infer V> ? V : never;
 
 export default function EmployeesPage() {
   const queryClient = useQueryClient();
-  const [period, setPeriod] = useState<PeriodKey>('thisMonth');
+  const [params, setParams] = useSearchParams();
+  // Период — в URL (?period=), чтобы F5 и возврат из карточки не сбрасывали выбор.
+  const rawPeriod = params.get('period');
+  const period: PeriodKey = rawPeriod && PERIOD_KEYS.has(rawPeriod) ? (rawPeriod as PeriodKey) : 'thisMonth';
+  const setPeriod = (next: PeriodKey) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'thisMonth') p.delete('period');
+        else p.set('period', next);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
   // Опора периода — сегодняшний день АВТОСЕРВИСА (157), не браузера: сервер
   // режет бизнес-сутки поясом тенанта, и по часам машины «Сегодня» просило
   // соседние сутки (обоснование — в resolvePeriod).
   const { today: tenantToday } = useTenantCalendar();
   const range = useMemo(() => resolvePeriod(period, tenantToday), [period, tenantToday]);
 
-  // ── Data ────────────────────────────────────────────────────────────
-  const { data: users, isLoading: usersLoading } = useQuery<User[]>({
+  // ── Данные ──────────────────────────────────────────────────────────
+  const {
+    data: users,
+    isLoading: usersLoading,
+    isError: usersError,
+    refetch: refetchUsers,
+    isFetching: usersFetching,
+  } = useQuery<User[]>({
     queryKey: ['users-all'],
     queryFn: async () => {
       const res = await usersApi.getAll();
@@ -69,8 +98,8 @@ export default function EmployeesPage() {
     staleTime: 60_000,
   });
 
-  // Schedule for the chosen period — single call, then aggregated client-side.
-  const { data: scheduleEntries } = useQuery<ScheduleEntry[]>({
+  // Расписание за период — один запрос, агрегация на клиенте.
+  const scheduleQuery = useQuery<ScheduleEntry[]>({
     queryKey: ['employee-schedule', range.from, range.to],
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom: range.from, dateTo: range.to });
@@ -79,8 +108,8 @@ export default function EmployeesPage() {
     staleTime: 30_000,
   });
 
-  // Salary for the chosen period and the comparable previous period.
-  const { data: salaryRows } = useQuery<MasterSalary[]>({
+  // Зарплата за период и за сопоставимый предыдущий.
+  const salaryQuery = useQuery<MasterSalary[]>({
     queryKey: ['employee-salary', range.from, range.to],
     queryFn: async () => {
       const res = await salaryApi.getAll({ dateFrom: range.from, dateTo: range.to });
@@ -88,7 +117,7 @@ export default function EmployeesPage() {
     },
     staleTime: 30_000,
   });
-  const { data: prevSalaryRows } = useQuery<MasterSalary[]>({
+  const prevSalaryQuery = useQuery<MasterSalary[]>({
     queryKey: ['employee-salary-prev', range.prevFrom, range.prevTo],
     queryFn: async () => {
       const res = await salaryApi.getAll({ dateFrom: range.prevFrom, dateTo: range.prevTo });
@@ -96,16 +125,17 @@ export default function EmployeesPage() {
     },
     staleTime: 30_000,
   });
+  const scheduleEntries = scheduleQuery.data;
+  const salaryRows = salaryQuery.data;
+  const prevSalaryRows = prevSalaryQuery.data;
 
-  // ── Derived ─────────────────────────────────────────────────────────
+  // ── Производные ─────────────────────────────────────────────────────
   const activeUsers = useMemo(() => (users ?? []).filter((u) => u.isActive), [users]);
 
-  // Role breakdown for the KPI strip — order keeps the most relevant roles first.
   const roleBreakdown = useMemo(() => {
-    const order = ['master', 'admin', 'director', 'superadmin'];
     const counts = new Map<string, number>();
     for (const u of activeUsers) counts.set(u.role, (counts.get(u.role) ?? 0) + 1);
-    return order.filter((r) => (counts.get(r) ?? 0) > 0).map((r) => ({ role: r, count: counts.get(r) ?? 0 }));
+    return ROLE_ORDER.filter((r) => (counts.get(r) ?? 0) > 0).map((r) => ({ role: r, count: counts.get(r) ?? 0 }));
   }, [activeUsers]);
 
   const attendance = useMemo(() => aggregateAttendance(scheduleEntries ?? []), [scheduleEntries]);
@@ -122,7 +152,7 @@ export default function EmployeesPage() {
     return map;
   }, [prevSalaryRows]);
 
-  // Build achievement input across the whole roster, then pick winners.
+  // Достижения — по всей команде за период.
   const achievements = useMemo(() => {
     const inputs: AchievementInput[] = activeUsers.map((u) => {
       const sal = salaryByUser.get(u.id);
@@ -142,7 +172,7 @@ export default function EmployeesPage() {
     return computeAchievements(inputs);
   }, [activeUsers, salaryByUser, attendance]);
 
-  // Group users by `team` (NULL → "Без группы").
+  // Группы по `team` (NULL → «Без группы»).
   const groups = useMemo(() => {
     const buckets = new Map<string, User[]>();
     for (const u of activeUsers) {
@@ -151,11 +181,10 @@ export default function EmployeesPage() {
       arr.push(u);
       buckets.set(key, arr);
     }
-    // Sort users within each group, alphabetical.
     for (const arr of buckets.values()) {
       arr.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru'));
     }
-    // Stable group order: named groups alphabetical, then "Без группы" last.
+    // Именованные группы по алфавиту, «Без группы» — последней.
     return Array.from(buckets.entries()).sort((a, b) => {
       if (a[0] === NO_GROUP) return 1;
       if (b[0] === NO_GROUP) return -1;
@@ -163,7 +192,7 @@ export default function EmployeesPage() {
     });
   }, [activeUsers]);
 
-  // ── Group rename — patches every member of the group at once. ──────
+  // ── Переименование группы — патчит всех её участников разом ─────────
   const renameMutation = useMutation({
     mutationFn: async ({ from, to }: { from: string; to: string }) => {
       const members = (users ?? []).filter((u) => (u.team ?? '') === from);
@@ -173,98 +202,98 @@ export default function EmployeesPage() {
       queryClient.invalidateQueries({ queryKey: ['users-all'] });
       toast.success('Группа переименована');
     },
-    onError: () => toast.error('Не удалось переименовать'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Не удалось переименовать'),
   });
 
-  if (usersLoading) return <LoadingSpinner />;
-  if (activeUsers.length === 0) {
-    return (
-      <EmptyState
-        icon={Users}
-        title="Сотрудников пока нет"
-        description="Пригласите команду через раздел «Пользователи»."
-      />
-    );
-  }
+  // Вторичные запросы: сбой не прячем за «—», а называем и даём повторить.
+  const failedSecondary = [
+    scheduleQuery.isError && !scheduleQuery.data ? 'посещаемость' : null,
+    salaryQuery.isError && !salaryQuery.data ? 'заработок' : null,
+    prevSalaryQuery.isError && !prevSalaryQuery.data ? 'сравнение с прошлым периодом' : null,
+  ].filter(Boolean) as string[];
+  const retrySecondary = () => {
+    if (scheduleQuery.isError) void scheduleQuery.refetch();
+    if (salaryQuery.isError) void salaryQuery.refetch();
+    if (prevSalaryQuery.isError) void prevSalaryQuery.refetch();
+  };
+  const secondaryFetching = scheduleQuery.isFetching || salaryQuery.isFetching || prevSalaryQuery.isFetching;
 
   return (
-    <div className="space-y-4 pb-8">
-      <Header period={period} onPeriodChange={setPeriod} totalActive={activeUsers.length} />
-
-      {/* KPI strip — roster headcount + role breakdown */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
-        <div className="rounded-xl bg-blue-50 p-3">
-          <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Всего сотрудников</p>
-          <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{activeUsers.length}</p>
-        </div>
-        {roleBreakdown.map(({ role, count }) => (
-          <div key={role} className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider truncate">
-              {roleLabels[role] || role}
-            </p>
-            <p className="text-base sm:text-lg font-bold text-gray-900 mt-0.5">{count}</p>
+    <div className="space-y-5">
+      <PageHeader
+        title="Сотрудники"
+        icon={UserCircle}
+        subtitle={usersLoading ? 'Команда автосервиса' : `${activeUsers.length} активных`}
+        actions={
+          <div className="max-w-full overflow-x-auto no-scrollbar">
+            <SegmentedControl
+              aria-label="Период"
+              value={period}
+              onChange={setPeriod}
+              options={PERIOD_OPTIONS.map((p) => ({ value: p.key, label: p.label }))}
+            />
           </div>
-        ))}
-      </div>
+        }
+      />
 
-      {groups.map(([groupKey, members]) => (
-        <GroupSection
-          key={groupKey}
-          groupKey={groupKey}
-          members={members}
-          attendance={attendance}
-          salaryByUser={salaryByUser}
-          prevSalaryByUser={prevSalaryByUser}
-          achievements={achievements}
-          period={period}
-          onRename={(from, to) => renameMutation.mutate({ from, to })}
-        />
-      ))}
+      <QueryState
+        isLoading={usersLoading}
+        isError={usersError}
+        onRetry={refetchUsers}
+        isFetching={usersFetching}
+        loader={
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <SkeletonCard key={i} lines={3} />
+            ))}
+          </div>
+        }
+        isEmpty={activeUsers.length === 0}
+        empty={{
+          icon: Users,
+          title: 'Сотрудников пока нет',
+          description: 'Пригласите команду через раздел «Пользователи».',
+        }}
+        errorTitle="Не удалось загрузить сотрудников"
+      >
+        {/* KPI: численность и разбивка по ролям — нейтральные плитки */}
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <StatCard compact label="Всего сотрудников" value={activeUsers.length} icon={Users} />
+          {roleBreakdown.map(({ role, count }) => (
+            <StatCard key={role} compact label={roleLabels[role] || role} value={count} />
+          ))}
+        </div>
+
+        {failedSecondary.length > 0 && (
+          <ErrorRow
+            className="mt-5"
+            message={`Не удалось загрузить: ${failedSecondary.join(', ')}. Цифры в карточках неполные.`}
+            onRetry={retrySecondary}
+            loading={secondaryFetching}
+          />
+        )}
+
+        <div className="mt-5 space-y-6">
+          {groups.map(([groupKey, members]) => (
+            <GroupSection
+              key={groupKey}
+              groupKey={groupKey}
+              members={members}
+              attendance={attendance}
+              salaryByUser={salaryByUser}
+              prevSalaryByUser={prevSalaryByUser}
+              achievements={achievements}
+              period={period}
+              onRename={(from, to) => renameMutation.mutate({ from, to })}
+            />
+          ))}
+        </div>
+      </QueryState>
     </div>
   );
 }
 
-// ─── Header — title + period switcher ────────────────────────────────
-
-function Header({
-  period,
-  onPeriodChange,
-  totalActive,
-}: {
-  period: PeriodKey;
-  onPeriodChange: (p: PeriodKey) => void;
-  totalActive: number;
-}) {
-  return (
-    <PageHeader
-      title="Сотрудники"
-      icon={Users}
-      subtitle={`${totalActive} активных`}
-      actions={
-        /* Period switcher — segmented control */
-        <div className="flex flex-wrap items-center gap-1 rounded-xl bg-white border border-gray-200 p-1 shadow-sm">
-          {PERIOD_OPTIONS.map((p) => {
-            const active = p.key === period;
-            return (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => onPeriodChange(p.key)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                  active ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-                }`}
-              >
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
-      }
-    />
-  );
-}
-
-// ─── Group section — header (with rename) + employee cards ───────────
+// ─── Группа: заголовок с переименованием + карточки ──────────────────
 
 function GroupSection({
   groupKey,
@@ -278,7 +307,7 @@ function GroupSection({
 }: {
   groupKey: string;
   members: User[];
-  attendance: ReturnType<typeof aggregateAttendance>;
+  attendance: AttendanceMap;
   salaryByUser: Map<string, MasterSalary>;
   prevSalaryByUser: Map<string, MasterSalary>;
   achievements: Map<string, Achievement[]>;
@@ -303,12 +332,12 @@ function GroupSection({
   };
 
   return (
-    <section className="space-y-3">
-      {/* Group title */}
-      <div className="flex items-center gap-2 px-1">
+    <section aria-label={`Группа ${displayName}`} className="space-y-3">
+      <div className="flex min-h-[36px] items-center gap-2">
         {editing ? (
-          <input
+          <Input
             autoFocus
+            aria-label="Название группы"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commitEdit}
@@ -317,25 +346,25 @@ function GroupSection({
               if (e.key === 'Escape') setEditing(false);
             }}
             placeholder="Название группы…"
-            className="text-sm font-bold text-gray-900 px-2 py-1 rounded-md border border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            size="sm"
+            className="w-64"
           />
         ) : (
-          <button
-            type="button"
-            onClick={beginEdit}
-            className="group flex items-center gap-1.5 text-sm font-bold text-gray-900 hover:text-blue-700 transition-colors"
-            title={isUngrouped ? 'Назвать группу' : 'Переименовать группу'}
-          >
-            <span>{displayName}</span>
-            <Pencil className="h-3 w-3 text-gray-300 group-hover:text-blue-600 transition-colors" />
-          </button>
+          <>
+            <h2 className="text-md font-semibold text-ink">{displayName}</h2>
+            <Badge size="sm">{members.length}</Badge>
+            <IconButton
+              label={isUngrouped ? 'Назвать группу' : 'Переименовать группу'}
+              icon={Pencil}
+              size="sm"
+              onClick={beginEdit}
+            />
+          </>
         )}
-        <span className="text-xs text-gray-500 ml-1">{members.length}</span>
       </div>
 
-      {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
-        {members.map((u, idx) => (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {members.map((u) => (
           <EmployeeCard
             key={u.id}
             user={u}
@@ -344,7 +373,6 @@ function GroupSection({
             prevSalary={prevSalaryByUser.get(u.id)}
             achievements={achievements.get(u.id) ?? []}
             period={period}
-            index={idx}
           />
         ))}
       </div>
@@ -352,7 +380,7 @@ function GroupSection({
   );
 }
 
-// ─── Employee card ──────────────────────────────────────────────────
+// ─── Карточка сотрудника ────────────────────────────────────────────
 
 function EmployeeCard({
   user,
@@ -361,184 +389,133 @@ function EmployeeCard({
   prevSalary,
   achievements,
   period,
-  index,
 }: {
   user: User;
-  attendance?: ReturnType<typeof aggregateAttendance> extends Map<infer _, infer V> ? V : never;
+  attendance?: AttendanceRow;
   salary?: MasterSalary;
   prevSalary?: MasterSalary;
   achievements: Achievement[];
   period: PeriodKey;
-  index: number;
 }) {
-  const navigate = useNavigate();
-  const initials = user.fullName
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-  const roleClass = roleBadgeColors[user.role] || roleBadgeColors.master;
-
   const earnings = salary?.totalEarnings ?? 0;
   const prevEarnings = prevSalary?.totalEarnings ?? 0;
   const earningsDeltaPct = prevEarnings > 0 ? Math.round(((earnings - prevEarnings) / prevEarnings) * 100) : null;
 
   const worked = attendance?.worked ?? 0;
   const avgPerShift = worked > 0 ? earnings / worked : 0;
+  const lateTotal = attendance ? (attendance.lateMinor ?? 0) + (attendance.lateMajor ?? 0) : null;
+  const isMaster = user.role === 'master';
 
   return (
-    <motion.article
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.22, delay: Math.min(index * 0.03, 0.18), ease: [0.2, 0, 0, 1] }}
-      className="group flex flex-col rounded-2xl border border-gray-100 bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden"
-    >
-      {/* Top — avatar + name + role */}
+    <Card as="article" padding="none" interactive className="flex flex-col">
       <Link
         to={`/employees/${user.id}`}
-        className="flex items-center gap-3 px-4 pt-4 pb-3 no-underline hover:bg-gray-50/50 transition-colors"
+        className={cn('group flex items-center gap-3 rounded-t-xl px-4 pb-3 pt-4 no-underline', focusRing)}
       >
-        {user.avatar ? (
-          <img src={user.avatar} alt="" className="h-12 w-12 rounded-full object-cover" />
-        ) : (
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-700 font-bold text-sm">
-            {initials}
+        <UserAvatar name={user.fullName} src={user.avatar} size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-ink group-hover:text-accent-text">{user.fullName}</p>
+          <div className="mt-1">
+            <RoleBadge role={user.role} size="sm" />
           </div>
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-gray-900 truncate">{user.fullName}</p>
-          <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full mt-0.5 ${roleClass}`}>
-            {roleLabels[user.role] || user.role}
-          </span>
         </div>
-        <ChevronRight className="h-4 w-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+        <ChevronRight
+          className="h-4 w-4 flex-shrink-0 text-ink-4 transition-transform group-hover:translate-x-0.5"
+          aria-hidden="true"
+        />
       </Link>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-px bg-gray-100">
-        <Stat
-          icon={<Calendar className="h-3 w-3" />}
-          label="Смен / расп."
+      {/* Посещаемость за период */}
+      <div className="grid grid-cols-2 gap-3 border-t border-line px-4 py-3">
+        <MiniStat
+          size="sm"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <Calendar className="h-3 w-3" aria-hidden="true" />
+              Смен / расп.
+            </span>
+          }
           value={attendance ? `${attendance.worked}/${attendance.scheduled}` : '—'}
           hint={attendance && attendance.daysOff > 0 ? `+${attendance.daysOff} вых.` : undefined}
         />
-        <Stat
-          icon={<Clock className="h-3 w-3" />}
-          label="Опоздания"
-          value={attendance ? String((attendance.lateMinor ?? 0) + (attendance.lateMajor ?? 0)) : '—'}
+        <MiniStat
+          size="sm"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" aria-hidden="true" />
+              Опоздания
+            </span>
+          }
+          value={lateTotal === null ? '—' : String(lateTotal)}
+          tone={attendance && attendance.lateMajor > 0 ? 'warn' : 'neutral'}
           hint={
             attendance && attendance.lateMajor > 0
-              ? `${attendance.lateMajor} >1 ч`
+              ? `${attendance.lateMajor} больше часа`
               : attendance && attendance.lateMinor > 0
-                ? 'все <1 ч'
+                ? 'все до часа'
                 : undefined
           }
-          tone={attendance && attendance.lateMajor > 0 ? 'warn' : undefined}
         />
       </div>
 
-      {/* Salary — master role only and only when there's data */}
-      {user.role === 'master' && salary && earnings > 0 && (
-        <div className="px-4 py-3 bg-gradient-to-r from-blue-50/40 to-transparent border-t border-gray-100">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <p className="text-xl font-bold text-gray-900 tabular-nums">{formatMoney(earnings)}</p>
+      {/* Заработок — только мастерам и только когда есть данные */}
+      {isMaster && salary && earnings > 0 && (
+        <div className="border-t border-line px-4 py-3">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <Money value={earnings} className="text-xl font-semibold tracking-tight text-ink" />
             {earningsDeltaPct !== null && (
-              <span
-                className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                  earningsDeltaPct > 0
-                    ? 'bg-green-50 text-green-700'
-                    : earningsDeltaPct < 0
-                      ? 'bg-red-50 text-red-600'
-                      : 'bg-gray-100 text-gray-500'
-                }`}
+              <Badge
+                size="sm"
+                tone={earningsDeltaPct > 0 ? 'ok' : earningsDeltaPct < 0 ? 'bad' : 'neutral'}
+                icon={earningsDeltaPct >= 0 ? TrendingUp : TrendingDown}
               >
-                {earningsDeltaPct > 0 ? (
-                  <TrendingUp className="h-2.5 w-2.5" />
-                ) : (
-                  <TrendingDown className="h-2.5 w-2.5" />
-                )}
                 {earningsDeltaPct > 0 ? '+' : ''}
                 {earningsDeltaPct}%
-              </span>
+              </Badge>
             )}
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-gray-500 mt-0.5">
-            <span>
-              {salary.checkCount} {pluralChecks(salary.checkCount)}
-            </span>
+          <p className="mt-0.5 text-xs text-ink-3">
+            {salary.checkCount} {pluralChecks(salary.checkCount)}
             {avgPerShift > 0 && (
               <>
-                <span className="text-gray-300">·</span>
-                <span>~{formatMoney(avgPerShift)}/смену</span>
+                {' · '}~<Money value={avgPerShift} />
+                /смену
               </>
             )}
-            <span className="text-gray-300">·</span>
-            <span>{PERIOD_LABEL_CASUAL[period]}</span>
-          </div>
+            {' · '}
+            {PERIOD_LABEL_CASUAL[period]}
+          </p>
         </div>
       )}
 
-      {/* Achievements */}
+      {/* Достижения */}
       {achievements.length > 0 && (
-        <div className="px-4 py-3 border-t border-gray-100 flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 border-t border-line px-4 py-3">
           {achievements.map((a) => (
-            <span
-              key={a.id}
-              title={a.hint}
-              className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-100"
-            >
-              <span>{a.emoji}</span>
-              <span>{a.label}</span>
-            </span>
+            <Badge key={a.id} outline size="sm" title={a.hint}>
+              <span aria-hidden="true">{a.emoji}</span> {a.label}
+            </Badge>
           ))}
         </div>
       )}
 
-      {/* Action — go to checks filtered by master */}
-      {user.role === 'master' && (
-        <button
-          type="button"
-          onClick={() => navigate(`/checks?masterId=${user.id}`)}
-          className="border-t border-gray-100 px-4 py-2.5 flex items-center justify-between text-sm font-semibold text-blue-600 hover:bg-blue-50/50 transition-colors"
+      {/* Переход к чекам мастера — настоящая ссылка (Cmd+клик, средняя кнопка) */}
+      {isMaster && (
+        <Link
+          to={`/checks?masterId=${user.id}`}
+          className={cn(
+            'mt-auto flex items-center justify-between gap-2 rounded-b-xl border-t border-line px-4 py-2.5 text-sm font-medium text-accent no-underline transition-colors hover:bg-accent-soft/60',
+            focusRing,
+          )}
         >
-          <span className="flex items-center gap-1.5">
-            <Receipt className="h-4 w-4" />
+          <span className="inline-flex items-center gap-1.5">
+            <Receipt className="h-4 w-4" aria-hidden="true" />
             Чеки сотрудника
           </span>
-          <ChevronRight className="h-4 w-4 text-gray-300" />
-        </button>
+          <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
+        </Link>
       )}
-    </motion.article>
-  );
-}
-
-// ─── Atoms ──────────────────────────────────────────────────────────
-
-function Stat({
-  icon,
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  value: string;
-  hint?: string;
-  tone?: 'warn';
-}) {
-  return (
-    <div className="bg-white px-3 py-2.5">
-      <div className="flex items-center gap-1 text-[10px] text-gray-500 uppercase tracking-wider">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <p className={`text-base font-bold tabular-nums mt-0.5 ${tone === 'warn' ? 'text-orange-600' : 'text-gray-900'}`}>
-        {value}
-      </p>
-      {hint && <p className="text-[10px] text-gray-500 mt-0">{hint}</p>}
-    </div>
+    </Card>
   );
 }
 

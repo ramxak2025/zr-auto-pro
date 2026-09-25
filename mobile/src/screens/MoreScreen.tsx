@@ -55,6 +55,14 @@ interface MenuItem {
   screen: string;
   icon: keyof typeof Ionicons.glyphMap;
   permission?: keyof UserPermissions;
+  /**
+   * Пункт виден при ЛЮБОМ из перечисленных прав (owner-class байпасится внутри
+   * hasPermission, как и у `permission`). Нужен разделам-хабам, куда ведут
+   * разные права: «Отчёты» открываются финансам, зарплате, поставщикам,
+   * клиентам, складу и записям — сервер внутри хаба сам решает, какие отчёты
+   * показать. Задано вместе с `permission` — проверяются оба.
+   */
+  permissionAny?: (keyof UserPermissions)[];
   roles?: string[];
   featureKey?: string;
   iconBg: string;
@@ -251,10 +259,22 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        label: 'Финансовые отчёты',
-        description: 'Прибыль, маржа, средний чек',
+        // «Отчёты» (2026-09-25): маршрут Reports теперь открывает хаб конструктора
+        // (сводный, по мастерам, зарплатам, поставщикам, товарам…); прежний
+        // финансовый отчёт — первая карточка хаба. Пункт виден при ЛЮБОМ праве,
+        // открывающем хотя бы один отчёт (те же права, что в shared/reports/
+        // catalog.ts); какие именно отчёты доступны — решает сервер в каталоге.
+        label: 'Отчёты',
+        description: 'Сводный, по мастерам, зарплатам, поставщикам, товарам',
         screen: 'Reports',
-        permission: 'financial_reports',
+        permissionAny: [
+          'financial_reports',
+          'salary_view',
+          'suppliers_access',
+          'clients_view',
+          'warehouse_access',
+          'bookings_access',
+        ],
         featureKey: 'reports_view',
         icon: 'bar-chart-outline',
         iconBg: colors.purple[50],
@@ -579,6 +599,7 @@ export default function MoreScreen() {
     // Матрица роли АВТОРИТЕТНА: /auth/me отдаёт эффективные права, admin живёт
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
     if (item.permission && !hasPermission(item.permission)) return false;
+    if (item.permissionAny && !item.permissionAny.some((perm) => hasPermission(perm))) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     // 163 — «Филиалы» скрыты, когда показывать нечего: у одноточечного
     // тенанта второго автосервиса не существует, и раздел был бы пустым

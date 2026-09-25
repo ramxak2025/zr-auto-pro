@@ -1,122 +1,191 @@
 import { ReactNode } from 'react';
-import type { LucideIcon } from 'lucide-react';
+import { Link, type LinkProps } from 'react-router-dom';
+import { format, isPast, parseISO } from 'date-fns';
+import { ru } from 'date-fns/locale';
+import { AlertCircle, type LucideIcon } from 'lucide-react';
+import type { Tenant } from '../../types';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { cn } from '../../ui/cn';
+import { focusRing, toneText, type Tone } from '../../ui/tokens';
 
 /*
- * Общие строительные блоки WEB-суперадминки (внутренний инструмент владельца
- * платформы). Стиль — «data-dense dashboard»: плотные плитки, единый заголовок
- * страницы, чипы-фильтры и сегментные переключатели, переиспользуемые всеми
- * страницами /admin/*. Только Tailwind-утилиты существующей темы.
+ * Строительные блоки WEB-суперадминки поверх примитивов ui/ (фаза B).
+ * Здесь только то, чего в системе нет: плитка-ссылка, чип-переключатель,
+ * мини-показатель, строка ошибки виджета, бейджи статуса автосервиса и
+ * общие форматтеры дат/денег для графиков.
  */
 
-// ── Заголовок страницы ────────────────────────────────────────────────────────
+const compactFmt = new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 });
 
-export function AdminPageHeader({
-  title,
-  subtitle,
-  actions,
-}: {
-  title: string;
-  subtitle?: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h1 className="text-xl font-bold text-gray-900 md:text-2xl">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-gray-500">{subtitle}</p>}
-      </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </div>
-  );
+/** «12 тыс. ₽» — подписи оси Y графиков. */
+export function compactRub(value: number): string {
+  return `${compactFmt.format(value)} ₽`;
 }
 
-// ── KPI-плитка ────────────────────────────────────────────────────────────────
-
-export type StatTone = 'blue' | 'green' | 'red' | 'emerald' | 'teal' | 'indigo' | 'purple' | 'amber';
-
-// Полные строки классов (не шаблоны) — иначе Tailwind JIT их не увидит.
-const STAT_TONES: Record<StatTone, { bg: string; text: string }> = {
-  blue: { bg: 'bg-blue-50', text: 'text-blue-600' },
-  green: { bg: 'bg-green-50', text: 'text-green-600' },
-  red: { bg: 'bg-red-50', text: 'text-red-600' },
-  emerald: { bg: 'bg-emerald-50', text: 'text-emerald-600' },
-  teal: { bg: 'bg-teal-50', text: 'text-teal-600' },
-  indigo: { bg: 'bg-indigo-50', text: 'text-indigo-600' },
-  purple: { bg: 'bg-purple-50', text: 'text-purple-600' },
-  amber: { bg: 'bg-amber-50', text: 'text-amber-600' },
-};
-
-export function StatTile({
-  icon: Icon,
-  tone = 'blue',
-  label,
-  value,
-  sub,
-}: {
-  icon: LucideIcon;
-  tone?: StatTone;
-  label: string;
-  value: ReactNode;
-  sub?: ReactNode;
-}) {
-  const t = STAT_TONES[tone];
-  return (
-    <div className="card flex items-start gap-3 p-4">
-      <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${t.bg}`}>
-        <Icon className={`h-[18px] w-[18px] ${t.text}`} />
-      </div>
-      <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-gray-500">{label}</p>
-        <p className="mt-0.5 text-xl font-bold tabular-nums leading-tight text-gray-900">{value}</p>
-        {sub && <p className="mt-0.5 text-xs text-gray-400">{sub}</p>}
-      </div>
-    </div>
-  );
+/** 'YYYY-MM' → 'июн' (подпись под столбцом/точкой). */
+export function shortMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  if (!y || !m) return month;
+  return format(new Date(y, m - 1, 1), 'LLL', { locale: ru });
 }
 
-// ── Чип-фильтр ────────────────────────────────────────────────────────────────
+/** 'YYYY-MM' → 'июнь 2026' (подсказка). */
+export function longMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  if (!y || !m) return month;
+  return format(new Date(y, m - 1, 1), 'LLLL yyyy', { locale: ru });
+}
 
-export function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+/** ISO → «25 сент. 2026, 14:05»; битая строка возвращается как есть. */
+export function formatDateRu(iso: string, pattern = 'd MMM yyyy, HH:mm'): string {
+  try {
+    return format(parseISO(iso), pattern, { locale: ru });
+  } catch {
+    return iso;
+  }
+}
+
+export function isTenantExpired(t: Pick<Tenant, 'subscriptionEnd'>): boolean {
+  return !!t.subscriptionEnd && isPast(parseISO(t.subscriptionEnd));
+}
+
+/** Плитка-ссылка (быстрые переходы, разделы): настоящая <Link> в виде карточки. */
+export function LinkTile({ className, children, ...rest }: LinkProps & { className?: string; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`press-soft cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-        active
-          ? 'border-primary-600 bg-primary-600 text-white'
-          : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-      }`}
+    <Link
+      className={cn(
+        'group block rounded-xl border border-line bg-surface text-left shadow-card',
+        'transition-[border-color,box-shadow] duration-150 ease-out hover:border-line-strong hover:shadow-pop',
+        focusRing,
+        className,
+      )}
+      {...rest}
     >
       {children}
-    </button>
+    </Link>
   );
 }
 
-// ── Сегментный переключатель ─────────────────────────────────────────────────
-
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
+/** Чип-переключатель множественного выбора (сегменты рассылки): кнопка с aria-pressed. */
+export function ToggleChip({
+  active,
+  onClick,
+  children,
+  disabled,
 }: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <div className="inline-flex rounded-lg bg-gray-100 p-1">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          className={`cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-            value === o.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
+    <Button
+      type="button"
+      size="sm"
+      variant={active ? 'soft' : 'secondary'}
+      aria-pressed={active}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** Маленький показатель: подпись 12 px + значение с табличными цифрами. */
+export function MiniStat({
+  label,
+  value,
+  hint,
+  tone = 'neutral',
+  size = 'md',
+  className,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  hint?: ReactNode;
+  tone?: Tone;
+  size?: 'sm' | 'md';
+  className?: string;
+}) {
+  return (
+    <div className={cn('min-w-0', className)}>
+      <p className="truncate text-xs text-ink-3">{label}</p>
+      <p
+        className={cn(
+          'mt-0.5 truncate font-semibold tabular-nums tracking-tight',
+          size === 'sm' ? 'text-base' : 'text-lg',
+          tone === 'neutral' ? 'text-ink' : toneText[tone],
+        )}
+      >
+        {value}
+      </p>
+      {hint && <p className="truncate text-2xs text-ink-3">{hint}</p>}
+    </div>
+  );
+}
+
+/** Строка ошибки виджета: не «пусто», а честная ошибка с «Повторить». */
+export function ErrorRow({
+  message,
+  onRetry,
+  loading = false,
+  className,
+}: {
+  message: string;
+  onRetry?: () => void;
+  loading?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      className={cn(
+        'flex items-center gap-3 rounded-lg border border-bad/20 bg-bad-soft px-3.5 py-3 text-sm text-bad-text',
+        className,
+      )}
+    >
+      <AlertCircle className="h-4 w-4 flex-shrink-0 text-bad" aria-hidden="true" />
+      <p className="min-w-0 flex-1">{message}</p>
+      {onRetry && (
+        <Button variant="secondary" size="sm" onClick={onRetry} loading={loading}>
+          Повторить
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Статус автосервиса: Активна / Отключена (+ Истекла, когда срок вышел, а флаг ещё активен). */
+export function TenantStatusBadges({ tenant, size = 'md' }: { tenant: Tenant; size?: 'sm' | 'md' }) {
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {tenant.isActive ? (
+        <Badge tone="ok" dot size={size}>
+          Активна
+        </Badge>
+      ) : (
+        <Badge tone="bad" dot size={size}>
+          Отключена
+        </Badge>
+      )}
+      {isTenantExpired(tenant) && tenant.isActive && (
+        <Badge tone="warn" size={size}>
+          Истекла
+        </Badge>
+      )}
+    </span>
+  );
+}
+
+/** Строка «иконка · значение» в карточке «Информация». */
+export function InfoRow({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 text-sm">
+      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+      <span className="sr-only">{label}: </span>
+      <span className="min-w-0 flex-1 text-ink-2 [overflow-wrap:anywhere]">{children}</span>
     </div>
   );
 }

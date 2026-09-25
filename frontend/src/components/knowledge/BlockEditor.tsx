@@ -1,19 +1,13 @@
 import { useRef, useState } from 'react';
-import {
-  Type,
-  Heading,
-  ImagePlus,
-  Video,
-  ArrowUp,
-  ArrowDown,
-  Trash2,
-  Loader2,
-  AlertCircle,
-  PlayCircle,
-} from 'lucide-react';
+import { Type, Heading, ImagePlus, Video, ArrowUp, ArrowDown, Trash2, AlertCircle, PlayCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { KnowledgeBlock } from '../../types';
 import { uploadsApi } from '../../api/services';
+import { Button } from '../../ui/Button';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Textarea } from '../../ui/Textarea';
 import { parseVkEmbedUrl } from './vkVideo';
 
 // ───────────────────────────────────────────────────────────────────────
@@ -25,6 +19,13 @@ import { parseVkEmbedUrl } from './vkVideo';
 //    • video    — paste a VK link → VK video block + caption
 //  The parent owns the array; this component only emits the next array.
 // ───────────────────────────────────────────────────────────────────────
+
+const BLOCK_META: Record<KnowledgeBlock['type'], { label: string; icon: typeof Type }> = {
+  text: { label: 'Текст', icon: Type },
+  heading: { label: 'Заголовок', icon: Heading },
+  image: { label: 'Изображение', icon: ImagePlus },
+  video: { label: 'Видео VK', icon: Video },
+};
 
 export default function BlockEditor({
   blocks,
@@ -66,166 +67,141 @@ export default function BlockEditor({
   return (
     <div className="space-y-3">
       {blocks.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/60 px-4 py-8 text-center text-sm text-gray-500">
-          Пока нет блоков. Добавьте текст, заголовок, изображение или видео ниже.
+        <div className="rounded-lg border border-dashed border-line-strong bg-surface-2 px-4 py-8 text-center text-sm text-ink-3">
+          Пока нет блоков. Добавьте текст, заголовок, изображение или видео кнопками ниже.
         </div>
       ) : (
-        blocks.map((block, i) => (
-          <div key={i} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
-            {/* Block toolbar */}
-            <div className="mb-2 flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
+        <ol className="space-y-3" aria-label="Блоки статьи">
+          {blocks.map((block, i) => {
+            const meta = BLOCK_META[block.type];
+            const MetaIcon = meta.icon;
+            return (
+              <li key={i} className="rounded-lg border border-line bg-surface p-3 shadow-card">
+                {/* Block toolbar */}
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+                    <MetaIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                    {meta.label}
+                    <span className="font-normal tabular-nums text-ink-4">#{i + 1}</span>
+                  </span>
+                  <div className="flex items-center gap-0.5">
+                    <IconButton label="Выше" icon={ArrowUp} size="sm" onClick={() => move(i, -1)} disabled={i === 0} />
+                    <IconButton
+                      label="Ниже"
+                      icon={ArrowDown}
+                      size="sm"
+                      onClick={() => move(i, 1)}
+                      disabled={i === blocks.length - 1}
+                    />
+                    <IconButton
+                      label="Удалить блок"
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
+                      onClick={() => remove(i)}
+                    />
+                  </div>
+                </div>
+
+                {/* Block body */}
                 {block.type === 'text' && (
-                  <>
-                    <Type className="h-3.5 w-3.5" /> Текст
-                  </>
+                  <Textarea
+                    value={block.text}
+                    onChange={(e) => update(i, { text: e.target.value })}
+                    placeholder="Текст абзаца…"
+                    rows={4}
+                    aria-label={`Текст блока ${i + 1}`}
+                    className="leading-relaxed"
+                  />
                 )}
+
                 {block.type === 'heading' && (
-                  <>
-                    <Heading className="h-3.5 w-3.5" /> Заголовок
-                  </>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={block.text}
+                      onChange={(e) => update(i, { text: e.target.value })}
+                      placeholder="Текст заголовка…"
+                      aria-label={`Заголовок блока ${i + 1}`}
+                      className="min-w-[12rem] flex-1 font-semibold"
+                    />
+                    <SegmentedControl
+                      size="sm"
+                      aria-label="Уровень заголовка"
+                      value={block.level === 3 ? '3' : '2'}
+                      onChange={(v) => update(i, { level: v === '3' ? 3 : 2 })}
+                      options={[
+                        { value: '2', label: 'H2' },
+                        { value: '3', label: 'H3' },
+                      ]}
+                    />
+                  </div>
                 )}
+
                 {block.type === 'image' && (
-                  <>
-                    <ImagePlus className="h-3.5 w-3.5" /> Изображение
-                  </>
+                  <div className="space-y-2">
+                    <div className="overflow-hidden rounded-lg border border-line bg-surface-2">
+                      <img src={block.url} alt={block.caption || ''} className="max-h-56 w-full object-contain" />
+                    </div>
+                    <Input
+                      value={block.caption ?? ''}
+                      onChange={(e) => update(i, { caption: e.target.value })}
+                      placeholder="Подпись (необязательно)"
+                      aria-label="Подпись к изображению"
+                    />
+                  </div>
                 )}
+
                 {block.type === 'video' && (
-                  <>
-                    <Video className="h-3.5 w-3.5" /> Видео VK
-                  </>
+                  <VideoBlockEditor
+                    url={block.url}
+                    caption={block.caption ?? ''}
+                    onUrlChange={(url) => update(i, { url })}
+                    onCaptionChange={(caption) => update(i, { caption })}
+                  />
                 )}
-              </span>
-              <div className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => move(i, -1)}
-                  disabled={i === 0}
-                  title="Выше"
-                  className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => move(i, 1)}
-                  disabled={i === blocks.length - 1}
-                  title="Ниже"
-                  className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30"
-                >
-                  <ArrowDown className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remove(i)}
-                  title="Удалить блок"
-                  className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Block body */}
-            {block.type === 'text' && (
-              <textarea
-                value={block.text}
-                onChange={(e) => update(i, { text: e.target.value })}
-                placeholder="Текст абзаца…"
-                rows={4}
-                className="input resize-y text-sm leading-relaxed"
-              />
-            )}
-
-            {block.type === 'heading' && (
-              <div className="flex items-center gap-2">
-                <input
-                  value={block.text}
-                  onChange={(e) => update(i, { text: e.target.value })}
-                  placeholder="Текст заголовка…"
-                  className="input flex-1 font-semibold"
-                />
-                <div className="flex rounded-lg border border-gray-200 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => update(i, { level: 2 })}
-                    className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
-                      (block.level ?? 2) === 2 ? 'bg-primary-600 text-white' : 'text-gray-500'
-                    }`}
-                  >
-                    H2
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => update(i, { level: 3 })}
-                    className={`rounded-md px-2.5 py-1 text-xs font-semibold ${
-                      block.level === 3 ? 'bg-primary-600 text-white' : 'text-gray-500'
-                    }`}
-                  >
-                    H3
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {block.type === 'image' && (
-              <div className="space-y-2">
-                <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-                  <img src={block.url} alt={block.caption || ''} className="max-h-56 w-full object-contain" />
-                </div>
-                <input
-                  value={block.caption ?? ''}
-                  onChange={(e) => update(i, { caption: e.target.value })}
-                  placeholder="Подпись (необязательно)"
-                  className="input text-sm"
-                />
-              </div>
-            )}
-
-            {block.type === 'video' && (
-              <VideoBlockEditor
-                url={block.url}
-                caption={block.caption ?? ''}
-                onUrlChange={(url) => update(i, { url })}
-                onCaptionChange={(caption) => update(i, { caption })}
-              />
-            )}
-          </div>
-        ))
+              </li>
+            );
+          })}
+        </ol>
       )}
 
       {/* Add-block toolbar */}
-      <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3">
-        <button type="button" onClick={() => add({ type: 'text', text: '' })} className="btn-secondary btn-sm">
-          <Type className="h-4 w-4" /> Текст
-        </button>
-        <button
-          type="button"
+      <div className="flex flex-wrap gap-2 border-t border-line pt-3">
+        <Button variant="secondary" size="sm" icon={Type} onClick={() => add({ type: 'text', text: '' })}>
+          Текст
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Heading}
           onClick={() => add({ type: 'heading', text: '', level: 2 })}
-          className="btn-secondary btn-sm"
         >
-          <Heading className="h-4 w-4" /> Заголовок
-        </button>
-        <button
-          type="button"
+          Заголовок
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={ImagePlus}
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          className="btn-secondary btn-sm"
+          loading={uploading}
         >
-          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />} Изображение
-        </button>
-        <button
-          type="button"
+          Изображение
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Video}
           onClick={() => add({ type: 'video', provider: 'vk', url: '', caption: '' })}
-          className="btn-secondary btn-sm"
         >
-          <Video className="h-4 w-4" /> Видео VK
-        </button>
+          Видео VK
+        </Button>
         <input
           ref={fileInputRef}
           type="file"
           accept="image/*"
           className="hidden"
+          aria-hidden="true"
+          tabIndex={-1}
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) handleImageUpload(f);
@@ -256,19 +232,20 @@ function VideoBlockEditor({
 
   return (
     <div className="space-y-2">
-      <input
+      <Input
         value={url}
         onChange={(e) => onUrlChange(e.target.value)}
         placeholder="Ссылка на видео VK — например https://vk.com/video-123_456"
-        className={`input text-sm ${invalid ? 'input-error' : ''}`}
+        aria-label="Ссылка на видео VK"
+        invalid={invalid}
       />
       {invalid && (
-        <p className="flex items-center gap-1.5 text-xs text-red-600">
-          <AlertCircle className="h-3.5 w-3.5" /> Не похоже на ссылку VK Видео.
+        <p className="flex items-center gap-1.5 text-xs text-bad-text" role="alert">
+          <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" /> Не похоже на ссылку VK Видео.
         </p>
       )}
       {embed && (
-        <div className="relative overflow-hidden rounded-lg border border-gray-200 bg-black pt-[56.25%]">
+        <div className="relative overflow-hidden rounded-lg border border-line bg-ink pt-[56.25%]">
           <iframe
             src={embed}
             title="Предпросмотр VK видео"
@@ -280,15 +257,16 @@ function VideoBlockEditor({
         </div>
       )}
       {!url.trim() && (
-        <p className="flex items-center gap-1.5 text-xs text-gray-400">
-          <PlayCircle className="h-3.5 w-3.5" /> Вставьте ссылку на видео из VK, чтобы появился предпросмотр.
+        <p className="flex items-center gap-1.5 text-xs text-ink-3">
+          <PlayCircle className="h-3.5 w-3.5" aria-hidden="true" /> Вставьте ссылку на видео из VK, чтобы появился
+          предпросмотр.
         </p>
       )}
-      <input
+      <Input
         value={caption}
         onChange={(e) => onCaptionChange(e.target.value)}
         placeholder="Подпись (необязательно)"
-        className="input text-sm"
+        aria-label="Подпись к видео"
       />
     </div>
   );

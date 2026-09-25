@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { LucideIcon } from 'lucide-react';
+import { Button } from '../ui/Button';
 
 interface EmptyStateProps {
   icon?: LucideIcon;
@@ -9,39 +10,36 @@ interface EmptyStateProps {
     label: string;
     onClick: () => void;
   };
+  /** Компактный вариант для ячеек таблиц и маленьких карточек. */
+  compact?: boolean;
 }
 
-export default function EmptyState({
-  icon: Icon,
-  title,
-  description,
-  action,
-}: EmptyStateProps) {
+/**
+ * Пустое состояние: «здесь пока пусто» + что сделать дальше. Не используйте
+ * его для ОШИБОК загрузки — для них QueryState/DataTable показывают отдельный
+ * блок с «Повторить» (аудит T1: ошибка ≠ пусто).
+ */
+export default function EmptyState({ icon: Icon, title, description, action, compact = false }: EmptyStateProps) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.32, ease: [0.2, 0, 0, 1] }}
-      className="flex flex-col items-center justify-center py-12 text-center"
+      transition={{ duration: 0.2, ease: [0.25, 1, 0.5, 1] }}
+      className={`flex flex-col items-center justify-center text-center ${compact ? 'py-8' : 'py-14'}`}
     >
       {Icon && (
-        <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: 0.05, type: 'spring', stiffness: 300, damping: 22 }}
-          className="mb-4 p-3 bg-gray-100 rounded-full"
+        <span
+          className={`mb-4 flex items-center justify-center rounded-full bg-surface-3 ${compact ? 'h-11 w-11' : 'h-14 w-14'}`}
         >
-          <Icon className="w-8 h-8 text-gray-400" />
-        </motion.div>
+          <Icon className={`${compact ? 'h-5 w-5' : 'h-6 w-6'} text-ink-4`} aria-hidden="true" />
+        </span>
       )}
-      <h3 className="text-lg font-medium text-gray-900 mb-1">{title}</h3>
-      {description && (
-        <p className="text-sm text-gray-500 max-w-sm mb-4">{description}</p>
-      )}
+      <h3 className={`font-semibold text-ink ${compact ? 'text-sm' : 'text-md'}`}>{title}</h3>
+      {description && <p className="mt-1 max-w-sm text-sm text-ink-3">{description}</p>}
       {action && (
-        <button onClick={action.onClick} className="btn-primary press-soft">
+        <Button variant="primary" size={compact ? 'sm' : 'md'} onClick={action.onClick} className="mt-4">
           {action.label}
-        </button>
+        </Button>
       )}
     </motion.div>
   );

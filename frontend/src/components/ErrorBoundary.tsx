@@ -74,29 +74,29 @@ export default class ErrorBoundary extends Component<Props, State> {
 
       return (
         <div className="flex flex-col items-center justify-center min-h-[400px] py-12 text-center px-4">
-          <div className="mb-4 p-3 bg-red-100 rounded-full">
-            <AlertTriangle className="w-8 h-8 text-red-500" />
+          <div className="mb-4 rounded-full bg-bad-soft p-3">
+            <AlertTriangle className="h-8 w-8 text-bad" aria-hidden="true" />
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">
+          <h2 className="mb-2 text-lg font-semibold text-ink">
             {this.state.isChunkError ? 'Приложение обновилось' : 'Произошла ошибка'}
           </h2>
-          <p className="text-sm text-gray-500 max-w-md mb-6">
+          <p className="mb-6 max-w-md text-sm text-ink-3">
             {this.state.isChunkError
               ? 'Доступна новая версия. Перезагрузите страницу.'
               : this.state.error?.message || 'Непредвиденная ошибка.'}
           </p>
           <div className="flex gap-3">
             {this.state.isChunkError ? (
-              <button onClick={this.handleHardReload} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors">
+              <button type="button" onClick={this.handleHardReload} className="btn-primary">
                 <RefreshCw className="w-4 h-4" />
                 Перезагрузить
               </button>
             ) : (
               <>
-                <button onClick={this.handleRetry} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors">
+                <button type="button" onClick={this.handleRetry} className="btn-primary">
                   Попробовать снова
                 </button>
-                <button onClick={this.handleHardReload} className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                <button type="button" onClick={this.handleHardReload} className="btn-secondary">
                   <RefreshCw className="w-4 h-4" />
                   Перезагрузить
                 </button>

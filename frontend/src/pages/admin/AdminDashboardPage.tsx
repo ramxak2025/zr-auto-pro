@@ -1,66 +1,66 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
-  Building2,
-  Users,
-  ArrowRight,
   Activity,
-  CreditCard,
-  TrendingUp,
+  ArrowRight,
   BadgeRussianRuble,
+  Building2,
   CalendarClock,
-  UserPlus,
+  CreditCard,
+  Inbox,
+  LayoutDashboard,
   Megaphone,
   ScrollText,
-  Inbox,
+  TrendingUp,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 
 import { tenantsApi, adminApi } from '../../api/services';
 import { PlatformStats } from '../../types';
-import QueryState from '../../components/QueryState';
+import { formatMoney } from '../../../../shared/utils/formatters';
+import PageHeader from '../../components/PageHeader';
 import MrrTrendChart from '../../components/MrrTrendChart';
 import SubscriptionRevenuePanel from '../../components/SubscriptionRevenuePanel';
-import { AdminPageHeader, StatTile } from '../../components/admin/adminUi';
-
-function formatRub(value: number | undefined): string {
-  return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
-}
+import { StatCard } from '../../ui/StatCard';
+import { SkeletonCard } from '../../ui/Skeleton';
+import { cn } from '../../ui/cn';
+import { focusRing } from '../../ui/tokens';
+import { ErrorRow, LinkTile } from '../../components/admin/adminUi';
+import { pluralRu } from '../../components/knowledge/utils';
 
 // «1 заявка ждёт / 2 заявки ждут / 5 заявок ждут»
 function pendingPhrase(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'заявка на регистрацию ждёт решения';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'заявки на регистрацию ждут решения';
-  return 'заявок на регистрацию ждут решения';
+  return pluralRu(
+    n,
+    'заявка на подключение ждёт решения',
+    'заявки на подключение ждут решения',
+    'заявок на подключение ждут решения',
+  );
 }
 
 const QUICK_LINKS = [
   {
     to: '/admin/tenants',
     icon: Building2,
-    iconClass: 'bg-primary-50 text-primary-600',
-    title: 'Управление клиентами',
-    subtitle: 'Просмотр, создание и редактирование автосервисов',
+    title: 'Автосервисы',
+    subtitle: 'Просмотр, создание и редактирование клиентов платформы',
   },
   {
     to: '/admin/plans',
     icon: CreditCard,
-    iconClass: 'bg-green-50 text-green-600',
-    title: 'Управление тарифами',
-    subtitle: 'Настройка тарифных планов и цен',
+    title: 'Тарифы',
+    subtitle: 'Тарифные планы, функции и цены',
   },
   {
     to: '/admin/broadcast',
     icon: Megaphone,
-    iconClass: 'bg-violet-50 text-violet-600',
-    title: 'Рассылка владельцам',
-    subtitle: 'Объявление со ссылкой и кнопками — директорам',
+    title: 'Рассылка',
+    subtitle: 'Объявление владельцам со ссылкой и кнопками',
   },
   {
     to: '/admin/audit-log',
     icon: ScrollText,
-    iconClass: 'bg-amber-50 text-amber-600',
     title: 'Журнал действий',
     subtitle: 'История операций администраторов платформы',
   },
@@ -88,90 +88,136 @@ export default function AdminDashboardPage() {
   });
 
   return (
-    <div>
-      <AdminPageHeader title="Панель управления" subtitle="Платная выручка по подпискам и состояние платформы" />
+    <div className="space-y-5">
+      <PageHeader
+        title="Главная"
+        icon={LayoutDashboard}
+        subtitle="Состояние платформы и платная выручка по подпискам"
+      />
 
       {/* Ожидающие заявки — самое срочное, поэтому первым */}
       {!!pendingCount && (
         <Link
           to="/admin/registration"
-          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 transition-colors hover:bg-amber-100"
+          className={cn(
+            'flex items-center gap-3 rounded-xl border border-warn/30 bg-warn-soft px-4 py-3 transition-colors hover:border-warn/50',
+            focusRing,
+          )}
         >
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-amber-100">
-              <Inbox className="h-[18px] w-[18px] text-amber-600" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-amber-800">
-                {pendingCount} {pendingPhrase(pendingCount)}
-              </p>
-              <p className="text-xs text-amber-700">Открыть раздел «Заявки»</p>
-            </div>
-          </div>
-          <ArrowRight className="h-5 w-5 flex-shrink-0 text-amber-500" />
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-warn/15 text-warn">
+            <Inbox className="h-[18px] w-[18px]" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-warn-text">
+              <span className="tabular-nums">{pendingCount}</span> {pendingPhrase(pendingCount)}
+            </span>
+            <span className="block text-xs text-warn-text/80">Открыть раздел «Заявки»</span>
+          </span>
+          <ArrowRight className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
         </Link>
       )}
 
-      {/* KPI платформы — плотная сетка */}
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        errorTitle="Не удалось загрузить статистику"
-        minHeight="min-h-[200px]"
-      >
-        <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatTile icon={Building2} tone="blue" label="Всего клиентов" value={stats?.totalTenants ?? 0} />
-          <StatTile icon={Activity} tone="green" label="Активных" value={stats?.activeTenants ?? 0} />
-          <StatTile icon={CalendarClock} tone="red" label="Истёкших" value={stats?.expiredTenants ?? 0} />
-          <StatTile icon={Users} tone="purple" label="Пользователей" value={stats?.totalUsers ?? 0} />
-          <StatTile
-            icon={BadgeRussianRuble}
-            tone="emerald"
-            label="MRR"
-            value={formatRub(stats?.mrr)}
-            sub="месячная выручка"
+      {/* KPI платформы — нейтральные плитки; тон только там, где есть смысл */}
+      <section aria-label="Показатели платформы">
+        {isLoading ? (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-busy="true">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <SkeletonCard key={i} lines={1} className="p-4" />
+            ))}
+          </div>
+        ) : isError ? (
+          <ErrorRow
+            message="Не удалось загрузить статистику платформы"
+            onRetry={() => refetch()}
+            loading={isFetching}
           />
-          <StatTile icon={TrendingUp} tone="teal" label="ARPU" value={formatRub(stats?.arpu)} sub="на клиента" />
-          <StatTile icon={UserPlus} tone="indigo" label="Новых за месяц" value={stats?.newTenantsThisMonth ?? 0} />
-          <StatTile icon={Inbox} tone="amber" label="Заявки ждут" value={pendingCount ?? 0} sub="на регистрацию" />
-        </div>
-      </QueryState>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              compact
+              label="Всего автосервисов"
+              value={stats?.totalTenants ?? 0}
+              icon={Building2}
+              to="/admin/tenants"
+            />
+            <StatCard
+              compact
+              label="Активных"
+              value={stats?.activeTenants ?? 0}
+              icon={Activity}
+              to="/admin/tenants?status=active"
+            />
+            <StatCard
+              compact
+              label="Истёкших подписок"
+              value={stats?.expiredTenants ?? 0}
+              icon={CalendarClock}
+              tone={(stats?.expiredTenants ?? 0) > 0 ? 'warn' : 'neutral'}
+              to="/admin/tenants?status=expired"
+            />
+            <StatCard compact label="Пользователей" value={stats?.totalUsers ?? 0} icon={Users} />
+            <StatCard
+              compact
+              label="MRR"
+              value={formatMoney(stats?.mrr ?? 0)}
+              hint="месячная выручка по ценникам тарифов"
+              icon={BadgeRussianRuble}
+            />
+            <StatCard
+              compact
+              label="ARPU"
+              value={formatMoney(stats?.arpu ?? 0)}
+              hint="на активный автосервис"
+              icon={TrendingUp}
+            />
+            <StatCard compact label="Новых за месяц" value={stats?.newTenantsThisMonth ?? 0} icon={UserPlus} />
+            <StatCard
+              compact
+              label="Заявки ждут"
+              value={pendingCount ?? 0}
+              hint="на подключение"
+              icon={Inbox}
+              tone={(pendingCount ?? 0) > 0 ? 'warn' : 'neutral'}
+              to="/admin/registration"
+            />
+          </div>
+        )}
+      </section>
 
-      {/* Платная выручка по подпискам */}
       <SubscriptionRevenuePanel />
 
-      {/* Динамика MRR */}
-      <div className="mb-8">
-        <MrrTrendChart />
-      </div>
+      <MrrTrendChart />
 
-      {/* Быстрые действия */}
-      <h2 className="mb-3 text-lg font-semibold text-gray-900">Быстрые действия</h2>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {QUICK_LINKS.map((link) => {
-          const Icon = link.icon;
-          return (
-            <Link
-              key={link.to}
-              to={link.to}
-              className="card flex items-center justify-between gap-3 p-4 transition-shadow hover:shadow-md"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${link.iconClass}`}>
-                  <Icon className="h-[18px] w-[18px]" />
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-gray-900">{link.title}</p>
-                  <p className="truncate text-xs text-gray-500">{link.subtitle}</p>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 flex-shrink-0 text-gray-400" />
-            </Link>
-          );
-        })}
-      </div>
+      {/* Разделы */}
+      <section aria-labelledby="admin-sections">
+        <h2 id="admin-sections" className="mb-3 text-md font-semibold text-ink">
+          Разделы
+        </h2>
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {QUICK_LINKS.map((link) => {
+            const Icon = link.icon;
+            return (
+              <li key={link.to}>
+                <LinkTile to={link.to} className="flex items-center gap-3 p-4">
+                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+                    <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink group-hover:text-accent-text">
+                      {link.title}
+                    </span>
+                    <span className="block truncate text-xs text-ink-3">{link.subtitle}</span>
+                  </span>
+                  <ArrowRight
+                    className="h-4 w-4 flex-shrink-0 text-ink-4 transition-transform duration-150 group-hover:translate-x-0.5"
+                    aria-hidden="true"
+                  />
+                </LinkTile>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
     </div>
   );
 }

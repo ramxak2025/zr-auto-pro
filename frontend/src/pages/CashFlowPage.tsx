@@ -1,17 +1,17 @@
-import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Wallet,
+  ArrowDownToLine,
+  ArrowRightLeft,
   Banknote,
-  CreditCard,
-  ShieldAlert,
-  Users,
   CalendarClock,
   Coins,
-  PiggyBank,
-  Undo2,
-  ArrowDownToLine,
+  CreditCard,
   Landmark,
+  PiggyBank,
+  ShieldAlert,
+  Undo2,
+  Wallet,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -22,8 +22,18 @@ import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
+import MonthPager from '../components/reports/MonthPager';
+import { patchParams, readPeriod } from '../components/reports/periodParams';
+import { numericColumnSizing } from '../components/reports/tableWidths';
 import type { User } from '../../../shared/types';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { StatCard } from '../ui/StatCard';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Money } from '../ui/Money';
+import { Select } from '../ui/Select';
+import { Toolbar } from '../ui/Toolbar';
+import { SkeletonCard } from '../ui/Skeleton';
+import { cn } from '../ui/cn';
 
 interface CashFlowDay {
   date: string;
@@ -90,6 +100,22 @@ function parseDay(date: string): Date {
   return new Date(y || 1970, (m || 1) - 1, d || 1);
 }
 
+/** Сумма или прочерк, если нулевая (таблица по дням не должна пестрить нулями). */
+function amountOrDash(value: number | undefined, className?: string, prefix = '') {
+  if (!value || value <= 0) return <span className="text-ink-3">—</span>;
+  return (
+    <span className={cn('tabular-nums', className)}>
+      {prefix}
+      {formatMoney(value)}
+    </span>
+  );
+}
+
+/**
+ * Движение денег по дням: KPI за период и таблица с итогами. Период и мастер —
+ * в URL; запрос и ключ ['cashflow', from, to, masterId] прежние. Второстепенные
+ * колонки прячутся на узких экранах вместо дублирующих карточек.
+ */
 export default function CashFlowPage() {
   // Дефолтный период — текущий месяц ПО КАЛЕНДАРЮ АВТОСЕРВИСА (157): движение
   // денег сервер режет сутками тенанта, и «месяц» по часам браузера в ночь на
@@ -102,9 +128,13 @@ export default function CashFlowPage() {
   // admin — по матрице роли из /auth/me (волна Битрикс24).
   const canFilterByMaster = hasPermission('cashflow_view_all');
 
-  const [dateFrom, setDateFrom] = useState(monthStart);
-  const [dateTo, setDateTo] = useState(today);
-  const [masterId, setMasterId] = useState('');
+  const [params, setParams] = useSearchParams();
+  const period = readPeriod(params, { from: monthStart, to: today });
+  const dateFrom = period.from;
+  const dateTo = period.to;
+  const masterId = params.get('masterId') ?? '';
+  const update = (patch: Record<string, string | null | undefined>) =>
+    setParams(patchParams(params, patch), { replace: true });
 
   const { data: mastersData } = useQuery<User[]>({
     queryKey: ['masters'],
@@ -159,150 +189,257 @@ export default function CashFlowPage() {
     installmentPaidParts.push(`картой ${formatMoney(totals.installmentPaidCard)}`);
   }
 
+  const share = (day: CashFlowDay) => (totals.total > 0 ? Math.round((day.total / totals.total) * 100) : 0);
+
+  const columns: DataTableColumn<CashFlowDay>[] = [
+    {
+      key: 'date',
+      header: 'Дата',
+      primary: true,
+      sortable: true,
+      render: (day) => (
+        <span className="block whitespace-nowrap">
+          <span className="font-medium text-ink">{format(parseDay(day.date), 'dd MMM yyyy', { locale: ru })}</span>
+          <span className="block text-2xs capitalize text-ink-3 md:hidden">
+            {format(parseDay(day.date), 'EEEE', { locale: ru })}
+          </span>
+        </span>
+      ),
+      footer: 'Итого',
+    },
+    {
+      key: 'weekday',
+      header: 'День недели',
+      hideBelow: 'md',
+      render: (day) => (
+        <span className="capitalize text-ink-2">{format(parseDay(day.date), 'EEEE', { locale: ru })}</span>
+      ),
+      footer: <span className="font-normal text-ink-3">{days.length} дн.</span>,
+    },
+    {
+      key: 'cash',
+      header: 'Наличные',
+      numeric: true,
+      ...numericColumnSizing('Наличные'),
+      sortable: true,
+      hideBelow: 'sm',
+      render: (day) => amountOrDash(day.cash),
+      footer: <Money value={totals.cash} />,
+    },
+    {
+      key: 'card',
+      header: 'Карта',
+      numeric: true,
+      ...numericColumnSizing('Карта'),
+      sortable: true,
+      hideBelow: 'sm',
+      render: (day) => amountOrDash(day.card),
+      footer: <Money value={totals.card} />,
+    },
+  ];
+  if (hasInstallmentDebt) {
+    columns.push({
+      key: 'installmentDebt',
+      header: 'Рассрочка (долг)',
+      numeric: true,
+      ...numericColumnSizing('Рассрочка (долг)'),
+      hideBelow: 'md',
+      render: (day) => amountOrDash(day.installmentDebt),
+      footer: <Money value={totals.installmentDebt ?? 0} />,
+    });
+  }
+  columns.push({
+    key: 'total',
+    header: 'Итого',
+    numeric: true,
+    ...numericColumnSizing('Итого'),
+    sortable: true,
+    render: (day) => <Money value={day.total} className="font-semibold text-ink" />,
+    footer: <Money value={totals.total} />,
+  });
+  if (hasWarrantyLoss) {
+    columns.push({
+      key: 'warrantyLoss',
+      header: 'Гарантия (убыток)',
+      numeric: true,
+      ...numericColumnSizing('Гарантия (убыток)'),
+      hideBelow: 'md',
+      render: (day) => amountOrDash(day.warrantyLoss, 'text-bad-text', '−'),
+      footer: <Money value={-(totals.warrantyLoss ?? 0)} className="text-bad-text" />,
+    });
+  }
+  if (hasInstallmentPaid) {
+    columns.push({
+      key: 'installmentPaid',
+      header: 'Погашено',
+      numeric: true,
+      ...numericColumnSizing('Погашено'),
+      hideBelow: 'md',
+      render: (day) => amountOrDash(day.installmentPaid, undefined, '+'),
+      footer: <Money value={totals.installmentPaid ?? 0} signed />,
+    });
+  }
+  if (hasReceived) {
+    columns.push({
+      key: 'received',
+      header: 'Касса за день',
+      numeric: true,
+      ...numericColumnSizing('Касса за день'),
+      sortable: true,
+      render: (day) => <Money value={day.received ?? 0} className="font-semibold text-ok-text" />,
+      footer: <Money value={totals.received ?? 0} className="text-ok-text" />,
+    });
+  }
+  if (hasRefunds) {
+    columns.push({
+      key: 'refunds',
+      header: <abbr title="Уже вычтены из дня продажи — справочно">Возвраты</abbr>,
+      numeric: true,
+      ...numericColumnSizing('Возвраты'),
+      hideBelow: 'md',
+      render: (day) => amountOrDash(day.refunds, 'text-ink-2'),
+      footer: <Money value={totals.refunds ?? 0} />,
+    });
+  }
+  if (hasCollections) {
+    columns.push({
+      key: 'collections',
+      header: <abbr title="Изъято из кассы и сейфа — справочно">Инкассации</abbr>,
+      numeric: true,
+      ...numericColumnSizing('Инкассации'),
+      hideBelow: 'md',
+      render: (day) => amountOrDash(day.collections, 'text-ink-2', '−'),
+      footer: <Money value={-(totals.collections ?? 0)} />,
+    });
+  }
+  columns.push({
+    key: 'share',
+    header: 'Доля периода',
+    hideBelow: 'lg',
+    width: '18%',
+    sortValue: (day) => day.total,
+    render: (day) => (
+      <span className="flex items-center gap-2">
+        <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
+          <span
+            className="block h-full rounded-full bg-accent"
+            style={{ width: `${Math.max(share(day), day.total > 0 ? 3 : 0)}%` }}
+          />
+        </span>
+        <span className="w-9 text-right text-xs tabular-nums text-ink-3">{share(day)}%</span>
+      </span>
+    ),
+    footer: <span className="block text-right">100%</span>,
+  });
+
+  const kpiLoading = isLoading && !cashFlow;
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Движение денег" icon={Wallet} />
+    <div className="space-y-5">
+      <PageHeader
+        title="Движение денег"
+        icon={ArrowRightLeft}
+        subtitle="Касса по дням: наличные, карта, рассрочка, погашения"
+      />
 
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
-        <DatePeriodPicker
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onChange={(from, to) => {
-            setDateFrom(from);
-            setDateTo(to);
-          }}
-        />
+      <Toolbar>
+        <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={(from, to) => update({ from, to })} />
+        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => update({ from, to })} />
         {canFilterByMaster && mastersData && mastersData.length > 0 && (
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-gray-400" />
-            <select
-              value={masterId}
-              onChange={(e) => setMasterId(e.target.value)}
-              aria-label="Фильтр по мастеру"
-              className="input py-2 pr-8 min-w-[180px]"
-            >
-              <option value="">Все мастера</option>
-              {mastersData.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.fullName}
-                </option>
-              ))}
-            </select>
-          </div>
+          <Select
+            aria-label="Мастер"
+            placeholder="Все мастера"
+            options={mastersData.map((m) => ({ value: m.id, label: m.fullName }))}
+            value={masterId}
+            onChange={(e) => update({ masterId: e.target.value })}
+            className="w-52"
+          />
         )}
-      </div>
+      </Toolbar>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="stat-card">
-          <div className="flex items-center gap-2 mb-1">
-            <Banknote className="w-4 h-4 text-green-500" />
-            <div className="stat-label">Наличные</div>
-          </div>
-          <div className="stat-value tabular-nums text-green-600">{formatMoney(totals.cash)}</div>
+      {kpiLoading ? (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <SkeletonCard key={i} lines={1} />
+          ))}
         </div>
-        <div className="stat-card">
-          <div className="flex items-center gap-2 mb-1">
-            <CreditCard className="w-4 h-4 text-blue-500" />
-            <div className="stat-label">Карта</div>
-          </div>
-          <div className="stat-value tabular-nums text-blue-600">{formatMoney(totals.card)}</div>
-        </div>
-        {hasInstallmentDebt && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <CalendarClock className="w-4 h-4 text-violet-500" />
-              <div className="stat-label">Рассрочка (долг)</div>
-            </div>
-            <div className="stat-value tabular-nums text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</div>
-          </div>
-        )}
-        <div className="stat-card">
-          <div className="flex items-center gap-2 mb-1">
-            <Wallet className="w-4 h-4 text-gray-700" />
-            <div className="stat-label">Итого</div>
-          </div>
-          <div className="stat-value tabular-nums text-gray-900">{formatMoney(totals.total)}</div>
-          <p className="text-[11px] text-gray-500 mt-0.5">Оборот (без гарантии)</p>
-        </div>
-        {hasReceived && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <PiggyBank className="w-4 h-4 text-emerald-500" />
-              <div className="stat-label">Касса</div>
-            </div>
-            <div className="stat-value tabular-nums text-emerald-600">{formatMoney(totals.received ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Реально принято: нал + карта + погашения рассрочки</p>
-          </div>
-        )}
-        {hasRefunds && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <Undo2 className="w-4 h-4 text-rose-500" />
-              <div className="stat-label">Возвраты</div>
-            </div>
-            <div className="stat-value tabular-nums text-rose-600">{formatMoney(totals.refunds ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Уже вычтены из дня продажи — справочно</p>
-          </div>
-        )}
-        {hasWarrantyLoss && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <ShieldAlert className="w-4 h-4 text-red-500" />
-              <div className="stat-label">Гарантия (убыток)</div>
-            </div>
-            <div className="stat-value tabular-nums text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Не входит в оборот — запчасти + оплата мастеру</p>
-          </div>
-        )}
-        {hasInstallmentPaid && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <Coins className="w-4 h-4 text-teal-500" />
-              <div className="stat-label">Погашения рассрочки</div>
-            </div>
-            <div className="stat-value tabular-nums text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Не входит в оборот — оплата прошлых продаж</p>
-            {installmentPaidParts.length > 0 && (
-              <p className="text-[11px] text-gray-500 mt-0.5">в т.ч. {installmentPaidParts.join(' · ')}</p>
+      ) : (
+        !isError && (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+            <StatCard compact label="Наличные" value={formatMoney(totals.cash)} icon={Banknote} />
+            <StatCard compact label="Карта" value={formatMoney(totals.card)} icon={CreditCard} />
+            {hasInstallmentDebt && (
+              <StatCard
+                compact
+                label="Рассрочка (долг)"
+                value={formatMoney(totals.installmentDebt ?? 0)}
+                hint="Выдано в долг — входит в оборот"
+                icon={CalendarClock}
+                tone="warn"
+              />
+            )}
+            <StatCard compact label="Оборот" value={formatMoney(totals.total)} hint="Без гарантии" icon={Wallet} />
+            {hasReceived && (
+              <StatCard
+                compact
+                label="Касса за период"
+                value={formatMoney(totals.received ?? 0)}
+                hint="Реально принято: нал + карта + погашения"
+                icon={PiggyBank}
+                tone="ok"
+              />
+            )}
+            {hasRefunds && (
+              <StatCard
+                compact
+                label="Возвраты"
+                value={formatMoney(totals.refunds ?? 0)}
+                hint="Уже вычтены из дня продажи — справочно"
+                icon={Undo2}
+              />
+            )}
+            {hasWarrantyLoss && (
+              <StatCard
+                compact
+                label="Гарантия (убыток)"
+                value={<Money value={-(totals.warrantyLoss ?? 0)} className="text-bad-text" />}
+                hint="Не входит в оборот — запчасти + оплата мастеру"
+                icon={ShieldAlert}
+                tone="bad"
+              />
+            )}
+            {hasInstallmentPaid && (
+              <StatCard
+                compact
+                label="Погашения рассрочки"
+                value={<Money value={totals.installmentPaid ?? 0} signed />}
+                hint={
+                  installmentPaidParts.length > 0
+                    ? `в т.ч. ${installmentPaidParts.join(' · ')}`
+                    : 'Не входит в оборот — оплата прошлых продаж'
+                }
+                icon={Coins}
+              />
+            )}
+            {hasCollections && (
+              <StatCard
+                compact
+                label="Инкассации"
+                value={<Money value={-(totals.collections ?? 0)} />}
+                hint="Изъято из кассы и сейфа за период"
+                icon={ArrowDownToLine}
+              />
+            )}
+            {wallets && (
+              <>
+                <StatCard compact label="В кассе сейчас" value={formatMoney(wallets.drawer)} icon={Wallet} />
+                <StatCard compact label="В сейфе сейчас" value={formatMoney(wallets.safe)} icon={Landmark} />
+              </>
             )}
           </div>
-        )}
-        {hasCollections && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <ArrowDownToLine className="w-4 h-4 text-amber-500" />
-              <div className="stat-label">Инкассации</div>
-            </div>
-            <div className="stat-value tabular-nums text-amber-600">−{formatMoney(totals.collections ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Изъято из кассы и сейфа за период</p>
-          </div>
-        )}
-        {wallets && (
-          <>
-            <div className="stat-card">
-              <div className="flex items-center gap-2 mb-1">
-                <Wallet className="w-4 h-4 text-emerald-500" />
-                <div className="stat-label">Касса</div>
-              </div>
-              <div className="stat-value tabular-nums text-emerald-700">{formatMoney(wallets.drawer)}</div>
-              <p className="text-[11px] text-gray-500 mt-0.5">Остаток в кассе сейчас</p>
-            </div>
-            <div className="stat-card">
-              <div className="flex items-center gap-2 mb-1">
-                <Landmark className="w-4 h-4 text-amber-500" />
-                <div className="stat-label">Сейф</div>
-              </div>
-              <div className="stat-value tabular-nums text-amber-700">{formatMoney(wallets.safe)}</div>
-              <p className="text-[11px] text-gray-500 mt-0.5">Остаток в сейфе сейчас</p>
-            </div>
-          </>
-        )}
-      </div>
+        )
+      )}
 
-      {/* Table */}
       <QueryState
         isLoading={isLoading}
         isError={isError}
@@ -311,212 +448,20 @@ export default function CashFlowPage() {
         isEmpty={days.length === 0}
         empty={{
           icon: Wallet,
-          title: 'Нет данных',
-          description: 'За выбранный период нет движения денежных средств',
+          title: 'За период движения денег нет',
+          description: 'Проведённых чеков и платежей за выбранные дни не было',
         }}
+        errorTitle="Не удалось загрузить движение денег"
+        loader={<DataTable<CashFlowDay> columns={columns} rows={[]} rowKey={(d) => d.date} isLoading />}
         minHeight="min-h-[30vh]"
       >
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {days.map((day) => (
-              <div key={day.date} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-gray-900 text-sm">
-                    {format(parseDay(day.date), 'dd MMM yyyy', { locale: ru })}
-                  </span>
-                  <span className="font-bold text-gray-900 text-sm">{formatMoney(day.total)}</span>
-                </div>
-                <div className="flex items-center gap-3 text-xs">
-                  {day.cash > 0 && (
-                    <span className="text-green-600">
-                      <Banknote className="w-3 h-3 inline mr-0.5" />
-                      {formatMoney(day.cash)}
-                    </span>
-                  )}
-                  {day.card > 0 && (
-                    <span className="text-blue-600">
-                      <CreditCard className="w-3 h-3 inline mr-0.5" />
-                      {formatMoney(day.card)}
-                    </span>
-                  )}
-                  {(day.warrantyLoss ?? 0) > 0 && (
-                    <span className="text-red-600">
-                      <ShieldAlert className="w-3 h-3 inline mr-0.5" />-{formatMoney(day.warrantyLoss ?? 0)}
-                    </span>
-                  )}
-                  {(day.installmentDebt ?? 0) > 0 && (
-                    <span className="text-violet-600">
-                      <CalendarClock className="w-3 h-3 inline mr-0.5" />
-                      {formatMoney(day.installmentDebt ?? 0)}
-                    </span>
-                  )}
-                  {(day.installmentPaid ?? 0) > 0 && (
-                    <span className="text-teal-600">
-                      <Coins className="w-3 h-3 inline mr-0.5" />+{formatMoney(day.installmentPaid ?? 0)}
-                    </span>
-                  )}
-                </div>
-                {typeof day.received === 'number' && (
-                  <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 text-xs">
-                    <span className="text-gray-500">Касса за день</span>
-                    <span className="font-semibold text-emerald-600 tabular-nums">{formatMoney(day.received)}</span>
-                  </div>
-                )}
-                {(day.refunds ?? 0) > 0 && (
-                  <div className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-500">Возвраты (уже вычтены из дня продажи)</span>
-                    <span className="text-rose-600 tabular-nums">{formatMoney(day.refunds ?? 0)}</span>
-                  </div>
-                )}
-                {(day.collections ?? 0) > 0 && (
-                  <div className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-500">Инкассации</span>
-                    <span className="text-amber-600 tabular-nums">−{formatMoney(day.collections ?? 0)}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table — dense, full-width with weekday + share-of-period */}
-          <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-20rem)]">
-            <table className="table">
-              <thead className="sticky top-0 z-10">
-                <tr>
-                  <th>Дата</th>
-                  <th>День недели</th>
-                  <th className="text-right">Наличные</th>
-                  <th className="text-right">Карта</th>
-                  {hasInstallmentDebt && <th className="text-right">Рассрочка (долг)</th>}
-                  <th className="text-right">Итого</th>
-                  {hasWarrantyLoss && <th className="text-right">Гарантия (убыток)</th>}
-                  {hasInstallmentPaid && <th className="text-right">Погашено</th>}
-                  {hasReceived && <th className="text-right">Касса за день</th>}
-                  {hasRefunds && (
-                    <th className="text-right" title="Уже вычтены из дня продажи — справочно">
-                      Возвраты
-                    </th>
-                  )}
-                  {hasCollections && (
-                    <th className="text-right" title="Изъято из кассы и сейфа — справочно">
-                      Инкассации
-                    </th>
-                  )}
-                  <th className="w-[22%]">Доля периода</th>
-                </tr>
-              </thead>
-              <tbody>
-                {days.map((day) => (
-                  <tr key={day.date}>
-                    <td className="font-medium text-gray-900 whitespace-nowrap">
-                      {format(parseDay(day.date), 'dd MMM yyyy', { locale: ru })}
-                    </td>
-                    <td className="capitalize text-gray-500 whitespace-nowrap">
-                      {format(parseDay(day.date), 'EEEE', { locale: ru })}
-                    </td>
-                    <td className="text-right tabular-nums text-green-600">
-                      {day.cash > 0 ? formatMoney(day.cash) : '\u2014'}
-                    </td>
-                    <td className="text-right tabular-nums text-blue-600">
-                      {day.card > 0 ? formatMoney(day.card) : '\u2014'}
-                    </td>
-                    {hasInstallmentDebt && (
-                      <td className="text-right tabular-nums text-violet-600">
-                        {(day.installmentDebt ?? 0) > 0 ? formatMoney(day.installmentDebt ?? 0) : '\u2014'}
-                      </td>
-                    )}
-                    <td className="text-right tabular-nums font-semibold text-gray-900">{formatMoney(day.total)}</td>
-                    {hasWarrantyLoss && (
-                      <td className="text-right tabular-nums text-red-600">
-                        {(day.warrantyLoss ?? 0) > 0 ? `-${formatMoney(day.warrantyLoss ?? 0)}` : '\u2014'}
-                      </td>
-                    )}
-                    {hasInstallmentPaid && (
-                      <td className="text-right tabular-nums text-teal-600">
-                        {(day.installmentPaid ?? 0) > 0 ? `+${formatMoney(day.installmentPaid ?? 0)}` : '\u2014'}
-                      </td>
-                    )}
-                    {hasReceived && (
-                      <td className="text-right tabular-nums font-semibold text-emerald-600">
-                        {formatMoney(day.received ?? 0)}
-                      </td>
-                    )}
-                    {hasRefunds && (
-                      <td className="text-right tabular-nums text-rose-600">
-                        {(day.refunds ?? 0) > 0 ? formatMoney(day.refunds ?? 0) : '\u2014'}
-                      </td>
-                    )}
-                    {hasCollections && (
-                      <td className="text-right tabular-nums text-amber-600">
-                        {(day.collections ?? 0) > 0 ? `\u2212${formatMoney(day.collections ?? 0)}` : '\u2014'}
-                      </td>
-                    )}
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-primary-500"
-                            style={{
-                              width: `${
-                                totals.total > 0
-                                  ? Math.max(Math.round((day.total / totals.total) * 100), day.total > 0 ? 4 : 0)
-                                  : 0
-                              }%`,
-                            }}
-                          />
-                        </div>
-                        <span className="w-9 text-right text-xs font-medium tabular-nums text-gray-500">
-                          {totals.total > 0 ? Math.round((day.total / totals.total) * 100) : 0}%
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-gray-300 bg-gray-50 [&>td]:sticky [&>td]:bottom-0 [&>td]:z-10 [&>td]:bg-gray-50">
-                  <td className="font-bold text-gray-900">Итого</td>
-                  <td className="text-gray-500">{days.length} дн.</td>
-                  <td className="text-right tabular-nums font-bold text-green-600">{formatMoney(totals.cash)}</td>
-                  <td className="text-right tabular-nums font-bold text-blue-600">{formatMoney(totals.card)}</td>
-                  {hasInstallmentDebt && (
-                    <td className="text-right tabular-nums font-bold text-violet-600">
-                      {formatMoney(totals.installmentDebt ?? 0)}
-                    </td>
-                  )}
-                  <td className="text-right tabular-nums font-bold text-gray-900">{formatMoney(totals.total)}</td>
-                  {hasWarrantyLoss && (
-                    <td className="text-right tabular-nums font-bold text-red-600">
-                      -{formatMoney(totals.warrantyLoss ?? 0)}
-                    </td>
-                  )}
-                  {hasInstallmentPaid && (
-                    <td className="text-right tabular-nums font-bold text-teal-600">
-                      +{formatMoney(totals.installmentPaid ?? 0)}
-                    </td>
-                  )}
-                  {hasReceived && (
-                    <td className="text-right tabular-nums font-bold text-emerald-600">
-                      {formatMoney(totals.received ?? 0)}
-                    </td>
-                  )}
-                  {hasRefunds && (
-                    <td className="text-right tabular-nums font-bold text-rose-600">
-                      {formatMoney(totals.refunds ?? 0)}
-                    </td>
-                  )}
-                  {hasCollections && (
-                    <td className="text-right tabular-nums font-bold text-amber-600">
-                      −{formatMoney(totals.collections ?? 0)}
-                    </td>
-                  )}
-                  <td className="text-right tabular-nums font-bold text-gray-900">100%</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </>
+        <DataTable<CashFlowDay>
+          columns={columns}
+          rows={days}
+          rowKey={(d) => d.date}
+          caption="Движение денег по дням"
+          className="overflow-x-auto"
+        />
       </QueryState>
     </div>
   );

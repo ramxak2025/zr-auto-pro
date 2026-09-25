@@ -1,3 +1,5 @@
+import type { Tone } from '../../ui/tokens';
+
 /*
  * Единый словарь действий платформенного журнала (admin_audit_log).
  *
@@ -13,38 +15,31 @@
  * Прежний словарь страницы использовал вымышленную dot-нотацию
  * ('tenant.create', 'plan.update', …) — ни один ключ не совпадал, журнал
  * показывал сырые snake_case-ключи. Неизвестные ключи по-прежнему выводятся
- * как есть (серым) — новые действия backend не потеряются.
+ * как есть (нейтральным бейджем) — новые действия backend не потеряются.
+ *
+ * Тон — по смыслу визуальной системы: ok — деньги/возобновление, bad —
+ * приостановка/удаление/отказ, warn — требует внимания (вход от имени
+ * владельца, вкл/выкл), accent — смена тарифа, info — правка закрытого чека.
  */
 
-export type AuditTone = 'green' | 'red' | 'yellow' | 'blue' | 'gray' | 'purple';
-
-export const AUDIT_ACTION_META: Record<string, { label: string; tone: AuditTone }> = {
-  tenant_extend: { label: 'Продление подписки', tone: 'green' },
-  tenant_change_plan: { label: 'Смена тарифа', tone: 'blue' },
-  tenant_suspend: { label: 'Приостановка', tone: 'red' },
-  tenant_unsuspend: { label: 'Возобновление работы', tone: 'green' },
-  impersonate: { label: 'Вход как владелец', tone: 'yellow' },
-  tenant_toggle_active: { label: 'Вкл/выкл автосервиса', tone: 'yellow' },
-  tenant_delete: { label: 'Удаление автосервиса', tone: 'red' },
-  registration_approve: { label: 'Заявка одобрена', tone: 'green' },
-  registration_reject: { label: 'Заявка отклонена', tone: 'red' },
-  broadcast_cancel: { label: 'Рассылка отменена', tone: 'gray' },
-  check_closed_edit: { label: 'Правка закрытого чека', tone: 'purple' },
-};
-
-const TONE_BADGE: Record<AuditTone, string> = {
-  green: 'badge-green',
-  red: 'badge-red',
-  yellow: 'badge-yellow',
-  blue: 'badge-blue',
-  gray: 'badge-gray',
-  purple: 'badge bg-purple-50 text-purple-700',
+export const AUDIT_ACTION_META: Record<string, { label: string; tone: Tone }> = {
+  tenant_extend: { label: 'Продление подписки', tone: 'ok' },
+  tenant_change_plan: { label: 'Смена тарифа', tone: 'accent' },
+  tenant_suspend: { label: 'Приостановка', tone: 'bad' },
+  tenant_unsuspend: { label: 'Возобновление работы', tone: 'ok' },
+  impersonate: { label: 'Вход как владелец', tone: 'warn' },
+  tenant_toggle_active: { label: 'Вкл/выкл автосервиса', tone: 'warn' },
+  tenant_delete: { label: 'Удаление автосервиса', tone: 'bad' },
+  registration_approve: { label: 'Заявка одобрена', tone: 'ok' },
+  registration_reject: { label: 'Заявка отклонена', tone: 'bad' },
+  broadcast_cancel: { label: 'Рассылка отменена', tone: 'neutral' },
+  check_closed_edit: { label: 'Правка закрытого чека', tone: 'info' },
 };
 
 export function auditActionLabel(action: string): string {
   return AUDIT_ACTION_META[action]?.label ?? action;
 }
 
-export function auditActionBadgeClass(action: string): string {
-  return TONE_BADGE[AUDIT_ACTION_META[action]?.tone ?? 'gray'];
+export function auditActionTone(action: string): Tone {
+  return AUDIT_ACTION_META[action]?.tone ?? 'neutral';
 }

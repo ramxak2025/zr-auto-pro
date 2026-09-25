@@ -1,19 +1,25 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { ScrollText, User as UserIcon, Clock, Loader2, ChevronDown } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
-import { ru } from 'date-fns/locale';
+import { ChevronDown, ScrollText, User as UserIcon } from 'lucide-react';
 
 import { adminApi } from '../../api/services';
-import QueryState from '../../components/QueryState';
-import { AdminPageHeader, Chip } from '../../components/admin/adminUi';
-import { auditActionLabel, auditActionBadgeClass } from '../../components/admin/auditActions';
+import type { AuditLogEntry } from '../../types';
+import PageHeader from '../../components/PageHeader';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { DataTable, type DataTableColumn } from '../../ui/DataTable';
+import { Select } from '../../ui/Select';
+import { Toolbar } from '../../ui/Toolbar';
+import { formatDateRu } from '../../components/admin/adminUi';
+import { auditActionLabel, auditActionTone } from '../../components/admin/auditActions';
 
 const PAGE_SIZE = 50;
 
 export default function AdminAuditLogPage() {
-  // Фильтр по типу действия — клиентский, поверх загруженных страниц.
-  const [actionFilter, setActionFilter] = useState('');
+  // Фильтр по типу действия — клиентский, поверх загруженных страниц; живёт в URL.
+  const [params, setParams] = useSearchParams();
+  const actionFilter = params.get('action') ?? '';
 
   // GET /admin/audit-log принимает limit/offset (аддитивная пагинация; без
   // параметров backend отдаёт прежние 50) — через shared-фабрику adminApi.
@@ -31,136 +37,114 @@ export default function AdminAuditLogPage() {
 
   const rows = useMemo(() => (data?.pages ?? []).flat(), [data]);
 
-  // Чипы — только реально встречающиеся в журнале действия.
+  // В фильтре — только реально встречающиеся в журнале действия.
   const presentActions = useMemo(() => {
     const set = new Set<string>();
     rows.forEach((r) => set.add(r.action));
-    return Array.from(set);
+    return Array.from(set).sort((a, b) => auditActionLabel(a).localeCompare(auditActionLabel(b), 'ru'));
   }, [rows]);
 
   const visibleRows = actionFilter ? rows.filter((r) => r.action === actionFilter) : rows;
 
+  const columns: DataTableColumn<AuditLogEntry>[] = [
+    {
+      key: 'action',
+      header: 'Действие',
+      render: (e) => <Badge tone={auditActionTone(e.action)}>{auditActionLabel(e.action)}</Badge>,
+    },
+    {
+      key: 'actor',
+      header: 'Кто',
+      hideBelow: 'sm',
+      render: (e) => (
+        <span className="inline-flex items-center gap-1.5 text-ink-2">
+          <UserIcon className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+          {e.actorName || 'Система'}
+        </span>
+      ),
+    },
+    {
+      key: 'target',
+      header: 'Объект',
+      hideBelow: 'md',
+      render: (e) =>
+        e.targetName || e.targetType ? (
+          <span className="text-ink-2">
+            {e.targetName || e.targetId}
+            {e.targetType && <span className="ml-1.5 text-xs text-ink-3">({e.targetType})</span>}
+          </span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'when',
+      header: 'Когда',
+      width: 170,
+      render: (e) => <span className="whitespace-nowrap tabular-nums text-ink-2">{formatDateRu(e.createdAt)}</span>,
+    },
+  ];
+
   return (
-    <div>
-      <AdminPageHeader title="Журнал действий" subtitle="Операции администраторов платформы — новые сверху" />
+    <div className="space-y-5">
+      <PageHeader
+        title="Журнал действий"
+        icon={ScrollText}
+        subtitle="Операции администраторов платформы — новые сверху"
+      />
 
       {presentActions.length > 1 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Chip active={actionFilter === ''} onClick={() => setActionFilter('')}>
-            Все
-          </Chip>
-          {presentActions.map((action) => (
-            <Chip
-              key={action}
-              active={actionFilter === action}
-              onClick={() => setActionFilter(actionFilter === action ? '' : action)}
-            >
-              {auditActionLabel(action)}
-            </Chip>
-          ))}
-        </div>
+        <Toolbar>
+          <Select
+            aria-label="Действие"
+            value={actionFilter}
+            onChange={(e) => setParams(e.target.value ? { action: e.target.value } : {}, { replace: true })}
+            className="w-64"
+          >
+            <option value="">Все действия</option>
+            {presentActions.map((action) => (
+              <option key={action} value={action}>
+                {auditActionLabel(action)}
+              </option>
+            ))}
+          </Select>
+        </Toolbar>
       )}
 
-      <QueryState
+      <DataTable
+        caption="Журнал действий администраторов платформы"
+        rows={visibleRows}
+        rowKey={(e) => e.id}
+        columns={columns}
         isLoading={isLoading}
         isError={isError}
-        onRetry={refetch}
+        onRetry={() => refetch()}
         isFetching={isFetching && !isFetchingNextPage}
         errorTitle="Не удалось загрузить журнал"
-        isEmpty={rows.length === 0}
-        empty={{
-          icon: ScrollText,
-          title: 'Журнал пуст',
-          description: 'Действия администраторов платформы появятся здесь',
-        }}
-        minHeight="min-h-[40vh]"
-      >
-        {visibleRows.length === 0 ? (
-          <div className="card flex flex-col items-center justify-center gap-2 py-12 text-center">
-            <ScrollText className="h-8 w-8 text-gray-300" />
-            <p className="text-sm text-gray-500">Нет записей с этим действием среди загруженных.</p>
-          </div>
-        ) : (
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Действие</th>
-                  <th>Кто</th>
-                  <th>Объект</th>
-                  <th>Когда</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((entry) => {
-                  const when = (() => {
-                    try {
-                      return format(parseISO(entry.createdAt), 'd MMM yyyy, HH:mm', { locale: ru });
-                    } catch {
-                      return entry.createdAt;
-                    }
-                  })();
-                  return (
-                    <tr key={entry.id}>
-                      <td>
-                        <span className={auditActionBadgeClass(entry.action)}>{auditActionLabel(entry.action)}</span>
-                      </td>
-                      <td>
-                        <span className="inline-flex items-center gap-1.5 text-gray-700">
-                          <UserIcon className="w-3.5 h-3.5 text-gray-400" />
-                          {entry.actorName || 'Система'}
-                        </span>
-                      </td>
-                      <td>
-                        {entry.targetName || entry.targetType ? (
-                          <span className="text-gray-700">
-                            {entry.targetName || entry.targetId}
-                            {entry.targetType && (
-                              <span className="text-gray-400 ml-1.5 text-xs">({entry.targetType})</span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td>
-                        <span className="inline-flex items-center gap-1.5 text-gray-500 whitespace-nowrap">
-                          <Clock className="w-3.5 h-3.5 text-gray-400" />
-                          {when}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        emptyState={
+          actionFilter && rows.length > 0
+            ? {
+                icon: ScrollText,
+                title: 'Нет записей с этим действием',
+                description: 'Среди загруженных записей таких нет — снимите фильтр или догрузите историю.',
+                action: { label: 'Показать все', onClick: () => setParams({}, { replace: true }) },
+              }
+            : {
+                icon: ScrollText,
+                title: 'Журнал пуст',
+                description: 'Действия администраторов платформы появятся здесь',
+              }
+        }
+      />
 
-        {/* Пагинация: догружаем историю страницами по 50 */}
-        {hasNextPage && (
-          <div className="mt-4 flex justify-center">
-            <button
-              type="button"
-              onClick={() => fetchNextPage()}
-              disabled={isFetchingNextPage}
-              className="btn-secondary"
-            >
-              {isFetchingNextPage ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Загрузка…
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-4 h-4" />
-                  Показать ещё
-                </>
-              )}
-            </button>
-          </div>
-        )}
-      </QueryState>
+      {/* Догружаем историю страницами по 50 */}
+      {hasNextPage && (
+        <div className="flex justify-center">
+          <Button variant="secondary" icon={ChevronDown} onClick={() => fetchNextPage()} loading={isFetchingNextPage}>
+            Показать ещё
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

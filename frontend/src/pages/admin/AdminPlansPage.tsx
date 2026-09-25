@@ -1,57 +1,72 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus,
-  Pencil,
-  Trash2,
-  CreditCard,
-  Loader2,
-  Check,
-  X,
-  Mic,
   Archive,
   ArchiveRestore,
-  Users,
   Building2,
+  Check,
+  CreditCard,
+  Mic,
+  Pencil,
+  Plus,
+  Trash2,
+  Users,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { plansApi, adminApi, tenantsApi } from '../../api/services';
 import { Plan, PlatformSettings, Tenant } from '../../types';
+import { formatMoney } from '../../../../shared/utils/formatters';
+import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
 import Switch from '../../components/Switch';
-import { AdminPageHeader } from '../../components/admin/adminUi';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Card, CardHeader } from '../../ui/Card';
+import { Checkbox } from '../../ui/Checkbox';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { SkeletonCard } from '../../ui/Skeleton';
+import { cn } from '../../ui/cn';
 // Feature toggles bucketed by `group` (core / section / integration) so the editor
 // and plan cards render the 23 keys under section headings. FEATURE_GROUPS wraps
 // the shared single-source-of-truth registry (web + mobile), so it never drifts.
 import { FEATURE_GROUPS } from '../../utils/featureGroups';
+import { pluralRu } from '../../components/knowledge/utils';
 
+// Числовые поля держим строками: инпуты текстовые (inputMode), Number() — на отправке.
 interface PlanFormData {
   name: string;
-  monthlyPrice: number;
+  monthlyPrice: string;
   description: string;
   features: string[];
-  maxUsers: number;
-  voiceMinutes: number;
+  maxUsers: string;
+  voiceMinutes: string;
   isActive: boolean;
-  sortOrder: number;
+  sortOrder: string;
 }
 
 const emptyForm: PlanFormData = {
   name: '',
-  monthlyPrice: 0,
+  monthlyPrice: '0',
   description: '',
   features: [],
-  maxUsers: 5,
-  voiceMinutes: 0,
+  maxUsers: '5',
+  voiceMinutes: '0',
   isActive: true,
-  sortOrder: 0,
+  sortOrder: '0',
 };
+
+const digitsOnly = (v: string) => v.replace(/[^\d]/g, '');
 
 export default function AdminPlansPage() {
   const queryClient = useQueryClient();
+  const uid = useId();
+  const formId = `${uid}-plan-form`;
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
@@ -88,7 +103,12 @@ export default function AdminPlansPage() {
   // которые получает КАЖДЫЙ автосервис ежемесячно. Держим здесь же, чтобы весь
   // расчёт минут голоса (пакет тарифа + бесплатный тир платформы) настраивался
   // на одном экране.
-  const { data: settings } = useQuery({
+  const {
+    data: settings,
+    isError: settingsError,
+    refetch: refetchSettings,
+    isFetching: settingsFetching,
+  } = useQuery({
     queryKey: ['admin-settings'],
     queryFn: () => adminApi.getSettings(),
     select: (res) => res.data as PlatformSettings,
@@ -166,13 +186,13 @@ export default function AdminPlansPage() {
     const features: string[] = Array.isArray(plan.features) ? plan.features : [];
     setForm({
       name: plan.name,
-      monthlyPrice: plan.monthlyPrice,
+      monthlyPrice: String(plan.monthlyPrice),
       description: plan.description || '',
       features: [...features],
-      maxUsers: plan.maxUsers,
-      voiceMinutes: plan.voiceMinutes ?? 0,
+      maxUsers: String(plan.maxUsers),
+      voiceMinutes: String(plan.voiceMinutes ?? 0),
       isActive: plan.isActive,
-      sortOrder: plan.sortOrder,
+      sortOrder: String(plan.sortOrder),
     });
     setModalOpen(true);
   };
@@ -204,12 +224,12 @@ export default function AdminPlansPage() {
     // edit; on create they ride along in the initial POST (no plan id yet).
     const scalar = {
       name: form.name,
-      monthlyPrice: Number(form.monthlyPrice),
+      monthlyPrice: Number(form.monthlyPrice) || 0,
       description: form.description || undefined,
-      maxUsers: Number(form.maxUsers),
-      voiceMinutes: Number(form.voiceMinutes),
+      maxUsers: Math.max(1, Number(form.maxUsers) || 1),
+      voiceMinutes: Number(form.voiceMinutes) || 0,
       isActive: form.isActive,
-      sortOrder: Number(form.sortOrder),
+      sortOrder: Number(form.sortOrder) || 0,
     };
 
     if (editingPlan) {
@@ -237,175 +257,214 @@ export default function AdminPlansPage() {
   const deleteSubscribers = deleteTarget ? (subscribersByPlan.get(deleteTarget.id) ?? 0) : 0;
 
   return (
-    <div>
-      <AdminPageHeader
+    <div className="space-y-5">
+      <PageHeader
         title="Тарифы"
+        icon={CreditCard}
         subtitle="Планы подписки и платформенные лимиты"
         actions={
-          <button onClick={openCreate} className="btn-primary">
-            <Plus className="w-4 h-4" />
+          <Button icon={Plus} onClick={openCreate}>
             Новый тариф
-          </button>
+          </Button>
         }
       />
 
       {/* Платформенная настройка: бесплатные минуты голосового ввода всем автосервисам */}
-      <div className="card card-body mb-6">
-        <div className="flex items-start gap-3">
-          <div className="p-2 bg-primary-50 rounded-lg flex-shrink-0">
-            <Mic className="w-5 h-5 text-primary-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="font-semibold text-gray-900">Голосовой ввод — лимит платформы</h2>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Бесплатные минуты голоса, которые ежемесячно получает каждый автосервис. Итоговый лимит автосервиса —
-              максимум из пакета его тарифа и этого значения, плюс индивидуальная надбавка.
-            </p>
-            <div className="mt-3 flex flex-wrap items-end gap-3">
-              <div>
-                <label className="label">Бесплатных минут голоса всем автосервисам / мес</label>
-                <input
-                  type="number"
-                  className="input w-64"
+      <Card padding="none">
+        <CardHeader
+          icon={Mic}
+          title="Голосовой ввод — лимит платформы"
+          subtitle="Бесплатные минуты голоса, которые ежемесячно получает каждый автосервис"
+          divider={false}
+        />
+        <div className="px-5 pb-5">
+          <p className="mb-4 max-w-[70ch] text-sm text-ink-2">
+            Итоговый лимит автосервиса — максимум из пакета его тарифа и этого значения, плюс индивидуальная надбавка.
+          </p>
+          {settingsError ? (
+            <QueryState
+              isLoading={false}
+              isError
+              onRetry={refetchSettings}
+              isFetching={settingsFetching}
+              errorTitle="Не удалось загрузить настройки платформы"
+              minHeight="py-6"
+            >
+              {null}
+            </QueryState>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Бесплатных минут в месяц" htmlFor={`${uid}-free-min`} className="w-48">
+                <Input
+                  id={`${uid}-free-min`}
+                  inputMode="numeric"
+                  className="tabular-nums"
                   value={freeMinutes}
-                  onChange={(e) => setFreeMinutes(e.target.value)}
-                  min={0}
-                  step={1}
+                  onChange={(e) => setFreeMinutes(digitsOnly(e.target.value))}
                   disabled={!settings}
+                  rightSlot={<span className="text-xs">мин</span>}
                 />
-              </div>
-              <button
-                type="button"
+              </Field>
+              <Button
+                variant="secondary"
                 onClick={saveFreeMinutes}
-                disabled={settingsMutation.isPending || !freeMinutesDirty}
-                className="btn-primary"
+                disabled={!freeMinutesDirty}
+                loading={settingsMutation.isPending}
               >
-                {settingsMutation.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Сохранение...
-                  </>
-                ) : (
-                  'Сохранить'
-                )}
-              </button>
+                Сохранить
+              </Button>
             </div>
-          </div>
+          )}
         </div>
-      </div>
+      </Card>
 
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        errorTitle="Не удалось загрузить тарифы"
-        isEmpty={plans.length === 0}
-        empty={{
-          icon: CreditCard,
-          title: 'Нет тарифов',
-          description: 'Создайте первый тариф',
-          action: { label: 'Создать', onClick: openCreate },
-        }}
-        minHeight="min-h-[40vh]"
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {plans.map((plan) => {
-            const features: string[] = Array.isArray(plan.features) ? plan.features : [];
-            const subscribers = subscribersByPlan.get(plan.id) ?? 0;
-            return (
-              <div key={plan.id} className={`card flex flex-col p-5 ${plan.isActive ? '' : 'opacity-75'}`}>
-                {/* Header: имя + статус */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="truncate font-semibold text-gray-900">{plan.name}</h3>
-                    <div className="mt-1">
-                      <span className="text-2xl font-bold tabular-nums text-gray-900">
-                        {plan.monthlyPrice.toLocaleString('ru-RU')}
-                      </span>
-                      <span className="ml-1 text-gray-500">₽/мес</span>
-                    </div>
-                  </div>
-                  {plan.isActive ? (
-                    <span className="badge-green flex-shrink-0">Активен</span>
-                  ) : (
-                    <span className="badge-gray flex-shrink-0">В архиве</span>
-                  )}
-                </div>
-
-                {plan.description && <p className="mt-1.5 text-sm text-gray-500">{plan.description}</p>}
-
-                {/* Meta */}
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Users className="h-3.5 w-3.5 text-gray-400" />
-                    до <span className="tabular-nums">{plan.maxUsers}</span> сотр.
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Mic className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="tabular-nums">{plan.voiceMinutes ?? 0}</span> мин/мес
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Building2 className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="tabular-nums">{subscribers}</span> подключено
-                  </span>
-                </div>
-
-                {/* Feature availability — grouped by section */}
-                <div className="mt-4 flex-1 space-y-2.5 border-t border-gray-100 pt-3">
-                  {FEATURE_GROUPS.map((grp) => (
-                    <div key={grp.group}>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
-                        {grp.label}
-                      </p>
-                      <ul className="space-y-0.5 text-[13px]">
-                        {grp.items.map((feat) => {
-                          const included = features.includes(feat.key);
-                          return (
-                            <li key={feat.key} className="flex items-center gap-2">
-                              {included ? (
-                                <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
-                              ) : (
-                                <X className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
-                              )}
-                              <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Actions */}
-                <div className="mt-4 flex items-center gap-2 border-t border-gray-100 pt-3">
-                  <button onClick={() => openEdit(plan)} className="btn-secondary btn-sm flex-1 justify-center">
-                    <Pencil className="w-3.5 h-3.5" />
-                    Редактировать
-                  </button>
-                  <button
-                    onClick={() => toggleActiveMutation.mutate({ id: plan.id, isActive: !plan.isActive })}
-                    disabled={toggleActiveMutation.isPending}
-                    className="btn-ghost btn-sm"
-                    title={plan.isActive ? 'В архив (скрыть из выбора)' : 'Вернуть из архива'}
-                  >
-                    {plan.isActive ? <Archive className="w-3.5 h-3.5" /> : <ArchiveRestore className="w-3.5 h-3.5" />}
-                    {plan.isActive ? 'В архив' : 'Активировать'}
-                  </button>
-                  <button
-                    onClick={() => setDeleteTarget(plan)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                    aria-label="Удалить тариф"
-                    title="Удалить безвозвратно"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+      {isLoading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <SkeletonCard key={i} lines={6} />
+          ))}
         </div>
-      </QueryState>
+      ) : (
+        <QueryState
+          isLoading={false}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          errorTitle="Не удалось загрузить тарифы"
+          isEmpty={plans.length === 0}
+          empty={{
+            icon: CreditCard,
+            title: 'Нет тарифов',
+            description: 'Создайте первый тариф',
+            action: { label: 'Создать', onClick: openCreate },
+          }}
+          minHeight="py-14"
+        >
+          <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Тарифы">
+            {plans.map((plan) => {
+              const features: string[] = Array.isArray(plan.features) ? plan.features : [];
+              const subscribers = subscribersByPlan.get(plan.id) ?? 0;
+              return (
+                <li key={plan.id}>
+                  <Card
+                    as="article"
+                    padding="none"
+                    className={cn('flex h-full flex-col', !plan.isActive && 'opacity-80')}
+                  >
+                    <div className="px-5 pt-5">
+                      {/* Header: имя + статус */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h2 className="truncate text-md font-semibold text-ink">{plan.name}</h2>
+                          <p className="mt-1">
+                            <span className="text-2xl font-semibold tabular-nums tracking-tight text-ink">
+                              {formatMoney(plan.monthlyPrice)}
+                            </span>
+                            <span className="ml-1 text-sm text-ink-3">/мес</span>
+                          </p>
+                        </div>
+                        {plan.isActive ? (
+                          <Badge tone="ok" dot className="flex-shrink-0">
+                            Активен
+                          </Badge>
+                        ) : (
+                          <Badge className="flex-shrink-0">В архиве</Badge>
+                        )}
+                      </div>
+
+                      {plan.description && <p className="mt-1.5 text-sm text-ink-3">{plan.description}</p>}
+
+                      {/* Meta */}
+                      <dl className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-2">
+                        <div className="inline-flex items-center gap-1.5">
+                          <Users className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+                          <dt className="sr-only">Сотрудников</dt>
+                          <dd>
+                            до <span className="tabular-nums">{plan.maxUsers}</span> сотр.
+                          </dd>
+                        </div>
+                        <div className="inline-flex items-center gap-1.5">
+                          <Mic className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+                          <dt className="sr-only">Минут голоса</dt>
+                          <dd>
+                            <span className="tabular-nums">{plan.voiceMinutes ?? 0}</span> мин/мес
+                          </dd>
+                        </div>
+                        <div className="inline-flex items-center gap-1.5">
+                          <Building2 className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+                          <dt className="sr-only">Подключено автосервисов</dt>
+                          <dd>
+                            <span className="tabular-nums">{subscribers}</span>{' '}
+                            {pluralRu(subscribers, 'подключён', 'подключено', 'подключено')}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+
+                    {/* Feature availability — grouped by section */}
+                    <div className="mt-4 flex-1 space-y-3 border-t border-line px-5 pt-4">
+                      {FEATURE_GROUPS.map((grp) => (
+                        <div key={grp.group}>
+                          <p className="mb-1 text-2xs font-semibold uppercase tracking-wide text-ink-3">{grp.label}</p>
+                          <ul className="space-y-0.5 text-[13px]">
+                            {grp.items.map((feat) => {
+                              const included = features.includes(feat.key);
+                              return (
+                                <li key={feat.key} className="flex items-center gap-2">
+                                  {included ? (
+                                    <Check className="h-3.5 w-3.5 flex-shrink-0 text-ok" aria-label="Включено" />
+                                  ) : (
+                                    <X className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-label="Не включено" />
+                                  )}
+                                  <span className={included ? 'text-ink-2' : 'text-ink-3'}>{feat.label}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-4 flex items-center gap-2 border-t border-line px-5 py-3">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={Pencil}
+                        onClick={() => openEdit(plan)}
+                        className="flex-1"
+                      >
+                        Редактировать
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={plan.isActive ? Archive : ArchiveRestore}
+                        onClick={() => toggleActiveMutation.mutate({ id: plan.id, isActive: !plan.isActive })}
+                        disabled={toggleActiveMutation.isPending}
+                        title={
+                          plan.isActive
+                            ? 'Скрыть из выбора; подключённые автосервисы продолжат работать'
+                            : 'Вернуть в выбор'
+                        }
+                      >
+                        {plan.isActive ? 'В архив' : 'Активировать'}
+                      </Button>
+                      <IconButton
+                        label={`Удалить тариф «${plan.name}» безвозвратно`}
+                        icon={Trash2}
+                        variant="danger"
+                        size="sm"
+                        onClick={() => setDeleteTarget(plan)}
+                      />
+                    </div>
+                  </Card>
+                </li>
+              );
+            })}
+          </ul>
+        </QueryState>
+      )}
 
       {/* Create / Edit Modal */}
       <Modal
@@ -413,131 +472,116 @@ export default function AdminPlansPage() {
         onClose={closeModal}
         title={editingPlan ? 'Редактировать тариф' : 'Новый тариф'}
         size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeModal} disabled={isSaving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={formId} loading={isSaving}>
+              {editingPlan ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Название</label>
-            <input
-              type="text"
-              className="input"
+        <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="Название" htmlFor={`${uid}-name`} required>
+            <Input
+              id={`${uid}-name`}
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="Например: Бизнес"
               required
             />
-          </div>
+          </Field>
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Цена (₽/мес)</label>
-              <input
-                type="number"
-                className="input"
+            <Field label="Цена, ₽/мес" htmlFor={`${uid}-price`}>
+              <Input
+                id={`${uid}-price`}
+                inputMode="decimal"
+                className="tabular-nums"
                 value={form.monthlyPrice}
-                onChange={(e) => setForm({ ...form, monthlyPrice: Number(e.target.value) })}
-                min={0}
-                step={100}
+                onChange={(e) => setForm({ ...form, monthlyPrice: digitsOnly(e.target.value) })}
+                rightSlot={<span className="text-xs">₽</span>}
               />
-            </div>
-            <div>
-              <label className="label">Макс. сотрудников</label>
-              <input
-                type="number"
-                className="input"
+            </Field>
+            <Field label="Макс. сотрудников" htmlFor={`${uid}-max-users`}>
+              <Input
+                id={`${uid}-max-users`}
+                inputMode="numeric"
+                className="tabular-nums"
                 value={form.maxUsers}
-                onChange={(e) => setForm({ ...form, maxUsers: Number(e.target.value) })}
-                min={1}
+                onChange={(e) => setForm({ ...form, maxUsers: digitsOnly(e.target.value) })}
               />
-            </div>
+            </Field>
           </div>
 
-          <div>
-            <label className="label">Описание</label>
-            <input
-              type="text"
-              className="input"
+          <Field label="Описание" htmlFor={`${uid}-desc`}>
+            <Input
+              id={`${uid}-desc`}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="Краткое описание тарифа"
             />
-          </div>
+          </Field>
 
           {/* Feature checkboxes — grouped by section (core / section / integration) */}
-          <div>
-            <label className="label">Доступные функции</label>
-            <div className="border border-gray-200 rounded-lg p-3 space-y-3 max-h-72 overflow-y-auto">
+          <fieldset>
+            <legend className="mb-1.5 text-sm font-medium text-ink-2">Доступные функции</legend>
+            <div className="max-h-72 space-y-3 overflow-y-auto rounded-lg border border-line-strong p-3">
               {FEATURE_GROUPS.map((grp) => (
                 <div key={grp.group}>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 px-1">{grp.label}</p>
+                  <p className="mb-1 px-1 text-2xs font-semibold uppercase tracking-wide text-ink-3">{grp.label}</p>
                   <div className="space-y-0.5">
                     {grp.items.map((feat) => (
-                      <label
+                      <Checkbox
                         key={feat.key}
-                        className="flex items-center gap-3 cursor-pointer py-1 px-2 rounded-md hover:bg-gray-50 transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                          checked={form.features.includes(feat.key)}
-                          onChange={() => toggleFeature(feat.key)}
-                        />
-                        <span className="text-sm text-gray-700">{feat.label}</span>
-                      </label>
+                        label={feat.label}
+                        checked={form.features.includes(feat.key)}
+                        onChange={() => toggleFeature(feat.key)}
+                        className="w-full rounded-md px-2 py-1 hover:bg-surface-2"
+                      />
                     ))}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
+          </fieldset>
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Минуты голоса / мес</label>
-              <input
-                type="number"
-                className="input"
+            <Field label="Минуты голоса / мес" htmlFor={`${uid}-voice`} hint="0 — только бесплатный лимит платформы">
+              <Input
+                id={`${uid}-voice`}
+                inputMode="numeric"
+                className="tabular-nums"
                 value={form.voiceMinutes}
-                onChange={(e) => setForm({ ...form, voiceMinutes: Number(e.target.value) })}
-                min={0}
-                step={1}
+                onChange={(e) => setForm({ ...form, voiceMinutes: digitsOnly(e.target.value) })}
               />
-            </div>
-            <div>
-              <label className="label">Порядок сортировки</label>
-              <input
-                type="number"
-                className="input"
+            </Field>
+            <Field label="Порядок сортировки" htmlFor={`${uid}-sort`}>
+              <Input
+                id={`${uid}-sort`}
+                inputMode="numeric"
+                className="tabular-nums"
                 value={form.sortOrder}
-                onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
-                min={0}
+                onChange={(e) => setForm({ ...form, sortOrder: digitsOnly(e.target.value) })}
               />
-            </div>
+            </Field>
           </div>
-          <p className="text-xs text-gray-500">
-            0 минут = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод (пакет минут)».
+          <p className="text-xs text-ink-3">
+            Пакет минут работает при включённой функции «Голосовой ввод (пакет минут)».
           </p>
 
-          <div className="flex items-center gap-3">
-            <Switch checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })} label="Тариф активен" />
-            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'В архиве'}</span>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={isSaving} className="btn-primary">
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : editingPlan ? (
-                'Сохранить'
-              ) : (
-                'Создать'
-              )}
-            </button>
+          <div className="flex items-center gap-3 border-t border-line pt-4">
+            <Switch
+              id={`${uid}-active`}
+              checked={form.isActive}
+              onChange={(v) => setForm({ ...form, isActive: v })}
+              label="Тариф активен"
+            />
+            <label htmlFor={`${uid}-active`} className="text-sm font-medium text-ink-2">
+              {form.isActive ? 'Тариф активен — доступен для выбора' : 'В архиве — скрыт из выбора'}
+            </label>
           </div>
         </form>
       </Modal>

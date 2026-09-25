@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, StatusBar } from 'react-native';
+import { Alert, AppState, Platform, StatusBar, StyleSheet } from 'react-native';
 import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { MutationCache, QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import NetInfo from '@react-native-community/netinfo';
 import * as Font from 'expo-font';
@@ -580,17 +581,42 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <ThemedRoot
-          apiRoutingReady={apiRoutingReady}
-          cacheReady={cacheReady}
-          fontsReady={fontsReady}
-          showSplash={showSplash}
-          onAuthResolve={() => setAuthResolved(true)}
-        />
+        <GestureRoot>
+          <ThemedRoot
+            apiRoutingReady={apiRoutingReady}
+            cacheReady={cacheReady}
+            fontsReady={fontsReady}
+            showSplash={showSplash}
+            onAuthResolve={() => setAuthResolved(true)}
+          />
+        </GestureRoot>
       </ThemeProvider>
     </ErrorBoundary>
   );
 }
+
+/**
+ * GestureRoot — корень react-native-gesture-handler для ANDROID.
+ *
+ * На Android RNGH перехватывает касания только внутри GestureHandlerRootView;
+ * без него ни один GestureDetector не работает (Android-таб-бар, swipe-строки
+ * клиентов / поставщиков / уволенных, таблица отчётов), а в dev-сборке
+ * RNGH бросает Render Error «GestureDetector must be used as a descendant of
+ * GestureHandlerRootView» сразу после входа. Локальные корни в BottomSheet,
+ * Dashboard и ReportRun остаются: вложенный RNGH-root на Android сам
+ * отключается, если выше уже есть активный (RNGestureHandlerRootView.kt).
+ *
+ * iOS намеренно не трогаем: там жесты работают без корня, дерево остаётся
+ * байт-в-байт прежним.
+ */
+function GestureRoot({ children }: { children: React.ReactNode }) {
+  if (Platform.OS !== 'android') return <>{children}</>;
+  return <GestureHandlerRootView style={rootStyles.gestureRoot}>{children}</GestureHandlerRootView>;
+}
+
+const rootStyles = StyleSheet.create({
+  gestureRoot: { flex: 1 },
+});
 
 interface ThemedRootProps {
   apiRoutingReady: boolean;

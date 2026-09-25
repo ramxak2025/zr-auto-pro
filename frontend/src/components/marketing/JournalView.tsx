@@ -1,22 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import {
   Bell,
   Car,
   CalendarClock,
-  CheckCircle2,
   MessageSquare,
   Repeat,
   Send,
   ShieldCheck,
   Star,
-  XCircle,
   type LucideIcon,
 } from 'lucide-react';
 
 import { marketingApi } from '../../api/services';
 import type { SentMessage, SentMessageType, SentMessagesResponse } from '../../types';
-import { LoadingBlock } from './marketingKit';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Card } from '../../ui/Card';
+import { Tabs } from '../../ui/Tabs';
+import { cn } from '../../ui/cn';
+import { toneChip } from '../../ui/tokens';
+import UiEmptyState from '../EmptyState';
+import { InfoNote, LoadingBlock, SectionError } from './marketingKit';
 
 // ─── Журнал отправок («что реально ушло клиентам») ──────────────────
 // Лента sent_messages: каждое сообщение — тип, канал, кому, когда, статус.
@@ -24,14 +30,14 @@ import { LoadingBlock } from './marketingKit';
 // Лимиты анти-спам-гейта приходят в meta с сервера — гарантии показываются
 // из первоисточника, не хардкодом.
 
-const TYPE_META: Record<SentMessageType, { label: string; icon: LucideIcon; iconClass: string }> = {
-  review: { label: 'Запрос отзыва', icon: Star, iconClass: 'bg-amber-50 text-amber-600' },
-  car_ready: { label: 'Машина готова', icon: Car, iconClass: 'bg-blue-50 text-blue-600' },
-  reminder: { label: 'Напоминание', icon: Bell, iconClass: 'bg-violet-50 text-violet-600' },
-  winback: { label: 'Возврат клиентов', icon: Repeat, iconClass: 'bg-teal-50 text-teal-600' },
-  booking: { label: 'Запись', icon: CalendarClock, iconClass: 'bg-indigo-50 text-indigo-600' },
-  manual: { label: 'Сообщение', icon: MessageSquare, iconClass: 'bg-gray-100 text-gray-500' },
-  broadcast: { label: 'Рассылка', icon: Send, iconClass: 'bg-emerald-50 text-emerald-600' },
+const TYPE_META: Record<SentMessageType, { label: string; icon: LucideIcon }> = {
+  review: { label: 'Запрос отзыва', icon: Star },
+  car_ready: { label: 'Машина готова', icon: Car },
+  reminder: { label: 'Напоминание', icon: Bell },
+  winback: { label: 'Возврат клиентов', icon: Repeat },
+  booking: { label: 'Запись', icon: CalendarClock },
+  manual: { label: 'Сообщение', icon: MessageSquare },
+  broadcast: { label: 'Рассылка', icon: Send },
 };
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -43,8 +49,9 @@ const CHANNEL_LABEL: Record<string, string> = {
   email: 'Email',
 };
 
-const FILTERS: { key: SentMessageType | null; label: string }[] = [
-  { key: null, label: 'Все' },
+type FilterKey = 'all' | SentMessageType;
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'Все' },
   { key: 'review', label: 'Отзывы' },
   { key: 'car_ready', label: 'Машина готова' },
   { key: 'broadcast', label: 'Рассылки' },
@@ -52,6 +59,7 @@ const FILTERS: { key: SentMessageType | null; label: string }[] = [
   { key: 'winback', label: 'Возврат' },
   { key: 'booking', label: 'Записи' },
 ];
+const FILTER_KEYS = FILTERS.map((f) => f.key);
 
 /** Нормализованный 10-значный ключ → «+7 988 444-44-85». */
 function formatPhone(phone: string): string {
@@ -86,41 +94,59 @@ function JournalRow({ m }: { m: SentMessage }) {
   const channel = m.providerType ? (CHANNEL_LABEL[m.providerType] ?? m.providerType) : null;
 
   return (
-    <div className="flex items-start gap-3 px-3 py-2.5">
-      <span className={`mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta.iconClass}`}>
-        <Icon className="h-4 w-4" />
+    <li className="flex items-start gap-3 px-4 py-2.5">
+      <span
+        className={cn('mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg', toneChip.neutral)}
+        role="img"
+        aria-label={meta.label}
+      >
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
             {m.toOwner ? 'В чат владельца' : m.clientName || formatPhone(m.phone)}
           </p>
-          <p className="flex-shrink-0 text-xs tabular-nums text-gray-400">{formatWhen(m.sentAt)}</p>
+          <p className="flex-shrink-0 text-xs tabular-nums text-ink-3">{formatWhen(m.sentAt)}</p>
         </div>
         <div className="mt-0.5 flex items-center gap-2">
-          <p className="min-w-0 flex-1 truncate text-xs text-gray-500">
+          <p className="min-w-0 flex-1 truncate text-xs text-ink-3">
             {meta.label}
             {channel ? ` · ${channel}` : ''}
           </p>
           {failed ? (
-            <span className="flex flex-shrink-0 items-center gap-1 text-xs font-medium text-red-500">
-              <XCircle className="h-3.5 w-3.5" /> Ошибка
-            </span>
+            <Badge tone="bad" size="sm" dot>
+              Ошибка
+            </Badge>
           ) : (
-            <span className="flex flex-shrink-0 items-center gap-1 text-xs font-medium text-green-600">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Отправлено
-            </span>
+            <Badge tone="ok" size="sm" dot>
+              Отправлено
+            </Badge>
           )}
         </div>
-        {m.toOwner && <p className="mt-0.5 text-xs text-gray-400">Telegram-бот пишет владельцу, не клиенту</p>}
-        {failed && m.error && <p className="mt-0.5 truncate text-xs text-red-400">{m.error}</p>}
+        {m.toOwner && <p className="mt-0.5 text-xs text-ink-3">Telegram-бот пишет владельцу, не клиенту</p>}
+        {failed && m.error && <p className="mt-0.5 truncate text-xs text-bad-text">{m.error}</p>}
       </div>
-    </div>
+    </li>
   );
 }
 
 export default function JournalView() {
-  const [typeFilter, setTypeFilter] = useState<SentMessageType | null>(null);
+  // Фильтр по типу — в URL (?type=review) рядом с вкладкой маркетинга.
+  const [params, setParams] = useSearchParams();
+  const rawType = params.get('type') as FilterKey | null;
+  const filter: FilterKey = rawType && FILTER_KEYS.includes(rawType) ? rawType : 'all';
+  const typeFilter: SentMessageType | null = filter === 'all' ? null : filter;
+  const setFilter = (key: FilterKey) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (key === 'all') p.delete('type');
+        else p.set('type', key);
+        return p;
+      },
+      { replace: true },
+    );
 
   const query = useInfiniteQuery<SentMessagesResponse>({
     queryKey: ['marketing', 'sent-messages', typeFilter],
@@ -142,66 +168,59 @@ export default function JournalView() {
   const guaranteeLine = `Не больше ${cap} сообщений клиенту за 24 часа, повторы отсекаются автоматически.`;
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-4xl space-y-4">
       {/* Гарантии — из meta сервера */}
-      <div className="flex items-start gap-2.5 rounded-xl border border-green-100 bg-green-50 px-3.5 py-3">
-        <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
-        <p className="text-xs text-green-800">
-          Здесь видно каждое сообщение, которое ушло вашим клиентам. {guaranteeLine}
-        </p>
-      </div>
+      <InfoNote icon={ShieldCheck} tone="ok">
+        Здесь видно каждое сообщение, которое ушло вашим клиентам. {guaranteeLine}
+      </InfoNote>
 
       {/* Фильтр по типу */}
-      <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
-        {FILTERS.map((f) => {
-          const active = typeFilter === f.key;
-          return (
-            <button
-              key={f.key ?? 'all'}
-              onClick={() => setTypeFilter(f.key)}
-              className={`press-soft flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
-                active ? 'bg-primary-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        aria-label="Тип сообщения"
+        idPrefix="journal"
+        variant="pills"
+        size="sm"
+        items={FILTERS}
+        value={filter}
+        onChange={setFilter}
+      />
 
       {/* Лента */}
-      <div className="card overflow-hidden">
+      <Card padding="none" role="tabpanel" id={`journal-panel-${filter}`} aria-labelledby={`journal-tab-${filter}`}>
         {query.isLoading ? (
-          <LoadingBlock className="py-10" />
-        ) : rows.length === 0 ? (
-          <div className="px-6 py-10 text-center">
-            <ShieldCheck className="mx-auto mb-3 h-10 w-10 text-green-200" />
-            <p className="text-sm font-medium text-gray-700">
-              {typeFilter ? 'Таких отправок ещё не было' : 'Здесь видно каждое сообщение'}
-            </p>
-            <p className="mx-auto mt-1 max-w-sm text-xs text-gray-500">
-              {typeFilter
-                ? 'Как только сообщение этого типа уйдёт клиенту — оно появится в этой ленте.'
-                : `Каждое сообщение вашим клиентам попадает в этот журнал: что, кому, когда и каким каналом. ${guaranteeLine}`}
-            </p>
+          <LoadingBlock className="px-4" lines={5} />
+        ) : query.isError ? (
+          <div className="p-4">
+            <SectionError
+              message="Не удалось загрузить журнал отправок"
+              onRetry={() => query.refetch()}
+              loading={query.isFetching}
+            />
           </div>
+        ) : rows.length === 0 ? (
+          <UiEmptyState
+            icon={ShieldCheck}
+            title={typeFilter ? 'Таких отправок ещё не было' : 'Здесь видно каждое сообщение'}
+            description={
+              typeFilter
+                ? 'Как только сообщение этого типа уйдёт клиенту — оно появится в этой ленте.'
+                : `Каждое сообщение вашим клиентам попадает в этот журнал: что, кому, когда и каким каналом. ${guaranteeLine}`
+            }
+            compact
+          />
         ) : (
-          <div className="divide-y divide-gray-50">
+          <ul className="divide-y divide-line">
             {rows.map((m) => (
               <JournalRow key={m.id} m={m} />
             ))}
-          </div>
+          </ul>
         )}
-      </div>
+      </Card>
 
       {query.hasNextPage && (
-        <button
-          onClick={() => query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-          className="btn-secondary w-full"
-        >
-          {query.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-        </button>
+        <Button variant="secondary" fullWidth onClick={() => query.fetchNextPage()} loading={query.isFetchingNextPage}>
+          Показать ещё
+        </Button>
       )}
     </div>
   );

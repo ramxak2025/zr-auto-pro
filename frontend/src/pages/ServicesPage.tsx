@@ -1,19 +1,39 @@
-import { useState, FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Wrench, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Wrench, Pencil, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
-import SearchInput from '../components/SearchInput';
-import Pagination from '../components/Pagination';
-import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
-import IconButton from '../components/IconButton';
-import { Service, PaginatedResponse } from '../types';
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  DataTable,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  Toolbar,
+} from '../ui';
+import type { DataTableColumn } from '../ui';
+import type { Service, PaginatedResponse } from '../types';
+import { countLabel, formatPercent, parseNumberInput } from '../components/warehouse/format';
+import { pageParam, useUrlParams } from '../components/warehouse/useUrlParams';
 
-const SERVICE_CATEGORIES: string[] = [];
+const LIMIT = 20;
+const FORM_ID = 'service-form';
+
+interface ServicePayload {
+  name: string;
+  category?: string;
+  defaultPrice: number;
+  masterPercent?: number | null;
+  warrantyDays?: number | null;
+}
 
 export default function ServicesPage() {
   const queryClient = useQueryClient();
@@ -24,80 +44,49 @@ export default function ServicesPage() {
   // попал; backend всё равно вернёт 403 без права.
   const canManage = hasPermission('services_manage');
 
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [categoryFilter, setCategoryFilter] = useState('Все');
-  const limit = 20;
+  // Поиск и страница — в URL: F5 и «Назад» сохраняют список.
+  const [params, setParam] = useUrlParams();
+  const search = params.get('q') ?? '';
+  const page = pageParam(params);
 
-  // Modal state
+  // Модалка формы
   const [modalOpen, setModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
-
-  // Form state
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
   const [masterPercent, setMasterPercent] = useState('');
   const [warrantyDays, setWarrantyDays] = useState('');
 
-  // Delete confirm
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Service | null>(null);
 
-  // Query
   const { data, isLoading, isError, isFetching, refetch } = useQuery<PaginatedResponse<Service>>({
-    queryKey: ['services', { search, page, limit, category: categoryFilter === 'Все' ? undefined : categoryFilter }],
+    // Ключ прежний: фильтр по категории в UI не заведён → category: undefined.
+    queryKey: ['services', { search, page, limit: LIMIT, category: undefined }],
     queryFn: async () => {
-      const params: any = { search, page, limit };
-      if (categoryFilter !== 'Все') {
-        params.category = categoryFilter;
-      }
-      const res = await servicesApi.getAll(params);
+      const res = await servicesApi.getAll({ search, page, limit: LIMIT });
       return res.data;
     },
   });
 
-  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: {
-      name: string;
-      category?: string;
-      defaultPrice: number;
-      masterPercent?: number | null;
-      warrantyDays?: number | null;
-    }) => servicesApi.create(data),
+    mutationFn: (payload: ServicePayload) => servicesApi.create(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга создана');
       closeModal();
     },
-    onError: () => {
-      toast.error('Ошибка при создании услуги');
-    },
+    onError: () => toast.error('Ошибка при создании услуги'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: string;
-      data: {
-        name: string;
-        category?: string;
-        defaultPrice: number;
-        masterPercent?: number | null;
-        warrantyDays?: number | null;
-      };
-    }) => servicesApi.update(id, data),
+    mutationFn: ({ id, payload }: { id: string; payload: ServicePayload }) => servicesApi.update(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга обновлена');
       closeModal();
     },
-    onError: () => {
-      toast.error('Ошибка при обновлении услуги');
-    },
+    onError: () => toast.error('Ошибка при обновлении услуги'),
   });
 
   const deleteMutation = useMutation({
@@ -106,13 +95,10 @@ export default function ServicesPage() {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга удалена');
     },
-    onError: () => {
-      toast.error('Ошибка при удалении услуги');
-    },
+    onError: () => toast.error('Ошибка при удалении услуги'),
   });
 
-  // Modal handlers
-  const openCreateModal = () => {
+  const openCreate = () => {
     setEditingService(null);
     setName('');
     setCategory('');
@@ -122,8 +108,7 @@ export default function ServicesPage() {
     setModalOpen(true);
   };
 
-  const openEditModal = (service: Service, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openEdit = (service: Service) => {
     setEditingService(service);
     setName(service.name);
     setCategory(service.category || '');
@@ -140,328 +125,255 @@ export default function ServicesPage() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const pctVal = masterPercent.trim();
-    const wdVal = warrantyDays.trim();
-    const payload = {
-      name,
-      category: category || undefined,
-      defaultPrice: Number(defaultPrice),
-      masterPercent: pctVal === '' ? null : Number(pctVal),
-      warrantyDays: wdVal === '' ? null : Math.max(0, Math.floor(Number(wdVal))),
+    if (!name.trim()) {
+      toast.error('Введите название услуги');
+      return;
+    }
+    const price = parseNumberInput(defaultPrice);
+    if (price === null || price < 0) {
+      toast.error('Введите цену по умолчанию');
+      return;
+    }
+    const pctRaw = masterPercent.trim();
+    const pct = pctRaw === '' ? null : parseNumberInput(pctRaw);
+    if (pctRaw !== '' && (pct === null || pct < 0 || pct > 100)) {
+      toast.error('Процент мастера — число от 0 до 100');
+      return;
+    }
+    const wdRaw = warrantyDays.trim();
+    const wdParsed = wdRaw === '' ? null : parseNumberInput(wdRaw);
+    if (wdRaw !== '' && wdParsed === null) {
+      toast.error('Срок гарантии — целое число дней');
+      return;
+    }
+    const payload: ServicePayload = {
+      name: name.trim(),
+      category: category.trim() || undefined,
+      defaultPrice: price,
+      masterPercent: pct,
+      warrantyDays: wdParsed === null ? null : Math.max(0, Math.floor(wdParsed)),
     };
-    if (editingService) {
-      updateMutation.mutate({ id: editingService.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
-    }
+    if (editingService) updateMutation.mutate({ id: editingService.id, payload });
+    else createMutation.mutate(payload);
   };
 
-  // Delete handlers
-  const handleDelete = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeleteId(id);
-    setConfirmOpen(true);
-  };
+  const services = data?.data ?? [];
+  const total = data?.total ?? 0;
+  const saving = createMutation.isPending || updateMutation.isPending;
 
-  const confirmDelete = () => {
-    if (deleteId) {
-      deleteMutation.mutate(deleteId);
-      setDeleteId(null);
-    }
-  };
-
-  const services = data?.data || [];
-  const total = data?.total || 0;
-  const avgPrice = services.length
-    ? Math.round(services.reduce((sum, s) => sum + (s.defaultPrice || 0), 0) / services.length)
-    : 0;
-  const withWarranty = services.filter((s) => (s.warrantyDays ?? 0) > 0).length;
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ru-RU').format(amount);
-  };
+  const columns: DataTableColumn<Service>[] = [
+    {
+      key: 'name',
+      header: 'Название',
+      sortable: true,
+      render: (s) => (
+        <span className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+            <Wrench className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="truncate font-medium text-ink">{s.name}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'category',
+      header: 'Категория',
+      hideBelow: 'sm',
+      render: (s) => (s.category ? <Badge outline>{s.category}</Badge> : <span className="text-ink-3">—</span>),
+    },
+    {
+      key: 'defaultPrice',
+      header: 'Цена по умолчанию',
+      numeric: true,
+      sortable: true,
+      render: (s) => <Money value={s.defaultPrice} className="font-medium text-ink" />,
+    },
+    ...(canManage
+      ? ([
+          {
+            key: 'masterPercent',
+            header: '% мастера',
+            numeric: true,
+            hideBelow: 'md',
+            render: (s) =>
+              s.masterPercent != null ? (
+                <span className="font-medium text-ink-2">{formatPercent(s.masterPercent)}</span>
+              ) : (
+                <span className="text-ink-3">стандарт</span>
+              ),
+          },
+        ] as DataTableColumn<Service>[])
+      : []),
+    {
+      key: 'warrantyDays',
+      header: 'Гарантия',
+      numeric: true,
+      hideBelow: 'md',
+      render: (s) =>
+        s.warrantyDays != null && s.warrantyDays > 0 ? (
+          <span className="text-ink-2">{s.warrantyDays} дн.</span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    ...(canManage
+      ? ([
+          {
+            key: 'actions',
+            header: <span className="sr-only">Действия</span>,
+            interactive: true,
+            align: 'right',
+            width: 96,
+            render: (s) => (
+              <span className="inline-flex items-center justify-end gap-1">
+                <IconButton label={`Изменить: ${s.name}`} icon={Pencil} size="sm" onClick={() => openEdit(s)} />
+                <IconButton
+                  label={`Удалить: ${s.name}`}
+                  icon={Trash2}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setDeleteTarget(s)}
+                />
+              </span>
+            ),
+          },
+        ] as DataTableColumn<Service>[])
+      : []),
+  ];
 
   return (
-    <div>
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
         title="Услуги"
         icon={Wrench}
+        subtitle={data ? `${countLabel(total, ['услуга', 'услуги', 'услуг'])} в прайс-листе` : undefined}
         actions={
           canManage ? (
-            <button onClick={openCreateModal} className="btn-primary">
-              <Plus className="w-4 h-4" />
+            <Button icon={Plus} onClick={openCreate}>
               Новая услуга
-            </button>
+            </Button>
           ) : undefined
         }
       />
 
-      {/* Search */}
-      <div className="mb-4 max-w-md">
+      <Toolbar>
         <SearchInput
           value={search}
-          onChange={(val) => {
-            setSearch(val);
-            setPage(1);
-          }}
-          placeholder="Поиск по названию услуги..."
+          onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
+          placeholder="Название услуги…"
+          className="w-full sm:w-72"
         />
-      </div>
+      </Toolbar>
 
-      {/* Category Filter Tabs - dynamic from existing services */}
-      {(() => {
-        // No preset categories — filters only shown if categories exist in data
-        return null;
-      })()}
-
-      {/* KPI strip */}
-      {!isLoading && services.length > 0 && (
-        <div className="grid grid-cols-3 gap-2.5 mb-4">
-          <div className="rounded-xl bg-indigo-50 p-3">
-            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Всего услуг</p>
-            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5 tabular-nums">{total}</p>
-          </div>
-          <div className="rounded-xl bg-green-50 p-3">
-            <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Средняя цена</p>
-            <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5 tabular-nums">
-              {formatCurrency(avgPrice)} ₽
-            </p>
-          </div>
-          <div className="rounded-xl bg-orange-50 p-3">
-            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">С гарантией</p>
-            <p className="text-base sm:text-lg font-bold text-orange-700 mt-0.5 tabular-nums">{withWarranty}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Content */}
-      <QueryState
+      <DataTable
+        rows={services}
+        rowKey={(s) => s.id}
+        columns={columns}
+        caption="Прайс-лист услуг"
         isLoading={isLoading}
         isError={isError}
         onRetry={() => refetch()}
         isFetching={isFetching}
-        isEmpty={services.length === 0}
-        empty={{
+        emptyState={{
           icon: Wrench,
-          title: 'Нет услуг',
-          description:
-            search || categoryFilter !== 'Все' ? 'По вашему запросу ничего не найдено' : 'Добавьте первую услугу',
-          action:
-            canManage && !search && categoryFilter === 'Все'
-              ? { label: 'Добавить услугу', onClick: openCreateModal }
-              : undefined,
+          title: search ? 'Ничего не найдено' : 'Услуг пока нет',
+          description: search
+            ? `По запросу «${search}» услуг нет — попробуйте другое название`
+            : 'Добавьте первую услугу, чтобы выбирать её в чеке',
+          action: canManage && !search ? { label: 'Добавить услугу', onClick: openCreate } : undefined,
         }}
-        minHeight="min-h-[40vh]"
+      />
+
+      <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParam({ page: p === 1 ? null : p })} />
+
+      <Modal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        title={editingService ? 'Редактировать услугу' : 'Новая услуга'}
+        description={editingService ? editingService.name : 'Услуга появится в списке для выбора в чеке'}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeModal} disabled={saving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={FORM_ID} loading={saving}>
+              {editingService ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {services.map((service) => (
-              <div key={service.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold text-gray-900 text-sm">{service.name}</span>
-                  {canManage && (
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <IconButton
-                        label="Редактировать услугу"
-                        icon={Edit2}
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => openEditModal(service, e)}
-                      />
-                      <IconButton
-                        label="Удалить услугу"
-                        icon={Trash2}
-                        variant="danger"
-                        size="sm"
-                        onClick={(e) => handleDelete(service.id, e)}
-                      />
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  {service.category && <span className="badge-default text-[11px]">{service.category}</span>}
-                  <span className="text-sm font-medium text-gray-900 tabular-nums">
-                    {formatCurrency(service.defaultPrice)}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table — dense, full-width */}
-          <div className="hidden md:block table-container md:max-h-[70vh]">
-            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
-              <thead>
-                <tr>
-                  <th>Название</th>
-                  <th>Категория</th>
-                  <th className="text-right">Цена по умолчанию</th>
-                  {canManage && <th className="text-right">% мастера</th>}
-                  <th className="text-right">Гарантия</th>
-                  {canManage && <th className="w-24 text-right">Действия</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {services.map((service) => (
-                  <tr key={service.id}>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <Wrench className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="font-medium text-gray-900">{service.name}</span>
-                      </div>
-                    </td>
-                    <td>
-                      {service.category ? (
-                        <span className="badge-default">{service.category}</span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="text-right font-medium text-gray-900 tabular-nums">
-                      {formatCurrency(service.defaultPrice)} ₽
-                    </td>
-                    {canManage && (
-                      <td className="text-right tabular-nums">
-                        {service.masterPercent != null ? (
-                          <span className="font-medium text-gray-700">{service.masterPercent}%</span>
-                        ) : (
-                          <span className="text-gray-500">стандарт</span>
-                        )}
-                      </td>
-                    )}
-                    <td className="text-right">
-                      {service.warrantyDays != null && service.warrantyDays > 0 ? (
-                        <span className="badge-default">{service.warrantyDays} дн.</span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    {canManage && (
-                      <td>
-                        <div className="flex items-center justify-end gap-1">
-                          <IconButton
-                            label="Редактировать услугу"
-                            icon={Edit2}
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => openEditModal(service, e)}
-                          />
-                          <IconButton
-                            label="Удалить услугу"
-                            icon={Trash2}
-                            variant="danger"
-                            size="sm"
-                            onClick={(e) => handleDelete(service.id, e)}
-                          />
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-        </>
-      </QueryState>
-
-      {/* Create/Edit Service Modal */}
-      <Modal isOpen={modalOpen} onClose={closeModal} title={editingService ? 'Редактировать услугу' : 'Новая услуга'}>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Название</label>
-            <input
-              type="text"
+        <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="Название" htmlFor="service-name" required>
+            <Input
+              id="service-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="input"
-              placeholder="Название услуги"
+              placeholder="Например: Замена масла"
+              autoComplete="off"
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Категория</label>
-            <input
-              type="text"
+          <Field label="Категория" htmlFor="service-category" hint="Например: Диагностика, ТО, Ходовая">
+            <Input
+              id="service-category"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="input"
-              placeholder="Например: Диагностика, ТО, Ходовая..."
+              placeholder="Без категории"
+              autoComplete="off"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Цена по умолчанию</label>
-            <input
-              type="number"
+          <Field label="Цена по умолчанию, ₽" htmlFor="service-price" required>
+            <Input
+              id="service-price"
+              inputMode="decimal"
               value={defaultPrice}
               onChange={(e) => setDefaultPrice(e.target.value)}
-              className="input"
               placeholder="0"
-              min="0"
-              required
+              className="tabular-nums"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Особый % мастера</label>
-            <input
-              type="number"
-              value={masterPercent}
-              onChange={(e) => setMasterPercent(e.target.value)}
-              className="input"
-              placeholder="Оставьте пустым для стандартного процента"
-              min="0"
-              max="100"
-              step="0.5"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Если заполнено — используется вместо стандартного процента мастера для этой услуги
-            </p>
-          </div>
-
-          <div>
-            <label className="label">Срок гарантии (дней)</label>
-            <input
-              type="number"
-              value={warrantyDays}
-              onChange={(e) => setWarrantyDays(e.target.value)}
-              className="input"
-              placeholder="Оставьте пустым — без гарантии"
-              min="0"
-              step="1"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Дней с момента продажи. На эту услугу можно будет оформить гарантийный возврат.
-            </p>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button
-              type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending}
-              className="btn-primary"
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Особый % мастера"
+              htmlFor="service-percent"
+              hint="Если заполнено — используется вместо стандартного процента мастера"
             >
-              {editingService ? 'Сохранить' : 'Создать'}
-            </button>
+              <Input
+                id="service-percent"
+                inputMode="decimal"
+                value={masterPercent}
+                onChange={(e) => setMasterPercent(e.target.value)}
+                placeholder="Стандартный"
+                className="tabular-nums"
+              />
+            </Field>
+            <Field
+              label="Гарантия, дней"
+              htmlFor="service-warranty"
+              hint="Дней с момента продажи; пусто — без гарантии"
+            >
+              <Input
+                id="service-warranty"
+                inputMode="numeric"
+                value={warrantyDays}
+                onChange={(e) => setWarrantyDays(e.target.value)}
+                placeholder="Без гарантии"
+                className="tabular-nums"
+              />
+            </Field>
           </div>
         </form>
       </Modal>
 
-      {/* Delete Confirm */}
       <ConfirmDialog
-        isOpen={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        onConfirm={confirmDelete}
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title="Удалить услугу"
-        message="Вы уверены, что хотите удалить эту услугу? Это действие нельзя отменить."
+        message={`Удалить «${deleteTarget?.name ?? ''}»? Это действие нельзя отменить.`}
         confirmText="Удалить"
         variant="danger"
       />

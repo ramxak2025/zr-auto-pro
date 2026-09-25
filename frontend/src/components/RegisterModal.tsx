@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import Modal from './Modal';
 import RegisterForm from './RegisterForm';
+import { Button } from '../ui/Button';
 
 interface RegisterModalProps {
   isOpen: boolean;
@@ -30,19 +31,20 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
       isOpen={isOpen}
       onClose={onClose}
       title={submitted ? 'Заявка отправлена' : 'Заявка на подключение автосервиса'}
+      description={submitted ? undefined : 'Менеджер свяжется с вами и передаст доступы'}
       size="md"
     >
       <RegisterForm
         onSubmittedChange={setSubmitted}
         footerSecondary={
-          <button type="button" onClick={onClose} className="btn-secondary">
+          <Button type="button" variant="secondary" onClick={onClose}>
             Отмена
-          </button>
+          </Button>
         }
         successActions={
-          <button type="button" onClick={onClose} className="btn-primary w-full">
+          <Button type="button" fullWidth onClick={onClose}>
             Вернуться ко входу
-          </button>
+          </Button>
         }
       />
     </Modal>

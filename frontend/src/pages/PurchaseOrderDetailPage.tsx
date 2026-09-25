@@ -1,28 +1,49 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, PackageCheck, XCircle, Send, Clock, Wallet, CalendarClock } from 'lucide-react';
+import { Pencil, PackageCheck, XCircle, Send, Clock, Wallet, CalendarClock, ShoppingCart } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import InlineLoader from '../components/InlineLoader';
-import QueryState from '../components/QueryState';
-import EmptyState from '../components/EmptyState';
-import ConfirmDialog from '../components/ConfirmDialog';
-import Modal from '../components/Modal';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  Field,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  QueryState,
+  SkeletonCard,
+} from '../ui';
+import type { DataTableColumn } from '../ui';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
 
 import type { PurchaseOrder, PurchaseOrderItem } from '../types';
 import { formatMoney, formatDateTime, formatDateShort, formatDayKey } from '../../../shared/utils/formatters';
 import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { formatQty } from '../utils/units';
+import { parseNumberInput } from '../components/warehouse/format';
 
 const outstanding = (it: PurchaseOrderItem) => Math.max(0, it.quantity - it.receivedQuantity);
 
 // Закупочная цена из free-text поля («12,5» → 12.5); мусор/отрицательное → 0.
 const parsePrice = (t: string): number => {
-  const n = parseFloat((t || '').replace(',', '.'));
-  return Number.isNaN(n) || n < 0 ? 0 : n;
+  const n = parseNumberInput(t || '');
+  return n === null || n < 0 ? 0 : n;
+};
+
+// Количество к приёмке из free-text поля; мусор/отрицательное → 0.
+const parseQty = (t: string): number => {
+  const n = parseNumberInput(t || '');
+  return n === null || n < 0 ? 0 : n;
 };
 
 type PayMode = 'debt' | 'paid';
@@ -43,9 +64,10 @@ export default function PurchaseOrderDetailPage() {
   const today = formatDayKey(new Date(), tenantTz);
 
   const [receiveMode, setReceiveMode] = useState(false);
-  const [deltas, setDeltas] = useState<Record<string, number>>({});
-  // Закупочная цена за единицу по строке (free-text, чтобы «12,5» печаталось
-  // чисто) — приёмка в supply-режиме обновляет cost_price товара (миграция 098).
+  // «Принять сейчас» и цена закупки — free-text (запятая печатается чисто);
+  // числа считаются при отправке. Приёмка в supply-режиме обновляет cost_price
+  // товара (миграция 098).
+  const [deltas, setDeltas] = useState<Record<string, string>>({});
   const [prices, setPrices] = useState<Record<string, string>>({});
   // Выбранный способ приёмки для подтверждения: 'debt' (в долг) / 'paid'
   // (оплатить сразу). null — диалог закрыт.
@@ -65,14 +87,14 @@ export default function PurchaseOrderDetailPage() {
     refetch,
   } = useQuery({
     queryKey: ['purchase-order', id],
-    queryFn: () => purchaseOrdersApi.getById(id!),
-    select: (res) => res.data as PurchaseOrder,
+    // В кеш — сам заказ, не axios-ответ (та же форма, что в PurchaseOrderEditPage).
+    queryFn: async () => (await purchaseOrdersApi.getById(id as string)).data as PurchaseOrder,
     enabled: !!id,
   });
 
   // Caches touched when stock changes on receive.
   const invalidateAfterMutation = (next: PurchaseOrder) => {
-    queryClient.setQueryData(['purchase-order', id], { data: next });
+    queryClient.setQueryData(['purchase-order', id], next);
     queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
     queryClient.invalidateQueries({ queryKey: ['purchase-order', id] });
   };
@@ -87,8 +109,17 @@ export default function PurchaseOrderDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['purchase-order-suggestions'] });
   };
 
+  const invalidateSupplier = (supplierId?: string | null) => {
+    if (supplierId) {
+      queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
+    }
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+  };
+
   const orderMutation = useMutation({
-    mutationFn: () => purchaseOrdersApi.order(id!),
+    mutationFn: () => purchaseOrdersApi.order(id as string),
     onSuccess: (res) => {
       invalidateAfterMutation(res.data);
       toast.success('Заказ оформлен');
@@ -97,7 +128,7 @@ export default function PurchaseOrderDetailPage() {
   });
 
   const cancelMutation = useMutation({
-    mutationFn: () => purchaseOrdersApi.cancel(id!),
+    mutationFn: () => purchaseOrdersApi.cancel(id as string),
     onSuccess: (res) => {
       invalidateAfterMutation(res.data);
       toast.success('Заказ отменён');
@@ -105,7 +136,7 @@ export default function PurchaseOrderDetailPage() {
     onError: () => toast.error('Не удалось отменить заказ'),
   });
 
-  // Каждая приёмка на вебе теперь идёт в supply-режиме (миграция 098): шлём
+  // Каждая приёмка на вебе идёт в supply-режиме (миграция 098): шлём
   // paymentMode + закупочные цены → сервер обновляет cost_price товара, заводит
   // поставку и либо растит долг поставщику ('debt'), либо создаёт авто-платёж
   // ('paid'). Инвалидируем леджер поставщика, чтобы Поставки/Платежи/Долг
@@ -116,17 +147,11 @@ export default function PurchaseOrderDetailPage() {
     // и сервер честно отклонил бы такую приёмку как будущую. Без поля сервер
     // ставит свой текущий момент — прежнее поведение.
     mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode; receivedAt?: string }) =>
-      purchaseOrdersApi.receive(id!, vars),
+      purchaseOrdersApi.receive(id as string, vars),
     onSuccess: (res, vars) => {
       invalidateAfterMutation(res.data);
       invalidateStock();
-      const supplierId = res.data.supplierId;
-      if (supplierId) {
-        queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
-        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
-        queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
-      }
-      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      invalidateSupplier(res.data.supplierId);
       setReceiveMode(false);
       setDeltas({});
       setPrices({});
@@ -145,17 +170,11 @@ export default function PurchaseOrderDetailPage() {
   // Смена даты УЖЕ ПРОВЕДЁННОЙ поставки (159). Сервер одной транзакцией
   // переносит на новую дату накладную, оплату, движения склада и received_at.
   const changeDateMutation = useMutation({
-    mutationFn: (date: string) => purchaseOrdersApi.changeDate(id!, date),
+    mutationFn: (date: string) => purchaseOrdersApi.changeDate(id as string, date),
     onSuccess: (res) => {
       invalidateAfterMutation(res.data);
       invalidateStock();
-      const supplierId = res.data.supplierId;
-      if (supplierId) {
-        queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
-        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
-        queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
-      }
-      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      invalidateSupplier(res.data.supplierId);
       setDateModalOpen(false);
       toast.success('Дата поставки изменена');
     },
@@ -168,10 +187,10 @@ export default function PurchaseOrderDetailPage() {
   const items = useMemo(() => po?.items || [], [po]);
 
   const enterReceiveMode = () => {
-    const initDeltas: Record<string, number> = {};
+    const initDeltas: Record<string, string> = {};
     const initPrices: Record<string, string> = {};
     for (const it of items) {
-      initDeltas[it.id] = outstanding(it);
+      initDeltas[it.id] = String(outstanding(it));
       // По умолчанию — цена из заказа (снимок costPrice); владелец правит по факту.
       initPrices[it.id] = it.costPrice ? String(it.costPrice) : '';
     }
@@ -181,11 +200,17 @@ export default function PurchaseOrderDetailPage() {
     setReceiveMode(true);
   };
 
+  const exitReceiveMode = () => {
+    setReceiveMode(false);
+    setDeltas({});
+    setPrices({});
+  };
+
   // Строки к приёмке — только с положительным «принять сейчас» (кламп к остатку).
   const buildReceiveItems = (): ReceiveLine[] =>
     items
       .map((it) => {
-        const qty = Math.min(deltas[it.id] || 0, outstanding(it));
+        const qty = Math.min(parseQty(deltas[it.id] ?? ''), outstanding(it));
         if (qty <= 0) return null;
         return { itemId: it.id, receivedQuantity: qty, purchasePrice: parsePrice(prices[it.id] ?? '') };
       })
@@ -195,7 +220,7 @@ export default function PurchaseOrderDetailPage() {
   const invoiceTotal = useMemo(
     () =>
       items.reduce((sum, it) => {
-        const qty = Math.min(deltas[it.id] || 0, outstanding(it));
+        const qty = Math.min(parseQty(deltas[it.id] ?? ''), outstanding(it));
         if (qty <= 0) return sum;
         return sum + qty * parsePrice(prices[it.id] ?? '');
       }, 0),
@@ -248,22 +273,42 @@ export default function PurchaseOrderDetailPage() {
     changeDateMutation.mutate(newDate);
   };
 
-  if (isLoading) return <InlineLoader minHeight="min-h-[60vh]" />;
-  // A network failure (or a 404 that threw) — offer an explicit, recoverable error
-  // instead of falling through to the "not found" empty state.
-  if (isError) {
+  if (isLoading || isError) {
     return (
-      <QueryState isLoading={false} isError onRetry={refetch} isFetching={isFetching} minHeight="min-h-[60vh]">
-        <></>
-      </QueryState>
+      <div className="mx-auto w-full max-w-3xl space-y-5">
+        <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={() => refetch()}
+          isFetching={isFetching}
+          errorTitle="Не удалось загрузить заказ"
+          loader={
+            <div className="space-y-5">
+              <SkeletonCard lines={3} />
+              <SkeletonCard lines={4} />
+            </div>
+          }
+        >
+          <></>
+        </QueryState>
+      </div>
     );
   }
+
   if (!po) {
     return (
-      <EmptyState
-        title="Заказ не найден"
-        action={{ label: 'К списку заказов', onClick: () => navigate('/purchase-orders') }}
-      />
+      <div className="mx-auto w-full max-w-3xl space-y-5">
+        <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
+        <Card>
+          <EmptyState
+            icon={ShoppingCart}
+            title="Заказ не найден"
+            description="Возможно, он был удалён или ссылка устарела"
+            action={{ label: 'К списку заказов', onClick: () => navigate('/purchase-orders') }}
+          />
+        </Card>
+      </div>
     );
   }
 
@@ -271,241 +316,261 @@ export default function PurchaseOrderDetailPage() {
   const isOrdered = po.status === 'ordered';
   const isReceived = po.status === 'received';
 
-  return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate('/purchase-orders')}
-          className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600"
+  const columns: DataTableColumn<PurchaseOrderItem>[] = [
+    {
+      key: 'name',
+      header: 'Товар',
+      render: (it) => <span className="font-medium text-ink">{it.name}</span>,
+      footer: () => 'Итого по заказу',
+    },
+    {
+      key: 'quantity',
+      header: 'Заказано',
+      numeric: true,
+      render: (it) => formatQty(it.quantity),
+    },
+    {
+      key: 'receivedQuantity',
+      header: 'Принято',
+      numeric: true,
+      hideBelow: 'sm',
+      render: (it) => (
+        <span
+          className={it.receivedQuantity >= it.quantity && it.quantity > 0 ? 'font-medium text-ok-text' : undefined}
         >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-gray-900 truncate">{po.supplierName || 'Без поставщика'}</h1>
-            <PurchaseOrderStatusBadge status={po.status} />
-          </div>
-          <p className="text-sm text-gray-500">{formatDateTime(po.createdAt)}</p>
-        </div>
-      </div>
+          {formatQty(it.receivedQuantity)}
+        </span>
+      ),
+    },
+    ...(receiveMode
+      ? ([
+          {
+            key: 'receiveNow',
+            header: 'Принять сейчас',
+            numeric: true,
+            interactive: true,
+            width: 120,
+            render: (it) => (
+              <Input
+                size="sm"
+                inputMode="decimal"
+                aria-label={`Принять сейчас — ${it.name}`}
+                value={deltas[it.id] ?? ''}
+                disabled={outstanding(it) === 0}
+                invalid={parseQty(deltas[it.id] ?? '') > outstanding(it)}
+                onChange={(e) => setDeltas((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                className="text-right tabular-nums"
+              />
+            ),
+          },
+        ] as DataTableColumn<PurchaseOrderItem>[])
+      : []),
+    {
+      key: 'costPrice',
+      header: receiveMode ? 'Цена закупки' : 'Цена',
+      numeric: true,
+      interactive: receiveMode,
+      width: receiveMode ? 128 : undefined,
+      render: (it) =>
+        receiveMode ? (
+          <Input
+            size="sm"
+            inputMode="decimal"
+            aria-label={`Цена закупки — ${it.name}`}
+            placeholder="Цена"
+            value={prices[it.id] ?? ''}
+            disabled={outstanding(it) === 0}
+            onChange={(e) => setPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
+            className="text-right tabular-nums"
+          />
+        ) : (
+          <Money value={it.costPrice} />
+        ),
+    },
+    {
+      key: 'total',
+      header: 'Сумма',
+      numeric: true,
+      hideBelow: 'sm',
+      render: (it) => <Money value={it.total} className="font-medium text-ink" />,
+      footer: () => <Money value={po.total} />,
+    },
+  ];
 
-      {/* Meta */}
-      <div className="card card-body space-y-2 text-sm">
-        {po.createdByName && (
-          <div className="flex justify-between">
-            <span className="text-gray-500">Создал</span>
-            <span className="text-gray-900">{po.createdByName}</span>
-          </div>
-        )}
-        {po.orderedAt && (
-          <div className="flex justify-between">
-            <span className="text-gray-500">Оформлен</span>
-            <span className="text-gray-900">{formatDateTime(po.orderedAt)}</span>
-          </div>
-        )}
-        {po.receivedAt && (
-          <div className="flex justify-between">
-            <span className="text-gray-500">Получен</span>
-            <span className="text-gray-900">{formatDateTime(po.receivedAt)}</span>
-          </div>
-        )}
-        {po.dateCorrectedAt && (
-          <div className="flex justify-between">
-            <span className="text-gray-500">Дата изменена</span>
-            <span className="text-gray-900">
-              {formatDateShort(po.dateCorrectedAt)}
-              {po.dateCorrectedByName ? ` · ${po.dateCorrectedByName}` : ''}
-            </span>
-          </div>
-        )}
-        {po.note && (
-          <div className="flex justify-between gap-4">
-            <span className="text-gray-500 flex-shrink-0">Комментарий</span>
-            <span className="text-gray-900 text-right">{po.note}</span>
-          </div>
-        )}
-      </div>
+  const actions = canWrite
+    ? receiveMode
+      ? [
+          <Button key="cancel" variant="secondary" onClick={exitReceiveMode} disabled={isBusy}>
+            Отмена
+          </Button>,
+          <Button key="paid" variant="secondary" icon={Wallet} onClick={() => choosePayMode('paid')} disabled={isBusy}>
+            Оплатить сразу
+          </Button>,
+          <Button
+            key="debt"
+            icon={Clock}
+            onClick={() => choosePayMode('debt')}
+            loading={receiveMutation.isPending}
+            disabled={isBusy}
+          >
+            Принять без оплаты
+          </Button>,
+        ]
+      : [
+          ...(isDraft
+            ? [
+                <Button
+                  key="edit"
+                  variant="secondary"
+                  icon={Pencil}
+                  onClick={() => navigate(`/purchase-orders/${po.id}/edit`)}
+                  disabled={isBusy}
+                >
+                  Редактировать
+                </Button>,
+                <Button
+                  key="cancel"
+                  variant="danger"
+                  icon={XCircle}
+                  onClick={() => setCancelOpen(true)}
+                  disabled={isBusy}
+                >
+                  Отменить
+                </Button>,
+                <Button
+                  key="order"
+                  icon={Send}
+                  onClick={() => orderMutation.mutate()}
+                  loading={orderMutation.isPending}
+                  disabled={isBusy}
+                >
+                  Оформить заказ
+                </Button>,
+              ]
+            : []),
+          ...(isOrdered
+            ? [
+                <Button
+                  key="cancel"
+                  variant="danger"
+                  icon={XCircle}
+                  onClick={() => setCancelOpen(true)}
+                  disabled={isBusy}
+                >
+                  Отменить
+                </Button>,
+                <Button key="receive" icon={PackageCheck} onClick={enterReceiveMode} disabled={isBusy}>
+                  Принять поставку
+                </Button>,
+              ]
+            : []),
+          // Проведённая поставка: дату можно поправить задним числом (159)
+          // — сервер перенесёт склад, накладную и деньги на неё же.
+          ...(isReceived
+            ? [
+                <Button key="date" variant="secondary" icon={CalendarClock} onClick={openDateModal} disabled={isBusy}>
+                  Изменить дату
+                </Button>,
+              ]
+            : []),
+        ]
+    : [];
+
+  return (
+    <div className="mx-auto w-full max-w-3xl space-y-5">
+      <PageHeader
+        title={po.supplierName || 'Без поставщика'}
+        icon={ShoppingCart}
+        backTo="/purchase-orders"
+        meta={<PurchaseOrderStatusBadge status={po.status} />}
+        subtitle={`Заказ от ${formatDateTime(po.createdAt, tenantTz)}`}
+        actions={actions.length > 0 ? <>{actions}</> : undefined}
+      />
+
+      <Card>
+        <CardHeader title="Сведения" dense />
+        <CardBody padding="sm">
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+            {po.createdByName && (
+              <div className="flex justify-between gap-4 sm:block">
+                <dt className="text-ink-3">Создал</dt>
+                <dd className="text-right text-ink sm:text-left">{po.createdByName}</dd>
+              </div>
+            )}
+            {po.orderedAt && (
+              <div className="flex justify-between gap-4 sm:block">
+                <dt className="text-ink-3">Оформлен</dt>
+                <dd className="text-right tabular-nums text-ink sm:text-left">
+                  {formatDateTime(po.orderedAt, tenantTz)}
+                </dd>
+              </div>
+            )}
+            {po.receivedAt && (
+              <div className="flex justify-between gap-4 sm:block">
+                <dt className="text-ink-3">Дата поставки</dt>
+                <dd className="text-right tabular-nums text-ink sm:text-left">
+                  {formatDateTime(po.receivedAt, tenantTz)}
+                </dd>
+              </div>
+            )}
+            {po.dateCorrectedAt && (
+              <div className="flex justify-between gap-4 sm:block">
+                <dt className="text-ink-3">Дата изменена</dt>
+                <dd className="text-right tabular-nums text-ink sm:text-left">
+                  {formatDateShort(po.dateCorrectedAt, tenantTz)}
+                  {po.dateCorrectedByName ? ` · ${po.dateCorrectedByName}` : ''}
+                </dd>
+              </div>
+            )}
+            {po.note && (
+              <div className="flex justify-between gap-4 sm:col-span-2 sm:block">
+                <dt className="flex-shrink-0 text-ink-3">Комментарий</dt>
+                <dd className="text-right text-ink sm:text-left">{po.note}</dd>
+              </div>
+            )}
+            {!po.createdByName && !po.orderedAt && !po.receivedAt && !po.note && (
+              <p className="text-ink-3 sm:col-span-2">Черновик: заказ ещё не оформлен</p>
+            )}
+          </dl>
+        </CardBody>
+      </Card>
 
       {/* Дата поставки (159) — в режиме приёмки. По умолчанию сегодня; можно
           выбрать прошедшую: ею сервер датирует склад, накладную и деньги. */}
       {receiveMode && (
-        <div className="card card-body flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <label className="label mb-0" htmlFor="po-receive-date">
-              Дата поставки
-            </label>
-            <p className="text-xs text-gray-500">
-              Можно указать прошедшую — этой датой запишутся приход на склад, накладная и деньги.
-            </p>
-          </div>
-          <input
-            id="po-receive-date"
-            type="date"
-            max={today}
-            className="input w-44"
-            value={receiveDate}
-            onChange={(e) => setReceiveDate(e.target.value)}
-          />
-        </div>
+        <Card padding="sm">
+          <Field
+            label="Дата поставки"
+            htmlFor="po-receive-date"
+            inline
+            hint="Можно указать прошедшую — этой датой запишутся приход на склад, накладная и деньги"
+          >
+            <Input
+              id="po-receive-date"
+              type="date"
+              max={today}
+              value={receiveDate}
+              onChange={(e) => setReceiveDate(e.target.value)}
+              className="sm:w-48"
+            />
+          </Field>
+        </Card>
       )}
 
-      {/* Items */}
-      <div className="card overflow-hidden">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Товар</th>
-              <th className="text-center">Заказано</th>
-              <th className="text-center">Принято</th>
-              {receiveMode && <th className="text-center">Принять сейчас</th>}
-              <th className="text-right">{receiveMode ? 'Цена закупки' : 'Цена'}</th>
-              <th className="text-right">Сумма</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td className="font-medium text-gray-900">{it.name}</td>
-                <td className="text-center text-gray-600 tabular-nums">{it.quantity}</td>
-                <td className="text-center text-gray-600 tabular-nums">{it.receivedQuantity}</td>
-                {receiveMode && (
-                  <td className="text-center">
-                    <input
-                      type="number"
-                      min={0}
-                      max={outstanding(it)}
-                      step="any"
-                      inputMode="decimal"
-                      className="input w-24 mx-auto text-center"
-                      value={deltas[it.id] ?? 0}
-                      disabled={outstanding(it) === 0}
-                      onChange={(e) =>
-                        setDeltas((prev) => ({
-                          ...prev,
-                          [it.id]: Math.min(Math.max(0, e.target.valueAsNumber || 0), outstanding(it)),
-                        }))
-                      }
-                    />
-                  </td>
-                )}
-                <td className="text-right text-gray-600 tabular-nums">
-                  {receiveMode ? (
-                    <input
-                      type="number"
-                      min={0}
-                      step="any"
-                      inputMode="decimal"
-                      className="input w-28 ml-auto text-right"
-                      placeholder="Цена"
-                      value={prices[it.id] ?? ''}
-                      disabled={outstanding(it) === 0}
-                      onChange={(e) => setPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
-                    />
-                  ) : (
-                    formatMoney(it.costPrice)
-                  )}
-                </td>
-                <td className="text-right font-medium text-gray-900 tabular-nums">{formatMoney(it.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
-          <span className="text-sm font-medium text-gray-600">Итого</span>
-          <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
-        </div>
+      <Card>
+        <CardHeader
+          title="Позиции"
+          subtitle={receiveMode ? 'Укажите, сколько принимаете, и фактическую цену закупки' : `${items.length} поз.`}
+          divider={false}
+        />
+        <DataTable bare rows={items} rowKey={(it) => it.id} columns={columns} caption="Позиции заказа" />
         {receiveMode && (
-          <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-100 bg-primary-50/60">
-            <span className="text-sm font-medium text-gray-600">Стоимость накладной</span>
-            <span className="text-lg font-bold text-primary-700 tabular-nums">{formatMoney(invoiceTotal)}</span>
-          </div>
+          <CardFooter>
+            <span className="text-sm font-medium text-ink-2">Стоимость накладной</span>
+            <Money value={invoiceTotal} className="text-lg font-semibold text-ink" />
+          </CardFooter>
         )}
-      </div>
-
-      {/* Actions */}
-      {canWrite && (
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          {receiveMode ? (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  setReceiveMode(false);
-                  setDeltas({});
-                  setPrices({});
-                }}
-                disabled={isBusy}
-                className="btn-secondary"
-              >
-                Отмена
-              </button>
-              <button type="button" onClick={() => choosePayMode('debt')} disabled={isBusy} className="btn-primary">
-                <Clock className="w-4 h-4" />
-                {receiveMutation.isPending ? 'Приёмка...' : 'Принять без оплаты'}
-              </button>
-              <button
-                type="button"
-                onClick={() => choosePayMode('paid')}
-                disabled={isBusy}
-                className="btn bg-green-600 text-white hover:bg-green-700 focus:ring-green-500 shadow-sm"
-              >
-                <Wallet className="w-4 h-4" />
-                Оплатить сразу
-              </button>
-            </>
-          ) : (
-            <>
-              {isDraft && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/purchase-orders/${po.id}/edit`)}
-                    disabled={isBusy}
-                    className="btn-secondary"
-                  >
-                    <Pencil className="w-4 h-4" />
-                    Редактировать
-                  </button>
-                  <button type="button" onClick={() => setCancelOpen(true)} disabled={isBusy} className="btn-danger">
-                    <XCircle className="w-4 h-4" />
-                    Отменить
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => orderMutation.mutate()}
-                    disabled={isBusy}
-                    className="btn-primary"
-                  >
-                    <Send className="w-4 h-4" />
-                    {orderMutation.isPending ? 'Оформление...' : 'Оформить заказ'}
-                  </button>
-                </>
-              )}
-              {isOrdered && (
-                <>
-                  <button type="button" onClick={() => setCancelOpen(true)} disabled={isBusy} className="btn-danger">
-                    <XCircle className="w-4 h-4" />
-                    Отменить
-                  </button>
-                  <button type="button" onClick={enterReceiveMode} disabled={isBusy} className="btn-primary">
-                    <PackageCheck className="w-4 h-4" />
-                    Принять поставку
-                  </button>
-                </>
-              )}
-              {/* Проведённая поставка: дату можно поправить задним числом (159)
-                  — сервер перенесёт склад, накладную и деньги на неё же. */}
-              {isReceived && (
-                <button type="button" onClick={openDateModal} disabled={isBusy} className="btn-secondary">
-                  <CalendarClock className="w-4 h-4" />
-                  Изменить дату
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      </Card>
 
       <ConfirmDialog
         isOpen={cancelOpen}
@@ -535,34 +600,32 @@ export default function PurchaseOrderDetailPage() {
       />
 
       {/* Смена даты проведённой поставки (159) */}
-      <Modal isOpen={dateModalOpen} onClose={() => setDateModalOpen(false)} title="Дата поставки" size="sm">
-        <div className="space-y-4">
-          <div>
-            <label className="label" htmlFor="po-new-date">
-              Новая дата
-            </label>
-            <input
-              id="po-new-date"
-              type="date"
-              max={today}
-              className="input"
-              value={newDate}
-              onChange={(e) => setNewDate(e.target.value)}
-            />
-          </div>
-          <p className="text-sm text-gray-500">
-            На эту дату переедут приход товара на склад, накладная поставщика и оплата по ней. Суммы и остатки не
-            меняются.
-          </p>
-          <div className="flex justify-end gap-3">
-            <button type="button" className="btn-secondary" onClick={() => setDateModalOpen(false)}>
+      <Modal
+        isOpen={dateModalOpen}
+        onClose={() => setDateModalOpen(false)}
+        title="Дата поставки"
+        description="На эту дату переедут приход товара на склад, накладная поставщика и оплата по ней. Суммы и остатки не меняются."
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDateModalOpen(false)} disabled={isBusy}>
               Отмена
-            </button>
-            <button type="button" className="btn-primary" onClick={submitNewDate} disabled={isBusy}>
-              {changeDateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
-            </button>
-          </div>
-        </div>
+            </Button>
+            <Button onClick={submitNewDate} loading={changeDateMutation.isPending} disabled={isBusy}>
+              Сохранить
+            </Button>
+          </>
+        }
+      >
+        <Field label="Новая дата" htmlFor="po-new-date">
+          <Input
+            id="po-new-date"
+            type="date"
+            max={today}
+            value={newDate}
+            onChange={(e) => setNewDate(e.target.value)}
+          />
+        </Field>
       </Modal>
     </div>
   );

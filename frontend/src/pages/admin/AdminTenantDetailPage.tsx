@@ -1,31 +1,31 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft,
+  Activity,
+  Banknote,
   Building2,
-  Users,
-  Plus,
-  Pencil,
-  Trash2,
-  Loader2,
   CalendarDays,
-  Phone,
+  CalendarPlus,
+  ChevronDown,
+  ClipboardList,
+  Clock,
+  CreditCard,
+  Gift,
+  Info,
+  LogIn,
   Mail,
   MapPin,
-  CalendarPlus,
-  CreditCard,
-  LogIn,
-  Banknote,
   Package,
-  Activity,
-  Clock,
-  ClipboardList,
   PauseCircle,
+  Pencil,
+  Phone,
   PlayCircle,
-  Wallet,
-  Gift,
+  Plus,
   StickyNote,
+  Trash2,
+  Users,
+  Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO, isPast, formatDistanceToNow, addDays, addYears } from 'date-fns';
@@ -35,6 +35,9 @@ import { tenantsApi, usersApi, plansApi } from '../../api/services';
 import type { ExtendSubscriptionRequest } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
 import { Tenant, User, UserRole, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
+import { formatMoney, roleLabels } from '../../../../shared/utils/formatters';
+import { formatPhone } from '../../../../shared/validation/phone';
+import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
@@ -42,7 +45,28 @@ import Switch from '../../components/Switch';
 import EmptyState from '../../components/EmptyState';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 import { writeSessionToken } from '../../utils/sessionToken';
-import { roleLabels } from '../../../../shared/utils/formatters';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Card, CardHeader } from '../../ui/Card';
+import { DataTable, type DataTableColumn } from '../../ui/DataTable';
+import { DropdownMenu, type MenuEntry } from '../../ui/DropdownMenu';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Select } from '../../ui/Select';
+import { Skeleton } from '../../ui/Skeleton';
+import { Textarea } from '../../ui/Textarea';
+import { cn } from '../../ui/cn';
+import { focusRing, type Tone } from '../../ui/tokens';
+import {
+  ErrorRow,
+  InfoRow,
+  MiniStat,
+  TenantStatusBadges,
+  ToggleChip,
+  formatDateRu,
+} from '../../components/admin/adminUi';
 
 // Quick-fill presets — each computes the new "until" date from the anchor
 // (current end if still in the future, otherwise today). They only set the
@@ -53,22 +77,21 @@ const EXTEND_PRESETS: { label: string; add: (d: Date) => Date }[] = [
   { label: '+год', add: (d) => addYears(d, 1) },
 ];
 
-function formatRub(value: number | undefined | null): string {
-  return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
-}
-
-const roleBadgeMap: Record<string, string> = {
-  director: 'badge-blue',
-  admin: 'badge-green',
-  master: 'badge-yellow',
+// Роль — метка, не статус: владелец — акцент, остальные нейтральны.
+const roleTone: Record<string, Tone> = {
+  director: 'accent',
+  admin: 'info',
+  master: 'neutral',
 };
 
-// Subscription status → badge label/class for the cabinet header (102).
-const subStatusMeta: Record<SubscriptionStatus, { label: string; badge: string }> = {
-  active: { label: 'Активна', badge: 'badge-green' },
-  expired: { label: 'Истекла', badge: 'badge-yellow' },
-  suspended: { label: 'Приостановлена', badge: 'badge-red' },
+// Subscription status → badge label/tone for the cabinet header (102).
+const subStatusMeta: Record<SubscriptionStatus, { label: string; tone: Tone }> = {
+  active: { label: 'Подписка активна', tone: 'ok' },
+  expired: { label: 'Подписка истекла', tone: 'warn' },
+  suspended: { label: 'Приостановлена', tone: 'bad' },
 };
+
+const digitsOnly = (v: string) => v.replace(/[^\d]/g, '');
 
 // ----------- Tenant Edit Form -----------
 interface TenantFormData {
@@ -77,8 +100,8 @@ interface TenantFormData {
   address: string;
   email: string;
   description: string;
-  maxUsers: number;
-  voiceMinutesExtra: number;
+  maxUsers: string;
+  voiceMinutesExtra: string;
   isActive: boolean;
   subscriptionEnd: string;
   subscriptionNote: string;
@@ -90,7 +113,7 @@ interface UserFormData {
   phone: string;
   password: string;
   role: UserRole;
-  salaryPercent: number;
+  salaryPercent: string;
   isActive: boolean;
 }
 
@@ -99,7 +122,7 @@ const emptyUserForm: UserFormData = {
   phone: '',
   password: '',
   role: UserRole.MASTER,
-  salaryPercent: 0,
+  salaryPercent: '0',
   isActive: true,
 };
 
@@ -108,6 +131,7 @@ export default function AdminTenantDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { refreshUser } = useAuth();
+  const uid = useId();
 
   // Subscription management modals
   const [extendModalOpen, setExtendModalOpen] = useState(false);
@@ -131,8 +155,8 @@ export default function AdminTenantDetailPage() {
     address: '',
     email: '',
     description: '',
-    maxUsers: 5,
-    voiceMinutesExtra: 0,
+    maxUsers: '5',
+    voiceMinutesExtra: '0',
     isActive: true,
     subscriptionEnd: '',
     subscriptionNote: '',
@@ -160,7 +184,12 @@ export default function AdminTenantDetailPage() {
 
   // Composed superadmin cabinet: identity + subscription status/plan + activity
   // metrics in one call (replaces the standalone GET /tenants/:id/metrics fetch).
-  const { data: cabinet } = useQuery({
+  const {
+    data: cabinet,
+    isError: cabinetError,
+    refetch: refetchCabinet,
+    isFetching: cabinetFetching,
+  } = useQuery({
     queryKey: ['tenant-cabinet', id],
     queryFn: () => tenantsApi.getCabinet(id!),
     select: (res) => res.data as TenantCabinet,
@@ -326,8 +355,8 @@ export default function AdminTenantDetailPage() {
       address: tenant.address || '',
       email: tenant.email || '',
       description: tenant.description || '',
-      maxUsers: tenant.maxUsers,
-      voiceMinutesExtra: tenant.voiceMinutesExtra ?? 0,
+      maxUsers: String(tenant.maxUsers),
+      voiceMinutesExtra: String(tenant.voiceMinutesExtra ?? 0),
       isActive: tenant.isActive,
       subscriptionEnd: tenant.subscriptionEnd ? tenant.subscriptionEnd.slice(0, 10) : '',
       subscriptionNote: tenant.subscriptionNote || '',
@@ -386,8 +415,8 @@ export default function AdminTenantDetailPage() {
       address: tenantForm.address || undefined,
       email: tenantForm.email || undefined,
       description: tenantForm.description || undefined,
-      maxUsers: Number(tenantForm.maxUsers),
-      voiceMinutesExtra: Number(tenantForm.voiceMinutesExtra),
+      maxUsers: Math.max(1, Number(tenantForm.maxUsers) || 1),
+      voiceMinutesExtra: Number(tenantForm.voiceMinutesExtra) || 0,
       isActive: tenantForm.isActive,
       subscriptionEnd: tenantForm.subscriptionEnd || null,
       subscriptionNote: tenantForm.subscriptionNote || null,
@@ -408,7 +437,7 @@ export default function AdminTenantDetailPage() {
       phone: user.phone || '',
       password: '',
       role: user.role,
-      salaryPercent: user.salaryPercent,
+      salaryPercent: String(user.salaryPercent),
       isActive: user.isActive,
     });
     setUserModalOpen(true);
@@ -435,7 +464,7 @@ export default function AdminTenantDetailPage() {
       fullName: userForm.fullName,
       phone: userForm.phone,
       role: userForm.role,
-      salaryPercent: Number(userForm.salaryPercent),
+      salaryPercent: Number(userForm.salaryPercent) || 0,
       isActive: userForm.isActive,
       tenantId: id,
     };
@@ -461,30 +490,59 @@ export default function AdminTenantDetailPage() {
 
   const isUserSaving = createUserMutation.isPending || updateUserMutation.isPending;
 
-  // Loading → inline loader; a transient fetch FAILURE → error+retry (not a
-  // permanent "не найден"). Only a resolved-but-empty response is a real 404.
+  // Loading → скелет; сбой сети → ошибка с «Повторить» (не «не найден»).
+  // Только успешно пустой ответ — настоящий 404.
   if (isLoading || isError) {
     return (
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        errorTitle="Не удалось загрузить автосервис"
-        minHeight="min-h-[60vh]"
-      >
-        {null}
-      </QueryState>
+      <div className="space-y-5">
+        <PageHeader title="Автосервис" icon={Building2} backTo="/admin/tenants" />
+        {isLoading ? (
+          <div className="space-y-5" aria-busy="true">
+            <Card padding="md">
+              <Skeleton className="h-6 w-1/3" />
+              <div className="mt-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i}>
+                    <Skeleton variant="text" className="w-20" />
+                    <Skeleton className="mt-2 h-5 w-24" />
+                  </div>
+                ))}
+              </div>
+            </Card>
+            <Card padding="md">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="mt-4 h-32 w-full" />
+            </Card>
+          </div>
+        ) : (
+          <Card padding="md">
+            <QueryState
+              isLoading={false}
+              isError
+              onRetry={refetch}
+              isFetching={isFetching}
+              errorTitle="Не удалось загрузить автосервис"
+            >
+              {null}
+            </QueryState>
+          </Card>
+        )}
+      </div>
     );
   }
 
   if (!tenant) {
     return (
-      <EmptyState
-        icon={Building2}
-        title="Автосервис не найден"
-        action={{ label: 'Назад', onClick: () => navigate('/admin/tenants') }}
-      />
+      <div className="space-y-5">
+        <PageHeader title="Автосервис" icon={Building2} backTo="/admin/tenants" />
+        <Card padding="md">
+          <EmptyState
+            icon={Building2}
+            title="Автосервис не найден"
+            action={{ label: 'К списку автосервисов', onClick: () => navigate('/admin/tenants') }}
+          />
+        </Card>
+      </div>
     );
   }
 
@@ -502,560 +560,546 @@ export default function AdminTenantDetailPage() {
   const extendAmountValid = Number.isFinite(extendAmountNum) && extendAmountNum > 0;
   const canSubmitExtend = extendUntilValid && (extendMode === 'free' || extendAmountValid);
 
+  const moreItems: MenuEntry[] = [
+    { key: 'impersonate', label: 'Войти как владелец', icon: LogIn, onSelect: () => setImpersonateConfirm(true) },
+    { type: 'separator', key: 'sep' },
+    isSuspended
+      ? { key: 'unsuspend', label: 'Возобновить работу', icon: PlayCircle, onSelect: () => setUnsuspendConfirm(true) }
+      : {
+          key: 'suspend',
+          label: 'Приостановить',
+          icon: PauseCircle,
+          danger: true,
+          onSelect: () => setSuspendModalOpen(true),
+        },
+  ];
+
+  const userColumns: DataTableColumn<User>[] = [
+    { key: 'fullName', header: 'Имя', render: (u) => <span className="font-medium text-ink">{u.fullName}</span> },
+    {
+      key: 'phone',
+      header: 'Телефон',
+      hideBelow: 'sm',
+      render: (u) => <span className="tabular-nums text-ink-2">{u.phone ? formatPhone(u.phone) : '—'}</span>,
+    },
+    {
+      key: 'role',
+      header: 'Роль',
+      render: (u) => <Badge tone={roleTone[u.role] ?? 'neutral'}>{roleLabels[u.role] || u.role}</Badge>,
+    },
+    {
+      key: 'salaryPercent',
+      header: 'Ставка',
+      numeric: true,
+      hideBelow: 'md',
+      render: (u) => <span className="text-ink-2">{u.salaryPercent}%</span>,
+    },
+    {
+      key: 'isActive',
+      header: 'Статус',
+      hideBelow: 'md',
+      render: (u) =>
+        u.isActive ? (
+          <Badge tone="ok" dot>
+            Активен
+          </Badge>
+        ) : (
+          <Badge tone="bad" dot>
+            Неактивен
+          </Badge>
+        ),
+    },
+    {
+      key: 'actions',
+      header: '',
+      interactive: true,
+      width: 88,
+      render: (u) => (
+        <span className="flex justify-end gap-0.5">
+          <IconButton label={`Редактировать ${u.fullName}`} icon={Pencil} size="sm" onClick={() => openEditUser(u)} />
+          <IconButton
+            label={`Уволить ${u.fullName}`}
+            icon={Trash2}
+            size="sm"
+            variant="danger"
+            onClick={() => setDeleteUserId(u.id)}
+          />
+        </span>
+      ),
+    },
+  ];
+
   return (
-    <div>
-      {/* Back link */}
-      <button
-        onClick={() => navigate('/admin/tenants')}
-        className="mb-3 flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Назад к автосервисам
-      </button>
-
-      {/* Header card: имя + статус + действия одной панелью */}
-      <div className="card mb-4 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-primary-50">
-              <Building2 className="h-5 w-5 text-primary-600" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-xl font-bold text-gray-900 md:text-2xl">{tenant.name}</h1>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {tenant.isActive ? (
-                  <span className="badge-green">Активна</span>
-                ) : (
-                  <span className="badge-red">Отключена</span>
-                )}
-                {subStatus && (
-                  <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
-                )}
-                <SubscriptionPeriodBadge
-                  kind={subStatus?.currentPeriodKind ?? tenant.currentPeriodKind}
-                  until={subStatus?.subscriptionEnd ?? tenant.subscriptionEnd}
-                  size="sm"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={openExtendModal} className="btn-primary btn-sm">
-              <CalendarPlus className="w-4 h-4" />
+    <div className="space-y-5">
+      <PageHeader
+        title={tenant.name}
+        icon={Building2}
+        backTo="/admin/tenants"
+        subtitle={
+          tenant.plan?.name
+            ? `Тариф «${tenant.plan.name}» · ${formatMoney(tenant.monthlyPrice)}/мес`
+            : 'Тариф не назначен'
+        }
+        meta={
+          <>
+            <TenantStatusBadges tenant={tenant} size="sm" />
+            {subStatus && subStatus.status !== 'active' && (
+              <Badge tone={subStatusMeta[subStatus.status].tone} size="sm">
+                {subStatusMeta[subStatus.status].label}
+              </Badge>
+            )}
+            <SubscriptionPeriodBadge
+              kind={subStatus?.currentPeriodKind ?? tenant.currentPeriodKind}
+              until={subStatus?.subscriptionEnd ?? tenant.subscriptionEnd}
+              size="sm"
+            />
+          </>
+        }
+        actions={
+          <>
+            <Button icon={CalendarPlus} onClick={openExtendModal}>
               Продлить
-            </button>
-            <button onClick={openPlanModal} className="btn-secondary btn-sm">
-              <CreditCard className="w-4 h-4" />
+            </Button>
+            <Button variant="secondary" icon={CreditCard} onClick={openPlanModal}>
               Тариф
-            </button>
-            <button onClick={() => setImpersonateConfirm(true)} className="btn-secondary btn-sm">
-              <LogIn className="w-4 h-4" />
-              Войти как владелец
-            </button>
-            <button onClick={openTenantEdit} className="btn-secondary btn-sm">
-              <Pencil className="w-4 h-4" />
+            </Button>
+            <Button variant="secondary" icon={Pencil} onClick={openTenantEdit}>
               Редактировать
-            </button>
-            {isSuspended ? (
-              <button
-                onClick={() => setUnsuspendConfirm(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100"
-              >
-                <PlayCircle className="w-4 h-4" />
-                Возобновить
-              </button>
-            ) : (
-              <button
-                onClick={() => setSuspendModalOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
-              >
-                <PauseCircle className="w-4 h-4" />
-                Приостановить
-              </button>
-            )}
+            </Button>
+            <DropdownMenu
+              aria-label="Ещё действия"
+              items={moreItems}
+              trigger={
+                <Button variant="secondary" iconRight={ChevronDown}>
+                  Ещё
+                </Button>
+              }
+            />
+          </>
+        }
+      />
+
+      {isSuspended && (
+        <div
+          className="flex items-start gap-3 rounded-xl border border-bad/20 bg-bad-soft px-4 py-3 text-sm text-bad-text"
+          role="status"
+        >
+          <PauseCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-bad" aria-hidden="true" />
+          <div>
+            <p className="font-medium">
+              Работа приостановлена
+              {subStatus?.suspendedAt ? ` ${formatDateRu(subStatus.suspendedAt, 'd MMMM yyyy')}` : ''}
+            </p>
+            {subStatus?.suspendedReason && <p className="mt-0.5">Причина: {subStatus.suspendedReason}</p>}
+            <p className="mt-0.5 text-bad-text/80">Сотрудники не могут войти в приложение до возобновления.</p>
           </div>
-        </div>
-
-        {subStatus?.status === 'suspended' && (
-          <div className="mt-4 flex items-start gap-3 rounded-lg bg-red-50 p-4">
-            <PauseCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-red-700">
-                Работа приостановлена
-                {subStatus.suspendedAt
-                  ? ` ${format(parseISO(subStatus.suspendedAt), 'd MMMM yyyy', { locale: ru })}`
-                  : ''}
-              </p>
-              {subStatus.suspendedReason && (
-                <p className="text-sm text-red-600 mt-0.5">Причина: {subStatus.suspendedReason}</p>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        {/* Подписка (superadmin cabinet) */}
-        <div className="card p-5 xl:col-span-2">
-          <h2 className="mb-4 text-base font-semibold text-gray-900">Подписка</h2>
-          {subStatus ? (
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Тариф</p>
-                <p className="text-sm font-semibold text-gray-900">{subStatus.planName || 'Не назначен'}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Стоимость</p>
-                <p className="text-sm font-semibold tabular-nums text-gray-900">{formatRub(subStatus.planPrice)}/мес</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Действует до</p>
-                {subStatus.subscriptionEnd ? (
-                  <p
-                    className={`text-sm font-semibold tabular-nums ${
-                      subStatus.status === 'expired' ? 'text-red-600' : 'text-gray-900'
-                    }`}
-                  >
-                    {format(parseISO(subStatus.subscriptionEnd), 'd MMMM yyyy', { locale: ru })}
-                  </p>
-                ) : (
-                  <p className="text-sm font-semibold text-gray-400">Не указано</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-0.5">Сотрудников</p>
-                <p className="text-sm font-semibold tabular-nums text-gray-900">
-                  {subStatus.currentUsers} / {subStatus.maxUsers}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Загрузка данных подписки…
-            </div>
-          )}
-
-          {/* Показатели клиента */}
-          {metrics && (
-            <div className="mt-5 border-t border-gray-100 pt-4">
-              <h3 className="mb-3 text-sm font-semibold text-gray-900">Показатели клиента</h3>
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
-                    <ClipboardList className="h-3.5 w-3.5" />
-                    <span className="text-xs">Заказ-наряды</span>
-                  </div>
-                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.checksTotal}</p>
-                  <p className="text-xs tabular-nums text-gray-500">за 30 дней: {metrics.checksLast30d}</p>
-                </div>
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
-                    <Banknote className="h-3.5 w-3.5" />
-                    <span className="text-xs">Выручка</span>
-                  </div>
-                  <p className="text-lg font-bold tabular-nums text-gray-900">{formatRub(metrics.revenueTotal)}</p>
-                  <p className="text-xs tabular-nums text-gray-500">за 30 дней: {formatRub(metrics.revenueLast30d)}</p>
-                </div>
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
-                    <Users className="h-3.5 w-3.5" />
-                    <span className="text-xs">Сотрудники</span>
-                  </div>
-                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.usersCount}</p>
-                  <p className="text-xs tabular-nums text-gray-500">активных: {metrics.activeUsersCount}</p>
-                </div>
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
-                    <Package className="h-3.5 w-3.5" />
-                    <span className="text-xs">Товары / активность</span>
-                  </div>
-                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.productsCount}</p>
-                  <p className="flex items-center gap-1 text-xs text-gray-500">
-                    {metrics.lastActivityAt ? (
-                      <>
-                        <Clock className="h-3 w-3" />
-                        {formatDistanceToNow(parseISO(metrics.lastActivityAt), {
-                          addSuffix: true,
-                          locale: ru,
-                        })}
-                      </>
-                    ) : (
-                      <>
-                        <Activity className="h-3 w-3" />
-                        нет активности
-                      </>
-                    )}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Информация о тенанте */}
-        <div className="card p-5">
-          <h2 className="mb-4 text-base font-semibold text-gray-900">Информация</h2>
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2">
-              <Phone className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              <span className="text-gray-700">{tenant.phone || '—'}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Mail className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              <span className="truncate text-gray-700">{tenant.email || '—'}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              <span className="text-gray-700">{tenant.address || '—'}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              <span className="tabular-nums text-gray-700">
-                Пользователей: {tenantUsers.length} / {tenant.maxUsers}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CalendarDays className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              <span className="text-gray-500">Подписка до:</span>
-              {subscriptionEnd ? (
-                <span className={`tabular-nums ${isExpired ? 'font-medium text-red-600' : 'text-gray-700'}`}>
-                  {format(subscriptionEnd, 'd MMM yyyy', { locale: ru })}
-                </span>
-              ) : (
-                <span className="text-gray-400">не указано</span>
-              )}
-            </div>
-            {tenant.subscriptionNote && (
-              <div className="flex items-start gap-2">
-                <StickyNote className="mt-0.5 w-4 h-4 flex-shrink-0 text-gray-400" />
-                <span className="text-gray-600">{tenant.subscriptionNote}</span>
-              </div>
-            )}
-            {tenant.slug && (
-              <div className="text-gray-500">
-                Slug: <span className="font-mono text-gray-700">{tenant.slug}</span>
-              </div>
-            )}
-            {tenant.description && <p className="border-t border-gray-100 pt-3 text-gray-600">{tenant.description}</p>}
-          </div>
-        </div>
-      </div>
-
-      {/* Users Section */}
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-semibold text-gray-900">
-          Пользователи <span className="tabular-nums text-gray-400">({tenantUsers.length})</span>
-        </h2>
-        <button onClick={openCreateUser} className="btn-primary btn-sm">
-          <Plus className="w-4 h-4" />
-          Новый пользователь
-        </button>
-      </div>
-
-      {tenantUsers.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title="Нет пользователей"
-          description="Создайте первого сотрудника"
-          action={{ label: 'Создать', onClick: openCreateUser }}
-        />
-      ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Имя</th>
-                <th>Телефон</th>
-                <th>Роль</th>
-                <th>% ставка</th>
-                <th>Статус</th>
-                <th className="text-right">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tenantUsers.map((user) => (
-                <tr key={user.id}>
-                  <td className="font-medium text-gray-900">{user.fullName}</td>
-                  <td className="tabular-nums">{user.phone}</td>
-                  <td>
-                    <span className={roleBadgeMap[user.role] || 'badge-gray'}>
-                      {roleLabels[user.role] || user.role}
-                    </span>
-                  </td>
-                  <td className="tabular-nums">{user.salaryPercent}%</td>
-                  <td>
-                    {user.isActive ? (
-                      <span className="badge-green">Активен</span>
-                    ) : (
-                      <span className="badge-red">Неактивен</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => openEditUser(user)}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                        title="Редактировать"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteUserId(user.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                        title="Уволить"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       )}
 
-      {/* Tenant Edit Modal */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
+        {/* Подписка + показатели (superadmin cabinet) */}
+        <Card padding="none" className="xl:col-span-2">
+          <CardHeader icon={CreditCard} title="Подписка" subtitle="Тариф, срок и лимит сотрудников" />
+          <div className="px-5 py-4">
+            {cabinetError && !subStatus ? (
+              <ErrorRow
+                message="Не удалось загрузить данные подписки"
+                onRetry={() => refetchCabinet()}
+                loading={cabinetFetching}
+              />
+            ) : !subStatus ? (
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-busy="true">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i}>
+                    <Skeleton variant="text" className="w-20" />
+                    <Skeleton className="mt-2 h-5 w-24" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <dl className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <MiniStat label="Тариф" value={subStatus.planName || 'Не назначен'} />
+                <MiniStat label="Стоимость" value={`${formatMoney(subStatus.planPrice)}/мес`} />
+                <MiniStat
+                  label="Действует до"
+                  value={
+                    subStatus.subscriptionEnd ? formatDateRu(subStatus.subscriptionEnd, 'd MMMM yyyy') : 'Не указано'
+                  }
+                  tone={subStatus.status === 'expired' ? 'bad' : 'neutral'}
+                />
+                <MiniStat label="Сотрудников" value={`${subStatus.currentUsers} / ${subStatus.maxUsers}`} />
+              </dl>
+            )}
+          </div>
+
+          {/* Показатели клиента — сигналы активности */}
+          <div className="border-t border-line px-5 py-4">
+            <h3 className="mb-3 text-sm font-semibold text-ink">Показатели клиента</h3>
+            {cabinetError && !metrics ? (
+              <p className="text-sm text-ink-3">Показатели недоступны — повторите загрузку выше.</p>
+            ) : !metrics ? (
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-busy="true">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-[76px] w-full rounded-lg" />
+                ))}
+              </div>
+            ) : (
+              <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <MetricTile
+                  icon={ClipboardList}
+                  label="Заказ-наряды"
+                  value={metrics.checksTotal}
+                  hint={`за 30 дней: ${metrics.checksLast30d}`}
+                />
+                <MetricTile
+                  icon={Banknote}
+                  label="Выручка"
+                  value={formatMoney(metrics.revenueTotal)}
+                  hint={`за 30 дней: ${formatMoney(metrics.revenueLast30d)}`}
+                />
+                <MetricTile
+                  icon={Users}
+                  label="Сотрудники"
+                  value={metrics.usersCount}
+                  hint={`активных: ${metrics.activeUsersCount}`}
+                />
+                <MetricTile
+                  icon={Package}
+                  label="Товары · активность"
+                  value={metrics.productsCount}
+                  hint={
+                    metrics.lastActivityAt ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Clock className="h-3 w-3" aria-hidden="true" />
+                        {formatDistanceToNow(parseISO(metrics.lastActivityAt), { addSuffix: true, locale: ru })}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1">
+                        <Activity className="h-3 w-3" aria-hidden="true" />
+                        нет активности
+                      </span>
+                    )
+                  }
+                />
+              </dl>
+            )}
+          </div>
+        </Card>
+
+        {/* Информация о тенанте */}
+        <Card padding="none">
+          <CardHeader icon={Info} iconTone="neutral" title="Информация" />
+          <div className="space-y-3 px-5 py-4">
+            <InfoRow icon={Phone} label="Телефон">
+              {tenant.phone ? (
+                <a
+                  href={`tel:${tenant.phone}`}
+                  className={cn('rounded tabular-nums hover:text-accent-text', focusRing)}
+                >
+                  {formatPhone(tenant.phone)}
+                </a>
+              ) : (
+                '—'
+              )}
+            </InfoRow>
+            <InfoRow icon={Mail} label="Email">
+              {tenant.email ? (
+                <a href={`mailto:${tenant.email}`} className={cn('rounded hover:text-accent-text', focusRing)}>
+                  {tenant.email}
+                </a>
+              ) : (
+                '—'
+              )}
+            </InfoRow>
+            <InfoRow icon={MapPin} label="Адрес">
+              {tenant.address || '—'}
+            </InfoRow>
+            <InfoRow icon={Users} label="Пользователей">
+              <span className="tabular-nums">
+                Пользователей: {tenantUsers.length} / {tenant.maxUsers}
+              </span>
+            </InfoRow>
+            <InfoRow icon={CalendarDays} label="Подписка до">
+              <span className="text-ink-3">Подписка до: </span>
+              {subscriptionEnd ? (
+                <span className={cn('tabular-nums', isExpired ? 'font-medium text-bad-text' : 'text-ink-2')}>
+                  {format(subscriptionEnd, 'd MMM yyyy', { locale: ru })}
+                </span>
+              ) : (
+                <span className="text-ink-3">не указано</span>
+              )}
+            </InfoRow>
+            {tenant.subscriptionNote && (
+              <InfoRow icon={StickyNote} label="Примечание">
+                {tenant.subscriptionNote}
+              </InfoRow>
+            )}
+            {tenant.slug && (
+              <p className="text-sm text-ink-3">
+                Slug: <span className="font-mono text-ink-2">{tenant.slug}</span>
+              </p>
+            )}
+            {tenant.description && <p className="border-t border-line pt-3 text-sm text-ink-2">{tenant.description}</p>}
+          </div>
+        </Card>
+      </div>
+
+      {/* Сотрудники */}
+      <Card padding="none">
+        <CardHeader
+          icon={Users}
+          title="Сотрудники"
+          subtitle={`${tenantUsers.length} из ${tenant.maxUsers} по лимиту тарифа`}
+          divider={tenantUsers.length === 0}
+          actions={
+            <Button variant="secondary" size="sm" icon={Plus} onClick={openCreateUser}>
+              Новый пользователь
+            </Button>
+          }
+        />
+        <DataTable
+          bare
+          caption={`Сотрудники автосервиса «${tenant.name}»`}
+          rows={tenantUsers}
+          rowKey={(u) => u.id}
+          columns={userColumns}
+          emptyState={{
+            icon: Users,
+            title: 'Нет пользователей',
+            description: 'Создайте первого сотрудника',
+            action: { label: 'Создать', onClick: openCreateUser },
+          }}
+        />
+      </Card>
+
+      {/* Редактирование автосервиса */}
       <Modal
         isOpen={tenantModalOpen}
         onClose={() => setTenantModalOpen(false)}
         title="Редактировать автосервис"
         size="lg"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setTenantModalOpen(false)}
+              disabled={updateTenantMutation.isPending}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" form={`${uid}-tenant-form`} loading={updateTenantMutation.isPending}>
+              Сохранить
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleTenantSubmit} className="space-y-4">
-          <div>
-            <label className="label">Название</label>
-            <input
-              type="text"
-              className="input"
+        <form id={`${uid}-tenant-form`} onSubmit={handleTenantSubmit} className="space-y-4">
+          <Field label="Название" htmlFor={`${uid}-t-name`} required>
+            <Input
+              id={`${uid}-t-name`}
+              autoComplete="organization"
               value={tenantForm.name}
               onChange={(e) => setTenantForm({ ...tenantForm, name: e.target.value })}
               required
             />
-          </div>
+          </Field>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Телефон</label>
-              <input
+            <Field label="Телефон" htmlFor={`${uid}-t-phone`}>
+              <Input
+                id={`${uid}-t-phone`}
                 type="tel"
-                className="input"
+                inputMode="tel"
                 value={tenantForm.phone}
                 onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
               />
-            </div>
-            <div>
-              <label className="label">Email</label>
-              <input
+            </Field>
+            <Field label="Email" htmlFor={`${uid}-t-email`}>
+              <Input
+                id={`${uid}-t-email`}
                 type="email"
-                className="input"
+                inputMode="email"
                 value={tenantForm.email}
                 onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
               />
-            </div>
+            </Field>
           </div>
-          <div>
-            <label className="label">Адрес</label>
-            <input
-              type="text"
-              className="input"
+          <Field label="Адрес" htmlFor={`${uid}-t-address`}>
+            <Input
+              id={`${uid}-t-address`}
+              autoComplete="street-address"
               value={tenantForm.address}
               onChange={(e) => setTenantForm({ ...tenantForm, address: e.target.value })}
             />
-          </div>
-          <div>
-            <label className="label">Описание</label>
-            <textarea
-              className="input"
+          </Field>
+          <Field label="Описание" htmlFor={`${uid}-t-desc`}>
+            <Textarea
+              id={`${uid}-t-desc`}
               rows={2}
               value={tenantForm.description}
               onChange={(e) => setTenantForm({ ...tenantForm, description: e.target.value })}
             />
+          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Максимум пользователей"
+              htmlFor={`${uid}-t-max`}
+              hint="Меняется автоматически при назначении тарифа. Ручное значение — осознанное исключение."
+            >
+              <Input
+                id={`${uid}-t-max`}
+                inputMode="numeric"
+                className="tabular-nums"
+                value={tenantForm.maxUsers}
+                onChange={(e) => setTenantForm({ ...tenantForm, maxUsers: digitsOnly(e.target.value) })}
+              />
+            </Field>
+            <Field
+              label="Доп. минуты голоса"
+              htmlFor={`${uid}-t-voice`}
+              hint="Надбавка к пакету минут тарифа. 0 — без надбавки."
+            >
+              <Input
+                id={`${uid}-t-voice`}
+                inputMode="numeric"
+                className="tabular-nums"
+                value={tenantForm.voiceMinutesExtra}
+                onChange={(e) => setTenantForm({ ...tenantForm, voiceMinutesExtra: digitsOnly(e.target.value) })}
+                rightSlot={<span className="text-xs">мин</span>}
+              />
+            </Field>
           </div>
-          <div>
-            <label className="label">Максимум пользователей</label>
-            <input
-              type="number"
-              className="input"
-              value={tenantForm.maxUsers}
-              onChange={(e) => setTenantForm({ ...tenantForm, maxUsers: Number(e.target.value) })}
-              min={1}
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Меняется автоматически при назначении тарифа. Ручное значение — осознанное исключение для этого
-              автосервиса.
-            </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Подписка до" htmlFor={`${uid}-t-sub`}>
+              <Input
+                id={`${uid}-t-sub`}
+                type="date"
+                className="tabular-nums"
+                value={tenantForm.subscriptionEnd}
+                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })}
+              />
+            </Field>
+            <Field label="Примечание к подписке" htmlFor={`${uid}-t-note`}>
+              <Input
+                id={`${uid}-t-note`}
+                value={tenantForm.subscriptionNote}
+                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
+              />
+            </Field>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 border-t border-line pt-4">
             <Switch
+              id={`${uid}-t-active`}
               checked={tenantForm.isActive}
               onChange={(v) => setTenantForm({ ...tenantForm, isActive: v })}
               label="Автосервис активен"
             />
-            <span className="text-sm font-medium text-gray-700">{tenantForm.isActive ? 'Активна' : 'Неактивна'}</span>
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label">Подписка до</label>
-              <input
-                type="date"
-                className="input"
-                value={tenantForm.subscriptionEnd}
-                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="label">Примечание к подписке</label>
-              <input
-                type="text"
-                className="input"
-                value={tenantForm.subscriptionNote}
-                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="label">Доп. минуты голоса (надбавка)</label>
-            <input
-              type="number"
-              className="input"
-              value={tenantForm.voiceMinutesExtra}
-              onChange={(e) => setTenantForm({ ...tenantForm, voiceMinutesExtra: Number(e.target.value) })}
-              min={0}
-              step={1}
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Прибавляется к пакету минут голосового ввода из тарифа. 0 = без надбавки.
-            </p>
-          </div>
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={() => setTenantModalOpen(false)} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={updateTenantMutation.isPending} className="btn-primary">
-              {updateTenantMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                'Сохранить'
-              )}
-            </button>
+            <label htmlFor={`${uid}-t-active`} className="text-sm font-medium text-ink-2">
+              {tenantForm.isActive ? 'Автосервис активен' : 'Автосервис отключён — сотрудники не войдут'}
+            </label>
           </div>
         </form>
       </Modal>
 
-      {/* User Create/Edit Modal */}
+      {/* Пользователь: создание / редактирование */}
       <Modal
         isOpen={userModalOpen}
         onClose={closeUserModal}
         title={editingUser ? 'Редактировать пользователя' : 'Новый пользователь'}
+        description="Права сотрудника определяются ролью; тонкая настройка ролей — в приложении владельца."
         size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeUserModal} disabled={isUserSaving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={`${uid}-user-form`} loading={isUserSaving}>
+              {editingUser ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleUserSubmit} className="space-y-4">
-          <div>
-            <label className="label">ФИО</label>
-            <input
-              type="text"
-              className="input"
+        <form id={`${uid}-user-form`} onSubmit={handleUserSubmit} className="space-y-4">
+          <Field label="ФИО" htmlFor={`${uid}-u-name`} required>
+            <Input
+              id={`${uid}-u-name`}
+              autoComplete="off"
               value={userForm.fullName}
               onChange={(e) => setUserForm({ ...userForm, fullName: e.target.value })}
               placeholder="Иванов Иван Иванович"
               required
             />
-          </div>
-          <div>
-            <label className="label">Телефон (логин для входа)</label>
-            <input
+          </Field>
+          <Field label="Телефон (логин для входа)" htmlFor={`${uid}-u-phone`} required>
+            <Input
+              id={`${uid}-u-phone`}
               type="tel"
-              className="input"
+              inputMode="tel"
+              autoComplete="off"
+              className="tabular-nums"
               value={userForm.phone}
               onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })}
               placeholder="+7 (XXX) XXX-XX-XX"
               required
             />
-          </div>
-          {!editingUser ? (
-            <div>
-              <label className="label">Пароль</label>
-              <input
-                type="password"
-                className="input"
-                value={userForm.password}
-                onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                placeholder="Введите пароль"
-                required
-              />
-            </div>
-          ) : (
-            <div>
-              <label className="label">Новый пароль (оставьте пустым, чтобы не менять)</label>
-              <input
-                type="password"
-                className="input"
-                value={userForm.password}
-                onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                placeholder="Новый пароль"
-              />
-            </div>
-          )}
-          <div>
-            <label className="label">Роль</label>
-            <select
-              className="input"
-              value={userForm.role}
-              onChange={(e) => setUserForm({ ...userForm, role: e.target.value as UserRole })}
-            >
-              <option value={UserRole.DIRECTOR}>Директор</option>
-              <option value={UserRole.ADMIN}>Админ</option>
-              <option value={UserRole.MASTER}>Мастер</option>
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
-              Права сотрудника определяются ролью. Тонкая настройка ролей — в приложении владельца автосервиса.
-            </p>
-          </div>
-          <div>
-            <label className="label">% ставка от услуг</label>
-            <input
-              type="number"
-              className="input"
-              value={userForm.salaryPercent}
-              onChange={(e) => setUserForm({ ...userForm, salaryPercent: Number(e.target.value) })}
-              min={0}
-              max={100}
+          </Field>
+          <Field
+            label={editingUser ? 'Новый пароль' : 'Пароль'}
+            htmlFor={`${uid}-u-pass`}
+            required={!editingUser}
+            hint={editingUser ? 'Оставьте пустым, чтобы не менять. Минимум 8 символов.' : 'Минимум 8 символов'}
+          >
+            <Input
+              id={`${uid}-u-pass`}
+              type="password"
+              autoComplete="new-password"
+              value={userForm.password}
+              onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+              required={!editingUser}
             />
+          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Роль" htmlFor={`${uid}-u-role`}>
+              <Select
+                id={`${uid}-u-role`}
+                value={userForm.role}
+                onChange={(e) => setUserForm({ ...userForm, role: e.target.value as UserRole })}
+              >
+                <option value={UserRole.DIRECTOR}>Директор</option>
+                <option value={UserRole.ADMIN}>Администратор</option>
+                <option value={UserRole.MASTER}>Мастер</option>
+              </Select>
+            </Field>
+            <Field label="Ставка от услуг" htmlFor={`${uid}-u-percent`}>
+              <Input
+                id={`${uid}-u-percent`}
+                inputMode="numeric"
+                className="tabular-nums"
+                value={userForm.salaryPercent}
+                onChange={(e) =>
+                  setUserForm({
+                    ...userForm,
+                    salaryPercent: String(Math.min(100, Number(digitsOnly(e.target.value)) || 0)),
+                  })
+                }
+                rightSlot={<span className="text-xs">%</span>}
+              />
+            </Field>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 border-t border-line pt-4">
             <Switch
+              id={`${uid}-u-active`}
               checked={userForm.isActive}
               onChange={(v) => setUserForm({ ...userForm, isActive: v })}
               label="Сотрудник активен"
             />
-            <span className="text-sm font-medium text-gray-700">{userForm.isActive ? 'Активен' : 'Неактивен'}</span>
-          </div>
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeUserModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={isUserSaving} className="btn-primary">
-              {isUserSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : editingUser ? (
-                'Сохранить'
-              ) : (
-                'Создать'
-              )}
-            </button>
+            <label htmlFor={`${uid}-u-active`} className="text-sm font-medium text-ink-2">
+              {userForm.isActive ? 'Сотрудник активен' : 'Неактивен — вход закрыт'}
+            </label>
           </div>
         </form>
       </Modal>
 
-      {/* Dismiss User Confirmation */}
+      {/* Увольнение */}
       <ConfirmDialog
         isOpen={!!deleteUserId}
         onClose={() => setDeleteUserId(null)}
@@ -1064,189 +1108,154 @@ export default function AdminTenantDetailPage() {
           setDeleteUserId(null);
         }}
         title="Уволить сотрудника"
-        message="Уволить сотрудника? Он переместится в Уволенные, восстановить можно в течение года."
+        message="Уволить сотрудника? Он переместится в «Уволенные», восстановить можно в течение года."
         confirmText="Уволить"
         variant="danger"
       />
 
-      {/* Extend Subscription Modal — paid/free segmented flow */}
-      <Modal isOpen={extendModalOpen} onClose={() => setExtendModalOpen(false)} title="Продлить подписку" size="sm">
-        <div className="space-y-4">
-          {/* Current period */}
-          <div className="rounded-xl bg-gray-50 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-gray-500">Текущий срок</span>
-              <span className="text-sm font-semibold tabular-nums text-gray-900">
-                {subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указан'}
-              </span>
-            </div>
-            {subStatus?.currentPeriodKind && (
-              <div className="mt-2">
-                <SubscriptionPeriodBadge
-                  kind={subStatus.currentPeriodKind}
-                  until={subStatus.subscriptionEnd}
-                  size="sm"
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Paid / Free segmented toggle */}
-          <div>
-            <label className="label">Тип продления</label>
-            <div className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1">
-              <button
-                type="button"
-                onClick={() => setExtendMode('paid')}
-                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
-                  extendMode === 'paid' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Wallet className="h-4 w-4" />
-                Платно
-              </button>
-              <button
-                type="button"
-                onClick={() => setExtendMode('free')}
-                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
-                  extendMode === 'free' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Gift className="h-4 w-4" />
-                Бесплатно
-              </button>
-            </div>
-            <p className="mt-1.5 text-xs text-gray-500">
+      {/* Продление подписки — платно / бесплатно */}
+      <Modal
+        isOpen={extendModalOpen}
+        onClose={() => setExtendModalOpen(false)}
+        title="Продлить подписку"
+        description={`Текущий срок: ${subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указан'}`}
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setExtendModalOpen(false)} disabled={extendMutation.isPending}>
+              Отмена
+            </Button>
+            <Button onClick={handleExtendSubmit} disabled={!canSubmitExtend} loading={extendMutation.isPending}>
               {extendMode === 'paid'
-                ? 'Платёж запишется в выручку по подпискам.'
-                : 'Бесплатное продление не учитывается как выручка.'}
-            </p>
-          </div>
-
-          {/* Amount — paid only */}
-          {extendMode === 'paid' && (
-            <div>
-              <label className="label">Сумма платежа, ₽</label>
-              <input
-                type="number"
-                className="input tabular-nums"
-                value={extendAmount}
-                onChange={(e) => setExtendAmount(e.target.value)}
-                placeholder="например, 2990"
-                min={1}
-                inputMode="numeric"
-              />
-            </div>
+                ? extendAmountValid
+                  ? `Продлить · ${formatMoney(extendAmountNum)}`
+                  : 'Продлить'
+                : 'Продлить бесплатно'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {subStatus?.currentPeriodKind && (
+            <SubscriptionPeriodBadge kind={subStatus.currentPeriodKind} until={subStatus.subscriptionEnd} />
           )}
 
-          {/* Quick presets fill the until-date */}
-          <div>
-            <label className="label">Быстрое продление</label>
-            <div className="grid grid-cols-3 gap-2">
-              {EXTEND_PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  onClick={() => applyExtendPreset(preset.add)}
-                  className="btn-secondary justify-center py-2 text-sm"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-xs text-gray-400">
-              Считаются от {subscriptionEnd && !isExpired ? 'текущего срока' : 'сегодня'} и подставляют дату ниже.
-            </p>
-          </div>
+          <Field
+            label="Тип продления"
+            hint={
+              extendMode === 'paid'
+                ? 'Платёж запишется в выручку по подпискам.'
+                : 'Бесплатное продление не учитывается как выручка.'
+            }
+          >
+            <SegmentedControl<'paid' | 'free'>
+              aria-label="Тип продления"
+              fullWidth
+              value={extendMode}
+              onChange={setExtendMode}
+              options={[
+                { value: 'paid', label: 'Платно', icon: Wallet },
+                { value: 'free', label: 'Бесплатно', icon: Gift },
+              ]}
+            />
+          </Field>
 
-          {/* Until date */}
-          <div>
-            <label className="label">Действует до</label>
-            <input
+          {extendMode === 'paid' && (
+            <Field
+              label="Сумма платежа"
+              htmlFor={`${uid}-ext-amount`}
+              error={extendAmount && !extendAmountValid ? 'Введите сумму больше 0.' : undefined}
+            >
+              <Input
+                id={`${uid}-ext-amount`}
+                inputMode="decimal"
+                className="tabular-nums"
+                value={extendAmount}
+                onChange={(e) => setExtendAmount(digitsOnly(e.target.value))}
+                placeholder="например, 2990"
+                invalid={!!extendAmount && !extendAmountValid}
+                rightSlot={<span className="text-xs">₽</span>}
+              />
+            </Field>
+          )}
+
+          <Field
+            label="Быстрое продление"
+            hint={`Считается от ${subscriptionEnd && !isExpired ? 'текущего срока' : 'сегодня'} и подставляет дату ниже.`}
+          >
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрое продление">
+              {EXTEND_PRESETS.map((preset) => {
+                const presetDate = format(preset.add(extendAnchor()), 'yyyy-MM-dd');
+                return (
+                  <ToggleChip
+                    key={preset.label}
+                    active={extendUntil === presetDate}
+                    onClick={() => applyExtendPreset(preset.add)}
+                  >
+                    {preset.label}
+                  </ToggleChip>
+                );
+              })}
+            </div>
+          </Field>
+
+          <Field
+            label="Действует до"
+            htmlFor={`${uid}-ext-until`}
+            error={extendUntil && !extendUntilValid ? 'Дата должна быть в будущем.' : undefined}
+          >
+            <Input
+              id={`${uid}-ext-until`}
               type="date"
-              className="input tabular-nums"
+              className="tabular-nums"
               value={extendUntil}
               min={extendTodayStr}
+              invalid={!!extendUntil && !extendUntilValid}
               onChange={(e) => setExtendUntil(e.target.value)}
             />
-            {extendUntil && !extendUntilValid && (
-              <p className="mt-1 text-xs text-red-600">Дата должна быть в будущем.</p>
-            )}
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
-            <button type="button" onClick={() => setExtendModalOpen(false)} className="btn-secondary">
-              Отмена
-            </button>
-            <button
-              type="button"
-              onClick={handleExtendSubmit}
-              disabled={!canSubmitExtend || extendMutation.isPending}
-              className="btn-primary"
-            >
-              {extendMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Продление...
-                </>
-              ) : extendMode === 'paid' ? (
-                extendAmountValid ? (
-                  `Продлить · ${formatRub(extendAmountNum)}`
-                ) : (
-                  'Продлить'
-                )
-              ) : (
-                'Продлить бесплатно'
-              )}
-            </button>
-          </div>
+          </Field>
         </div>
       </Modal>
 
-      {/* Assign Plan Modal */}
-      <Modal isOpen={planModalOpen} onClose={() => setPlanModalOpen(false)} title="Назначить тариф" size="sm">
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Назначение тарифа синхронизирует цену и лимит сотрудников автосервиса.
-          </p>
-
-          <div>
-            <label className="label">Тариф</label>
-            <select className="input" value={selectedPlanId} onChange={(e) => setSelectedPlanId(e.target.value)}>
-              <option value="">— Выберите тариф —</option>
-              {(plans ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} — {formatRub(p.monthlyPrice)}/мес · до {p.maxUsers} сотр.
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
-            <button type="button" onClick={() => setPlanModalOpen(false)} className="btn-secondary">
+      {/* Назначить тариф */}
+      <Modal
+        isOpen={planModalOpen}
+        onClose={() => setPlanModalOpen(false)}
+        title="Назначить тариф"
+        description="Назначение тарифа синхронизирует цену и лимит сотрудников автосервиса."
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPlanModalOpen(false)} disabled={assignPlanMutation.isPending}>
               Отмена
-            </button>
-            <button
-              type="button"
-              disabled={!selectedPlanId || assignPlanMutation.isPending}
+            </Button>
+            <Button
+              disabled={!selectedPlanId}
               onClick={() => selectedPlanId && assignPlanMutation.mutate(selectedPlanId)}
-              className="btn-primary"
+              loading={assignPlanMutation.isPending}
             >
-              {assignPlanMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Назначение...
-                </>
-              ) : (
-                'Назначить'
-              )}
-            </button>
-          </div>
-        </div>
+              Назначить
+            </Button>
+          </>
+        }
+      >
+        <Field label="Тариф" htmlFor={`${uid}-plan`}>
+          <Select
+            id={`${uid}-plan`}
+            value={selectedPlanId}
+            onChange={(e) => setSelectedPlanId(e.target.value)}
+            placeholder="— Выберите тариф —"
+          >
+            {(plans ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} — {formatMoney(p.monthlyPrice)}/мес · до {p.maxUsers} сотр.
+              </option>
+            ))}
+          </Select>
+        </Field>
       </Modal>
 
-      {/* Impersonate Confirmation */}
+      {/* Вход как владелец */}
       <ConfirmDialog
         isOpen={impersonateConfirm}
         onClose={() => setImpersonateConfirm(false)}
@@ -1260,52 +1269,40 @@ export default function AdminTenantDetailPage() {
         variant="primary"
       />
 
-      {/* Suspend Modal (reason + confirm) */}
+      {/* Приостановка (причина + подтверждение) */}
       <Modal
         isOpen={suspendModalOpen}
         onClose={() => setSuspendModalOpen(false)}
         title="Приостановить автосервис"
+        description={`Сотрудники «${tenant.name}» потеряют доступ до возобновления. Срок подписки не меняется.`}
         size="sm"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Сотрудники «{tenant.name}» потеряют доступ к приложению до возобновления. Срок подписки при этом не
-            меняется.
-          </p>
-          <div>
-            <label className="label">Причина (необязательно)</label>
-            <textarea
-              className="input"
-              rows={3}
-              value={suspendReason}
-              onChange={(e) => setSuspendReason(e.target.value)}
-              placeholder="Например: задолженность по оплате"
-            />
-          </div>
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
-            <button type="button" onClick={() => setSuspendModalOpen(false)} className="btn-secondary">
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setSuspendModalOpen(false)} disabled={suspendMutation.isPending}>
               Отмена
-            </button>
-            <button
-              type="button"
-              disabled={suspendMutation.isPending}
+            </Button>
+            <Button
+              variant="danger"
               onClick={() => suspendMutation.mutate(suspendReason.trim() || undefined)}
-              className="btn-danger"
+              loading={suspendMutation.isPending}
             >
-              {suspendMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Приостановка...
-                </>
-              ) : (
-                'Приостановить'
-              )}
-            </button>
-          </div>
-        </div>
+              Приостановить
+            </Button>
+          </>
+        }
+      >
+        <Field label="Причина (необязательно)" htmlFor={`${uid}-suspend-reason`}>
+          <Textarea
+            id={`${uid}-suspend-reason`}
+            rows={3}
+            value={suspendReason}
+            onChange={(e) => setSuspendReason(e.target.value)}
+            placeholder="Например: задолженность по оплате"
+          />
+        </Field>
       </Modal>
 
-      {/* Unsuspend Confirmation */}
+      {/* Возобновление */}
       <ConfirmDialog
         isOpen={unsuspendConfirm}
         onClose={() => setUnsuspendConfirm(false)}
@@ -1318,6 +1315,32 @@ export default function AdminTenantDetailPage() {
         confirmText="Возобновить"
         variant="primary"
       />
+    </div>
+  );
+}
+
+/** Плитка показателя активности клиента: подпись с иконкой, значение, подсказка. */
+function MetricTile({
+  icon: Icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: typeof Users;
+  label: string;
+  value: React.ReactNode;
+  hint?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg bg-surface-2 p-3">
+      <dt className="mb-1 flex items-center gap-1.5 text-xs text-ink-3">
+        <Icon className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+        {label}
+      </dt>
+      <dd>
+        <p className="text-lg font-semibold tabular-nums tracking-tight text-ink">{value}</p>
+        {hint && <p className="text-xs tabular-nums text-ink-3">{hint}</p>}
+      </dd>
     </div>
   );
 }

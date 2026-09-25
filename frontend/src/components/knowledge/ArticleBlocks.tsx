@@ -3,67 +3,70 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X, PlayCircle } from 'lucide-react';
 import type { KnowledgeBlock } from '../../types';
+import { cn } from '../../ui/cn';
+import { focusRing } from '../../ui/tokens';
 import { parseVkEmbedUrl } from './vkVideo';
+import { articleType, headingClass, headingTag } from './articleTypography';
 
 // ───────────────────────────────────────────────────────────────────────
 //  Block reader — renders an ordered KnowledgeBlock[] in article order.
-//  text → paragraph, heading → h2/h3, image → figure (click → lightbox),
-//  video → responsive VK iframe with caption.
+//  text → paragraph, heading → h3/h4 (под h2 заголовка статьи),
+//  image → figure (click → lightbox), video → responsive VK iframe + caption.
+//  Типографика — общая шкала articleTypography.ts (та же, что у markdown).
 // ───────────────────────────────────────────────────────────────────────
 
 export default function ArticleBlocksReader({ blocks }: { blocks: KnowledgeBlock[] }) {
   const [lightbox, setLightbox] = useState<{ url: string; caption?: string } | null>(null);
 
   return (
-    <div className="space-y-4 text-[15px] leading-relaxed text-gray-800">
+    <div className={articleType.body}>
       {blocks.map((block, i) => {
         switch (block.type) {
-          case 'heading':
-            return block.level === 3 ? (
-              <h3 key={i} className="mt-5 text-lg font-semibold text-gray-900 first:mt-0">
+          case 'heading': {
+            // Блок «H2» — первый уровень внутри статьи (h3 под h2 заголовка), «H3» — второй.
+            const depth = block.level === 3 ? 1 : 0;
+            const Tag = headingTag(3 + depth);
+            return (
+              <Tag key={i} className={headingClass(depth)}>
                 {block.text}
-              </h3>
-            ) : (
-              <h2 key={i} className="mt-6 text-xl font-bold text-gray-900 first:mt-0">
-                {block.text}
-              </h2>
+              </Tag>
             );
+          }
 
           case 'text':
-            // Preserve author line breaks without a markdown dependency.
+            // Переносы автора сохраняем без markdown-зависимости.
             return (
-              <p key={i} className="whitespace-pre-wrap">
+              <p key={i} className={cn(articleType.paragraph, 'whitespace-pre-wrap')}>
                 {block.text}
               </p>
             );
 
           case 'image':
             return (
-              <figure key={i} className="my-2">
+              <figure key={i} className={articleType.figure}>
                 <button
                   type="button"
                   onClick={() => setLightbox({ url: block.url, caption: block.caption })}
-                  className="block w-full overflow-hidden rounded-xl border border-gray-200 bg-gray-50 transition-opacity hover:opacity-95"
+                  aria-label={block.caption ? `Открыть изображение: ${block.caption}` : 'Открыть изображение'}
+                  className={cn('block w-full overflow-hidden rounded-lg', focusRing)}
                 >
                   <img
                     src={block.url}
                     alt={block.caption || ''}
                     loading="lazy"
-                    className="max-h-[28rem] w-full object-contain"
+                    className={cn(articleType.image, 'max-h-[28rem]')}
                   />
                 </button>
-                {block.caption && (
-                  <figcaption className="mt-1.5 text-center text-xs text-gray-500">{block.caption}</figcaption>
-                )}
+                {block.caption && <figcaption className={articleType.figcaption}>{block.caption}</figcaption>}
               </figure>
             );
 
           case 'video': {
             const embed = parseVkEmbedUrl(block.url);
             return (
-              <figure key={i} className="my-2">
+              <figure key={i} className={articleType.figure}>
                 {embed ? (
-                  <div className="relative overflow-hidden rounded-xl border border-gray-200 bg-black pt-[56.25%]">
+                  <div className="relative overflow-hidden rounded-lg border border-line bg-ink pt-[56.25%]">
                     <iframe
                       src={embed}
                       title={block.caption || 'VK видео'}
@@ -78,14 +81,15 @@ export default function ArticleBlocksReader({ blocks }: { blocks: KnowledgeBlock
                     href={block.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-primary-600 hover:bg-gray-100"
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border border-line bg-surface-2 px-4 py-3 text-sm font-medium text-accent-text hover:bg-surface-3',
+                      focusRing,
+                    )}
                   >
-                    <PlayCircle className="h-5 w-5" /> Открыть видео в VK
+                    <PlayCircle className="h-5 w-5" aria-hidden="true" /> Открыть видео в VK
                   </a>
                 )}
-                {block.caption && (
-                  <figcaption className="mt-1.5 text-center text-xs text-gray-500">{block.caption}</figcaption>
-                )}
+                {block.caption && <figcaption className={articleType.figcaption}>{block.caption}</figcaption>}
               </figure>
             );
           }
@@ -115,26 +119,30 @@ function Lightbox({ url, caption, onClose }: { url: string; caption?: string; on
   return createPortal(
     <AnimatePresence>
       <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-label={caption || 'Изображение'}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: 0.18 }}
-        className="fixed inset-0 z-[10000] flex flex-col items-center justify-center bg-black/85 p-4"
+        transition={{ duration: 0.16 }}
+        className="fixed inset-0 z-[10000] flex flex-col items-center justify-center bg-ink/85 p-4"
         onClick={onClose}
       >
         <button
           type="button"
           onClick={onClose}
           aria-label="Закрыть"
-          className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+          autoFocus
+          className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
         >
-          <X className="h-5 w-5" />
+          <X className="h-5 w-5" aria-hidden="true" />
         </button>
         <motion.img
-          initial={{ scale: 0.96, opacity: 0 }}
+          initial={{ scale: 0.97, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.96, opacity: 0 }}
-          transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+          exit={{ scale: 0.97, opacity: 0 }}
+          transition={{ duration: 0.18, ease: [0.25, 1, 0.5, 1] }}
           src={url}
           alt={caption || ''}
           onClick={(e) => e.stopPropagation()}

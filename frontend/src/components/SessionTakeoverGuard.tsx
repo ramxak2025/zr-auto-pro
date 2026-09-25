@@ -3,6 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 import { endSessionWithNotice } from '../api/axios';
 import { SESSION_TOKEN_KEY, inspectStoredSession } from '../utils/sessionToken';
+import { Button } from '../ui/Button';
 
 /**
  * ВТОРАЯ ВКЛАДКА ПОСЛЕ СМЕНЫ ФИЛИАЛА (167) — заслон на весь экран.
@@ -84,35 +85,38 @@ export default function SessionTakeoverGuard() {
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="session-takeover-title"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/60 p-4 backdrop-blur-sm"
+      aria-describedby="session-takeover-text"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-ink/60 p-4 backdrop-blur-[2px]"
     >
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-6 shadow-pop">
         <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-            <AlertTriangle className="h-5 w-5" />
+          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-warn-soft text-warn">
+            <AlertTriangle className="h-5 w-5" aria-hidden="true" />
           </span>
-          <div className="min-w-0">
-            <h2 id="session-takeover-title" className="text-base font-bold text-gray-900">
+          <div className="min-w-0" id="session-takeover-text">
+            <h2 id="session-takeover-title" className="text-md font-semibold text-ink">
               Сессия обновлена в другой вкладке
             </h2>
-            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            <p className="mt-2 text-sm leading-relaxed text-ink-2">
               В другой вкладке вы перешли в другой филиал или вошли под другим аккаунтом. Эта страница показывает данные
               прежнего филиала, поэтому работать в ней нельзя — иначе чек уйдёт не в тот автосервис.
             </p>
-            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            <p className="mt-2 text-sm leading-relaxed text-ink-2">
               Обновите страницу: вкладка откроется в текущем филиале, пароль вводить не нужно. Незавершённые
               заказ-наряды в этой вкладке будут потеряны.
             </p>
           </div>
         </div>
-        <button
-          type="button"
+        <Button
+          icon={RefreshCw}
+          fullWidth
+          size="lg"
+          className="mt-5"
           onClick={() => window.location.reload()}
-          className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700"
+          autoFocus
         >
-          <RefreshCw className="h-4 w-4" />
           Обновить страницу
-        </button>
+        </Button>
       </div>
     </div>
   );

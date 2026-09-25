@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Phone,
   PhoneIncoming,
@@ -12,21 +12,31 @@ import {
   Loader2,
   Play,
   Pause,
-  AlertCircle,
-  User,
   X,
-  Volume2,
-  Clock,
   ArrowDownLeft,
   ArrowUpRight,
+  CalendarDays,
 } from 'lucide-react';
-import { format, subDays, addDays } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { useTenantTimezone } from '../hooks/useTenantTimezone';
-import { zoned } from '../utils/tenantTime';
-import { formatDayKey, formatTimeShort } from '../../../shared/utils/formatters';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
+import { formatTimeShort } from '../../../shared/utils/formatters';
 import { useAuth } from '../contexts/AuthContext';
 import { callsApi } from '../api/services';
+import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
+import { ErrorRow } from '../components/dashboard/shared';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Card } from '../ui/Card';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { Skeleton } from '../ui/Skeleton';
+import { StatCard } from '../ui/StatCard';
+import { Tabs } from '../ui/Tabs';
+import { Toolbar, ToolbarGroup, ToolbarSeparator } from '../ui/Toolbar';
+import { cn } from '../ui/cn';
+import { focusRing, toneChip, type Tone } from '../ui/tokens';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,6 +69,7 @@ interface CallsSummary {
 }
 
 type FilterTab = 'all' | 'incoming' | 'outgoing' | 'missed';
+const FILTER_TABS: FilterTab[] = ['all', 'incoming', 'outgoing', 'missed'];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -84,11 +95,29 @@ function formatPhone(phone: string): string {
   return phone;
 }
 
+/** 'YYYY-MM-DD' → локальная Date без сдвига пояса (для календарной арифметики и подписи). */
+function parseDayKey(key: string): Date {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y || 1970, (m || 1) - 1, d || 1);
+}
+
+/** Соседний день от ключа — чистая календарная арифметика, пояс машины не влияет. */
+function shiftDayKey(key: string, days: number): string {
+  const d = parseDayKey(key);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** «25 сентября, пт» → «25 сентября, пт» с заглавной первой буквой (не CSS по словам). */
+const ucFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 // ---------------------------------------------------------------------------
 // Audio player (inline, not modal)
 // ---------------------------------------------------------------------------
 
-function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; phone: string; onClose: () => void }) {
+function AudioPlayer({ recordingId, onClose }: { recordingId: string; onClose: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,13 +141,13 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
         audio.addEventListener('timeupdate', () => setCurrent(audio.currentTime));
         audio.addEventListener('ended', () => setPlaying(false));
         audio.addEventListener('error', () => {
-          setError('Не удалось воспроизвести');
+          setError('Не удалось воспроизвести запись');
           setLoading(false);
         });
         audio.load();
       } catch {
         if (!cancelled) {
-          setError('Ошибка загрузки');
+          setError('Не удалось загрузить запись');
           setLoading(false);
         }
       }
@@ -144,19 +173,38 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
     }
   }, [playing]);
 
-  const seek = useCallback(
-    (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-      const bar = progressRef.current;
+  const seekTo = useCallback(
+    (time: number) => {
       const a = audioRef.current;
-      if (!bar || !a || !duration) return;
-      const rect = bar.getBoundingClientRect();
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      a.currentTime = pct * duration;
+      if (!a || !duration) return;
+      a.currentTime = Math.max(0, Math.min(duration, time));
       setCurrent(a.currentTime);
     },
     [duration],
   );
+
+  const seek = useCallback(
+    (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+      const bar = progressRef.current;
+      if (!bar || !duration) return;
+      const rect = bar.getBoundingClientRect();
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      seekTo(pct * duration);
+    },
+    [duration, seekTo],
+  );
+
+  // Клавиатура на ползунке: ←/→ — 5 с, Home/End — в начало/конец.
+  const onSliderKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowRight') seekTo(currentTime + 5);
+    else if (e.key === 'ArrowLeft') seekTo(currentTime - 5);
+    else if (e.key === 'Home') seekTo(0);
+    else if (e.key === 'End') seekTo(duration);
+    else if (e.key === ' ' || e.key === 'Enter') togglePlay();
+    else return;
+    e.preventDefault();
+  };
 
   const fmtTime = (s: number) => {
     if (!s || !isFinite(s)) return '0:00';
@@ -168,28 +216,23 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="bg-primary-50 border border-primary-100 rounded-xl p-3 mx-4 mb-3 animate-in slide-in-from-top-2 duration-200">
+    <div className="mx-4 mb-3 rounded-lg border border-accent/20 bg-accent-soft px-3 py-2.5 motion-safe:animate-pop-in">
       <div className="flex items-center gap-3">
-        <button
-          type="button"
+        <IconButton
+          label={playing ? 'Пауза' : 'Воспроизвести'}
+          icon={playing ? Pause : Play}
+          variant="primary"
           onClick={togglePlay}
           disabled={loading || !!error}
-          aria-label={playing ? 'Пауза' : 'Воспроизвести'}
-          title={playing ? 'Пауза' : 'Воспроизвести'}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-500 text-white shadow-sm hover:bg-primary-600 active:scale-95 transition-all flex-shrink-0 disabled:opacity-50"
-        >
-          {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : playing ? (
-            <Pause className="h-4 w-4" />
-          ) : (
-            <Play className="h-4 w-4 ml-0.5" />
-          )}
-        </button>
+          loading={loading}
+          className="rounded-full"
+        />
 
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           {error ? (
-            <p className="text-xs text-red-600">{error}</p>
+            <p className="text-xs text-bad-text" role="alert">
+              {error}
+            </p>
           ) : (
             <>
               <div
@@ -199,34 +242,25 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
                 aria-valuemin={0}
                 aria-valuemax={Math.round(duration) || 0}
                 aria-valuenow={Math.round(currentTime)}
+                aria-valuetext={`${fmtTime(currentTime)} из ${fmtTime(duration)}`}
                 tabIndex={0}
-                className="relative h-1.5 bg-primary-200 rounded-full cursor-pointer"
+                className={cn('relative h-1.5 cursor-pointer rounded-full bg-accent/20', focusRing)}
                 onClick={seek}
                 onTouchStart={seek}
                 onTouchMove={seek}
+                onKeyDown={onSliderKey}
               >
-                <div
-                  className="absolute left-0 top-0 h-full bg-primary-500 rounded-full"
-                  style={{ width: `${pct}%` }}
-                />
+                <div className="absolute left-0 top-0 h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
               </div>
-              <div className="flex justify-between mt-1">
-                <span className="text-[10px] text-primary-600">{fmtTime(currentTime)}</span>
-                <span className="text-[10px] text-primary-400">{fmtTime(duration)}</span>
+              <div className="mt-1 flex justify-between text-2xs tabular-nums text-accent-text">
+                <span>{fmtTime(currentTime)}</span>
+                <span>{fmtTime(duration)}</span>
               </div>
             </>
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Закрыть плеер"
-          title="Закрыть плеер"
-          className="p-1 rounded-lg hover:bg-primary-100 text-primary-400 flex-shrink-0"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <IconButton label="Закрыть плеер" icon={X} size="sm" onClick={onClose} />
       </div>
     </div>
   );
@@ -260,85 +294,78 @@ function CallRow({
   const callTime = call.date ? formatTimeShort(call.date, timeZone) : '';
   const isPlaying = activeRecording === call.recordingUrl;
 
+  const tone: Tone = isMissed ? (call.calledBack ? 'ok' : 'bad') : isIncoming ? 'ok' : 'info';
+  const Icon = isMissed ? (call.calledBack ? PhoneForwarded : PhoneMissed) : isIncoming ? ArrowDownLeft : ArrowUpRight;
+  const kindLabel = isMissed
+    ? call.calledBack
+      ? 'Пропущен, перезвонили'
+      : 'Пропущен'
+    : isIncoming
+      ? 'Входящий'
+      : 'Исходящий';
+
   return (
-    <div>
-      <div className="flex items-center gap-3 px-4 py-3 active:bg-gray-50 transition-colors">
-        {/* Left: direction indicator */}
-        <div
-          className={`flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 ${
-            isMissed && call.calledBack
-              ? 'bg-green-50'
-              : isMissed
-                ? 'bg-red-50'
-                : isIncoming
-                  ? 'bg-green-50'
-                  : 'bg-blue-50'
-          }`}
+    <li>
+      <div className="flex items-center gap-3 px-4 py-2.5">
+        <span
+          className={cn('flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg', toneChip[tone])}
+          role="img"
+          aria-label={kindLabel}
         >
-          {isMissed && call.calledBack ? (
-            <PhoneForwarded className="h-4 w-4 text-green-600" />
-          ) : isMissed ? (
-            <PhoneMissed className="h-4 w-4 text-red-500" />
-          ) : isIncoming ? (
-            <ArrowDownLeft className="h-4 w-4 text-green-600" />
-          ) : (
-            <ArrowUpRight className="h-4 w-4 text-blue-600" />
-          )}
-        </div>
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </span>
 
-        {/* Center: info */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className={`text-sm font-semibold ${isMissed ? 'text-red-600' : 'text-gray-900'}`}>
-              {formatPhone(displayPhone)}
-            </p>
-          </div>
-
+        <div className="min-w-0 flex-1">
+          <p
+            className={cn(
+              'text-sm font-semibold tabular-nums',
+              isMissed && !call.calledBack ? 'text-bad-text' : 'text-ink',
+            )}
+          >
+            {formatPhone(displayPhone)}
+          </p>
           {call.client ? (
             <Link
               to={`/clients/${call.client.id}`}
-              className="text-xs text-primary-600 hover:underline truncate block mt-0.5"
+              className={cn('mt-0.5 block truncate text-xs text-accent-text hover:underline', focusRing)}
             >
               {call.client.fullName}
-              {call.client.cars?.[0] && ` \u2022 ${call.client.cars[0].makeModel || call.client.cars[0].plateNumber}`}
+              {call.client.cars?.[0] && ` · ${call.client.cars[0].makeModel || call.client.cars[0].plateNumber}`}
             </Link>
           ) : (
-            <p className="text-xs text-gray-500 mt-0.5">Неизвестный номер</p>
+            <p className="mt-0.5 text-xs text-ink-3">Неизвестный номер</p>
           )}
         </div>
 
-        {/* Right: time + duration + play */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center gap-3">
           <div className="text-right">
-            <p className="text-xs text-gray-500">{callTime}</p>
-            {call.duration > 0 && <p className="text-[10px] text-gray-500">{formatDuration(call.duration)}</p>}
-            {isMissed && call.calledBack && <p className="text-[10px] font-medium text-green-600">Перезвонили</p>}
-            {isMissed && !call.calledBack && <p className="text-[10px] font-medium text-red-500">Пропущен</p>}
+            <p className="text-xs tabular-nums text-ink-3">{callTime}</p>
+            {call.duration > 0 && <p className="text-2xs tabular-nums text-ink-3">{formatDuration(call.duration)}</p>}
           </div>
-
+          {isMissed && (
+            <Badge tone={call.calledBack ? 'ok' : 'bad'} size="sm" className="hidden sm:inline-flex">
+              {call.calledBack ? 'Перезвонили' : 'Пропущен'}
+            </Badge>
+          )}
           {canListen && call.recordingUrl && (
-            <button
-              type="button"
+            <IconButton
+              label={isPlaying ? 'Пауза' : 'Прослушать запись'}
+              icon={isPlaying ? Pause : Play}
+              size="sm"
+              variant={isPlaying ? 'primary' : 'secondary'}
+              active={isPlaying}
+              className="rounded-full"
               onClick={() => onPlayRecording(isPlaying ? null : call.recordingUrl)}
-              aria-label={isPlaying ? 'Пауза' : 'Прослушать запись'}
-              title={isPlaying ? 'Пауза' : 'Прослушать запись'}
-              className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors flex-shrink-0 ${
-                isPlaying
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-gray-100 text-gray-500 hover:bg-primary-50 hover:text-primary-600'
-              }`}
-            >
-              {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
-            </button>
+            />
           )}
         </div>
       </div>
 
       {/* Inline audio player */}
       {isPlaying && call.recordingUrl && (
-        <AudioPlayer recordingId={call.recordingUrl} phone={displayPhone} onClose={() => onPlayRecording(null)} />
+        <AudioPlayer recordingId={call.recordingUrl} onClose={() => onPlayRecording(null)} />
       )}
-    </div>
+    </li>
   );
 }
 
@@ -346,37 +373,48 @@ function CallRow({
 // Main page
 // ---------------------------------------------------------------------------
 
-const filterTabs: { key: FilterTab; label: string; icon: typeof Phone }[] = [
-  { key: 'all', label: 'Все', icon: Phone },
-  { key: 'incoming', label: 'Вх.', icon: PhoneIncoming },
-  { key: 'outgoing', label: 'Исх.', icon: PhoneOutgoing },
-  { key: 'missed', label: 'Пропущ.', icon: PhoneMissed },
-];
-
 export default function CallsPage() {
   const { hasPermission } = useAuth();
   // День ленты и время звонков — по календарю автосервиса, тому же, по которому
   // сервер отбирает звонки за дату.
-  const timeZone = useTenantTimezone();
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const { timeZone, today } = useTenantCalendar();
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
+
+  // День и вкладка — в URL: F5 и пересылка ссылки открывают тот же день.
+  const [params, setParams] = useSearchParams();
+  const rawDate = params.get('date');
+  const dateStr = rawDate && DAY_KEY_RE.test(rawDate) && rawDate <= today ? rawDate : today;
+  const rawTab = params.get('tab') as FilterTab | null;
+  const activeTab: FilterTab = rawTab && FILTER_TABS.includes(rawTab) ? rawTab : 'all';
+
+  const updateParams = (next: { date?: string; tab?: FilterTab }) => {
+    setActiveRecording(null);
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        const d = next.date ?? dateStr;
+        const t = next.tab ?? activeTab;
+        if (d && d !== today) p.set('date', d);
+        else p.delete('date');
+        if (t !== 'all') p.set('tab', t);
+        else p.delete('tab');
+        return p;
+      },
+      { replace: true },
+    );
+  };
 
   // Волна «права как в Битрикс24»: только матрица (байпас superadmin/director —
   // внутри hasPermission; admin — по правам роли из /auth/me).
   const canView = hasPermission('calls_view');
   const canListen = hasPermission('calls_listen');
 
-  const dateStr = formatDayKey(selectedDate, timeZone);
-
+  const isToday = dateStr === today;
   const dateLabel = useMemo(() => {
-    const today = new Date();
-    const todayStr = formatDayKey(today, timeZone);
-    const yesterdayStr = formatDayKey(subDays(today, 1), timeZone);
-    if (dateStr === todayStr) return 'Сегодня';
-    if (dateStr === yesterdayStr) return 'Вчера';
-    return format(zoned(selectedDate, timeZone), 'd MMM, EEEEEE', { locale: ru });
-  }, [dateStr, selectedDate, timeZone]);
+    if (dateStr === today) return 'Сегодня';
+    if (dateStr === shiftDayKey(today, -1)) return 'Вчера';
+    return ucFirst(format(parseDayKey(dateStr), 'd MMMM, EEEEEE', { locale: ru }));
+  }, [dateStr, today]);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['calls', dateStr],
@@ -389,7 +427,7 @@ export default function CallsPage() {
     enabled: canView,
   });
 
-  const calls: Call[] = data?.calls ?? [];
+  const calls = useMemo<Call[]>(() => data?.calls ?? [], [data]);
   const summary: CallsSummary | undefined = data?.summary;
 
   const filteredCalls = useMemo(() => {
@@ -405,169 +443,157 @@ export default function CallsPage() {
     }
   }, [calls, activeTab]);
 
-  const goToPrevDay = () => {
-    setSelectedDate((d) => subDays(d, 1));
-    setActiveRecording(null);
-  };
-  const goToNextDay = () => {
-    const tomorrow = addDays(selectedDate, 1);
-    if (tomorrow <= new Date()) {
-      setSelectedDate(tomorrow);
-      setActiveRecording(null);
-    }
-  };
-  const isToday = formatDayKey(new Date(), timeZone) === dateStr;
-
   if (!canView) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <Phone className="h-12 w-12 text-gray-200 mb-4" />
-        <p className="text-lg font-semibold text-gray-900">Доступ ограничен</p>
-        <p className="text-sm text-gray-500 mt-1">У вас нет прав для просмотра звонков</p>
+      <div className="space-y-5">
+        <PageHeader title="Звонки" icon={Phone} />
+        <Card>
+          <EmptyState icon={Phone} title="Доступ ограничен" description="У вас нет прав для просмотра звонков" />
+        </Card>
       </div>
     );
   }
 
+  const tabItems = [
+    { key: 'all' as const, label: 'Все', icon: Phone, count: summary?.total },
+    { key: 'incoming' as const, label: 'Входящие', icon: PhoneIncoming, count: summary?.incoming },
+    { key: 'outgoing' as const, label: 'Исходящие', icon: PhoneOutgoing, count: summary?.outgoing },
+    { key: 'missed' as const, label: 'Пропущенные', icon: PhoneMissed, count: summary?.missed },
+  ];
+
   return (
-    <div className="space-y-4">
-      {/* Header + Date nav */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-bold text-gray-900">Звонки</h1>
-          <p className="text-xs text-gray-500">История и записи</p>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={goToPrevDay}
-            aria-label="Предыдущий день"
-            className="p-2 rounded-lg hover:bg-gray-100 text-gray-400"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <span className="text-sm font-medium text-gray-700 min-w-[80px] text-center">{dateLabel}</span>
-          <button
-            type="button"
-            onClick={goToNextDay}
+    <div className="space-y-5">
+      <PageHeader title="Звонки" icon={Phone} subtitle="История и записи разговоров по дням" />
+
+      <Toolbar>
+        <ToolbarGroup>
+          <IconButton
+            label="Предыдущий день"
+            icon={ChevronLeft}
+            variant="secondary"
+            onClick={() => updateParams({ date: shiftDayKey(dateStr, -1) })}
+          />
+          <span className="min-w-[7.5rem] text-center text-sm font-semibold text-ink" aria-live="polite">
+            {dateLabel}
+          </span>
+          <IconButton
+            label="Следующий день"
+            icon={ChevronRight}
+            variant="secondary"
             disabled={isToday}
-            aria-label="Следующий день"
-            className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 disabled:opacity-20"
-          >
-            <ChevronRight className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
+            onClick={() => updateParams({ date: shiftDayKey(dateStr, 1) })}
+          />
+        </ToolbarGroup>
+        <ToolbarSeparator />
+        <ToolbarGroup>
+          <Input
+            type="date"
+            aria-label="Выбрать день"
+            value={dateStr}
+            max={today}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (DAY_KEY_RE.test(v) && v <= today) updateParams({ date: v });
+            }}
+            leftIcon={CalendarDays}
+            className="!w-44"
+          />
+          {!isToday && (
+            <Button variant="ghost" onClick={() => updateParams({ date: today })}>
+              Сегодня
+            </Button>
+          )}
+        </ToolbarGroup>
+      </Toolbar>
 
       {/* Summary strip */}
-      <div className="flex gap-2">
-        {[
-          { label: 'Вх.', value: summary?.incoming ?? 0, color: 'text-green-600', bg: 'bg-green-50' },
-          { label: 'Исх.', value: summary?.outgoing ?? 0, color: 'text-blue-600', bg: 'bg-blue-50' },
-          { label: 'Пропущ.', value: summary?.missed ?? 0, color: 'text-red-600', bg: 'bg-red-50' },
-          { label: 'Без ответа', value: summary?.notCalledBack ?? 0, color: 'text-orange-600', bg: 'bg-orange-50' },
-        ].map((s) => (
-          <div key={s.label} className={`flex-1 ${s.bg} rounded-xl py-2.5 px-2 text-center`}>
-            <p className={`text-lg font-bold ${s.color}`}>{isLoading ? '-' : s.value}</p>
-            <p className="text-[10px] text-gray-500 mt-0.5">{s.label}</p>
-          </div>
-        ))}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard compact label="Входящие" value={summary?.incoming ?? 0} icon={ArrowDownLeft} loading={isLoading} />
+        <StatCard compact label="Исходящие" value={summary?.outgoing ?? 0} icon={ArrowUpRight} loading={isLoading} />
+        <StatCard
+          compact
+          label="Пропущено"
+          value={summary?.missed ?? 0}
+          icon={PhoneMissed}
+          tone={(summary?.missed ?? 0) > 0 ? 'bad' : 'neutral'}
+          loading={isLoading}
+        />
+        <StatCard
+          compact
+          label="Без перезвона"
+          value={summary?.notCalledBack ?? 0}
+          icon={PhoneForwarded}
+          tone={(summary?.notCalledBack ?? 0) > 0 ? 'warn' : 'neutral'}
+          hint={(summary?.notCalledBack ?? 0) > 0 ? 'нужно перезвонить' : undefined}
+          onClick={(summary?.notCalledBack ?? 0) > 0 ? () => updateParams({ tab: 'missed' }) : undefined}
+          loading={isLoading}
+        />
       </div>
-
-      {/* Not called back warning */}
-      {summary && summary.notCalledBack > 0 && (
-        <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-200 rounded-xl px-3.5 py-2.5">
-          <PhoneForwarded className="h-4 w-4 text-orange-500 flex-shrink-0" />
-          <p className="text-xs text-orange-700 font-medium">
-            {summary.notCalledBack}{' '}
-            {summary.notCalledBack === 1 ? 'пропущенный без перезвона' : 'пропущенных без перезвона'}
-          </p>
-        </div>
-      )}
 
       {/* Filter tabs + Call list */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        {/* Tabs */}
-        <div className="flex border-b border-gray-100">
-          {filterTabs.map((tab) => {
-            const count =
-              tab.key === 'all'
-                ? summary?.total
-                : tab.key === 'incoming'
-                  ? summary?.incoming
-                  : tab.key === 'outgoing'
-                    ? summary?.outgoing
-                    : summary?.missed;
-            const active = activeTab === tab.key;
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => {
-                  setActiveTab(tab.key);
-                  setActiveRecording(null);
-                }}
-                className={`flex-1 py-2.5 text-center transition-all relative ${
-                  active ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'
-                }`}
-              >
-                <span className="text-xs font-semibold">
-                  {tab.label}
-                  {count !== undefined ? ` ${count}` : ''}
-                </span>
-                {active && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />}
-              </button>
-            );
-          })}
+      <Card padding="none">
+        <div className="px-4 pt-1">
+          <Tabs
+            aria-label="Фильтр звонков"
+            idPrefix="calls"
+            items={tabItems}
+            value={activeTab}
+            onChange={(t) => updateParams({ tab: t })}
+          />
         </div>
 
-        {/* Call rows */}
-        {isLoading ? (
-          <div className="divide-y divide-gray-50">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
-                <div className="w-9 h-9 rounded-full bg-gray-100" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 w-32 rounded bg-gray-100" />
-                  <div className="h-3 w-20 rounded bg-gray-100" />
-                </div>
-                <div className="h-3 w-10 rounded bg-gray-100" />
-              </div>
-            ))}
-          </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center py-10" role="alert">
-            <AlertCircle className="h-8 w-8 text-red-300 mb-2" />
-            <p className="text-sm text-red-600">Не удалось загрузить звонки</p>
-            <p className="text-xs text-gray-500 mt-1">Проверьте настройки телефонии (Mango Office)</p>
-            <button
-              type="button"
-              onClick={() => refetch()}
-              disabled={isFetching}
-              className="btn-secondary btn-sm press-soft mt-4"
-            >
-              Повторить
-            </button>
-          </div>
-        ) : filteredCalls.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <Phone className="h-8 w-8 text-gray-200 mb-2" />
-            <p className="text-sm text-gray-400">{activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {filteredCalls.map((call, idx) => (
-              <CallRow
-                key={`${call.id}-${idx}`}
-                call={call}
-                canListen={canListen}
-                activeRecording={activeRecording}
-                onPlayRecording={setActiveRecording}
-                timeZone={timeZone}
+        <div role="tabpanel" id={`calls-panel-${activeTab}`} aria-labelledby={`calls-tab-${activeTab}`}>
+          {isLoading ? (
+            <ul className="divide-y divide-line" aria-busy="true">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <li key={i} className="flex items-center gap-3 px-4 py-3">
+                  <Skeleton className="h-9 w-9 rounded-lg" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton variant="text" className="w-40" />
+                    <Skeleton variant="text" className="h-3 w-24" />
+                  </div>
+                  <Skeleton variant="text" className="w-10" />
+                </li>
+              ))}
+            </ul>
+          ) : isError ? (
+            <div className="p-4">
+              <ErrorRow
+                message="Не удалось загрузить звонки. Проверьте подключение телефонии в «Маркетинг → Интеграции»."
+                onRetry={() => refetch()}
+                loading={isFetching}
               />
-            ))}
-          </div>
-        )}
-      </div>
+            </div>
+          ) : filteredCalls.length === 0 ? (
+            <EmptyState
+              icon={Phone}
+              title={activeTab === 'missed' ? 'Пропущенных нет' : 'Звонков за этот день нет'}
+              description={activeTab === 'all' && !isToday ? 'Попробуйте другой день' : undefined}
+              compact
+            />
+          ) : (
+            <ul className="divide-y divide-line">
+              {filteredCalls.map((call, idx) => (
+                <CallRow
+                  key={`${call.id}-${idx}`}
+                  call={call}
+                  canListen={canListen}
+                  activeRecording={activeRecording}
+                  onPlayRecording={setActiveRecording}
+                  timeZone={timeZone}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </Card>
+
+      {isFetching && !isLoading && (
+        <p className="flex items-center gap-1.5 text-xs text-ink-3" role="status">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          Обновляем…
+        </p>
+      )}
     </div>
   );
 }

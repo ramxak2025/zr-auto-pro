@@ -1,26 +1,33 @@
-import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, FormEvent, type MouseEvent } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download, Upload, Car } from 'lucide-react';
+import { Plus, Users, Trash2, Pencil, ShoppingBag, Download, Upload, Car, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { useVinEnabled } from '../hooks/useVinEnabled';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import SearchInput from '../components/SearchInput';
-import QueryState from '../components/QueryState';
-import IconButton from '../components/IconButton';
 import Pagination from '../components/Pagination';
+import PageHeader from '../components/PageHeader';
 import PhoneInput from '../components/PhoneInput';
-import { useClickableRow } from '../hooks/useClickableRow';
+import { Badge } from '../ui/Badge';
+import { Button, buttonClasses } from '../ui/Button';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Field } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { Textarea } from '../ui/Textarea';
+import { Toolbar } from '../ui/Toolbar';
+import { cn } from '../ui/cn';
+import { focusRing, toneChip } from '../ui/tokens';
 import { Client, PaginatedResponse } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { formatDateShort } from '../../../shared/utils/formatters';
 import { apiErrorMessage, otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
-
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
-const clickableRowProps = useClickableRow;
 
 const clientInitials = (name: string) =>
   name
@@ -35,10 +42,14 @@ const clientInitials = (name: string) =>
 const isQueuedOffline = (res: { status?: number; data?: unknown } | undefined): boolean =>
   res?.status === 202 && (res?.data as { queued?: boolean } | undefined)?.queued === true;
 
+const LIMIT = 20;
+
 export default function ClientsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  const timeZone = useTenantTimezone();
+  const vinEnabled = useVinEnabled();
 
   // Волна «права как в Битрикс24»: только матрица (байпас superadmin/director —
   // внутри hasPermission; admin — по правам роли из /auth/me).
@@ -51,9 +62,27 @@ export default function ClientsPage() {
   const canImport = hasPermission('clients_edit');
   const canExport = hasPermission('export_data');
 
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const limit = 20;
+  // Состояние списка — в URL: F5, «Назад» из карточки и пересылка ссылки
+  // сохраняют поиск и страницу (аудит 2.5 P1).
+  const [params, setParams] = useSearchParams();
+  const search = params.get('q') ?? '';
+  const page = Math.max(1, Number(params.get('page')) || 1);
+  const limit = LIMIT;
+  const updateParams = (next: { q?: string; page?: number }) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        const q = next.q ?? search;
+        const pg = next.page ?? page;
+        if (q) p.set('q', q);
+        else p.delete('q');
+        if (pg > 1) p.set('page', String(pg));
+        else p.delete('page');
+        return p;
+      },
+      { replace: true },
+    );
+  };
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -76,6 +105,7 @@ export default function ClientsPage() {
     cars?: Array<{ plateNumber: string; makeModel: string }>;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Round 12 #3: клиент без телефона легален (backend коэрсит phone в ''),
   // но пустой номер чаще случайность — перед сохранением явный confirm.
@@ -149,8 +179,8 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       toast.success('Клиент удалён');
     },
-    onError: () => {
-      toast.error('Ошибка при удалении клиента');
+    onError: (err) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка при удалении клиента');
     },
   });
 
@@ -162,8 +192,8 @@ export default function ClientsPage() {
     setModalOpen(true);
   };
 
-  const openEditModal = (client: Client, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openEditModal = (client: Client, e?: MouseEvent) => {
+    e?.stopPropagation();
     setEditingClient(client);
     setFullName(client.fullName);
     setPhone(client.phone);
@@ -237,8 +267,8 @@ export default function ClientsPage() {
     navigate(`/clients/${id}`);
   };
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleDelete = (id: string, e?: MouseEvent) => {
+    e?.stopPropagation();
     setDeleteId(id);
     setConfirmOpen(true);
   };
@@ -250,340 +280,297 @@ export default function ClientsPage() {
     }
   };
 
-  const clients = data?.data || [];
-  const total = data?.total || 0;
-  const withCars = clients.filter((c) => (c.cars?.length ?? 0) > 0).length;
-  const totalCars = clients.reduce((sum, c) => sum + (c.cars?.length ?? 0), 0);
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-    });
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const res = await clientsApi.exportCsv();
+      const blob = new Blob([res.data as BlobPart], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'clients.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('CSV скачан');
+    } catch {
+      toast.error('Ошибка экспорта');
+    } finally {
+      setExporting(false);
+    }
   };
 
-  return (
-    <div>
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Клиенты</h1>
-        <div className="flex items-center gap-2">
-          {canImport && (
-            <button
-              type="button"
-              onClick={() => navigate('/clients/import')}
-              className="btn-secondary hidden md:inline-flex"
-              title="Импорт клиентов и авто (только на компьютере)"
-            >
-              <Upload className="w-4 h-4" />
-              <span>Импорт</span>
-            </button>
-          )}
-          {canExport && (
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const res = await clientsApi.exportCsv();
-                  const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'clients.csv';
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  toast.success('CSV скачан');
-                } catch {
-                  toast.error('Ошибка экспорта');
-                }
-              }}
-              className="btn-secondary"
-              title="Экспорт CSV"
-            >
-              <Download className="w-4 h-4" />
-              <span className="hidden sm:inline">CSV</span>
-            </button>
-          )}
-          <button onClick={openCreateModal} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Новый клиент
-          </button>
-        </div>
-      </div>
+  const clients = data?.data || [];
+  const total = data?.total || 0;
+  const showRetailCard = !search || 'розничный покупатель'.includes(search.toLowerCase());
+  const hasRowActions = canEditClient || canDeleteClient;
 
-      {/* Search */}
-      <div className="mb-4 max-w-md">
+  const columns: DataTableColumn<Client>[] = [
+    {
+      key: 'name',
+      header: 'Клиент',
+      primary: true,
+      sortable: true,
+      sortValue: (c) => c.fullName,
+      render: (c) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <span
+            className={cn(
+              'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-2xs font-semibold',
+              c.isRetail ? toneChip.neutral : toneChip.accent,
+            )}
+            aria-hidden="true"
+          >
+            {c.isRetail ? <ShoppingBag className="h-3.5 w-3.5" /> : clientInitials(c.fullName)}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate">{c.fullName}</span>
+            {/* На узких экранах телефон и число авто живут под именем —
+                остальные колонки скрыты (hideBelow). */}
+            <span className="block truncate text-xs font-normal text-ink-3 md:hidden">
+              {c.phone ? formatPhone(c.phone) : c.isRetail ? '' : 'Без номера'}
+              {(c.cars?.length ?? 0) > 0 ? ` · авто: ${c.cars?.length}` : ''}
+            </span>
+          </span>
+          {c.source && (
+            <Badge outline size="sm" className="hidden lg:inline-flex">
+              {c.source}
+            </Badge>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'phone',
+      header: 'Телефон',
+      hideBelow: 'md',
+      width: 180,
+      render: (c) =>
+        c.phone ? (
+          <span className="whitespace-nowrap tabular-nums">{formatPhone(c.phone)}</span>
+        ) : c.isRetail ? (
+          // Retail-строка: пустая ячейка как «нет данных», без «Без номера» —
+          // у розничного своя семантика.
+          <span className="text-ink-4">—</span>
+        ) : (
+          <span className="whitespace-nowrap text-ink-3">Без номера</span>
+        ),
+    },
+    {
+      key: 'cars',
+      header: 'Автомобили',
+      hideBelow: 'lg',
+      render: (c) => {
+        const cars = c.cars ?? [];
+        if (cars.length === 0) return <span className="text-ink-4">—</span>;
+        return (
+          <span className="flex flex-wrap items-center gap-1.5">
+            {cars.slice(0, 2).map((car) => (
+              <span
+                key={car.id}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-md bg-surface-3 px-2 py-0.5 text-xs text-ink-2"
+              >
+                <Car className="h-3 w-3 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                <span className="truncate font-medium">{car.makeModel}</span>
+                {car.plateNumber && <span className="flex-shrink-0 tabular-nums text-ink-3">{car.plateNumber}</span>}
+              </span>
+            ))}
+            {cars.length > 2 && <span className="text-xs font-medium text-ink-3">+{cars.length - 2}</span>}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'comment',
+      header: 'Комментарий',
+      hideBelow: 'xl',
+      truncate: true,
+      width: 260,
+      render: (c) =>
+        c.comment ? (
+          <span className="text-ink-3" title={c.comment}>
+            {c.comment}
+          </span>
+        ) : (
+          <span className="text-ink-4">—</span>
+        ),
+    },
+    {
+      key: 'createdAt',
+      header: 'Добавлен',
+      hideBelow: 'md',
+      width: 120,
+      sortable: true,
+      sortValue: (c) => c.createdAt,
+      render: (c) => (
+        <span className="whitespace-nowrap tabular-nums text-ink-3">{formatDateShort(c.createdAt, timeZone)}</span>
+      ),
+    },
+    ...(hasRowActions
+      ? [
+          {
+            key: 'actions',
+            header: <span className="sr-only">Действия</span>,
+            interactive: true,
+            width: 88,
+            align: 'right',
+            render: (c: Client) => (
+              <span className="flex items-center justify-end gap-0.5">
+                {canEditClient && (
+                  <IconButton label="Редактировать" icon={Pencil} size="sm" onClick={(e) => openEditModal(c, e)} />
+                )}
+                {canDeleteClient && (
+                  <IconButton
+                    label="Удалить"
+                    icon={Trash2}
+                    variant="danger"
+                    size="sm"
+                    onClick={(e) => handleDelete(c.id, e)}
+                  />
+                )}
+              </span>
+            ),
+          } satisfies DataTableColumn<Client>,
+        ]
+      : []),
+  ];
+
+  const isPending = createMutation.isPending || updateMutation.isPending || submitting;
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Клиенты"
+        icon={Users}
+        subtitle={data ? `${total.toLocaleString('ru-RU')} в базе` : undefined}
+        actions={
+          <>
+            {canImport && (
+              <Link
+                to="/clients/import"
+                className={cn(buttonClasses({ variant: 'secondary' }), 'hidden md:inline-flex')}
+                title="Импорт клиентов и авто из Excel/CSV (на компьютере)"
+              >
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Импорт
+              </Link>
+            )}
+            {canExport && (
+              <Button variant="secondary" icon={Download} onClick={exportCsv} loading={exporting}>
+                Экспорт CSV
+              </Button>
+            )}
+            <Button icon={Plus} onClick={openCreateModal}>
+              Новый клиент
+            </Button>
+          </>
+        }
+      />
+
+      <Toolbar>
         <SearchInput
           value={search}
-          onChange={(val) => {
-            setSearch(val);
-            setPage(1);
-          }}
-          placeholder="Поиск по имени или телефону..."
+          onChange={(val) => updateParams({ q: val, page: 1 })}
+          placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
+          className="w-full sm:w-80"
         />
-      </div>
+      </Toolbar>
 
-      {/* Retail buyer card — always visible */}
-      {(!search || 'розничный покупатель'.includes(search.toLowerCase())) && (
-        <div className="mb-4">
-          <div
-            onClick={() => navigate('/clients/retail')}
-            className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-4 active:bg-blue-100 transition-colors cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100">
-                <ShoppingBag className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Розничный покупатель</p>
-                <p className="text-xs text-gray-500">Чеки без привязки к клиенту</p>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Розничный покупатель — точка входа в розничные чеки. Настоящая ссылка:
+          Tab/Enter, Cmd+клик, средняя кнопка (аудит 2.5 P0). */}
+      {showRetailCard && (
+        <Link
+          to="/clients/retail"
+          className={cn(
+            'card flex items-center gap-3 px-4 py-3 transition-[border-color,box-shadow] duration-150 hover:border-line-strong hover:shadow-pop',
+            focusRing,
+          )}
+        >
+          <span className={cn('flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg', toneChip.accent)}>
+            <ShoppingBag className="h-[18px] w-[18px]" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-ink">Розничный покупатель</span>
+            <span className="block text-xs text-ink-3">Чеки без привязки к клиенту</span>
+          </span>
+          <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+        </Link>
       )}
 
-      {/* KPI strip */}
-      {!isLoading && clients.length > 0 && (
-        <div className="grid grid-cols-3 gap-2.5 mb-4">
-          <div className="rounded-xl bg-blue-50 p-3">
-            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Всего клиентов</p>
-            <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{total}</p>
-          </div>
-          <div className="rounded-xl bg-emerald-50 p-3">
-            <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wider">С авто · на стр.</p>
-            <p className="text-base sm:text-lg font-bold text-emerald-700 mt-0.5">{withCars}</p>
-          </div>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Автопарк · на стр.</p>
-            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5">{totalCars}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Content */}
-      <QueryState
+      <DataTable
+        caption="Список клиентов"
+        columns={columns}
+        rows={clients}
+        rowKey={(c) => c.id}
+        rowHref={(c) => `/clients/${c.id}`}
         isLoading={isLoading}
         isError={isError}
-        onRetry={refetch}
+        onRetry={() => refetch()}
         isFetching={isFetching}
-        isEmpty={clients.length === 0}
-        empty={{
+        errorTitle="Не удалось загрузить клиентов"
+        emptyState={{
           icon: Users,
-          title: 'Нет клиентов',
-          description: search ? 'По вашему запросу ничего не найдено' : 'Добавьте первого клиента',
+          title: search ? 'Ничего не найдено' : 'Клиентов пока нет',
+          description: search ? 'Попробуйте другое имя, телефон или госномер' : 'Добавьте первого клиента',
           action: !search ? { label: 'Добавить клиента', onClick: openCreateModal } : undefined,
         }}
-        minHeight="min-h-[40vh]"
-      >
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {clients.map((client) => (
-              <div
-                key={client.id}
-                {...clickableRowProps(() => navigate(`/clients/${client.id}`), { label: client.fullName })}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-gray-900 text-sm">{client.fullName}</span>
-                  <div className="flex items-center gap-1">
-                    {canEditClient && (
-                      <IconButton
-                        label="Редактировать"
-                        icon={Edit2}
-                        size="sm"
-                        onClick={(e) => openEditModal(client, e)}
-                      />
-                    )}
-                    {canDeleteClient && (
-                      <IconButton
-                        label="Удалить"
-                        icon={Trash2}
-                        variant="danger"
-                        size="sm"
-                        onClick={(e) => handleDelete(client.id, e)}
-                      />
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-4 text-sm text-gray-500">
-                  {client.phone ? (
-                    <span className="flex items-center gap-1">
-                      <Phone className="w-3.5 h-3.5" />
-                      {formatPhone(client.phone)}
-                    </span>
-                  ) : !client.isRetail ? (
-                    // Round 12 #3: бестелефонный клиент — серый плейсхолдер.
-                    // Retail-строку не подписываем: у неё своя семантика.
-                    <span className="text-gray-400">Без номера</span>
-                  ) : null}
-                  <span className="badge-info text-[11px]">{client.cars?.length || 0} авто</span>
-                </div>
-              </div>
-            ))}
-          </div>
+      />
 
-          {/* Desktop table — dense, full-width */}
-          <div className="hidden md:block table-container md:max-h-[70vh]">
-            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
-              <thead>
-                <tr>
-                  <th>Клиент</th>
-                  <th>Телефон</th>
-                  <th>Автомобили</th>
-                  <th>Комментарий</th>
-                  <th>Добавлен</th>
-                  <th className="w-24 text-right">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clients.map((client) => {
-                  const cars = client.cars ?? [];
-                  return (
-                    <tr
-                      key={client.id}
-                      {...clickableRowProps(() => navigate(`/clients/${client.id}`), { label: client.fullName })}
-                      className="cursor-pointer hover:bg-gray-50"
-                    >
-                      <td>
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">
-                            {clientInitials(client.fullName)}
-                          </div>
-                          <div className="min-w-0">
-                            <span className="block font-medium text-gray-900 truncate">{client.fullName}</span>
-                            {client.source && <span className="badge-default mt-0.5 text-[10px]">{client.source}</span>}
-                          </div>
-                        </div>
-                      </td>
-                      <td>
-                        {client.phone ? (
-                          <div className="flex items-center gap-2">
-                            <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                            <span className="whitespace-nowrap text-gray-600">{formatPhone(client.phone)}</span>
-                          </div>
-                        ) : client.isRetail ? (
-                          // Retail-строка: пустая ячейка как «нет данных», без
-                          // «Без номера» — у розничного своя семантика.
-                          <span className="text-gray-300">—</span>
-                        ) : (
-                          <span className="whitespace-nowrap text-gray-400">Без номера</span>
-                        )}
-                      </td>
-                      <td>
-                        {cars.length === 0 ? (
-                          <span className="text-gray-300">—</span>
-                        ) : (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {cars.slice(0, 2).map((car) => (
-                              <span
-                                key={car.id}
-                                className="inline-flex items-center gap-1 rounded-lg bg-gray-100 px-2 py-0.5 text-xs text-gray-700"
-                              >
-                                <Car className="w-3 h-3 text-gray-400" />
-                                <span className="font-medium">{car.makeModel}</span>
-                                {car.plateNumber && <span className="text-gray-400">{car.plateNumber}</span>}
-                              </span>
-                            ))}
-                            {cars.length > 2 && (
-                              <span className="text-xs font-medium text-gray-400">+{cars.length - 2}</span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td className="max-w-[260px]">
-                        {client.comment ? (
-                          <span className="block truncate text-gray-500" title={client.comment}>
-                            {client.comment}
-                          </span>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-2 whitespace-nowrap text-gray-500">
-                          <Calendar className="w-4 h-4 flex-shrink-0" />
-                          {formatDate(client.createdAt)}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="flex items-center justify-end gap-1">
-                          {canEditClient && (
-                            <button
-                              onClick={(e) => openEditModal(client, e)}
-                              className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                              title="Редактировать"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                          )}
-                          {canDeleteClient && (
-                            <button
-                              onClick={(e) => handleDelete(client.id, e)}
-                              className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                              title="Удалить"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-        </>
-      </QueryState>
+      <Pagination page={page} total={total} limit={limit} onChange={(p) => updateParams({ page: p })} />
 
       {/* Create/Edit Modal */}
-      <Modal isOpen={modalOpen} onClose={closeModal} title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">ФИО</label>
-            <input
-              type="text"
+      <Modal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeModal} disabled={isPending}>
+              Отмена
+            </Button>
+            <Button type="submit" form="client-form" loading={isPending}>
+              {editingClient ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
+      >
+        <form id="client-form" onSubmit={handleSubmit} className="space-y-4">
+          <Field label="ФИО" htmlFor="client-form-name" required>
+            <Input
+              id="client-form-name"
+              name="fullName"
+              autoComplete="name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="input"
-              placeholder="Введите ФИО клиента"
+              placeholder="Иванов Иван Иванович"
               required
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Телефон</label>
-            <PhoneInput value={phone} onChange={setPhone} placeholder="+7 (___) ___-__-__" />
-          </div>
+          <Field
+            label="Телефон"
+            htmlFor="client-form-phone"
+            hint={!editingClient ? 'По номеру мы предупредим о дубле и найдём клиента в Кассе' : undefined}
+          >
+            <PhoneInput
+              id="client-form-phone"
+              name="phone"
+              autoComplete="tel"
+              value={phone}
+              onChange={setPhone}
+              placeholder="+7 (___) ___-__-__"
+            />
+          </Field>
 
-          <div>
-            <label className="label">Комментарий</label>
-            <textarea
+          <Field label="Комментарий" htmlFor="client-form-comment">
+            <Textarea
+              id="client-form-comment"
+              name="comment"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              className="input"
               rows={3}
-              placeholder="Комментарий (необязательно)"
+              placeholder="Необязательно"
             />
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button
-              type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending || submitting}
-              className="btn-primary"
-            >
-              {editingClient ? 'Сохранить' : submitting ? 'Проверяем…' : 'Создать'}
-            </button>
-          </div>
+          </Field>
         </form>
       </Modal>
 

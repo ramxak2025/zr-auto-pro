@@ -1,5 +1,9 @@
 import { ArrowLeft, Building2, ChevronRight, Home, Loader2 } from 'lucide-react';
 import type { LoginPointOption } from '../../../shared/api/types';
+import { Badge } from '../ui/Badge';
+import { IconButton } from '../ui/IconButton';
+import { cn } from '../ui/cn';
+import { focusRing, toneChip } from '../ui/tokens';
 
 /**
  * LoginPointSelect — ВТОРОЙ ШАГ ВХОДА: «в какой филиал зайти» (163).
@@ -42,43 +46,43 @@ export default function LoginPointSelect({
   return (
     <div className="w-full max-w-sm">
       <div className="mb-6 flex items-center gap-3">
-        <button
-          type="button"
+        <IconButton
+          label="Назад, к вводу телефона и пароля"
+          icon={ArrowLeft}
+          variant="secondary"
           onClick={onBack}
           disabled={busy}
-          aria-label="Назад, к вводу телефона и пароля"
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-40"
-        >
-          <ArrowLeft className="h-[18px] w-[18px]" />
-        </button>
+          className="rounded-full"
+        />
         <div className="min-w-0">
-          <h1 className="text-lg font-bold text-gray-900">Выберите филиал</h1>
-          <p className="text-xs text-gray-500">Куда вы заходите работать</p>
+          <h1 className="text-md font-semibold text-ink">Выберите филиал</h1>
+          <p className="text-xs text-ink-3">Куда вы заходите работать</p>
         </div>
       </div>
 
       {/* Честное объяснение ПРАВИЛА, а не украшение: человек должен узнать про
           «выйти и войти» здесь, а не когда будет искать переключатель. */}
-      <p className="mb-5 text-sm leading-relaxed text-gray-600">
+      <p className="mb-5 text-sm leading-relaxed text-ink-2">
         Вы войдёте в один филиал — вся касса, склад и зарплата смены будут его. Чтобы работать в другом, нужно выйти и
         войти заново.
       </p>
 
-      <div className="space-y-3">
+      <ul className="space-y-3" aria-label="Доступные филиалы">
         {points.map((point) => (
-          <PointRow
-            key={point.id}
-            point={point}
-            isLast={point.id === defaultPointId}
-            busy={submittingPointId === point.id}
-            // Второй клик по второй карточке, пока летит первый обмен, сжёг бы
-            // одноразовый токен: сервер ответил бы «Выбор филиала уже
-            // использован», и человек начинал бы вход заново на ровном месте.
-            disabled={busy && submittingPointId !== point.id}
-            onSelect={() => onSelect(point.id)}
-          />
+          <li key={point.id}>
+            <PointRow
+              point={point}
+              isLast={point.id === defaultPointId}
+              busy={submittingPointId === point.id}
+              // Второй клик по второй карточке, пока летит первый обмен, сжёг бы
+              // одноразовый токен: сервер ответил бы «Выбор филиала уже
+              // использован», и человек начинал бы вход заново на ровном месте.
+              disabled={busy && submittingPointId !== point.id}
+              onSelect={() => onSelect(point.id)}
+            />
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -111,35 +115,36 @@ function PointRow({
       type="button"
       onClick={onSelect}
       disabled={disabled || busy}
+      aria-busy={busy || undefined}
       aria-label={`Войти: ${point.name}, ${kind.toLowerCase()}${point.address ? `, ${point.address}` : ''}${
         isLast ? '. Здесь вы работали в прошлый раз' : ''
       }`}
-      className={`flex w-full items-center gap-3 rounded-2xl border px-4 py-4 text-left transition-all ${
-        disabled
-          ? 'border-gray-200 bg-white opacity-50'
-          : 'border-gray-200 bg-white hover:border-primary-300 hover:bg-primary-50/40 active:scale-[0.99]'
-      }`}
+      className={cn(
+        'flex w-full items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3.5 text-left shadow-card transition-[border-color,background-color,box-shadow] duration-150',
+        disabled ? 'opacity-50' : 'hover:border-accent/40 hover:bg-accent-soft/40 hover:shadow-pop',
+        focusRing,
+      )}
     >
-      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600">
-        <Icon className="h-5 w-5" />
+      <span className={cn('flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg', toneChip.accent)}>
+        <Icon className="h-5 w-5" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
-          <span className="truncate text-[15px] font-bold text-gray-900">{point.name}</span>
+          <span className="truncate text-md font-semibold text-ink">{point.name}</span>
           {isLast && (
-            <span className="flex-shrink-0 rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-bold text-primary-600">
+            <Badge tone="accent" size="sm">
               Были здесь
-            </span>
+            </Badge>
           )}
         </span>
-        <span className="mt-0.5 block truncate text-xs text-gray-500">
+        <span className="mt-0.5 block truncate text-xs text-ink-3">
           {point.address ? `${kind} · ${point.address}` : kind}
         </span>
       </span>
       {busy ? (
-        <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary-600" />
+        <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-accent" aria-hidden="true" />
       ) : (
-        <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-400" />
+        <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
       )}
     </button>
   );

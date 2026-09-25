@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -9,7 +9,6 @@ import {
   Copy,
   Info,
   KeyRound,
-  Loader2,
   Lock,
   Package,
   Plus,
@@ -28,8 +27,19 @@ import { rolesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { PERMISSION_GROUPS, CASHIER_ROLE_PRESET } from '../types';
 import type { PermissionKey, Role, RoleMatrix, RoleScope, User } from '../types';
-import Modal from './Modal';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Field } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import ConfirmDialog from './ConfirmDialog';
+import InlineLoader from './InlineLoader';
+import Modal from './Modal';
+import Switch from './Switch';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Роли как в Битрикс24 (волна 2, web). Управление ролями: список
@@ -391,7 +401,7 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
             : data?.message || 'Роль используется сотрудниками',
         );
       } else {
-        toast.error(data?.message || 'Не удалось удалить роль');
+        toast.error(apiErrorMessage(err) ?? 'Не удалось удалить роль');
       }
     },
   });
@@ -410,8 +420,8 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
       toast.success('Роль «Кассир» создана');
       setView({ kind: 'edit', role: res.data });
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось создать роль «Кассир»');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Не удалось создать роль «Кассир»');
     },
   });
   const handleCashierPreset = () => {
@@ -423,51 +433,49 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
   };
 
   const title = view.kind === 'list' ? 'Роли и права доступа' : view.kind === 'edit' ? 'Настройка роли' : 'Новая роль';
+  const description =
+    view.kind === 'list'
+      ? 'Роль — набор прав. Назначается сотруднику в его карточке и полностью определяет, что ему доступно.'
+      : view.kind === 'edit'
+        ? view.role.name
+        : view.copyFrom
+          ? `Копия роли «${view.copyFrom.name}»`
+          : undefined;
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title={title} size="xl">
+      <Modal isOpen={isOpen} onClose={onClose} title={title} description={description} size="xl">
         {view.kind === 'list' ? (
           rolesLoading ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
-            </div>
+            <InlineLoader minHeight="py-10" />
           ) : (
             <div className="space-y-5">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-xs text-gray-500">
-                  Роль — набор прав доступа. Назначается сотруднику в его карточке и полностью определяет, что ему
-                  доступно.
-                </p>
-                <button onClick={() => setView({ kind: 'create' })} className="btn-primary flex-shrink-0">
-                  <Plus className="w-4 h-4" />
-                  Новая роль
-                </button>
-              </div>
-
               {/* Round 14: пресет «Кассир» для режима кассовой смены */}
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-emerald-900">Режим кассовой смены</p>
-                  <p className="text-xs text-emerald-700 mt-0.5">
-                    {cashierRole
-                      ? 'Роль «Кассир» уже создана — откройте, чтобы посмотреть или настроить.'
-                      : 'Строгая роль в один тап: приём оплаты и кассовые смены, без прав мастера.'}
-                  </p>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <Banknote className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink">Режим кассовой смены</p>
+                    <p className="mt-0.5 text-xs text-ink-3">
+                      {cashierRole
+                        ? 'Роль «Кассир» уже создана — откройте, чтобы посмотреть или настроить.'
+                        : 'Строгая роль в один клик: приём оплаты и кассовые смены, без прав мастера.'}
+                    </p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleCashierPreset}
-                  disabled={createCashierMutation.isPending}
-                  className="btn-secondary flex-shrink-0"
-                >
-                  {createCashierMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Banknote className="w-4 h-4" />
-                  )}
-                  {cashierRole ? 'Открыть «Кассир»' : 'Создать роль «Кассир»'}
-                </button>
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCashierPreset}
+                    loading={createCashierMutation.isPending}
+                  >
+                    {cashierRole ? 'Открыть «Кассир»' : 'Создать роль «Кассир»'}
+                  </Button>
+                  <Button size="sm" icon={Plus} onClick={() => setView({ kind: 'create' })}>
+                    Новая роль
+                  </Button>
+                </div>
               </div>
 
               <RolesSection
@@ -543,64 +551,70 @@ function RolesSection({
   emptyText?: string;
 }) {
   return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">{title}</p>
+    <section>
+      <h3 className="mb-2 text-xs font-semibold text-ink-3">{title}</h3>
       {roles.length === 0 ? (
         emptyText ? (
-          <div className="text-center py-5 text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-            <KeyRound className="w-6 h-6 mx-auto mb-1.5 opacity-40" />
-            <p className="text-xs">{emptyText}</p>
+          <div className="rounded-lg border border-dashed border-line-strong bg-surface-2 px-4 py-5 text-center">
+            <KeyRound className="mx-auto mb-1.5 h-5 w-5 text-ink-4" aria-hidden="true" />
+            <p className="text-xs text-ink-3">{emptyText}</p>
           </div>
         ) : (
-          <p className="text-xs text-gray-400">Нет ролей</p>
+          <p className="text-xs text-ink-3">Нет ролей</p>
         )
       ) : (
-        <div className="space-y-2">
+        <ul className="space-y-2">
           {roles.map((role) => {
             const count = countFor(role);
             return (
-              <div
+              <li
                 key={role.id}
-                className="flex items-center justify-between gap-3 bg-gray-50 rounded-xl border border-gray-100 px-4 py-3"
+                className="flex items-center justify-between gap-3 rounded-lg border border-line px-4 py-3 transition-colors hover:bg-surface-2"
               >
-                <button type="button" onClick={() => onOpen(role)} className="flex-1 min-w-0 text-left group">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-900 text-sm truncate group-hover:text-primary-700 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => onOpen(role)}
+                  className={cn('group min-w-0 flex-1 rounded text-left', focusRing)}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-ink group-hover:text-accent-text">
                       {role.name}
                     </span>
-                    {role.isSystem && <span className="badge-gray flex-shrink-0">Системная</span>}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5 truncate">
+                    {role.isSystem && (
+                      <Badge outline size="sm">
+                        Системная
+                      </Badge>
+                    )}
+                    {role.locked && <Lock className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-ink-3">
                     {role.description ? `${role.description} · ` : ''}
                     {count} {pluralizeEmployees(count)}
-                  </div>
+                  </span>
                 </button>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <button
-                    type="button"
+                <div className="flex flex-shrink-0 items-center gap-1">
+                  <IconButton
+                    label={`Создать копию роли «${role.name}»`}
+                    icon={Copy}
+                    size="sm"
                     onClick={() => onCopy(role)}
-                    className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                    title="Создать копию"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
+                  />
                   {!role.isSystem && (
-                    <button
-                      type="button"
+                    <IconButton
+                      label={`Удалить роль «${role.name}»`}
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => onDelete(role)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                      title="Удалить роль"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    />
                   )}
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -623,6 +637,7 @@ function RoleEditor({
 }) {
   const queryClient = useQueryClient();
   const { refreshUser } = useAuth();
+  const idBase = useId();
   // Волна 3 (миграция 121): системные «Мастер»/«Администратор» теперь РЕДАКТИРУЕМЫ
   // — сервер делает copy-on-write (тенантный override). Read-only остаётся ТОЛЬКО
   // у заблокированной роли (`locked: true` — это «Директор», полные права).
@@ -631,7 +646,7 @@ function RoleEditor({
   const systemEditable = mode === 'edit' && !!role?.isSystem && !readOnly;
 
   const [name, setName] = useState(mode === 'edit' ? (role?.name ?? '') : copyFrom ? `${copyFrom.name} (копия)` : '');
-  const [description, setDescription] = useState(
+  const [descriptionText, setDescriptionText] = useState(
     mode === 'edit' ? (role?.description ?? '') : (copyFrom?.description ?? ''),
   );
   const [matrix, setMatrix] = useState<EditableMatrix>(() =>
@@ -656,7 +671,7 @@ function RoleEditor({
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), description: description.trim(), matrix: buildMatrix(matrix) };
+      const payload = { name: name.trim(), description: descriptionText.trim(), matrix: buildMatrix(matrix) };
       return mode === 'edit' && role ? rolesApi.update(role.id, payload) : rolesApi.create(payload);
     },
     onSuccess: () => {
@@ -670,8 +685,8 @@ function RoleEditor({
       );
       onBack();
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось сохранить роль');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Не удалось сохранить роль');
     },
   });
 
@@ -685,71 +700,55 @@ function RoleEditor({
 
   return (
     <div className="space-y-4">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" />К списку ролей
-      </button>
+      <Button variant="ghost" size="sm" icon={ArrowLeft} onClick={onBack} className="-ml-2">
+        К списку ролей
+      </Button>
 
       {readOnly && (
-        <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
-          <Lock className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-blue-700">
-            Директор — полные права, редактировать нельзя. При необходимости создайте копию как основу для своей роли.
-          </p>
-        </div>
+        <Notice icon={Lock} tone="info">
+          Директор — полные права, редактировать нельзя. При необходимости создайте копию как основу для своей роли.
+        </Notice>
       )}
 
       {systemEditable && (
-        <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
-          <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-gray-500">
-            Системная роль. Изменения сохранятся только для вашего автосервиса — общий шаблон остаётся прежним.
-          </p>
-        </div>
+        <Notice icon={Info} tone="neutral">
+          Системная роль. Изменения сохранятся только для вашего автосервиса — общий шаблон остаётся прежним.
+        </Notice>
       )}
 
       {mode === 'create' && copyFrom && (
-        <p className="text-xs text-gray-400">Права скопированы из роли «{copyFrom.name}» — настройте под себя.</p>
+        <p className="text-xs text-ink-3">Права скопированы из роли «{copyFrom.name}» — настройте под себя.</p>
       )}
 
-      <div>
-        <label className="label">Название</label>
-        <input
-          type="text"
-          className="input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Например: Приёмщик"
-          maxLength={100}
-          disabled={readOnly}
-        />
-      </div>
-
-      <div>
-        <label className="label">Описание</label>
-        <input
-          type="text"
-          className="input"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Необязательно"
-          maxLength={500}
-          disabled={readOnly}
-        />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Название" htmlFor={`${idBase}-name`} required>
+          <Input
+            id={`${idBase}-name`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Например: Приёмщик"
+            maxLength={100}
+            disabled={readOnly}
+          />
+        </Field>
+        <Field label="Описание" htmlFor={`${idBase}-desc`}>
+          <Input
+            id={`${idBase}-desc`}
+            value={descriptionText}
+            onChange={(e) => setDescriptionText(e.target.value)}
+            placeholder="Необязательно"
+            maxLength={500}
+            disabled={readOnly}
+          />
+        </Field>
       </div>
 
       {/* Round 14: кассир + исполнительские права — мягкое предупреждение */}
       {cashierMixWarning && (
-        <div className="flex items-start gap-2.5 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">
-          <Info className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-yellow-800">
-            Кассир обычно не совмещается с работой мастера: роль одновременно принимает оплату и создаёт или меняет
-            заказы. Сохранить можно — но надёжнее разделить эти роли.
-          </p>
-        </div>
+        <Notice icon={Info} tone="warn">
+          Кассир обычно не совмещается с работой мастера: роль одновременно принимает оплату и создаёт или меняет
+          заказы. Сохранить можно — но надёжнее разделить эти роли.
+        </Notice>
       )}
 
       {/* Матрица прав */}
@@ -757,69 +756,67 @@ function RoleEditor({
         {EDITOR_GROUPS.map((group) => {
           const GroupIcon = group.icon;
           return (
-            <div key={group.title}>
-              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-                <GroupIcon className="w-3.5 h-3.5" />
+            <section key={group.title}>
+              <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+                <GroupIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 {group.title}
-              </p>
-              <div className="divide-y divide-gray-50 rounded-xl border border-gray-100 px-4">
+              </h3>
+              <ul className="divide-y divide-line rounded-lg border border-line px-4">
                 {group.rows.map(({ key, def }) => {
                   const hint = MATRIX_HINTS[key];
+                  const label = def.label ?? MATRIX_LABELS[key];
                   return (
-                    <div key={key} className="flex items-center justify-between gap-3 py-2.5">
+                    <li key={key} className="flex items-center justify-between gap-3 py-2.5">
                       <div className="min-w-0">
-                        <p className="text-sm text-gray-700">{def.label ?? MATRIX_LABELS[key]}</p>
-                        {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+                        <p className="text-sm text-ink">{label}</p>
+                        {hint && <p className="mt-0.5 text-xs text-ink-3">{hint}</p>}
                       </div>
                       {def.kind === 'scope' ? (
-                        <ScopeSegmented value={scopeOf(def)} disabled={readOnly} onChange={(v) => setCell(def, v)} />
+                        <SegmentedControl
+                          size="sm"
+                          aria-label={label}
+                          options={SCOPE_OPTIONS.map((o) => ({ ...o, disabled: readOnly }))}
+                          value={scopeOf(def)}
+                          onChange={(v) => setCell(def, v)}
+                          className={cn('flex-shrink-0', readOnly && 'opacity-60')}
+                        />
                       ) : (
-                        <input
-                          type="checkbox"
+                        <Switch
+                          size="sm"
+                          label={label}
                           checked={boolOf(def)}
                           disabled={readOnly}
-                          onChange={() => setCell(def, !boolOf(def))}
-                          className="w-4 h-4 flex-shrink-0 text-primary-600 border-gray-300 rounded focus:ring-primary-500 disabled:opacity-60"
+                          onChange={(v) => setCell(def, v)}
                         />
                       )}
-                    </div>
+                    </li>
                   );
                 })}
-              </div>
-            </div>
+              </ul>
+            </section>
           );
         })}
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+      <div className="flex items-center justify-end gap-2 border-t border-line pt-4">
         {readOnly && role ? (
           <>
-            <button type="button" onClick={onBack} className="btn-secondary">
+            <Button variant="secondary" onClick={onBack}>
               Назад
-            </button>
-            <button type="button" onClick={() => onCopy(role)} className="btn-primary">
-              <Copy className="w-4 h-4" />
+            </Button>
+            <Button icon={Copy} onClick={() => onCopy(role)}>
               Создать копию
-            </button>
+            </Button>
           </>
         ) : (
           <>
-            <button type="button" onClick={onBack} className="btn-secondary">
+            <Button variant="secondary" onClick={onBack}>
               Отмена
-            </button>
-            <button type="button" onClick={handleSave} disabled={saveMutation.isPending} className="btn-primary">
-              {saveMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : mode === 'edit' ? (
-                'Сохранить'
-              ) : (
-                'Создать роль'
-              )}
-            </button>
+            </Button>
+            <Button onClick={handleSave} loading={saveMutation.isPending}>
+              {mode === 'edit' ? 'Сохранить' : 'Создать роль'}
+            </Button>
           </>
         )}
       </div>
@@ -827,32 +824,25 @@ function RoleEditor({
   );
 }
 
-// ─── Segmented control «Нет | Свои | Все» ────────────────────────────
-
-function ScopeSegmented({
-  value,
-  disabled,
-  onChange,
+/** Информационная плашка редактора: нейтральная, подсказка или предупреждение. */
+function Notice({
+  icon: Icon,
+  tone,
+  children,
 }: {
-  value: RoleScope;
-  disabled?: boolean;
-  onChange: (value: RoleScope) => void;
+  icon: LucideIcon;
+  tone: 'neutral' | 'info' | 'warn';
+  children: React.ReactNode;
 }) {
+  const cls = {
+    neutral: 'border-line bg-surface-2 text-ink-2',
+    info: 'border-info/20 bg-info-soft text-info-text',
+    warn: 'border-warn/30 bg-warn-soft text-warn-text',
+  }[tone];
   return (
-    <div className={`inline-flex flex-shrink-0 rounded-lg bg-gray-100 p-0.5 ${disabled ? 'opacity-60' : ''}`}>
-      {SCOPE_OPTIONS.map((opt) => (
-        <button
-          key={opt.value}
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(opt.value)}
-          className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-            value === opt.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          } ${disabled ? 'cursor-not-allowed' : ''}`}
-        >
-          {opt.label}
-        </button>
-      ))}
+    <div className={cn('flex items-start gap-2.5 rounded-lg border px-4 py-3', cls)}>
+      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+      <p className="text-xs leading-relaxed">{children}</p>
     </div>
   );
 }

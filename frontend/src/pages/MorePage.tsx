@@ -2,39 +2,42 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Users,
-  UserCircle,
-  Wrench,
-  Truck,
-  Wallet,
-  BarChart3,
-  Shield,
-  LogOut,
-  ChevronRight,
   ArrowRightLeft,
+  BarChart3,
+  Bell,
+  BookOpen,
+  Building2,
   CalendarDays,
   Camera,
-  Loader2,
-  CreditCard,
-  Megaphone,
-  Building2,
-  Lock,
-  Phone,
-  Package,
-  BookOpen,
-  Bell,
+  ChevronRight,
   ClipboardList,
   Coins,
-  ShoppingCart,
+  CreditCard,
+  Lock,
+  LogOut,
+  Megaphone,
+  Package,
+  Phone,
   Plug,
+  Shield,
+  ShoppingCart,
   SlidersHorizontal,
+  Truck,
+  UserCircle,
+  Users,
+  Wallet,
+  Wrench,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
 import { useAuth } from '../contexts/AuthContext';
-import { authApi, uploadsApi, subscriptionApi } from '../api/services';
-import type { UserPermissions, SubscriptionInfo } from '../types';
+import { authApi, subscriptionApi, uploadsApi } from '../api/services';
+import type { SubscriptionInfo, UserPermissions } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
+import { Card, IconButton, cn } from '../ui';
+import { focusRing } from '../ui/tokens';
 import DeleteAccountSection from '../components/DeleteAccountSection';
+import UserAvatar from '../components/company/UserAvatar';
 import { usePointAccess } from '../hooks/usePoints';
 
 const PRIVACY_URL = 'https://autexa.pw/privacy';
@@ -57,19 +60,10 @@ interface MenuItem {
    */
   multiPointOnly?: boolean;
   featureKey?: string;
-  color: string;
-  iconColor: string;
 }
 
 const menuItems: MenuItem[] = [
-  {
-    label: 'Сотрудники',
-    description: 'Карточки персонала, статус, рейтинги',
-    path: '/employees',
-    icon: UserCircle,
-    color: 'bg-cyan-50',
-    iconColor: 'text-cyan-600',
-  },
+  { label: 'Сотрудники', description: 'Карточки персонала, статус, рейтинги', path: '/employees', icon: UserCircle },
   {
     label: 'Расписание',
     description: 'График работы и смены',
@@ -77,8 +71,6 @@ const menuItems: MenuItem[] = [
     icon: CalendarDays,
     permission: 'schedule_view',
     featureKey: 'schedule_view',
-    color: 'bg-indigo-50',
-    iconColor: 'text-indigo-600',
   },
   {
     label: 'Клиенты',
@@ -87,8 +79,6 @@ const menuItems: MenuItem[] = [
     icon: Users,
     permission: 'clients_view',
     featureKey: 'clients_view',
-    color: 'bg-blue-50',
-    iconColor: 'text-blue-600',
   },
   {
     label: 'Услуги',
@@ -97,8 +87,6 @@ const menuItems: MenuItem[] = [
     icon: Wrench,
     permission: 'services_view',
     featureKey: 'services_view',
-    color: 'bg-orange-50',
-    iconColor: 'text-orange-600',
   },
   {
     label: 'Поставщики',
@@ -107,8 +95,6 @@ const menuItems: MenuItem[] = [
     icon: Truck,
     permission: 'suppliers_access',
     featureKey: 'suppliers_view',
-    color: 'bg-amber-50',
-    iconColor: 'text-amber-600',
   },
   {
     label: 'Заказы поставщикам',
@@ -117,8 +103,6 @@ const menuItems: MenuItem[] = [
     icon: ShoppingCart,
     permission: 'suppliers_access',
     featureKey: 'suppliers_view',
-    color: 'bg-amber-50',
-    iconColor: 'text-amber-600',
   },
   {
     label: 'Движение денег',
@@ -127,25 +111,14 @@ const menuItems: MenuItem[] = [
     icon: ArrowRightLeft,
     permission: 'cashflow_view',
     featureKey: 'cashflow_view',
-    color: 'bg-teal-50',
-    iconColor: 'text-teal-600',
   },
   {
     label: 'Кассовая смена',
     description: 'Z-отчёт, инкассация, сверка кассы',
     path: '/cash-shift',
     icon: ClipboardList,
-    color: 'bg-teal-50',
-    iconColor: 'text-teal-600',
   },
-  {
-    label: 'Рассрочка',
-    description: 'Продажи в рассрочку и график платежей',
-    path: '/installments',
-    icon: Coins,
-    color: 'bg-violet-50',
-    iconColor: 'text-violet-600',
-  },
+  { label: 'Рассрочка', description: 'Продажи в рассрочку и график платежей', path: '/installments', icon: Coins },
   {
     label: 'Зарплата',
     description: 'Заработок мастеров',
@@ -153,8 +126,6 @@ const menuItems: MenuItem[] = [
     icon: Wallet,
     permission: 'salary_view',
     featureKey: 'salary_view',
-    color: 'bg-green-50',
-    iconColor: 'text-green-600',
   },
   {
     label: 'Расходы',
@@ -163,8 +134,6 @@ const menuItems: MenuItem[] = [
     // Зеркало backend GET /expenses (OR-гейт): вносит расходы ЛИБО финансы.
     anyPermission: ['can_add_expenses', 'financial_reports'],
     icon: Wallet,
-    color: 'bg-rose-50',
-    iconColor: 'text-rose-600',
   },
   {
     label: 'Постоянные расходы и мотивация',
@@ -172,8 +141,6 @@ const menuItems: MenuItem[] = [
     path: '/planning',
     icon: SlidersHorizontal,
     permission: 'financial_reports',
-    color: 'bg-rose-50',
-    iconColor: 'text-rose-600',
   },
   {
     label: 'Отчёты',
@@ -182,35 +149,16 @@ const menuItems: MenuItem[] = [
     icon: BarChart3,
     permission: 'financial_reports',
     featureKey: 'reports_view',
-    color: 'bg-purple-50',
-    iconColor: 'text-purple-600',
   },
-  {
-    label: 'Звонки',
-    description: 'Журнал звонков и записи',
-    path: '/calls',
-    icon: Phone,
-    permission: 'calls_view',
-    color: 'bg-cyan-50',
-    iconColor: 'text-cyan-600',
-  },
+  { label: 'Звонки', description: 'Журнал звонков и записи', path: '/calls', icon: Phone, permission: 'calls_view' },
   {
     label: 'Маркетинг',
     description: 'Рассылки, акции, аналитика',
     path: '/marketing',
     icon: Megaphone,
     permission: 'marketing_access',
-    color: 'bg-violet-50',
-    iconColor: 'text-violet-600',
   },
-  {
-    label: 'База знаний',
-    description: 'Статьи, инструкции и регламенты',
-    path: '/knowledge',
-    icon: BookOpen,
-    color: 'bg-sky-50',
-    iconColor: 'text-sky-600',
-  },
+  { label: 'База знаний', description: 'Статьи, инструкции и регламенты', path: '/knowledge', icon: BookOpen },
   {
     label: 'Пользователи',
     description: 'Управление доступом',
@@ -218,8 +166,6 @@ const menuItems: MenuItem[] = [
     icon: Shield,
     permission: 'user_management',
     featureKey: 'users_manage',
-    color: 'bg-indigo-50',
-    iconColor: 'text-indigo-600',
   },
   {
     label: 'Имущество',
@@ -227,17 +173,8 @@ const menuItems: MenuItem[] = [
     path: '/equipment',
     icon: Package,
     permission: 'equipment_view',
-    color: 'bg-emerald-50',
-    iconColor: 'text-emerald-600',
   },
-  {
-    label: 'Уведомления',
-    description: 'Push-уведомления по категориям',
-    path: '/notifications',
-    icon: Bell,
-    color: 'bg-amber-50',
-    iconColor: 'text-amber-600',
-  },
+  { label: 'Уведомления', description: 'Push-уведомления по категориям', path: '/notifications', icon: Bell },
   {
     // «Филиалы» (156/160/161/163/167) — сводка по сети: основной сервис
     // владельца и открытые им филиалы с оборотом каждого. Это ЕДИНСТВЕННОЕ
@@ -248,18 +185,14 @@ const menuItems: MenuItem[] = [
     path: '/points',
     icon: Building2,
     multiPointOnly: true,
-    color: 'bg-orange-50',
-    iconColor: 'text-orange-600',
   },
   {
     label: 'Настройки компании',
-    description: 'Реквизиты и данные для чеков',
+    description: 'Реквизиты, автомобили, касса и лояльность',
     path: '/company-settings',
     icon: Building2,
     // Owner-only ячейка settings.company: у системного «Администратора» false.
     permission: 'company_manage',
-    color: 'bg-slate-50',
-    iconColor: 'text-slate-600',
   },
   {
     label: 'Интеграции',
@@ -267,8 +200,6 @@ const menuItems: MenuItem[] = [
     path: '/integrations',
     icon: Plug,
     permission: 'settings_manage',
-    color: 'bg-slate-50',
-    iconColor: 'text-slate-600',
   },
   {
     label: 'Тариф и подписка',
@@ -276,8 +207,6 @@ const menuItems: MenuItem[] = [
     path: '/tariff',
     icon: CreditCard,
     roles: ['director', 'admin'],
-    color: 'bg-rose-50',
-    iconColor: 'text-rose-600',
   },
 ];
 
@@ -289,7 +218,7 @@ export default function MorePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
-  // Fetch subscription for feature gating
+  // Подписка — для замков тарифа
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
     queryFn: async () => {
@@ -299,9 +228,9 @@ export default function MorePage() {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Gate directly on the server-resolved feature keys of the current plan,
-  // not a fragile match by plan name. See shared/constants/features.ts.
-  const planFeatures: string[] = Array.isArray(sub?.features) ? sub!.features : [];
+  // Гейтим по серверным ключам возможностей текущего тарифа, а не по имени
+  // тарифа. См. shared/constants/features.ts.
+  const planFeatures: string[] = sub && Array.isArray(sub.features) ? sub.features : [];
   const isBypass = user?.role === 'superadmin';
 
   const isFeatureLocked = (featureKey?: string) => {
@@ -319,39 +248,44 @@ export default function MorePage() {
       const res = await uploadsApi.upload(file);
       await authApi.updateAvatar(res.data.url);
       await refreshUser();
-      toast.success('Аватарка обновлена');
+      toast.success('Фото профиля обновлено');
     } catch {
-      toast.error('Не удалось загрузить аватарку');
+      toast.error('Не удалось загрузить фото профиля');
     } finally {
       setUploading(false);
     }
   };
 
+  const visibleItems = menuItems.filter((item) => {
+    // ROLE-ONLY hide-by-permission: скрываем пункт без gating-права. Байпас
+    // только superadmin/director — внутри hasPermission; admin живёт по
+    // эффективным правам матрицы из /auth/me (волна Битрикс24).
+    if (item.permission && !hasPermission(item.permission)) return false;
+    if (item.anyPermission && !item.anyPermission.some((p) => hasPermission(p))) return false;
+    if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
+    // «Филиалы» скрыты, когда показывать нечего: у тенанта один автосервис.
+    if (item.multiPointOnly && !multiPoint) return false;
+    return true;
+  });
+
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-3xl space-y-5">
       <h1 className="page-title">Ещё</h1>
 
-      {/* User card */}
-      <div className="card p-5">
+      {/* Профиль */}
+      <Card padding="md">
         <div className="flex items-center gap-4">
-          <div className="relative">
-            {user?.avatar ? (
-              <img src={user.avatar} alt="" className="h-14 w-14 rounded-full object-cover border-2 border-gray-100" />
-            ) : (
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xl font-bold">
-                {user?.fullName?.charAt(0) || 'U'}
-              </div>
-            )}
-            <button
-              type="button"
+          <div className="relative flex-shrink-0">
+            <UserAvatar name={user?.fullName || 'U'} src={user?.avatar} size="lg" />
+            <IconButton
+              label="Загрузить фото профиля"
+              icon={Camera}
+              size="sm"
+              variant="secondary"
+              loading={uploading}
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              aria-label="Загрузить фото профиля"
-              title="Загрузить фото профиля"
-              className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white border-2 border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors shadow-sm"
-            >
-              {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-            </button>
+              className="absolute -bottom-1 -right-1 rounded-full"
+            />
             <input
               ref={fileInputRef}
               type="file"
@@ -365,87 +299,83 @@ export default function MorePage() {
             />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-base font-semibold text-gray-900 truncate">{user?.fullName || 'User'}</p>
-            <p className="text-sm text-gray-500">{roleLabel}</p>
+            <p className="truncate text-md font-semibold text-ink">{user?.fullName || 'Пользователь'}</p>
+            <p className="text-sm text-ink-3">{roleLabel}</p>
           </div>
         </div>
-      </div>
+      </Card>
 
-      {/* Menu items */}
-      <div className="card divide-y divide-gray-100 overflow-hidden">
-        {menuItems.map((item) => {
-          // ROLE-ONLY hide-by-permission: скрываем пункт без gating-права.
-          // Байпас только superadmin/director — внутри hasPermission; admin
-          // живёт по эффективным правам матрицы из /auth/me (волна Битрикс24).
-          if (item.permission && !hasPermission(item.permission)) {
-            return null;
-          }
-          if (item.anyPermission && !item.anyPermission.some((p) => hasPermission(p))) {
-            return null;
-          }
-          if (item.roles && user?.role && !item.roles.includes(user.role)) {
-            return null;
-          }
-          // «Филиалы» скрыты, когда показывать нечего: у тенанта один
-          // автосервис, и второго не существует.
-          if (item.multiPointOnly && !multiPoint) {
-            return null;
-          }
+      {/* Разделы */}
+      <Card padding="none">
+        <nav aria-label="Разделы">
+          <ul className="divide-y divide-line">
+            {visibleItems.map((item) => {
+              const Icon = item.icon;
+              const locked = isFeatureLocked(item.featureKey);
+              return (
+                <li key={item.path}>
+                  <Link
+                    to={item.path}
+                    aria-describedby={locked ? undefined : undefined}
+                    className={cn(
+                      'flex items-center gap-4 px-5 py-3.5 no-underline transition-colors first:rounded-t-xl last:rounded-b-xl',
+                      locked ? 'opacity-70' : 'hover:bg-surface-2 active:bg-surface-3',
+                      focusRing,
+                    )}
+                  >
+                    <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-ink">{item.label}</span>
+                      <span className="block text-xs text-ink-3">{item.description}</span>
+                    </span>
+                    {locked ? (
+                      <>
+                        <Lock className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                        <span className="sr-only">Недоступно в вашем тарифе</span>
+                      </>
+                    ) : (
+                      <ChevronRight className="h-5 w-5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </Card>
 
-          const Icon = item.icon;
-          const locked = isFeatureLocked(item.featureKey);
+      {/* Выход */}
+      <Card padding="none">
+        <button
+          type="button"
+          onClick={logout}
+          className={cn(
+            'flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 text-sm font-medium text-bad-text transition-colors hover:bg-bad-soft active:bg-bad-soft',
+            focusRing,
+          )}
+        >
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          Выйти из аккаунта
+        </button>
+      </Card>
 
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={`flex items-center gap-4 px-5 py-4 transition-colors ${locked ? 'opacity-60' : 'hover:bg-gray-50 active:bg-gray-100'}`}
-            >
-              <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${item.color}`}>
-                <Icon className={`h-5 w-5 ${locked ? 'text-gray-400' : item.iconColor}`} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-semibold ${locked ? 'text-gray-400' : 'text-gray-900'}`}>{item.label}</p>
-                <p className="text-xs text-gray-500">{item.description}</p>
-              </div>
-              {locked ? (
-                <Lock className="h-4 w-4 text-gray-300 flex-shrink-0" />
-              ) : (
-                <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
-              )}
-            </Link>
-          );
-        })}
-      </div>
-
-      {/* Logout */}
-      <button
-        onClick={logout}
-        className="card w-full flex items-center justify-center gap-2 px-5 py-4
-          text-red-600 font-medium text-sm hover:bg-red-50 active:bg-red-100 transition-colors"
-      >
-        <LogOut className="h-5 w-5" />
-        Выйти из аккаунта
-      </button>
-
-      {/* Danger zone — in-app account deletion (Apple 5.1.1(v) / Google Play) */}
+      {/* Опасная зона — удаление аккаунта (Apple 5.1.1(v) / Google Play) */}
       <DeleteAccountSection />
 
-      {/* Legal links */}
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-1 text-xs text-gray-500">
-        <a
-          href={PRIVACY_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hover:text-gray-600 transition-colors"
-        >
+      {/* Правовые ссылки */}
+      <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-1 text-xs text-ink-3">
+        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" className="rounded hover:text-ink focus-ring">
           Политика конфиденциальности
         </a>
-        <span className="text-gray-300">·</span>
-        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 transition-colors">
+        <span className="text-ink-4" aria-hidden="true">
+          ·
+        </span>
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="rounded hover:text-ink focus-ring">
           Условия использования
         </a>
-      </div>
+      </p>
     </div>
   );
 }

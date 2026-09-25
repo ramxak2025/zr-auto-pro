@@ -1,24 +1,36 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Truck, Phone, User } from 'lucide-react';
+import { Plus, Truck, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import SearchInput from '../components/SearchInput';
-import Modal from '../components/Modal';
-import Pagination from '../components/Pagination';
+import {
+  Badge,
+  Button,
+  DataTable,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  Pagination,
+  SearchInput,
+  Textarea,
+  Toolbar,
+  cn,
+  toneChip,
+} from '../ui';
+import type { DataTableColumn } from '../ui';
 import PhoneInput from '../components/PhoneInput';
-import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
-import { useClickableRow } from '../hooks/useClickableRow';
-import { Supplier, PaginatedResponse } from '../types';
-import { formatMoney } from '../../../shared/utils/formatters';
+import type { Supplier, PaginatedResponse } from '../types';
+import { formatPhone } from '../../../shared/validation/phone';
+import { countLabel } from '../components/warehouse/format';
+import { pageParam, useUrlParams } from '../components/warehouse/useUrlParams';
 
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us apply it per-row inside `.map()` without tripping rules-of-hooks.
-const clickableRowProps = useClickableRow;
+const LIMIT = 20;
+const FORM_ID = 'supplier-form';
 
 interface SupplierFormData {
   name: string;
@@ -27,15 +39,12 @@ interface SupplierFormData {
   comment: string;
 }
 
-const emptyForm: SupplierFormData = {
-  name: '',
-  phone: '',
-  contactPerson: '',
-  comment: '',
-};
+const emptyForm: SupplierFormData = { name: '', phone: '', contactPerson: '', comment: '' };
+
+type MoneyKey = 'totalPurchases' | 'totalPaid' | 'currentDebt';
+const sumBy = (rows: Supplier[], key: MoneyKey) => rows.reduce((sum, r) => sum + (r[key] || 0), 0);
 
 export default function SuppliersPage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   // ROLE-ONLY: создание/редактирование/удаление поставщиков — только с
@@ -43,9 +52,10 @@ export default function SuppliersPage() {
   // admin — по матрице роли). Просмотр (suppliers_access) — у всех, кто попал.
   const canManage = hasPermission('suppliers_manage');
 
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const limit = 20;
+  // Поиск и страница — в URL: возврат из карточки поставщика возвращает на тот же список.
+  const [params, setParam] = useUrlParams();
+  const search = params.get('q') ?? '';
+  const page = pageParam(params);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -53,12 +63,17 @@ export default function SuppliersPage() {
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['suppliers', search, page],
-    queryFn: () => suppliersApi.getAll({ search, page, limit }),
-    select: (res) => res.data as PaginatedResponse<Supplier>,
+    // В кеш кладём ТОЛЬКО тело ответа. Раньше здесь лежал сырой axios-ответ
+    // (select: res.data): его функции/XHR не проходят structured clone, и
+    // persistent-кеш (IndexedDB, ключ 'suppliers' в whitelist) падал целиком.
+    queryFn: async () => {
+      const res = await suppliersApi.getAll({ search, page, limit: LIMIT });
+      return res.data as PaginatedResponse<Supplier>;
+    },
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: SupplierFormData) => suppliersApi.create(data),
+    mutationFn: (payload: SupplierFormData) => suppliersApi.create(payload),
     onSuccess: () => {
       toast.success('Поставщик создан');
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
@@ -68,9 +83,9 @@ export default function SuppliersPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: SupplierFormData }) => suppliersApi.update(id, data),
+    mutationFn: ({ id, payload }: { id: string; payload: SupplierFormData }) => suppliersApi.update(id, payload),
     onSuccess: () => {
-      toast.success('Поставщик обновлен');
+      toast.success('Поставщик обновлён');
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
       closeModal();
     },
@@ -83,8 +98,7 @@ export default function SuppliersPage() {
     setIsModalOpen(true);
   };
 
-  const openEditModal = (supplier: Supplier, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openEditModal = (supplier: Supplier) => {
     setEditingSupplier(supplier);
     setForm({
       name: supplier.name,
@@ -101,266 +115,240 @@ export default function SuppliersPage() {
     setForm(emptyForm);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) {
       toast.error('Введите название поставщика');
       return;
     }
-    if (editingSupplier) {
-      updateMutation.mutate({ id: editingSupplier.id, data: form });
-    } else {
-      createMutation.mutate(form);
-    }
+    if (editingSupplier) updateMutation.mutate({ id: editingSupplier.id, payload: form });
+    else createMutation.mutate(form);
   };
 
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
+  const suppliers = data?.data ?? [];
+  const total = data?.total ?? 0;
 
-  const suppliers = data?.data || [];
-  const total = data?.total || 0;
-  const totalDebt = suppliers.reduce((sum, s) => sum + (s.currentDebt || 0), 0);
-  const totalPurchasesSum = suppliers.reduce((sum, s) => sum + (s.totalPurchases || 0), 0);
+  const columns: DataTableColumn<Supplier>[] = [
+    {
+      key: 'name',
+      header: 'Поставщик',
+      primary: true,
+      sortable: true,
+      render: (s) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <span
+            className={cn(
+              'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+              s.isSystem ? toneChip.accent : toneChip.neutral,
+            )}
+          >
+            <Truck className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="truncate">{s.name}</span>
+          {s.isSystem && (
+            <Badge tone="accent" size="sm">
+              Системный
+            </Badge>
+          )}
+        </span>
+      ),
+      footer: (rows) => `Итого на странице (${rows.length})`,
+    },
+    {
+      key: 'contactPerson',
+      header: 'Контакт',
+      hideBelow: 'md',
+      truncate: true,
+      width: 200,
+      render: (s) =>
+        s.isSystem ? (
+          <span className="text-ink-3">Покупка б/у у клиентов</span>
+        ) : (
+          s.contactPerson || <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'phone',
+      header: 'Телефон',
+      hideBelow: 'lg',
+      render: (s) =>
+        s.phone && !s.isSystem ? (
+          <span className="tabular-nums">{formatPhone(s.phone)}</span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'totalPurchases',
+      header: 'Закупки',
+      numeric: true,
+      sortable: true,
+      hideBelow: 'sm',
+      render: (s) => <Money value={s.totalPurchases} />,
+      footer: (rows) => <Money value={sumBy(rows, 'totalPurchases')} />,
+    },
+    {
+      key: 'totalPaid',
+      header: 'Оплачено',
+      numeric: true,
+      sortable: true,
+      hideBelow: 'md',
+      render: (s) => <Money value={s.totalPaid} />,
+      footer: (rows) => <Money value={sumBy(rows, 'totalPaid')} />,
+    },
+    {
+      key: 'currentDebt',
+      header: 'Долг',
+      numeric: true,
+      sortable: true,
+      render: (s) => (
+        <Money value={s.currentDebt} className={s.currentDebt > 0 ? 'font-semibold text-bad-text' : 'text-ink-3'} />
+      ),
+      footer: (rows) => {
+        const debt = sumBy(rows, 'currentDebt');
+        return <Money value={debt} className={debt > 0 ? 'text-bad-text' : undefined} />;
+      },
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      hideBelow: 'sm',
+      render: (s) =>
+        s.currentDebt > 0 ? (
+          <Badge tone="bad" dot>
+            Долг
+          </Badge>
+        ) : (
+          <Badge tone="ok" dot>
+            Оплачено
+          </Badge>
+        ),
+    },
+    ...(canManage
+      ? ([
+          {
+            key: 'actions',
+            header: <span className="sr-only">Действия</span>,
+            interactive: true,
+            align: 'right',
+            width: 56,
+            // Системного поставщика не редактируем (backend вернёт 403).
+            render: (s) =>
+              s.isSystem ? null : (
+                <IconButton label={`Изменить: ${s.name}`} icon={Pencil} size="sm" onClick={() => openEditModal(s)} />
+              ),
+          },
+        ] as DataTableColumn<Supplier>[])
+      : []),
+  ];
 
   return (
-    <div>
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
         title="Поставщики"
         icon={Truck}
+        subtitle={data ? `${countLabel(total, ['поставщик', 'поставщика', 'поставщиков'])} в базе` : undefined}
         actions={
           canManage ? (
-            <button onClick={openCreateModal} className="btn-primary">
-              <Plus className="w-4 h-4" />
+            <Button icon={Plus} onClick={openCreateModal}>
               Новый поставщик
-            </button>
+            </Button>
           ) : undefined
         }
       />
 
-      {/* Search */}
-      <div className="mb-4 max-w-md">
+      <Toolbar>
         <SearchInput
           value={search}
-          onChange={(val) => {
-            setSearch(val);
-            setPage(1);
-          }}
-          placeholder="Поиск по названию, контакту..."
+          onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
+          placeholder="Название или контакт…"
+          className="w-full sm:w-72"
         />
-      </div>
+      </Toolbar>
 
-      {/* KPI strip */}
-      {!isLoading && suppliers.length > 0 && (
-        <div className="grid grid-cols-3 gap-2.5 mb-4">
-          <div className="rounded-xl bg-primary-50 p-3">
-            <p className="text-[10px] font-semibold text-primary-500 uppercase tracking-wider">Поставщиков</p>
-            <p className="text-base sm:text-lg font-bold text-primary-700 mt-0.5 tabular-nums">{total}</p>
-          </div>
-          <div className="rounded-xl bg-red-50 p-3">
-            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider">Общий долг</p>
-            <p className="text-base sm:text-lg font-bold text-red-700 mt-0.5 tabular-nums">{formatMoney(totalDebt)}</p>
-          </div>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Оборот закупок</p>
-            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5 tabular-nums">
-              {formatMoney(totalPurchasesSum)}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Table */}
-      <QueryState
+      <DataTable
+        rows={suppliers}
+        rowKey={(s) => s.id}
+        rowHref={(s) => `/suppliers/${s.id}`}
+        rowLabel={(s) => `Открыть поставщика ${s.name}`}
+        columns={columns}
+        caption="Поставщики: закупки, оплаты и долг"
         isLoading={isLoading}
         isError={isError}
         onRetry={() => refetch()}
         isFetching={isFetching}
-        isEmpty={suppliers.length === 0}
-        empty={{
+        emptyState={{
           icon: Truck,
-          title: 'Нет поставщиков',
-          description: 'Добавьте первого поставщика для учета закупок',
-          action: canManage ? { label: 'Новый поставщик', onClick: openCreateModal } : undefined,
+          title: search ? 'Ничего не найдено' : 'Поставщиков пока нет',
+          description: search
+            ? `По запросу «${search}» поставщиков нет`
+            : 'Добавьте первого поставщика, чтобы вести поставки и оплаты',
+          action: canManage && !search ? { label: 'Новый поставщик', onClick: openCreateModal } : undefined,
         }}
-        minHeight="min-h-[40vh]"
-      >
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {suppliers.map((supplier) => (
-              <div
-                key={supplier.id}
-                {...clickableRowProps(() => navigate(`/suppliers/${supplier.id}`), { label: supplier.name })}
-                className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
-                  supplier.isSystem ? 'bg-primary-50/30 border-primary-200' : 'bg-white border-gray-100'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-semibold text-gray-900 text-sm truncate">{supplier.name}</span>
-                    {supplier.isSystem ? (
-                      <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 flex-shrink-0">
-                        Системный
-                      </span>
-                    ) : null}
-                  </div>
-                  {supplier.currentDebt > 0 && (
-                    <span className="text-xs font-medium text-red-600 flex-shrink-0">
-                      {formatMoney(supplier.currentDebt)}
-                    </span>
-                  )}
-                </div>
-                {supplier.contactPerson && !supplier.isSystem && (
-                  <p className="text-xs text-gray-500 mb-1">{supplier.contactPerson}</p>
-                )}
-                {supplier.isSystem ? <p className="text-xs text-gray-500 mb-1">Покупка б/у у клиентов</p> : null}
-                <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span>
-                    Закупки: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPurchases)}</span>
-                  </span>
-                  <span>
-                    Оплачено: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPaid)}</span>
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+      />
 
-          {/* Desktop table — dense, full-width */}
-          <div className="hidden md:block table-container md:max-h-[70vh]">
-            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
-              <thead>
-                <tr>
-                  <th>Поставщик</th>
-                  <th>Контактное лицо</th>
-                  <th>Телефон</th>
-                  <th className="text-right">Закупки</th>
-                  <th className="text-right">Оплачено</th>
-                  <th className="text-right">Долг</th>
-                  <th className="text-center">Статус</th>
-                </tr>
-              </thead>
-              <tbody>
-                {suppliers.map((supplier) => (
-                  <tr
-                    key={supplier.id}
-                    {...clickableRowProps(() => navigate(`/suppliers/${supplier.id}`), { label: supplier.name })}
-                    className={`cursor-pointer hover:bg-gray-50 ${supplier.isSystem ? 'bg-primary-50/30' : ''}`}
-                  >
-                    <td className="font-medium text-gray-900">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
-                            supplier.isSystem ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-500'
-                          }`}
-                        >
-                          <Truck className="w-4 h-4" />
-                        </div>
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="truncate">{supplier.name}</span>
-                          {supplier.isSystem ? (
-                            <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 flex-shrink-0">
-                              {'\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439'}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="text-gray-600">
-                      {supplier.isSystem
-                        ? '\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u0431/\u0443 \u0443 \u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432'
-                        : supplier.contactPerson || '\u2014'}
-                    </td>
-                    <td className="text-gray-600">{supplier.isSystem ? '\u2014' : supplier.phone || '\u2014'}</td>
-                    <td className="text-right text-gray-900 tabular-nums">{formatMoney(supplier.totalPurchases)}</td>
-                    <td className="text-right text-gray-900 tabular-nums">{formatMoney(supplier.totalPaid)}</td>
-                    <td
-                      className={`text-right font-medium tabular-nums ${
-                        supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
-                      }`}
-                    >
-                      {formatMoney(supplier.currentDebt)}
-                    </td>
-                    <td className="text-center">
-                      {supplier.currentDebt > 0 ? (
-                        <span className="badge-danger">Долг</span>
-                      ) : (
-                        <span className="badge-success">Оплачено</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParam({ page: p === 1 ? null : p })} />
 
-          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-        </>
-      </QueryState>
-
-      {/* Create / Edit Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={closeModal}
         title={editingSupplier ? 'Редактировать поставщика' : 'Новый поставщик'}
+        description={editingSupplier?.name}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeModal} disabled={isSubmitting}>
+              Отмена
+            </Button>
+            <Button type="submit" form={FORM_ID} loading={isSubmitting}>
+              {editingSupplier ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Название *</label>
-            <input
-              type="text"
-              className="input"
+        <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="Название" htmlFor="supplier-name" required>
+            <Input
+              id="supplier-name"
+              name="organization"
+              autoComplete="organization"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="ООО Запчасти"
+              placeholder="ООО «Запчасти»"
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="label">Контактное лицо</label>
-            <div className="relative">
-              <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                className="input pl-10"
-                value={form.contactPerson}
-                onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
-                placeholder="Иван Иванов"
-              />
-            </div>
-          </div>
+          <Field label="Контактное лицо" htmlFor="supplier-contact">
+            <Input
+              id="supplier-contact"
+              name="name"
+              autoComplete="name"
+              value={form.contactPerson}
+              onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+              placeholder="Иван Иванов"
+            />
+          </Field>
 
-          <div>
-            <label className="label">Телефон</label>
-            <div className="relative">
-              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <PhoneInput
-                value={form.phone}
-                onChange={(val) => setForm({ ...form, phone: val })}
-                placeholder="+7 (XXX) XXX-XX-XX"
-              />
-            </div>
-          </div>
+          <Field label="Телефон" htmlFor="supplier-phone">
+            <PhoneInput
+              id="supplier-phone"
+              name="tel"
+              autoComplete="tel"
+              value={form.phone}
+              onChange={(value) => setForm({ ...form, phone: value })}
+              placeholder="+7 (XXX) XXX-XX-XX"
+            />
+          </Field>
 
-          <div>
-            <label className="label">Комментарий</label>
-            <textarea
-              className="input"
+          <Field label="Комментарий" htmlFor="supplier-comment">
+            <Textarea
+              id="supplier-comment"
               rows={3}
               value={form.comment}
               onChange={(e) => setForm({ ...form, comment: e.target.value })}
-              placeholder="Заметки о поставщике..."
+              placeholder="Заметки о поставщике…"
             />
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={isSubmitting} className="btn-primary">
-              {isSubmitting ? 'Сохранение...' : editingSupplier ? 'Сохранить' : 'Создать'}
-            </button>
-          </div>
+          </Field>
         </form>
       </Modal>
     </div>

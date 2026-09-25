@@ -1,9 +1,12 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { BarChart3, Gift, History, Megaphone, Plug, Send, Settings, Star, type LucideIcon } from 'lucide-react';
 
 import { useAuth } from '../contexts/AuthContext';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
+import { Card } from '../ui/Card';
+import { TabPanel, Tabs } from '../ui/Tabs';
 import { UserRole } from '../types';
 import MarketingReportsView from '../components/marketing/MarketingReportsView';
 import ReputationView from '../components/marketing/ReputationView';
@@ -26,6 +29,7 @@ const TABS: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'settings', label: 'Настройки', icon: Settings },
   { key: 'loyalty', label: 'Лояльность', icon: Gift },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 export default function MarketingPage() {
   const { isRole, hasPermission } = useAuth();
@@ -34,8 +38,23 @@ export default function MarketingPage() {
   // marketing_access — без права страница рисовала бы только 403-ошибки.
   const canAccess = hasPermission('marketing_access');
 
-  const [activeTab, setActiveTab] = useState<Tab>('reports');
+  // Вкладка — в URL (?tab=broadcasts): F5 и ссылка коллеге открывают тот же раздел.
+  const [params, setParams] = useSearchParams();
+  const rawTab = params.get('tab') as Tab | null;
+  const activeTab: Tab = rawTab && TAB_KEYS.includes(rawTab) ? rawTab : 'reports';
   const [settingsFocus, setSettingsFocus] = useState<SettingsSection | null>(null);
+
+  const setActiveTab = (tab: Tab) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (tab === 'reports') p.delete('tab');
+        else p.set('tab', tab);
+        return p;
+      },
+      { replace: true },
+    );
+  };
 
   // Deep-link into a specific settings sub-section (from Отзывы / Рассылки).
   const goToSettings = (section?: SettingsSection) => {
@@ -44,52 +63,61 @@ export default function MarketingPage() {
   };
 
   if (!canAccess) {
-    return <EmptyState icon={Megaphone} title="Нет доступа" description="У вас нет права на раздел «Маркетинг»" />;
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Маркетинг" icon={Megaphone} />
+        <Card>
+          <EmptyState icon={Megaphone} title="Нет доступа" description="У вас нет права на раздел «Маркетинг»" />
+        </Card>
+      </div>
+    );
   }
 
   // Masters get the restricted leaderboard only — no page chrome, no tabs.
   if (isMaster) {
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto w-full max-w-3xl">
         <ReputationView isMaster onGoToSettings={() => undefined} />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <PageHeader title="Маркетинг" icon={Megaphone} subtitle="Отзывы, интеграции, рассылки и лояльность" />
+    <div className="space-y-5">
+      <PageHeader title="Маркетинг" icon={Megaphone} subtitle="Отзывы, рассылки, интеграции и лояльность" />
 
-      {/* Tab strip — scrollable, so all six fit on mobile */}
-      <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = activeTab === t.key;
-          return (
-            <button
-              key={t.key}
-              onClick={() => {
-                setActiveTab(t.key);
-                if (t.key !== 'settings') setSettingsFocus(null);
-              }}
-              className={`press-soft flex flex-shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition-colors ${
-                active ? 'bg-primary-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <Icon className="h-4 w-4 flex-shrink-0" />
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        aria-label="Разделы маркетинга"
+        idPrefix="marketing"
+        items={TABS}
+        value={activeTab}
+        onChange={(t) => {
+          setActiveTab(t);
+          if (t !== 'settings') setSettingsFocus(null);
+        }}
+      />
 
-      {activeTab === 'reports' && <MarketingReportsView />}
-      {activeTab === 'reputation' && <ReputationView isMaster={false} onGoToSettings={() => goToSettings('review')} />}
-      {activeTab === 'integrations' && <IntegrationsView />}
-      {activeTab === 'settings' && <MarketingSettingsView focus={settingsFocus} />}
-      {activeTab === 'broadcasts' && <BroadcastsView onGoToSettings={goToSettings} />}
-      {activeTab === 'journal' && <JournalView />}
-      {activeTab === 'loyalty' && <LoyaltyView />}
+      <TabPanel idPrefix="marketing" tabKey="reports" active={activeTab === 'reports'}>
+        <MarketingReportsView />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="reputation" active={activeTab === 'reputation'}>
+        <ReputationView isMaster={false} onGoToSettings={() => goToSettings('review')} />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="integrations" active={activeTab === 'integrations'}>
+        <IntegrationsView />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="settings" active={activeTab === 'settings'}>
+        <MarketingSettingsView focus={settingsFocus} />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="broadcasts" active={activeTab === 'broadcasts'}>
+        <BroadcastsView onGoToSettings={goToSettings} />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="journal" active={activeTab === 'journal'}>
+        <JournalView />
+      </TabPanel>
+      <TabPanel idPrefix="marketing" tabKey="loyalty" active={activeTab === 'loyalty'}>
+        <LoyaltyView />
+      </TabPanel>
     </div>
   );
 }

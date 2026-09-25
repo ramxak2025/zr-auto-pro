@@ -1,88 +1,97 @@
-import { useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useId, useRef, useState } from 'react';
+import { Link, type To } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import {
-  GraduationCap,
-  ArrowLeft,
-  Plus,
-  Pencil,
-  Trash2,
-  X,
   Check,
-  Loader2,
-  ImagePlus,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
   Eye,
   EyeOff,
-  CheckCircle2,
-  Circle,
+  GraduationCap,
+  ImagePlus,
   ListChecks,
-  ChevronRight,
+  Pencil,
   PlayCircle,
+  Plus,
+  Trash2,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { knowledgeApi, uploadsApi } from '../../api/services';
-import type { KnowledgeCourse, KnowledgeLesson, KnowledgeQuizQuestion, KnowledgeCategory } from '../../types';
+import type { KnowledgeCategory, KnowledgeCourse, KnowledgeLesson, KnowledgeQuizQuestion } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import EmptyState from '../../components/EmptyState';
+import QueryState from '../../components/QueryState';
 import MarkdownView from '../../components/MarkdownView';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Card, CardHeader } from '../../ui/Card';
+import { Checkbox } from '../../ui/Checkbox';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { RadioGroup } from '../../ui/RadioGroup';
+import { Select } from '../../ui/Select';
+import { Skeleton, SkeletonCard, SkeletonText } from '../../ui/Skeleton';
+import { Textarea } from '../../ui/Textarea';
+import { cn } from '../../ui/cn';
+import { focusRing } from '../../ui/tokens';
+import { CKEY } from '../../components/knowledge/keys';
+import { CoverPlaceholder, InlineError, ProgressBar, TileLink } from '../../components/knowledge/ui';
+import { articleTitleClass, articleType } from '../../components/knowledge/articleTypography';
+import { pluralRu } from '../../components/knowledge/utils';
 
 // ───────────────────────────────────────────────────────────────────────
-//  Query keys
+//  Учебный центр: сетка курсов → курс (уроки + прогресс) → урок (markdown +
+//  тест). Какой экран показать, решает СТРАНИЦА по query-параметрам
+//  (?tab=learning&course=…&lesson=…): F5, «Назад» и пересылка ссылки
+//  работают. Компонент чистый по навигации — получает id и ссылки.
 // ───────────────────────────────────────────────────────────────────────
-const CKEY = {
-  courses: ['knowledge', 'courses'] as const,
-  course: (id: string) => ['knowledge', 'course', id] as const,
-};
 
-type LearningView =
-  | { mode: 'grid' }
-  | { mode: 'course'; courseId: string }
-  | { mode: 'lesson'; courseId: string; lessonId: string };
+export interface LearningNav {
+  courseId: string | null;
+  lessonId: string | null;
+  courseHref: (courseId: string) => To;
+  lessonHref: (courseId: string, lessonId: string) => To;
+  onBackToCourses: () => void;
+}
+
+const pctFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+
+function lessonsLabel(completed: number, total: number): string {
+  return `${completed} из ${total} ${pluralRu(total, 'урока', 'уроков', 'уроков')}`;
+}
 
 export default function LearningCenter({
   isManager,
   categories,
-  initialCourseId,
+  nav,
+  onCreateCourse,
 }: {
   isManager: boolean;
   categories: KnowledgeCategory[];
-  /** When set (e.g. opened from global search), start on that course's detail view. */
-  initialCourseId?: string;
+  nav: LearningNav;
+  /** Открыть модалку нового курса (кнопка живёт в PageHeader страницы). */
+  onCreateCourse: () => void;
 }) {
-  const [view, setView] = useState<LearningView>(
-    initialCourseId ? { mode: 'course', courseId: initialCourseId } : { mode: 'grid' },
-  );
-
-  if (view.mode === 'course') {
+  if (nav.courseId && nav.lessonId) {
+    return <LessonView courseId={nav.courseId} lessonId={nav.lessonId} />;
+  }
+  if (nav.courseId) {
     return (
       <CourseDetail
-        courseId={view.courseId}
+        courseId={nav.courseId}
         isManager={isManager}
         categories={categories}
-        onBack={() => setView({ mode: 'grid' })}
-        onOpenLesson={(lessonId) => setView({ mode: 'lesson', courseId: view.courseId, lessonId })}
+        lessonHref={(lessonId) => nav.lessonHref(nav.courseId!, lessonId)}
+        onDeleted={nav.onBackToCourses}
       />
     );
   }
-
-  if (view.mode === 'lesson') {
-    return (
-      <LessonView
-        courseId={view.courseId}
-        lessonId={view.lessonId}
-        onBack={() => setView({ mode: 'course', courseId: view.courseId })}
-      />
-    );
-  }
-
-  return (
-    <CourseGrid
-      isManager={isManager}
-      categories={categories}
-      onOpenCourse={(courseId) => setView({ mode: 'course', courseId })}
-    />
-  );
+  return <CourseGrid isManager={isManager} courseHref={nav.courseHref} onCreateCourse={onCreateCourse} />;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -90,111 +99,92 @@ export default function LearningCenter({
 // ───────────────────────────────────────────────────────────────────────
 function CourseGrid({
   isManager,
-  categories,
-  onOpenCourse,
+  courseHref,
+  onCreateCourse,
 }: {
   isManager: boolean;
-  categories: KnowledgeCategory[];
-  onOpenCourse: (courseId: string) => void;
+  courseHref: (courseId: string) => To;
+  onCreateCourse: () => void;
 }) {
-  const [editor, setEditor] = useState<KnowledgeCourse | 'new' | null>(null);
-
-  const { data: courses = [], isLoading } = useQuery({
+  const {
+    data: courses = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: CKEY.courses,
     queryFn: async () => (await knowledgeApi.listCourses()).data,
   });
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-16">
-        <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <SkeletonCard key={i} lines={3} />
+        ))}
       </div>
     );
   }
 
   return (
-    <div className="space-y-5">
-      {isManager && (
-        <div className="flex justify-end">
-          <button onClick={() => setEditor('new')} className="btn-primary btn-sm">
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">Новый курс</span>
-          </button>
-        </div>
-      )}
-
-      {courses.length === 0 ? (
-        <EmptyState
-          icon={GraduationCap}
-          title="Курсов пока нет"
-          description={
-            isManager
-              ? 'Создайте первый обучающий курс с уроками и тестами для команды.'
-              : 'Обучающие материалы скоро появятся.'
-          }
-          action={isManager ? { label: 'Создать курс', onClick: () => setEditor('new') } : undefined}
-        />
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {courses.map((c) => (
-            <CourseCard key={c.id} course={c} onOpen={() => onOpenCourse(c.id)} />
-          ))}
-        </div>
-      )}
-
-      {isManager && editor && (
-        <CourseEditorModal
-          course={editor === 'new' ? null : editor}
-          categories={categories}
-          onClose={() => setEditor(null)}
-          onSaved={() => setEditor(null)}
-        />
-      )}
-    </div>
+    <QueryState
+      isLoading={false}
+      isError={isError}
+      onRetry={refetch}
+      isFetching={isFetching}
+      errorTitle="Не удалось загрузить курсы"
+      isEmpty={courses.length === 0}
+      empty={{
+        icon: GraduationCap,
+        title: 'Курсов пока нет',
+        description: isManager
+          ? 'Создайте первый обучающий курс с уроками и тестами для команды.'
+          : 'Обучающие материалы скоро появятся.',
+        action: isManager ? { label: 'Создать курс', onClick: onCreateCourse } : undefined,
+      }}
+      minHeight="py-14"
+    >
+      <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Курсы">
+        {courses.map((c) => (
+          <li key={c.id}>
+            <CourseCard course={c} to={courseHref(c.id)} />
+          </li>
+        ))}
+      </ul>
+    </QueryState>
   );
 }
 
-function CourseCard({ course, onOpen }: { course: KnowledgeCourse; onOpen: () => void }) {
+function CourseCard({ course, to }: { course: KnowledgeCourse; to: To }) {
   return (
-    <button onClick={onOpen} className="card-interactive flex flex-col overflow-hidden text-left">
+    <TileLink to={to} className="flex h-full flex-col overflow-hidden">
       {course.coverImage ? (
         <img src={course.coverImage} alt="" className="h-32 w-full object-cover" loading="lazy" />
       ) : (
-        <div className="flex h-32 w-full items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100">
-          <GraduationCap className="h-10 w-10 text-primary-400" />
-        </div>
+        <CoverPlaceholder icon={GraduationCap} className="h-32 w-full" />
       )}
       <div className="flex flex-1 flex-col p-4">
-        <div className="mb-1.5 flex items-center gap-2">
-          {course.completed && (
-            <span className="badge-green gap-1">
-              <Check className="h-3 w-3" /> Пройден
-            </span>
-          )}
-          {!course.published && <span className="badge-gray">Черновик</span>}
-        </div>
-        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{course.title}</h3>
-        {course.description && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{course.description}</p>}
-        <div className="mt-auto pt-3">
-          <ProgressBar percent={course.progressPercent} />
-          <p className="mt-1.5 text-xs text-gray-400">
-            {course.completedLessons} из {course.lessonCount} уроков
+        {(course.completed || !course.published) && (
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            {course.completed && (
+              <Badge tone="ok" icon={Check}>
+                Пройден
+              </Badge>
+            )}
+            {!course.published && <Badge>Черновик</Badge>}
+          </div>
+        )}
+        <h3 className="line-clamp-2 text-sm font-semibold text-ink group-hover:text-accent-text">{course.title}</h3>
+        {course.description && <p className="mt-1 line-clamp-2 text-xs text-ink-3">{course.description}</p>}
+        <div className="mt-auto pt-4">
+          <ProgressBar percent={course.progressPercent} label={`Прогресс курса «${course.title}»`} />
+          <p className="mt-1.5 text-xs tabular-nums text-ink-3">
+            {lessonsLabel(course.completedLessons, course.lessonCount)}
           </p>
         </div>
       </div>
-    </button>
-  );
-}
-
-function ProgressBar({ percent }: { percent: number }) {
-  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-  return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-      <div
-        className={`h-full rounded-full transition-all ${clamped >= 100 ? 'bg-green-500' : 'bg-primary-500'}`}
-        style={{ width: `${clamped}%` }}
-      />
-    </div>
+    </TileLink>
   );
 }
 
@@ -205,14 +195,14 @@ function CourseDetail({
   courseId,
   isManager,
   categories,
-  onBack,
-  onOpenLesson,
+  lessonHref,
+  onDeleted,
 }: {
   courseId: string;
   isManager: boolean;
   categories: KnowledgeCategory[];
-  onBack: () => void;
-  onOpenLesson: (lessonId: string) => void;
+  lessonHref: (lessonId: string) => To;
+  onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
   const [courseEditor, setCourseEditor] = useState(false);
@@ -220,7 +210,13 @@ function CourseDetail({
   const [confirmDeleteCourse, setConfirmDeleteCourse] = useState(false);
   const [confirmDeleteLesson, setConfirmDeleteLesson] = useState<string | null>(null);
 
-  const { data: course, isLoading } = useQuery({
+  const {
+    data: course,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: CKEY.course(courseId),
     queryFn: async () => (await knowledgeApi.getCourse(courseId)).data,
   });
@@ -235,7 +231,7 @@ function CourseDetail({
     onSuccess: () => {
       toast.success('Курс удалён');
       queryClient.invalidateQueries({ queryKey: CKEY.courses });
-      onBack();
+      onDeleted();
     },
     onError: () => toast.error('Не удалось удалить курс'),
   });
@@ -250,16 +246,32 @@ function CourseDetail({
     onError: () => toast.error('Не удалось удалить урок'),
   });
 
-  if (isLoading || !course) {
+  if (isLoading) {
     return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> К курсам
-        </button>
-        <div className="flex justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-        </div>
+      <div className="space-y-5" aria-busy="true">
+        <Card padding="md">
+          <Skeleton className="h-7 w-2/3" />
+          <SkeletonText lines={2} className="mt-3 max-w-xl" />
+          <Skeleton className="mt-5 h-1.5 w-full" />
+        </Card>
+        <SkeletonCard lines={4} />
       </div>
+    );
+  }
+
+  if (isError || !course) {
+    return (
+      <Card padding="md">
+        <QueryState
+          isLoading={false}
+          isError
+          onRetry={refetch}
+          isFetching={isFetching}
+          errorTitle="Не удалось загрузить курс"
+        >
+          {null}
+        </QueryState>
+      </Card>
     );
   }
 
@@ -268,109 +280,124 @@ function CourseDetail({
   return (
     // pb-24 on mobile keeps the last lesson row / «Добавить урок» clear of the
     // floating bottom tab bar; md:pb-0 restores desktop spacing.
-    <div className="space-y-6 pb-24 md:pb-0">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> К курсам
-        </button>
-        {isManager && (
-          <div className="flex items-center gap-2">
-            <button onClick={() => setCourseEditor(true)} className="btn-secondary btn-sm">
-              <Pencil className="h-4 w-4" />
-              <span className="hidden sm:inline">Изменить курс</span>
-            </button>
-            <button onClick={() => setConfirmDeleteCourse(true)} className="btn-ghost btn-sm text-red-600">
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Header card */}
-      <div className="card overflow-hidden">
+    <div className="space-y-5 pb-24 md:pb-0">
+      {/* Карточка курса */}
+      <Card padding="none" className="overflow-hidden">
         {course.coverImage && <img src={course.coverImage} alt="" className="max-h-56 w-full object-cover" />}
-        <div className="p-6">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            {course.completed && (
-              <span className="badge-green gap-1">
-                <Check className="h-3 w-3" /> Курс пройден
-              </span>
-            )}
-            {!course.published && <span className="badge-gray">Черновик</span>}
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">{course.title}</h1>
-          {course.description && <p className="mt-2 text-sm text-gray-600">{course.description}</p>}
-          <div className="mt-4">
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-sm font-medium text-gray-700">
-                {course.completedLessons} из {course.lessonCount} уроков
-              </span>
-              <span className="text-sm font-semibold text-primary-600">{Math.round(course.progressPercent)}%</span>
-            </div>
-            <ProgressBar percent={course.progressPercent} />
-          </div>
-        </div>
-      </div>
-
-      {/* Lessons */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-500">Уроки</h2>
-          {isManager && (
-            <button onClick={() => setLessonEditor('new')} className="btn-secondary btn-sm">
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Добавить урок</span>
-            </button>
-          )}
-        </div>
-
-        {lessons.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">
-            {isManager ? 'В курсе пока нет уроков. Добавьте первый.' : 'Уроки скоро появятся.'}
-          </div>
-        ) : (
-          <div className="card divide-y divide-gray-100 overflow-hidden">
-            {lessons.map((lesson, i) => (
-              <div key={lesson.id} className="flex items-center gap-3 px-4 py-3">
-                <button onClick={() => onOpenLesson(lesson.id)} className="flex flex-1 items-center gap-3 text-left">
-                  {lesson.completed ? (
-                    <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-500" />
-                  ) : (
-                    <Circle className="h-5 w-5 flex-shrink-0 text-gray-300" />
+        <div className="px-5 py-5 sm:px-8 sm:py-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              {(course.completed || !course.published) && (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  {course.completed && (
+                    <Badge tone="ok" icon={Check}>
+                      Курс пройден
+                    </Badge>
                   )}
-                  <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-500">
+                  {!course.published && <Badge>Черновик</Badge>}
+                </div>
+              )}
+              <h2 className={articleTitleClass}>{course.title}</h2>
+              {course.description && (
+                <p className="mt-2 max-w-[70ch] text-sm leading-relaxed text-ink-2">{course.description}</p>
+              )}
+            </div>
+            {isManager && (
+              <div className="flex flex-shrink-0 items-center gap-2">
+                <Button variant="secondary" icon={Pencil} onClick={() => setCourseEditor(true)}>
+                  Изменить курс
+                </Button>
+                <IconButton
+                  label="Удалить курс"
+                  icon={Trash2}
+                  variant="danger"
+                  onClick={() => setConfirmDeleteCourse(true)}
+                />
+              </div>
+            )}
+          </div>
+          <div className="mt-5 max-w-xl">
+            <div className="mb-1.5 flex items-baseline justify-between gap-3">
+              <span className="text-sm tabular-nums text-ink-2">
+                {lessonsLabel(course.completedLessons, course.lessonCount)}
+              </span>
+              <span className="text-sm font-semibold tabular-nums text-ink">
+                {pctFmt.format(course.progressPercent)}%
+              </span>
+            </div>
+            <ProgressBar percent={course.progressPercent} label="Прогресс курса" />
+          </div>
+        </div>
+      </Card>
+
+      {/* Уроки */}
+      <Card padding="none">
+        <CardHeader
+          as="h3"
+          title="Уроки"
+          subtitle={`${lessons.length} ${pluralRu(lessons.length, 'урок', 'урока', 'уроков')}`}
+          divider={lessons.length > 0}
+          actions={
+            isManager ? (
+              <Button icon={Plus} onClick={() => setLessonEditor('new')}>
+                Добавить урок
+              </Button>
+            ) : undefined
+          }
+        />
+        {lessons.length === 0 ? (
+          <p className="px-5 pb-8 pt-2 text-center text-sm text-ink-3">
+            {isManager ? 'В курсе пока нет уроков. Добавьте первый.' : 'Уроки скоро появятся.'}
+          </p>
+        ) : (
+          <ol className="divide-y divide-line">
+            {lessons.map((lesson, i) => (
+              <li key={lesson.id} className="flex items-center gap-2 px-3 py-1.5 sm:px-4">
+                <Link
+                  to={lessonHref(lesson.id)}
+                  className={cn(
+                    'flex min-h-[40px] min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 text-left transition-colors hover:bg-surface-2',
+                    focusRing,
+                  )}
+                >
+                  {lesson.completed ? (
+                    <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-ok" aria-label="Пройден" />
+                  ) : (
+                    <Circle className="h-5 w-5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                  )}
+                  <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold tabular-nums text-ink-3">
                     {i + 1}
                   </span>
-                  <span className="flex-1 truncate text-sm font-medium text-gray-800">{lesson.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{lesson.title}</span>
                   {lesson.hasQuiz && (
-                    <span className="badge-blue gap-1">
-                      <ListChecks className="h-3 w-3" /> Тест
-                    </span>
+                    <Badge tone="accent" size="sm" icon={ListChecks} className="hidden sm:inline-flex">
+                      Тест
+                    </Badge>
                   )}
-                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-                </button>
+                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                </Link>
                 {isManager && (
-                  <div className="flex items-center gap-1">
-                    <button
+                  <div className="flex flex-shrink-0 items-center">
+                    <IconButton
+                      label={`Изменить урок «${lesson.title}»`}
+                      icon={Pencil}
+                      size="sm"
                       onClick={() => setLessonEditor(lesson)}
-                      className="p-1 text-gray-400 hover:text-primary-600"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
+                    />
+                    <IconButton
+                      label={`Удалить урок «${lesson.title}»`}
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => setConfirmDeleteLesson(lesson.id)}
-                      className="p-1 text-gray-400 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    />
                   </div>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
+          </ol>
         )}
-      </section>
+      </Card>
 
       {/* Course editor */}
       {isManager && courseEditor && (
@@ -407,6 +434,7 @@ function CourseDetail({
         message="Курс и все его уроки будут удалены без возможности восстановления."
         confirmText="Удалить"
         variant="danger"
+        loading={deleteCourseMutation.isPending}
       />
       <ConfirmDialog
         isOpen={!!confirmDeleteLesson}
@@ -416,6 +444,7 @@ function CourseDetail({
         message="Урок будет удалён без возможности восстановления."
         confirmText="Удалить"
         variant="danger"
+        loading={deleteLessonMutation.isPending}
       />
     </div>
   );
@@ -424,12 +453,18 @@ function CourseDetail({
 // ───────────────────────────────────────────────────────────────────────
 //  Lesson view — markdown + quiz
 // ───────────────────────────────────────────────────────────────────────
-function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId: string; onBack: () => void }) {
+function LessonView({ courseId, lessonId }: { courseId: string; lessonId: string }) {
   const queryClient = useQueryClient();
 
   // We read the lesson from the already-loaded course detail to avoid a second
   // round trip — getCourse returns the full lessons[] incl. quiz questions.
-  const { data: course, isLoading } = useQuery({
+  const {
+    data: course,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: CKEY.course(courseId),
     queryFn: async () => (await knowledgeApi.getCourse(courseId)).data,
   });
@@ -447,7 +482,7 @@ function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId
       queryClient.invalidateQueries({ queryKey: CKEY.course(courseId) });
       queryClient.invalidateQueries({ queryKey: CKEY.courses });
       if (res.data.courseCompleted) {
-        toast.success('Курс пройден! 🎉');
+        toast.success('Курс пройден!');
       } else {
         toast.success('Урок завершён');
       }
@@ -464,27 +499,36 @@ function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId
     },
   });
 
-  if (isLoading || !course) {
+  if (isLoading) {
     return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> К урокам
-        </button>
-        <div className="flex justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-        </div>
-      </div>
+      <Card className="mx-auto w-full max-w-3xl px-5 py-6 sm:px-10 sm:py-8" aria-busy="true">
+        <Skeleton className="h-8 w-2/3" />
+        <SkeletonText lines={6} className="mt-8 max-w-[70ch]" />
+      </Card>
+    );
+  }
+
+  if (isError || !course) {
+    return (
+      <Card padding="md" className="mx-auto w-full max-w-3xl">
+        <QueryState
+          isLoading={false}
+          isError
+          onRetry={refetch}
+          isFetching={isFetching}
+          errorTitle="Не удалось загрузить урок"
+        >
+          {null}
+        </QueryState>
+      </Card>
     );
   }
 
   if (!lesson) {
     return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> К урокам
-        </button>
-        <EmptyState icon={PlayCircle} title="Урок не найден" />
-      </div>
+      <Card padding="md" className="mx-auto w-full max-w-3xl">
+        <EmptyState icon={PlayCircle} title="Урок не найден" description="Возможно, его удалили из курса." />
+      </Card>
     );
   }
 
@@ -512,108 +556,90 @@ function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId
   return (
     // pb-24 on mobile keeps the «Сдать тест»/«Отметить как пройденный» button
     // clear of the floating bottom tab bar; md:pb-0 restores desktop spacing.
-    <div className="space-y-6 pb-24 md:pb-0">
-      <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-        <ArrowLeft className="h-4 w-4" /> К урокам
-      </button>
-
-      <article className="card p-6 sm:p-8">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {lesson.completed && (
-            <span className="badge-green gap-1">
-              <Check className="h-3 w-3" /> Пройден
-            </span>
-          )}
-          {hasQuiz && (
-            <span className="badge-blue gap-1">
-              <ListChecks className="h-3 w-3" /> Тест в конце
-            </span>
-          )}
-        </div>
-        <h1 className="text-2xl font-bold text-gray-900">{lesson.title}</h1>
-
-        <div className="mt-6">
-          {lesson.body ? (
-            <MarkdownView>{lesson.body}</MarkdownView>
-          ) : (
-            <p className="text-sm italic text-gray-400">Содержимое не заполнено.</p>
-          )}
-        </div>
-
-        {/* Quiz */}
-        {hasQuiz && (
-          <div className="mt-8 border-t border-gray-100 pt-6">
-            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-gray-900">
-              <ListChecks className="h-5 w-5 text-primary-500" /> Проверочный тест
-            </h2>
-            <div className="space-y-5">
-              {quiz.map((q, qi) => (
-                <div key={qi}>
-                  <p className="mb-2 text-sm font-medium text-gray-800">
-                    {qi + 1}. {q.question}
-                  </p>
-                  <div className="space-y-2">
-                    {q.options.map((opt, oi) => {
-                      const selected = answers[qi] === oi;
-                      return (
-                        <label
-                          key={oi}
-                          className={`flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                            selected
-                              ? 'border-primary-400 bg-primary-50 text-primary-800'
-                              : 'border-gray-200 text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name={`q-${qi}`}
-                            checked={selected}
-                            onChange={() => setAnswer(qi, oi)}
-                            className="h-4 w-4 text-primary-600 focus:ring-primary-500"
-                          />
-                          <span>{opt}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+    <div className="pb-24 md:pb-0">
+      <Card as="article" padding="none" className="mx-auto w-full max-w-3xl">
+        <div className="px-5 py-6 sm:px-10 sm:py-8">
+          <p className="mb-3 text-xs text-ink-3">
+            Курс: <span className="font-medium text-ink-2">{course.title}</span>
+          </p>
+          {(lesson.completed || hasQuiz) && (
+            <div className="mb-4 flex flex-wrap items-center gap-1.5">
+              {lesson.completed && (
+                <Badge tone="ok" icon={Check}>
+                  Пройден
+                </Badge>
+              )}
+              {hasQuiz && (
+                <Badge tone="accent" icon={ListChecks}>
+                  Тест в конце
+                </Badge>
+              )}
             </div>
+          )}
+          <h2 className={articleTitleClass}>{lesson.title}</h2>
 
-            {quizError && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-                Правильных ответов: {quizError.correct} из {quizError.total}. Чтобы завершить урок, нужно ответить верно
-                на все вопросы.
-              </div>
+          <div className="mt-8">
+            {lesson.body ? (
+              <MarkdownView>{lesson.body}</MarkdownView>
+            ) : (
+              <p className={articleType.empty}>Содержимое не заполнено.</p>
             )}
           </div>
-        )}
 
-        {/* Complete action */}
-        <div className="mt-8 border-t border-gray-100 pt-5">
-          {lesson.completed ? (
-            <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
-              <Check className="h-5 w-5" /> Урок пройден
-            </div>
-          ) : (
-            <button
-              onClick={onComplete}
-              disabled={completeMutation.isPending || (hasQuiz && !allAnswered)}
-              className="btn-primary"
-            >
-              {completeMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Check className="h-4 w-4" />
+          {/* Quiz */}
+          {hasQuiz && (
+            <section className="mt-10 max-w-[70ch] border-t border-line pt-6" aria-labelledby="lesson-quiz">
+              <h3 id="lesson-quiz" className="mb-5 flex items-center gap-2 text-lg font-semibold text-ink">
+                <ListChecks className="h-5 w-5 text-accent" aria-hidden="true" /> Проверочный тест
+              </h3>
+              <div className="space-y-6">
+                {quiz.map((q, qi) => (
+                  <RadioGroup
+                    key={qi}
+                    label={`${qi + 1}. ${q.question}`}
+                    value={answers[qi] != null && answers[qi] >= 0 ? String(answers[qi]) : null}
+                    onChange={(v) => setAnswer(qi, Number(v))}
+                    options={q.options.map((opt, oi) => ({ value: String(oi), label: opt }))}
+                  />
+                ))}
+              </div>
+
+              {quizError && (
+                <InlineError
+                  className="mt-5"
+                  message={`Правильных ответов: ${quizError.correct} из ${quizError.total}. Чтобы завершить урок, нужно ответить верно на все вопросы.`}
+                />
               )}
-              {hasQuiz ? 'Сдать тест и завершить' : 'Отметить как пройденный'}
-            </button>
+            </section>
           )}
-          {hasQuiz && !lesson.completed && !allAnswered && (
-            <p className="mt-2 text-xs text-gray-400">Ответьте на все вопросы, чтобы сдать тест.</p>
-          )}
+
+          {/* Complete action */}
+          <div className="mt-10 max-w-[70ch] border-t border-line pt-5">
+            {lesson.completed ? (
+              <div
+                className="flex items-center gap-2.5 rounded-lg border border-ok/20 bg-ok-soft px-4 py-3 text-sm font-medium text-ok-text"
+                role="status"
+              >
+                <Check className="h-4 w-4" aria-hidden="true" /> Урок пройден
+              </div>
+            ) : (
+              <>
+                <Button
+                  icon={Check}
+                  onClick={onComplete}
+                  loading={completeMutation.isPending}
+                  disabled={hasQuiz && !allAnswered}
+                >
+                  {hasQuiz ? 'Сдать тест и завершить' : 'Отметить как пройденный'}
+                </Button>
+                {hasQuiz && !allAnswered && (
+                  <p className="mt-2 text-xs text-ink-3">Ответьте на все вопросы, чтобы сдать тест.</p>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </article>
+      </Card>
     </div>
   );
 }
@@ -621,7 +647,7 @@ function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId
 // ───────────────────────────────────────────────────────────────────────
 //  Course editor (create / edit) — manager
 // ───────────────────────────────────────────────────────────────────────
-function CourseEditorModal({
+export function CourseEditorModal({
   course,
   categories,
   onClose,
@@ -632,6 +658,7 @@ function CourseEditorModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const uid = useId();
   const queryClient = useQueryClient();
   const isEdit = !!course;
   const [title, setTitle] = useState(course?.title ?? '');
@@ -640,6 +667,7 @@ function CourseEditorModal({
   const [coverImage, setCoverImage] = useState<string | null>(course?.coverImage ?? null);
   const [published, setPublished] = useState(course?.published ?? true);
   const [uploadingCover, setUploadingCover] = useState(false);
+  const [titleError, setTitleError] = useState('');
   const coverInputRef = useRef<HTMLInputElement>(null);
 
   const saveMutation = useMutation({
@@ -673,100 +701,109 @@ function CourseEditorModal({
     }
   };
 
+  const submit = () => {
+    if (!title.trim()) {
+      setTitleError('Введите название курса');
+      return;
+    }
+    saveMutation.mutate();
+  };
+
   return (
-    <Modal isOpen onClose={onClose} title={isEdit ? 'Редактирование курса' : 'Новый курс'} size="lg">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={isEdit ? 'Редактирование курса' : 'Новый курс'}
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saveMutation.isPending}>
+            Отмена
+          </Button>
+          <Button onClick={submit} loading={saveMutation.isPending}>
+            {isEdit ? 'Сохранить' : 'Создать'}
+          </Button>
+        </>
+      }
+    >
       <div className="space-y-4">
-        <div>
-          <label className="label">Название курса</label>
-          <input
+        <Field label="Название курса" htmlFor={`${uid}-title`} required error={titleError || undefined}>
+          <Input
+            id={`${uid}-title`}
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (titleError) setTitleError('');
+            }}
             placeholder="Например: Приёмка автомобиля"
-            className="input"
+            invalid={!!titleError}
             autoFocus
           />
-        </div>
-        <div>
-          <label className="label">Описание</label>
-          <textarea
+        </Field>
+        <Field label="Описание" htmlFor={`${uid}-desc`}>
+          <Textarea
+            id={`${uid}-desc`}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Краткое описание курса"
             rows={3}
-            className="input resize-y"
           />
-        </div>
-        <div>
-          <label className="label">Категория</label>
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
+        </Field>
+        <Field label="Категория" htmlFor={`${uid}-cat`}>
+          <Select id={`${uid}-cat`} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">Без категории</option>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
             ))}
-          </select>
-        </div>
-        <div>
-          <label className="label">Обложка</label>
+          </Select>
+        </Field>
+        <Field label="Обложка">
           {coverImage ? (
             <div className="relative inline-block">
-              <img src={coverImage} alt="" className="h-28 rounded-lg object-cover" />
-              <button
-                type="button"
+              <img src={coverImage} alt="" className="h-28 rounded-lg border border-line object-cover" />
+              <IconButton
+                label="Убрать обложку"
+                icon={X}
+                size="sm"
+                variant="secondary"
                 onClick={() => setCoverImage(null)}
-                className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white text-gray-500 shadow ring-1 ring-gray-200 hover:text-red-600"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+                className="absolute -right-2 -top-2 rounded-full"
+              />
             </div>
           ) : (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ImagePlus}
               onClick={() => coverInputRef.current?.click()}
-              disabled={uploadingCover}
-              className="btn-secondary btn-sm"
+              loading={uploadingCover}
             >
-              {uploadingCover ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
               Загрузить обложку
-            </button>
+            </Button>
           )}
           <input
             ref={coverInputRef}
             type="file"
             accept="image/*"
             className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) handleCoverUpload(f);
               e.target.value = '';
             }}
           />
-        </div>
-        <div className="border-t border-gray-100 pt-4">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={published}
-              onChange={(e) => setPublished(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            {published ? <Eye className="h-4 w-4 text-gray-400" /> : <EyeOff className="h-4 w-4 text-gray-400" />}
-            Опубликовано
-          </label>
-        </div>
-        <div className="flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
-          <button onClick={onClose} className="btn-secondary">
-            Отмена
-          </button>
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={!title.trim() || saveMutation.isPending}
-            className="btn-primary"
-          >
-            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {isEdit ? 'Сохранить' : 'Создать'}
-          </button>
+        </Field>
+        <div className="border-t border-line pt-4">
+          <Checkbox
+            label="Опубликовано"
+            description={published ? 'Курс виден всем сотрудникам.' : 'Черновик — виден только редакторам.'}
+            checked={published}
+            onChange={(e) => setPublished(e.target.checked)}
+          />
         </div>
       </div>
     </Modal>
@@ -789,11 +826,13 @@ function LessonEditorModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const uid = useId();
   const isEdit = !!lesson;
   const [title, setTitle] = useState(lesson?.title ?? '');
   const [body, setBody] = useState(lesson?.body ?? '');
   const [showPreview, setShowPreview] = useState(false);
   const [hasQuiz, setHasQuiz] = useState(lesson?.hasQuiz ?? false);
+  const [titleError, setTitleError] = useState('');
   const [quiz, setQuiz] = useState<QuizDraft[]>(() =>
     (lesson?.quiz ?? []).map((q) => ({
       question: q.question,
@@ -836,7 +875,6 @@ function LessonEditorModal({
   const quizValid =
     !hasQuiz ||
     quiz.some((q) => q.question.trim().length > 0 && q.options.filter((o) => o.trim().length > 0).length >= 2);
-  const canSave = title.trim().length > 0 && quizValid && !saveMutation.isPending;
 
   const addQuestion = () => setQuiz((prev) => [...prev, { question: '', options: ['', ''], correctIndex: 0 }]);
 
@@ -845,104 +883,131 @@ function LessonEditorModal({
 
   const removeQuestion = (qi: number) => setQuiz((prev) => prev.filter((_, i) => i !== qi));
 
+  const submit = () => {
+    if (!title.trim()) {
+      setTitleError('Введите название урока');
+      return;
+    }
+    if (!quizValid) {
+      toast.error('Заполните хотя бы один вопрос с двумя вариантами или выключите тест');
+      return;
+    }
+    saveMutation.mutate();
+  };
+
   return (
-    <Modal isOpen onClose={onClose} title={isEdit ? 'Редактирование урока' : 'Новый урок'} size="xl">
-      <div className="space-y-4">
-        <div>
-          <label className="label">Название урока</label>
-          <input
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={isEdit ? 'Редактирование урока' : 'Новый урок'}
+      size="xl"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saveMutation.isPending}>
+            Отмена
+          </Button>
+          <Button onClick={submit} loading={saveMutation.isPending}>
+            {isEdit ? 'Сохранить' : 'Создать'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <Field label="Название урока" htmlFor={`${uid}-title`} required error={titleError || undefined}>
+          <Input
+            id={`${uid}-title`}
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              if (titleError) setTitleError('');
+            }}
             placeholder="Например: Внешний осмотр кузова"
-            className="input"
+            invalid={!!titleError}
             autoFocus
           />
-        </div>
+        </Field>
 
         {/* Body */}
-        <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="label mb-0">Содержание (Markdown)</label>
-            <button type="button" onClick={() => setShowPreview((v) => !v)} className="btn-ghost btn-sm">
-              {showPreview ? (
-                <>
-                  <EyeOff className="h-3.5 w-3.5" /> Скрыть превью
-                </>
-              ) : (
-                <>
-                  <Eye className="h-3.5 w-3.5" /> Превью
-                </>
-              )}
-            </button>
-          </div>
+        <Field label="Содержание (Markdown)" htmlFor={`${uid}-body`}>
           <div className={showPreview ? 'grid gap-3 lg:grid-cols-2' : ''}>
-            <textarea
+            <Textarea
+              id={`${uid}-body`}
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="# Заголовок&#10;&#10;Текст урока в **markdown**…"
+              placeholder={'# Заголовок\n\nТекст урока в **markdown**…'}
               rows={12}
-              className="input resize-y font-mono text-[13px] leading-relaxed"
+              className="font-mono text-[13px] leading-relaxed"
             />
             {showPreview && (
-              <div className="max-h-[20rem] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+              <div className="max-h-[20rem] overflow-y-auto rounded-lg border border-line bg-surface-2 p-4">
                 {body.trim() ? (
                   <MarkdownView>{body}</MarkdownView>
                 ) : (
-                  <p className="text-sm italic text-gray-400">Превью появится здесь…</p>
+                  <p className={articleType.empty}>Превью появится здесь…</p>
                 )}
               </div>
             )}
           </div>
-        </div>
+          <div className="mt-1.5 flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={showPreview ? EyeOff : Eye}
+              onClick={() => setShowPreview((v) => !v)}
+              aria-pressed={showPreview}
+            >
+              {showPreview ? 'Скрыть превью' : 'Превью'}
+            </Button>
+          </div>
+        </Field>
 
         {/* Quiz builder */}
-        <div className="border-t border-gray-100 pt-4">
-          <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700">
-            <input
-              type="checkbox"
-              checked={hasQuiz}
-              onChange={(e) => {
-                setHasQuiz(e.target.checked);
-                if (e.target.checked && quiz.length === 0) addQuestion();
-              }}
-              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            <ListChecks className="h-4 w-4 text-gray-400" /> Добавить проверочный тест
-          </label>
+        <div className="border-t border-line pt-4">
+          <Checkbox
+            label="Добавить проверочный тест"
+            description="Урок засчитывается, только если все ответы верны."
+            checked={hasQuiz}
+            onChange={(e) => {
+              setHasQuiz(e.target.checked);
+              if (e.target.checked && quiz.length === 0) addQuestion();
+            }}
+          />
 
           {hasQuiz && (
             <div className="mt-4 space-y-4">
               {quiz.map((q, qi) => (
-                <div key={qi} className="rounded-xl border border-gray-200 p-4">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className="text-xs font-semibold text-gray-400">Вопрос {qi + 1}</span>
-                    <button
-                      type="button"
+                <fieldset key={qi} className="rounded-lg border border-line bg-surface-2 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <legend className="float-left text-xs font-semibold text-ink-3">Вопрос {qi + 1}</legend>
+                    <IconButton
+                      label={`Удалить вопрос ${qi + 1}`}
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => removeQuestion(qi)}
-                      className="ml-auto text-gray-400 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    />
                   </div>
-                  <input
+                  <Input
                     value={q.question}
                     onChange={(e) => updateQuestion(qi, { question: e.target.value })}
                     placeholder="Текст вопроса"
-                    className="input mb-3"
+                    aria-label={`Текст вопроса ${qi + 1}`}
+                    className="mb-3"
                   />
-                  <p className="mb-1.5 text-xs text-gray-500">Отметьте правильный вариант радиокнопкой</p>
+                  <p className="mb-2 text-xs text-ink-3">Отметьте правильный вариант радиокнопкой.</p>
                   <div className="space-y-2">
                     {q.options.map((opt, oi) => (
                       <div key={oi} className="flex items-center gap-2">
                         <input
                           type="radio"
-                          name={`correct-${qi}`}
+                          name={`${uid}-correct-${qi}`}
                           checked={q.correctIndex === oi}
                           onChange={() => updateQuestion(qi, { correctIndex: oi })}
-                          className="h-4 w-4 flex-shrink-0 text-primary-600 focus:ring-primary-500"
-                          title="Правильный ответ"
+                          className="h-4 w-4 flex-shrink-0 cursor-pointer accent-accent"
+                          aria-label={`Вариант ${oi + 1} — правильный ответ`}
                         />
-                        <input
+                        <Input
+                          size="sm"
                           value={opt}
                           onChange={(e) =>
                             updateQuestion(qi, {
@@ -950,11 +1015,14 @@ function LessonEditorModal({
                             })
                           }
                           placeholder={`Вариант ${oi + 1}`}
-                          className="input flex-1 py-1.5"
+                          aria-label={`Вариант ${oi + 1}`}
+                          className="flex-1"
                         />
                         {q.options.length > 2 && (
-                          <button
-                            type="button"
+                          <IconButton
+                            label={`Убрать вариант ${oi + 1}`}
+                            icon={X}
+                            size="sm"
                             onClick={() =>
                               updateQuestion(qi, {
                                 options: q.options.filter((_, idx) => idx !== oi),
@@ -962,40 +1030,29 @@ function LessonEditorModal({
                                   q.correctIndex >= oi && q.correctIndex > 0 ? q.correctIndex - 1 : q.correctIndex,
                               })
                             }
-                            className="flex-shrink-0 text-gray-400 hover:text-red-600"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
+                          />
                         )}
                       </div>
                     ))}
                   </div>
                   {q.options.length < 6 && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Plus}
+                      className="mt-2"
                       onClick={() => updateQuestion(qi, { options: [...q.options, ''] })}
-                      className="btn-ghost btn-sm mt-2"
                     >
-                      <Plus className="h-3.5 w-3.5" /> Вариант
-                    </button>
+                      Вариант
+                    </Button>
                   )}
-                </div>
+                </fieldset>
               ))}
-              <button type="button" onClick={addQuestion} className="btn-secondary btn-sm">
-                <Plus className="h-4 w-4" /> Добавить вопрос
-              </button>
+              <Button variant="secondary" size="sm" icon={Plus} onClick={addQuestion}>
+                Добавить вопрос
+              </Button>
             </div>
           )}
-        </div>
-
-        <div className="flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
-          <button onClick={onClose} className="btn-secondary">
-            Отмена
-          </button>
-          <button onClick={() => saveMutation.mutate()} disabled={!canSave} className="btn-primary">
-            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {isEdit ? 'Сохранить' : 'Создать'}
-          </button>
         </div>
       </div>
     </Modal>

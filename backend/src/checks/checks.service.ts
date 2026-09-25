@@ -1324,7 +1324,7 @@ export class ChecksService {
                 ch.date::text AS _cursor_date, ch.created_at::text AS _cursor_created,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
-                ca.plate_number, ca.make_model,
+                ca.plate_number, ca.make_model, ca.vin AS car_vin,
                 pt.name as point_name,
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
@@ -1355,7 +1355,7 @@ export class ChecksService {
         `SELECT ch.*,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
-                ca.plate_number, ca.make_model,
+                ca.plate_number, ca.make_model, ca.vin AS car_vin,
                 pt.name as point_name,
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
@@ -1390,7 +1390,12 @@ export class ChecksService {
         (ch as any).client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
       }
       if (row.car_id) {
-        (ch as any).car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
+        (ch as any).car = {
+          id: row.car_id,
+          plateNumber: row.plate_number,
+          makeModel: row.make_model,
+          vin: row.car_vin ?? null,
+        };
       }
       // #59: true when the requesting user is a service-line executor on this
       // check but is NOT its creator (added as executor by someone else). Drives
@@ -1492,7 +1497,7 @@ export class ChecksService {
       `SELECT ch.*,
               m.full_name as master_name, m.avatar as master_avatar,
               cl.full_name as client_name, cl.phone as client_phone,
-              ca.plate_number, ca.make_model,
+              ca.plate_number, ca.make_model, ca.vin AS car_vin,
               loc.name as location_name,
               pt.name as point_name,
               ab.full_name as accepted_by_name
@@ -1512,7 +1517,12 @@ export class ChecksService {
     const ch: any = this.mapCheck(row, this.canSeeProfit(actor));
     if (row.master_id) ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
     if (row.client_id) ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
-    if (row.car_id) ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
+    // 171 — VIN машины едет в проекции всегда (null, если не указан), и при
+    // выключенной опции тоже: показывать решает клиент, отдельный запрос за
+    // машиной ради VIN в деталке не нужен. Алиас car_vin — чтобы не зависеть
+    // от появления одноимённой колонки в ch.*.
+    if (row.car_id)
+      ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model, vin: row.car_vin ?? null };
     // Round 14 (146): место заказа — компактно {id,name} для карточки/детали.
     if (row.location_id) ch.location = { id: row.location_id, name: row.location_name ?? null };
 
@@ -2096,7 +2106,7 @@ export class ChecksService {
          SELECT ch.*,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
-                ca.plate_number, ca.make_model,
+                ca.plate_number, ca.make_model, ca.vin AS car_vin,
                 loc.name as location_name,
                 pt.name as point_name,
                 (SELECT COALESCE(json_agg(json_build_object('id', u2.id, 'fullName', u2.full_name, 'avatar', u2.avatar)
@@ -2128,7 +2138,7 @@ export class ChecksService {
         ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
       }
       if (row.car_id) {
-        ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
+        ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model, vin: row.car_vin ?? null };
       }
       // Round 14: место + исполнители на карточке доски (авто, клиент, место,
       // комментарий — см. CASHIER_MODE_SPEC). json_agg отдаёт готовый массив.

@@ -341,6 +341,12 @@ export interface CreateCarRequest {
   clientId: string;
   /** 059 — register the car "без номера"; plate is stored empty. */
   noPlate?: boolean;
+  /**
+   * 171 — VIN (17 символов, нормализуется сервером через normalizeVin). Принимается
+   * только при включённой опции Tenant.vinEnabled; дубликат VIN внутри тенанта →
+   * 409 {code:'VIN_DUPLICATE', carId, clientId, clientName}.
+   */
+  vin?: string | null;
 }
 
 export interface UpdateCarRequest {
@@ -350,6 +356,8 @@ export interface UpdateCarRequest {
   clientId?: string;
   /** 059 — toggle "без номера". When true, the stored plate is cleared. */
   noPlate?: boolean;
+  /** 171 — VIN; null/'' — очистить. См. CreateCarRequest.vin. */
+  vin?: string | null;
 }
 
 /**
@@ -852,6 +860,13 @@ export interface ImportRowInput {
   phone?: string | null;
   carPlate?: string | null;
   carModel?: string | null;
+  /**
+   * 171 — VIN («car_vin» в шаблоне). Сервер нормализует сам; учитывается
+   * ТОЛЬКО при включённой опции Tenant.vinEnabled, иначе молча игнорируется.
+   * Невалидный / уже занятый VIN — предупреждение (invalid_vin / duplicate_vin),
+   * авто создаётся без VIN.
+   */
+  carVin?: string | null;
   /** Free-form data-quality tags from the source ("unclear_car_model", "no_phone", …). */
   notes?: string | null;
   /** Original raw client text — preserved for audit. */
@@ -870,7 +885,10 @@ export type ImportIssueKind =
   | 'plate_belongs_to_other_client'
   | 'duplicate_in_file'
   | 'multiple_name_candidates'
-  | 'name_conflict_same_phone';
+  | 'name_conflict_same_phone'
+  /** 171 — колонка VIN (только при включённой опции): не распознан / занят другой машиной или повторяется в файле. */
+  | 'invalid_vin'
+  | 'duplicate_vin';
 
 export interface ImportRowIssue {
   sourceRow: number;
@@ -916,6 +934,8 @@ export interface ImportPlannedCar {
   /** Set when plate is bound to a different client — preview blocks this row. */
   conflictsWithClientId?: string | null;
   conflictsWithClientName?: string | null;
+  /** 171 — VIN, который будет записан при создании (нормализованный); null/absent — без VIN. */
+  vin?: string | null;
 }
 
 export interface ImportPreviewSummary {

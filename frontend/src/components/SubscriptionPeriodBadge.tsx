@@ -3,6 +3,7 @@ import { ru } from 'date-fns/locale';
 import { Wallet, Gift } from 'lucide-react';
 
 import type { SubscriptionPeriodKind } from '../types';
+import { Badge } from '../ui/Badge';
 
 interface Props {
   /** 'paid' | 'free' | null — from tenant.currentPeriodKind / cabinet.subscription. */
@@ -14,10 +15,10 @@ interface Props {
 }
 
 /**
- * 122 — «оплачено до …» / «бесплатно до …» pill for the superadmin cabinet.
- * Renders nothing when the period kind is unknown (legacy payloads / never
- * extended through the ledger path). Paid = revenue → emerald; free = never
- * revenue → neutral slate.
+ * 122 — «оплачено до …» / «бесплатно до …» для кабинета суперадмина.
+ * Ничего не рендерит, когда вид периода неизвестен (legacy-payload / тенант
+ * ни разу не продлевался через реестр). Платный период = деньги пришли → ok;
+ * бесплатный — никогда не выручка → нейтральный.
  */
 export default function SubscriptionPeriodBadge({ kind, until, size = 'md', className = '' }: Props) {
   if (!kind) return null;
@@ -25,18 +26,13 @@ export default function SubscriptionPeriodBadge({ kind, until, size = 'md', clas
   const paid = kind === 'paid';
   const label = paid ? 'Оплачено до' : 'Бесплатно до';
   const dateStr = until ? format(parseISO(until), 'd MMM yyyy', { locale: ru }) : null;
-  const Icon = paid ? Wallet : Gift;
-
-  const tone = paid ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-slate-100 text-slate-600 ring-slate-200';
-  const pad = size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-0.5 text-xs';
 
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full font-medium ring-1 ${tone} ${pad} ${className}`}>
-      <Icon className="h-3 w-3 flex-shrink-0" />
+    <Badge tone={paid ? 'ok' : 'neutral'} icon={paid ? Wallet : Gift} size={size} className={className}>
       <span className="tabular-nums">
         {label}
         {dateStr ? ` ${dateStr}` : ''}
       </span>
-    </span>
+    </Badge>
   );
 }

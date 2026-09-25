@@ -44,6 +44,19 @@ export class CallsService {
     return rows.length > 0;
   }
 
+  /**
+   * Какая телефония подключена у тенанта — тем же правилом, каким getCalls
+   * выбирает источник: Mango включён → 'mango'; иначе есть активная
+   * интеграция «Мои Звонки» → 'moizvonki'; иначе null (телефонии нет).
+   * Нужен воронке звонков (ReportsService.getCallFunnel): «не подключено» и
+   * «подключено, но провайдер не ответил» — разные состояния для UI.
+   */
+  async getTelephonyProvider(tenantId: string): Promise<'mango' | 'moizvonki' | null> {
+    if (await this.isMangoEnabled(tenantId)) return 'mango';
+    if (await this.getMoiZvonkiConfig(tenantId)) return 'moizvonki';
+    return null;
+  }
+
   async getCalls(tenantId: string, query: { date?: string; dateFrom?: string; dateTo?: string }) {
     // Mango (telephony module, migration 088) PUSHES call events to us and they are
     // PERSISTED in the `calls` table — so a Mango tenant lists straight from the DB

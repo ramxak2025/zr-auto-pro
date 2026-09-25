@@ -1,5 +1,8 @@
 import { AlertTriangle, ArrowRight, Car as CarIcon } from 'lucide-react';
 import Modal from './Modal';
+import { Button } from '../ui/Button';
+import { cn } from '../ui/cn';
+import { focusRing, toneChip } from '../ui/tokens';
 
 interface DuplicateWarningDialogProps {
   isOpen: boolean;
@@ -22,8 +25,9 @@ interface DuplicateWarningDialogProps {
 }
 
 /**
- * Warns the user before creating a duplicate (client by phone or car by plate).
- * Offers to open the existing record instead, or create a new one anyway.
+ * Предупреждение перед созданием дубля (клиент по телефону / авто по госномеру).
+ * Главное действие — открыть существующую запись; «Всё равно создать» —
+ * третьестепенное (ghost), чтобы дубль не создавался на автомате.
  */
 export default function DuplicateWarningDialog({
   isOpen,
@@ -38,60 +42,61 @@ export default function DuplicateWarningDialog({
   existingCars,
 }: DuplicateWarningDialogProps) {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
-      <div className="flex items-start gap-3 mb-4">
-        <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-amber-50 flex items-center justify-center">
-          <AlertTriangle className="h-5 w-5 text-amber-600" />
-        </div>
-        <div className="flex-1">
-          <p className="text-sm text-gray-700">{description}</p>
-          <button
-            type="button"
-            onClick={onOpenExisting}
-            className="mt-3 w-full text-left bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200 px-4 py-3 transition-colors"
-          >
-            <div className="flex items-center justify-between">
-              <div className="min-w-0">
-                <div className="font-semibold text-gray-900 truncate">{existingLabel}</div>
-                {existingSubtitle && (
-                  <div className="text-xs text-gray-500 truncate">{existingSubtitle}</div>
-                )}
-              </div>
-              <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0 ml-3" />
-            </div>
-            {existingCars && existingCars.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-gray-200 space-y-1.5">
-                <div className="text-xs text-gray-500 font-medium">Уже привязано:</div>
-                {existingCars.slice(0, 5).map((car, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs text-gray-700">
-                    <CarIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                    <span className="font-mono font-semibold">{car.plateNumber}</span>
-                    <span className="text-gray-500 truncate">{car.makeModel}</span>
-                  </div>
-                ))}
-                {existingCars.length > 5 && (
-                  <div className="text-xs text-gray-400">… и ещё {existingCars.length - 5}</div>
-                )}
-              </div>
-            )}
-          </button>
-        </div>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onCreateAnyway} className="mr-auto">
+            Всё равно создать
+          </Button>
+          <Button variant="secondary" onClick={onClose}>
+            Отмена
+          </Button>
+          <Button onClick={onOpenExisting}>{openExistingLabel}</Button>
+        </>
+      }
+    >
+      <div className="flex items-start gap-3">
+        <span className={cn('flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg', toneChip.warn)}>
+          <AlertTriangle className="h-[18px] w-[18px]" aria-hidden="true" />
+        </span>
+        <p className="text-sm leading-relaxed text-ink-2">{description}</p>
       </div>
 
-      <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-100">
-        <button onClick={onClose} className="btn-secondary">
-          Отмена
-        </button>
-        <button onClick={onOpenExisting} className="btn-primary">
-          {openExistingLabel}
-        </button>
-        <button
-          onClick={onCreateAnyway}
-          className="text-sm text-gray-500 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors"
-        >
-          Всё равно создать
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={onOpenExisting}
+        className={cn(
+          'mt-4 w-full rounded-xl border border-line bg-surface-2 px-4 py-3 text-left transition-[border-color,background-color] duration-150 hover:border-line-strong hover:bg-surface-3',
+          focusRing,
+        )}
+      >
+        <span className="flex items-center justify-between gap-3">
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-ink">{existingLabel}</span>
+            {existingSubtitle && <span className="block truncate text-xs text-ink-3">{existingSubtitle}</span>}
+          </span>
+          <ArrowRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+        </span>
+        {existingCars && existingCars.length > 0 && (
+          <span className="mt-3 block space-y-1.5 border-t border-line pt-3">
+            <span className="block text-xs font-medium text-ink-3">Уже привязано:</span>
+            {existingCars.slice(0, 5).map((car, i) => (
+              <span key={i} className="flex items-center gap-2 text-xs text-ink-2">
+                <CarIcon className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                <span className="font-semibold tabular-nums tracking-wide">{car.plateNumber}</span>
+                <span className="truncate text-ink-3">{car.makeModel}</span>
+              </span>
+            ))}
+            {existingCars.length > 5 && (
+              <span className="block text-xs text-ink-3">… и ещё {existingCars.length - 5}</span>
+            )}
+          </span>
+        )}
+      </button>
     </Modal>
   );
 }

@@ -269,6 +269,19 @@ import type {
   ApproveRegistrationRequest,
   RejectRegistrationRequest,
 } from './types';
+// 2026-09-25 — VIN и конструктор отчётов (см. секции в ../types).
+import type {
+  CarLookupResult,
+  VinDecodeResult,
+  VinSettings,
+  UpdateVinSettingsRequest,
+  ReportId,
+  ReportQuery,
+  ReportResult,
+  ReportFilterKind,
+  ReportFilterOptions,
+  ReportCatalogResponse,
+} from '../types';
 
 export function createAuthApi(api: HttpClient) {
   return {
@@ -715,6 +728,12 @@ export function createCarsApi(api: HttpClient) {
         createdAt: string;
         client: { id: string; fullName: string; phone: string } | null;
       } | null>('/cars/lookup-by-plate', { params: { plate } }),
+    /**
+     * 171 — существующая машина тенанта с таким VIN (нормализованным), или null.
+     * Для Кассы в режиме поиска «VIN» (только при Tenant.vinEnabled). Сервер
+     * отвечает null и на некорректный VIN — без 400.
+     */
+    lookupByVin: (vin: string) => api.get<CarLookupResult | null>('/cars/lookup-by-vin', { params: { vin } }),
   };
 }
 
@@ -2662,5 +2681,59 @@ export function createVoiceApi(api: HttpClient) {
       } as unknown),
     /** Остаток пакета минут за текущий месяц (МСК). Доступно любой роли тенанта. */
     usage: () => api.get<VoiceUsage>('/voice/usage'),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  VIN (171, 2026-09-25). Поле VIN у машины, расшифровка марки/модели и
+//  поиск по VIN включаются опцией тенанта (Tenant.vinEnabled, по умолчанию
+//  ВЫКЛ). Настройки — /vin/settings (company_manage); расшифровка — любой
+//  роли. Хелперы нормализации/валидации — shared/utils/vin.ts.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createVinApi(api: HttpClient) {
+  return {
+    /**
+     * Расшифровать VIN: марка/модель/год. Сервер сам нормализует ввод; при
+     * некорректном VIN возвращает valid=false (не 400). Источники по очереди:
+     * платный сервис по ключу клиента → NHTSA → офлайн-справочник WMI.
+     * Внешние источники ждём до ~6 с, поэтому таймаут запроса поднят.
+     */
+    decode: (vin: string) => api.post<VinDecodeResult>('/vin/decode', { vin }, { timeout: 15_000 } as unknown),
+    /** Настройки VIN текущей компании + список поддерживаемых платных провайдеров. */
+    getSettings: () => api.get<VinSettings>('/vin/settings'),
+    /** Включить/выключить опцию, выбрать провайдера, сохранить/удалить ключи. */
+    updateSettings: (data: UpdateVinSettingsRequest) => api.patch<VinSettings>('/vin/settings', data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  КОНСТРУКТОР ОТЧЁТОВ (2026-09-25) — раздел «Отчёты». Каталог отчётов
+//  (названия, фильтры, права) — shared/reports/catalog.ts; сервер отдаёт
+//  единую структуру ReportResult, клиенты рендерят её универсальным экраном.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createReportBuilderApi(api: HttpClient) {
+  return {
+    /** Какие отчёты доступны текущему пользователю (права, филиалы). */
+    catalog: () => api.get<ReportCatalogResponse>('/reports/builder/catalog'),
+    /** Варианты сущностного фильтра: мастера / сотрудники / поставщики / филиалы. */
+    filterOptions: (kind: ReportFilterKind) =>
+      api.get<ReportFilterOptions>(`/reports/builder/filters/${kind}`),
+    /**
+     * Сформировать отчёт за период. ids — выбранные сущности (пусто = все),
+     * на проводе CSV. Период ≤ 366 дней. Тяжёлые отчёты могут считаться
+     * несколько секунд — таймаут поднят до 60 с.
+     */
+    run: (reportId: ReportId, query: ReportQuery) =>
+      api.get<ReportResult>(`/reports/builder/${reportId}`, {
+        params: {
+          dateFrom: query.dateFrom,
+          dateTo: query.dateTo,
+          ids: query.ids && query.ids.length > 0 ? query.ids.join(',') : undefined,
+          groupBy: query.groupBy || undefined,
+        },
+        timeout: 60_000,
+      } as unknown),
   };
 }

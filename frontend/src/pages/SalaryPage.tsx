@@ -1,20 +1,19 @@
-import { Fragment, useState } from 'react';
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  DollarSign,
-  Banknote,
-  CreditCard,
-  Shield,
-  TrendingUp,
-  Users,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
-  History,
-  Percent,
   Ban,
+  Banknote,
+  Check,
+  Coins,
+  CreditCard,
+  History,
+  MoreHorizontal,
   Pencil,
+  Percent,
+  Shield,
   Trash2,
+  Users,
 } from 'lucide-react';
 import { format, subMonths } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -22,14 +21,36 @@ import toast from 'react-hot-toast';
 
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { formatMoney } from '../../../shared/utils/formatters';
+import { formatDateShort, formatMoney } from '../../../shared/utils/formatters';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
+import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { useTenantCalendar } from '../hooks/useTenantTimezone';
+import ConfirmDialog from '../components/ConfirmDialog';
 import RateByMonthModal from '../components/RateByMonthModal';
-import { apiErrorMessage } from '../../../shared/utils/apiError';
+import MonthPager from '../components/reports/MonthPager';
+import { patchParams, readPeriod } from '../components/reports/periodParams';
+import { numericColumnSizing } from '../components/reports/tableWidths';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Card, CardHeader } from '../ui/Card';
+import { StatCard } from '../ui/StatCard';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Money } from '../ui/Money';
+import { Toolbar } from '../ui/Toolbar';
+import { Badge } from '../ui/Badge';
+import { Field } from '../ui/Field';
+import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { Drawer } from '../ui/Drawer';
+import { DropdownMenu, type MenuEntry } from '../ui/DropdownMenu';
+import { SkeletonCard, SkeletonText } from '../ui/Skeleton';
+import { cn } from '../ui/cn';
+import { toneChip } from '../ui/tokens';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, SalaryFine } from '../types';
 
 /**
@@ -67,6 +88,13 @@ function pluralShifts(n: number): string {
   return 'смен';
 }
 
+/** Сумма к выплате: плюс — надо выплатить (внимание), минус — переплата (ошибка), ноль — нейтрально. */
+function remainingClass(value: number): string {
+  if (value > 0) return 'text-warn-text';
+  if (value < 0) return 'text-bad-text';
+  return 'text-ink';
+}
+
 // ─── Payment dialog form state ──────────────────────────────────────────────
 
 interface PaymentFormState {
@@ -87,19 +115,115 @@ function emptyPaymentForm(monthYear: string): PaymentFormState {
   return { userId: '', userName: '', amount: '', monthYear, type: 'salary', comment: '' };
 }
 
-// ─── Payment history per row (expandable) ───────────────────────────────────
+const PAYOUT_TYPE_OPTIONS = [
+  { value: 'salary' as const, label: 'Зарплата' },
+  { value: 'advance' as const, label: 'Аванс' },
+];
+
+// ─── Строка истории (выплата / штраф) ────────────────────────────────────────
+
+interface HistoryItemProps {
+  amount: number;
+  /** Отменённая выплата — зачёркнута. */
+  struck?: boolean;
+  /** Отрицательная сумма (штраф). */
+  negative?: boolean;
+  badges?: React.ReactNode;
+  sub?: string | null;
+  warning?: string | null;
+  danger?: string | null;
+  date: string;
+  author?: string | null;
+  actions?: React.ReactNode;
+}
+
+function HistoryItem({
+  amount,
+  struck,
+  negative,
+  badges,
+  sub,
+  warning,
+  danger,
+  date,
+  author,
+  actions,
+}: HistoryItemProps) {
+  return (
+    <li className="flex items-start gap-3 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span
+            className={cn(
+              'text-sm font-semibold tabular-nums',
+              struck ? 'text-ink-3 line-through' : negative ? 'text-bad-text' : 'text-ink',
+            )}
+          >
+            {negative ? '−' : ''}
+            {formatMoney(amount)}
+          </span>
+          {badges}
+        </div>
+        {sub && <p className="mt-0.5 truncate text-xs text-ink-3">{sub}</p>}
+        {warning && <p className="mt-0.5 text-xs text-warn-text">{warning}</p>}
+        {danger && <p className="mt-0.5 text-xs text-bad-text">{danger}</p>}
+      </div>
+      <div className="flex-shrink-0 text-right text-xs text-ink-3">
+        <p className="tabular-nums">{date}</p>
+        {author && <p className="mt-0.5 max-w-[9rem] truncate">{author}</p>}
+      </div>
+      {actions && <div className="flex flex-shrink-0 items-center gap-0.5">{actions}</div>}
+    </li>
+  );
+}
+
+function HistoryState({
+  isLoading,
+  isError,
+  onRetry,
+  isFetching,
+  emptyText,
+  isEmpty,
+  errorText,
+  children,
+}: {
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  isFetching: boolean;
+  emptyText: string;
+  isEmpty: boolean;
+  errorText: string;
+  children: React.ReactNode;
+}) {
+  if (isLoading) return <SkeletonText lines={2} className="py-2" />;
+  // Ошибка ≠ пусто: «Нет выплат» при сбое сети провоцировала повторную выплату (аудит P0).
+  if (isError) return <ErrorRow message={errorText} onRetry={onRetry} loading={isFetching} />;
+  if (isEmpty) return <p className="py-2 text-sm text-ink-3">{emptyText}</p>;
+  return <>{children}</>;
+}
+
+// ─── Payment history per employee ───────────────────────────────────────────
 
 function PaymentHistorySection({
   userId,
+  timeZone,
   canManage,
   onReverse,
 }: {
   userId: string;
+  timeZone: string;
   /** Round 15 (153) — salary_payouts_manage: сторно ошибочной legacy-выплаты. */
   canManage?: boolean;
   onReverse?: (p: SalaryPayment) => void;
 }) {
-  const { data: payments, isLoading } = useQuery({
+  const {
+    data: payments,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['salary-payments', userId],
     queryFn: async () => {
       const res = await salaryApi.getPayments({ userId });
@@ -107,70 +231,58 @@ function PaymentHistorySection({
     },
   });
 
-  if (isLoading) {
-    return (
-      <div className="py-3 flex justify-center">
-        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-      </div>
-    );
-  }
-
-  if (!payments || payments.length === 0) {
-    return <p className="py-3 text-xs text-gray-500 text-center">Нет выплат</p>;
-  }
-
+  const list = payments ?? [];
   return (
-    <div className="divide-y divide-gray-100">
-      {payments.map((p) => {
-        const isReversed = !!p.reversedAt;
-        return (
-          <div key={p.id} className="flex items-center justify-between py-2 px-1">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`text-xs font-semibold ${isReversed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
-                >
-                  {formatMoney(p.amount)}
-                </span>
-                <span
-                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                    p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
-                  }`}
-                >
-                  {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
-                </span>
-                {isReversed && (
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-600">
-                    Отменена
-                  </span>
-                )}
-                {p.monthYear && <span className="text-[10px] text-gray-400">{formatMonthYear(p.monthYear)}</span>}
-              </div>
-              {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
-              {isReversed && p.reversalReason && (
-                <p className="text-[10px] text-red-500 truncate mt-0.5">Причина отмены: {p.reversalReason}</p>
-              )}
-            </div>
-            <div className="text-right flex-shrink-0 ml-3">
-              <p className="text-[10px] text-gray-400">
-                {format(new Date(p.createdAt || p.date), 'dd.MM.yyyy', { locale: ru })}
-              </p>
-              {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
-            </div>
-            {canManage && !isReversed && onReverse && (
-              <button
-                type="button"
-                onClick={() => onReverse(p)}
-                className="ml-2 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
-                title="Отменить выплату (сторно)"
-              >
-                <Ban className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        );
-      })}
-    </div>
+    <HistoryState
+      isLoading={isLoading}
+      isError={isError}
+      onRetry={() => refetch()}
+      isFetching={isFetching}
+      isEmpty={list.length === 0}
+      emptyText="Нет выплат"
+      errorText="Не удалось загрузить историю выплат"
+    >
+      <ul className="divide-y divide-line">
+        {list.map((p) => {
+          const isReversed = !!p.reversedAt;
+          return (
+            <HistoryItem
+              key={p.id}
+              amount={p.amount}
+              struck={isReversed}
+              badges={
+                <>
+                  <Badge outline size="sm">
+                    {p.type === 'advance' ? 'Аванс' : p.type === 'premium' ? 'Премия' : 'Зарплата'}
+                  </Badge>
+                  {isReversed && (
+                    <Badge tone="bad" size="sm">
+                      Отменена
+                    </Badge>
+                  )}
+                  {p.monthYear && <span className="text-xs text-ink-3">{formatMonthYear(p.monthYear)}</span>}
+                </>
+              }
+              sub={p.comment}
+              danger={isReversed && p.reversalReason ? `Причина отмены: ${p.reversalReason}` : null}
+              date={formatDateShort(p.createdAt || p.date, timeZone)}
+              author={p.creatorName}
+              actions={
+                canManage && !isReversed && onReverse ? (
+                  <IconButton
+                    size="sm"
+                    variant="danger"
+                    label="Отменить выплату (сторно)"
+                    icon={Ban}
+                    onClick={() => onReverse(p)}
+                  />
+                ) : undefined
+              }
+            />
+          );
+        })}
+      </ul>
+    </HistoryState>
   );
 }
 
@@ -188,6 +300,7 @@ function PaymentHistorySection({
 function PayoutsHistorySection({
   userId,
   monthYear,
+  timeZone,
   canManage,
   onCancel,
   onEdit,
@@ -196,6 +309,7 @@ function PayoutsHistorySection({
 }: {
   userId: string;
   monthYear: string;
+  timeZone: string;
   canManage: boolean;
   onCancel: (p: SalaryPayout) => void;
   onEdit: (p: SalaryPayout) => void;
@@ -203,7 +317,13 @@ function PayoutsHistorySection({
   onSettle: (p: SalaryPayout) => void;
   settlingId?: string;
 }) {
-  const { data: payouts, isLoading } = useQuery({
+  const {
+    data: payouts,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['salary-payouts', userId, monthYear],
     queryFn: async () => {
       const res = await salaryApi.listPayouts({ employeeId: userId, monthYear });
@@ -211,110 +331,98 @@ function PayoutsHistorySection({
     },
   });
 
-  if (isLoading) {
-    return (
-      <div className="py-3 flex justify-center">
-        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-      </div>
-    );
-  }
-  const list = payouts || [];
-  if (list.length === 0) {
-    return <p className="py-3 text-xs text-gray-500 text-center">Выплат нет</p>;
-  }
+  const list = payouts ?? [];
 
-  const statusMeta = (s: SalaryPayout['status']) =>
-    s === 'accepted'
-      ? { label: 'Выдано', cls: 'bg-green-50 text-green-600' }
-      : s === 'rejected'
-        ? { label: 'Отклонено', cls: 'bg-red-50 text-red-600' }
-        : s === 'cancelled'
-          ? { label: 'Отменена', cls: 'bg-red-50 text-red-600' }
-          : { label: 'Не зафиксирована', cls: 'bg-amber-50 text-amber-600' };
+  const statusBadge = (s: SalaryPayout['status']) =>
+    s === 'accepted' ? (
+      <Badge tone="ok" size="sm">
+        Выдано
+      </Badge>
+    ) : s === 'rejected' ? (
+      <Badge tone="bad" size="sm">
+        Отклонено
+      </Badge>
+    ) : s === 'cancelled' ? (
+      <Badge tone="bad" size="sm">
+        Отменена
+      </Badge>
+    ) : (
+      <Badge tone="warn" size="sm">
+        Не зафиксирована
+      </Badge>
+    );
 
   return (
-    <div className="divide-y divide-gray-100">
-      {list.map((p) => {
-        const meta = statusMeta(p.status);
-        const isCancelled = p.status === 'cancelled';
-        const showActions = canManage && (p.status === 'pending' || p.status === 'accepted');
-        return (
-          <div key={p.id} className="flex items-center justify-between py-2 px-1">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`text-xs font-semibold ${isCancelled ? 'text-gray-400 line-through' : 'text-gray-800'}`}
-                >
-                  {formatMoney(p.amount)}
-                </span>
-                <span
-                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                    p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
-                  }`}
-                >
-                  {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
-                </span>
-                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${meta.cls}`}>{meta.label}</span>
-                {/* 158 — «просмотрено» вместо подтверждения (только у выданных). */}
-                {p.status === 'accepted' && (
-                  <span
-                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                      p.viewedAt ? 'bg-gray-100 text-gray-500' : 'bg-amber-50 text-amber-600'
-                    }`}
-                  >
-                    {p.viewedAt ? 'Просмотрено' : 'Не просмотрено'}
-                  </span>
-                )}
-              </div>
-              {p.status === 'pending' && (
-                <p className="text-[10px] text-amber-600 mt-0.5">Расход не записан — зафиксируйте или отмените</p>
-              )}
-              {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
-              {isCancelled && p.cancelReason && (
-                <p className="text-[10px] text-red-500 truncate mt-0.5">Причина отмены: {p.cancelReason}</p>
-              )}
-            </div>
-            <div className="text-right flex-shrink-0 ml-3">
-              <p className="text-[10px] text-gray-400">{format(new Date(p.createdAt), 'dd.MM.yyyy', { locale: ru })}</p>
-              {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
-            </div>
-            {showActions && (
-              <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-                {p.status === 'pending' && (
+    <HistoryState
+      isLoading={isLoading}
+      isError={isError}
+      onRetry={() => refetch()}
+      isFetching={isFetching}
+      isEmpty={list.length === 0}
+      emptyText="Выплат нет"
+      errorText="Не удалось загрузить выплаты за месяц"
+    >
+      <ul className="divide-y divide-line">
+        {list.map((p) => {
+          const isCancelled = p.status === 'cancelled';
+          const showActions = canManage && (p.status === 'pending' || p.status === 'accepted');
+          return (
+            <HistoryItem
+              key={p.id}
+              amount={p.amount}
+              struck={isCancelled}
+              badges={
+                <>
+                  <Badge outline size="sm">
+                    {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
+                  </Badge>
+                  {statusBadge(p.status)}
+                  {/* 158 — «просмотрено» вместо подтверждения (только у выданных). */}
+                  {p.status === 'accepted' && (
+                    <Badge tone={p.viewedAt ? 'neutral' : 'warn'} size="sm">
+                      {p.viewedAt ? 'Просмотрено' : 'Не просмотрено'}
+                    </Badge>
+                  )}
+                </>
+              }
+              warning={p.status === 'pending' ? 'Расход не записан — зафиксируйте или отмените' : null}
+              sub={p.comment}
+              danger={isCancelled && p.cancelReason ? `Причина отмены: ${p.cancelReason}` : null}
+              date={formatDateShort(p.createdAt, timeZone)}
+              author={p.creatorName}
+              actions={
+                showActions ? (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => onSettle(p)}
-                      disabled={settlingId === p.id}
-                      className="px-2 py-1 rounded-lg text-[10px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 transition-colors"
-                      title="Записать расход и зафиксировать выплату"
-                    >
-                      {settlingId === p.id ? '…' : 'Зафиксировать'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onEdit(p)}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                      title="Изменить сумму"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
+                    {p.status === 'pending' && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          icon={Check}
+                          onClick={() => onSettle(p)}
+                          loading={settlingId === p.id}
+                          title="Записать расход и зафиксировать выплату"
+                        >
+                          Зафиксировать
+                        </Button>
+                        <IconButton size="sm" label="Изменить сумму" icon={Pencil} onClick={() => onEdit(p)} />
+                      </>
+                    )}
+                    <IconButton
+                      size="sm"
+                      variant="danger"
+                      label="Отменить выплату"
+                      icon={Ban}
+                      onClick={() => onCancel(p)}
+                    />
                   </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => onCancel(p)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                  title="Отменить выплату"
-                >
-                  <Ban className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
+                ) : undefined
+              }
+            />
+          );
+        })}
+      </ul>
+    </HistoryState>
   );
 }
 
@@ -324,6 +432,7 @@ function FinesHistorySection({
   userId,
   dateFrom,
   dateTo,
+  timeZone,
   canManage,
   onEdit,
   onDelete,
@@ -331,11 +440,18 @@ function FinesHistorySection({
   userId: string;
   dateFrom: string;
   dateTo: string;
+  timeZone: string;
   canManage: boolean;
   onEdit: (f: SalaryFine) => void;
   onDelete: (f: SalaryFine) => void;
 }) {
-  const { data: fines, isLoading } = useQuery({
+  const {
+    data: fines,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['salary-fines', userId],
     queryFn: async () => {
       const res = await salaryApi.listFines({ userId });
@@ -345,13 +461,6 @@ function FinesHistorySection({
   });
 
   if (!canManage) return null;
-  if (isLoading) {
-    return (
-      <div className="py-3 flex justify-center">
-        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-      </div>
-    );
-  }
   // Период списка = период страницы (штрафы вне периода не путают итоги).
   // Round 15 review-fix (п.7): f.date — timestamptz; slice(0,10) брал UTC-день,
   // и штраф, выписанный 00:00–03:00 МСК первого числа, выпадал из периода
@@ -361,45 +470,42 @@ function FinesHistorySection({
     const d = format(new Date(f.date), 'yyyy-MM-dd');
     return d >= dateFrom && d <= dateTo;
   });
-  if (list.length === 0) {
-    return <p className="py-3 text-xs text-gray-500 text-center">Нет штрафов за период</p>;
-  }
 
   return (
-    <div className="divide-y divide-gray-100">
-      {list.map((f) => (
-        <div key={f.id} className="flex items-center justify-between py-2 px-1">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-red-600">− {formatMoney(f.amount)}</span>
-              <span className="text-[10px] text-gray-500 truncate">{f.comment}</span>
-            </div>
-          </div>
-          <div className="text-right flex-shrink-0 ml-3">
-            <p className="text-[10px] text-gray-400">{format(new Date(f.date), 'dd.MM.yyyy', { locale: ru })}</p>
-            {f.creatorName && <p className="text-[10px] text-gray-300">{f.creatorName}</p>}
-          </div>
-          <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-            <button
-              type="button"
-              onClick={() => onEdit(f)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-              title="Изменить штраф"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDelete(f)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-              title="Удалить штраф"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
+    <HistoryState
+      isLoading={isLoading}
+      isError={isError}
+      onRetry={() => refetch()}
+      isFetching={isFetching}
+      isEmpty={list.length === 0}
+      emptyText="Нет штрафов за период"
+      errorText="Не удалось загрузить штрафы"
+    >
+      <ul className="divide-y divide-line">
+        {list.map((f) => (
+          <HistoryItem
+            key={f.id}
+            amount={f.amount}
+            negative
+            sub={f.comment}
+            date={formatDateShort(f.date, timeZone)}
+            author={f.creatorName}
+            actions={
+              <>
+                <IconButton size="sm" label="Изменить штраф" icon={Pencil} onClick={() => onEdit(f)} />
+                <IconButton
+                  size="sm"
+                  variant="danger"
+                  label="Удалить штраф"
+                  icon={Trash2}
+                  onClick={() => onDelete(f)}
+                />
+              </>
+            }
+          />
+        ))}
+      </ul>
+    </HistoryState>
   );
 }
 
@@ -419,11 +525,11 @@ function MasterSalaryView() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Моя зарплата"
-        icon={DollarSign}
-        subtitle={summary ? `${summary.masterName} · Ставка: ${summary.salaryPercent}%` : undefined}
+        icon={Coins}
+        subtitle={summary ? `${summary.masterName} · ставка ${summary.salaryPercent}%` : undefined}
       />
 
       <QueryState
@@ -433,82 +539,70 @@ function MasterSalaryView() {
         isFetching={isFetching}
         isEmpty={!summary}
         empty={{
-          icon: DollarSign,
+          icon: Coins,
           title: 'Нет данных о зарплате',
           description: 'Данные появятся после закрытия первого чека',
         }}
+        loader={
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <SkeletonCard key={i} lines={1} />
+            ))}
+          </div>
+        }
         minHeight="min-h-[40vh]"
       >
         {summary && (
-          <div className="space-y-6">
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="stat-card">
-                <div className="stat-label">Сегодня</div>
-                <div className="stat-value text-green-600">{formatMoney(summary.today)}</div>
-                {summary.todayChecks !== undefined && (
-                  <p className="text-xs text-gray-400 mt-1">{summary.todayChecks} чек(ов)</p>
-                )}
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Неделя</div>
-                <div className="stat-value text-blue-600">{formatMoney(summary.week)}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Месяц</div>
-                <div className="stat-value text-purple-600">{formatMoney(summary.month)}</div>
-                {summary.monthChecks !== undefined && (
-                  <p className="text-xs text-gray-400 mt-1">{summary.monthChecks} чек(ов)</p>
-                )}
-                {summary.perDay != null && (
-                  <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
-                    ≈ {formatMoney(summary.perDay)} / смена
-                    {summary.workedShiftsMonth != null &&
-                      ` · ${summary.workedShiftsMonth} ${pluralShifts(summary.workedShiftsMonth)}`}
-                  </p>
-                )}
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Всего</div>
-                <div className="stat-value text-gray-900">{formatMoney(summary.total)}</div>
-              </div>
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard
+                label="Сегодня"
+                value={formatMoney(summary.today)}
+                hint={summary.todayChecks !== undefined ? `Чеков: ${summary.todayChecks}` : undefined}
+                tone="accent"
+                icon={Banknote}
+              />
+              <StatCard label="Неделя" value={formatMoney(summary.week)} />
+              <StatCard
+                label="Месяц"
+                value={formatMoney(summary.month)}
+                hint={
+                  summary.perDay != null
+                    ? `≈ ${formatMoney(summary.perDay)} за смену${
+                        summary.workedShiftsMonth != null
+                          ? ` · ${summary.workedShiftsMonth} ${pluralShifts(summary.workedShiftsMonth)}`
+                          : ''
+                      }`
+                    : summary.monthChecks !== undefined
+                      ? `Чеков: ${summary.monthChecks}`
+                      : undefined
+                }
+              />
+              <StatCard label="Всего" value={formatMoney(summary.total)} />
             </div>
 
-            {/* Today breakdown by payment method */}
-            <div className="card">
-              <div className="card-body">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Сегодня по способу оплаты</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
-                    <div className="p-2 bg-green-100 rounded-lg">
-                      <Banknote className="w-5 h-5 text-green-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-green-700">Наличные</p>
-                      <p className="text-lg font-semibold text-green-800">{formatMoney(summary.todayCash || 0)}</p>
-                    </div>
+            <Card padding="none">
+              <CardHeader title="Сегодня по способу оплаты" icon={CreditCard} iconTone="neutral" />
+              <dl className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-3">
+                {[
+                  { label: 'Наличные', value: summary.todayCash || 0, icon: Banknote },
+                  { label: 'Карта', value: summary.todayCard || 0, icon: CreditCard },
+                  { label: 'Гарантия', value: summary.todayWarranty || 0, icon: Shield },
+                ].map(({ label, value, icon: Icon }) => (
+                  <div key={label} className="flex items-start gap-3">
+                    <span
+                      className={cn(
+                        'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg',
+                        toneChip.neutral,
+                      )}
+                    >
+                      <Icon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <MiniStat label={label} value={formatMoney(value)} />
                   </div>
-                  <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
-                    <div className="p-2 bg-blue-100 rounded-lg">
-                      <CreditCard className="w-5 h-5 text-blue-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-blue-700">Карта</p>
-                      <p className="text-lg font-semibold text-blue-800">{formatMoney(summary.todayCard || 0)}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg">
-                    <div className="p-2 bg-orange-100 rounded-lg">
-                      <Shield className="w-5 h-5 text-orange-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-orange-700">Гарантия</p>
-                      <p className="text-lg font-semibold text-orange-800">{formatMoney(summary.todayWarranty || 0)}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+                ))}
+              </dl>
+            </Card>
           </div>
         )}
       </QueryState>
@@ -543,11 +637,15 @@ function AdminSalaryView() {
   // Месяц — КАЛЕНДАРЯ АВТОСЕРВИСА (157), не браузера: зарплатный период сервер
   // режет поясом тенанта, и в ночь на 1-е число страница открывалась в новом
   // месяце с нулями, пока сервер был ещё в старом.
-  const { today: tenantToday, monthStart, monthEnd } = useTenantCalendar();
+  const { today: tenantToday, monthStart, monthEnd, timeZone } = useTenantCalendar();
   const currentMonthYear = getCurrentMonthYear(tenantToday);
 
-  const [dateFrom, setDateFrom] = useState(monthStart);
-  const [dateTo, setDateTo] = useState(monthEnd);
+  // Период — в URL (F5 и пересылка ссылки «зарплата за август» работают).
+  const [params, setParams] = useSearchParams();
+  const period = readPeriod(params, { from: monthStart, to: monthEnd });
+  const dateFrom = period.from;
+  const dateTo = period.to;
+  const setPeriod = (from: string, to: string) => setParams(patchParams(params, { from, to }), { replace: true });
 
   // Payment dialog
   const [payModalOpen, setPayModalOpen] = useState(false);
@@ -563,8 +661,9 @@ function AdminSalaryView() {
     comment: '',
   });
 
-  // Expanded payment history rows
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  // Выплаты и штрафы сотрудника — в боковой панели (вместо раскрывающихся строк).
+  const [historyTarget, setHistoryTarget] = useState<MasterSalary | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Round 15 п.1 — сотрудник, для которого открыт модал «Процент за месяц».
   const [rateTarget, setRateTarget] = useState<MasterSalary | null>(null);
@@ -574,6 +673,7 @@ function AdminSalaryView() {
   const [correctionReason, setCorrectionReason] = useState('');
   const [correctionAmount, setCorrectionAmount] = useState('');
   const [correctionComment, setCorrectionComment] = useState('');
+  const [fineToDelete, setFineToDelete] = useState<SalaryFine | null>(null);
 
   function openCorrection(c: Correction) {
     setCorrectionReason('');
@@ -772,17 +872,13 @@ function AdminSalaryView() {
     onError: correctionError('Не удалось удалить штраф'),
   });
 
-  function handleDeleteFine(f: SalaryFine) {
-    if (window.confirm(`Удалить штраф «${f.comment}» — ${formatMoney(f.amount)}?`)) {
-      deleteFineMutation.mutate(f.id);
-    }
-  }
-
   const correctionPending =
     cancelPayoutMutation.isPending ||
     updatePayoutMutation.isPending ||
     reversePaymentMutation.isPending ||
     updateFineMutation.isPending;
+
+  const isDestructiveCorrection = correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment';
 
   function handleCorrectionSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -815,7 +911,7 @@ function AdminSalaryView() {
 
   function handleOutsideSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const amount = parseFloat(outsideForm.amount);
+    const amount = parseFloat(outsideForm.amount.replace(',', '.'));
     if (!outsideForm.recipientName.trim()) {
       toast.error('Укажите получателя');
       return;
@@ -858,7 +954,7 @@ function AdminSalaryView() {
 
   function handlePaySubmit(e: React.FormEvent) {
     e.preventDefault();
-    const amount = parseFloat(payForm.amount);
+    const amount = parseFloat(payForm.amount.replace(',', '.'));
     if (!amount || amount <= 0) {
       toast.error('Укажите сумму');
       return;
@@ -872,16 +968,9 @@ function AdminSalaryView() {
     });
   }
 
-  function toggleHistory(masterId: string) {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(masterId)) {
-        next.delete(masterId);
-      } else {
-        next.add(masterId);
-      }
-      return next;
-    });
+  function openHistory(master: MasterSalary) {
+    setHistoryTarget(master);
+    setHistoryOpen(true);
   }
 
   // ── Month options for the selector ─────────────────────────────────────
@@ -892,30 +981,170 @@ function AdminSalaryView() {
     (value) => ({ value, label: formatMonthYear(value) }),
   );
 
+  const rowMenu = (m: MasterSalary): MenuEntry[] => {
+    const items: MenuEntry[] = [];
+    if (canPayout) items.push({ key: 'pay', label: 'Выплатить', icon: Banknote, onSelect: () => openPayModal(m) });
+    if (canRates)
+      items.push({
+        key: 'rate',
+        label: `Процент за ${formatMonthYear(periodMonthYear)}`,
+        icon: Percent,
+        onSelect: () => setRateTarget(m),
+      });
+    items.push({ key: 'history', label: 'Выплаты и штрафы', icon: History, onSelect: () => openHistory(m) });
+    return items;
+  };
+
+  const columns: DataTableColumn<MasterSalary>[] = [
+    {
+      key: 'masterName',
+      header: 'Мастер',
+      primary: true,
+      sortable: true,
+      render: (m) => (
+        <span className="block min-w-0">
+          <span className="block truncate font-medium text-ink">{m.masterName}</span>
+          <span className="block text-xs text-ink-3 md:hidden">Ставка {m.salaryPercent}%</span>
+        </span>
+      ),
+      footer: 'Итого',
+    },
+    {
+      key: 'salaryPercent',
+      ...numericColumnSizing('Ставка'),
+      header: 'Ставка',
+      numeric: true,
+      hideBelow: 'md',
+      render: (m) => `${m.salaryPercent}%`,
+    },
+    {
+      key: 'totalRevenue',
+      ...numericColumnSizing('Выручка'),
+      header: 'Выручка',
+      numeric: true,
+      sortable: true,
+      hideBelow: 'lg',
+      render: (m) => <Money value={m.totalRevenue} />,
+      footer: <Money value={totalRevenue} />,
+    },
+    {
+      key: 'totalEarnings',
+      ...numericColumnSizing('Заработок'),
+      header: 'Заработок',
+      numeric: true,
+      sortable: true,
+      render: (m) => <Money value={m.totalEarnings} className="font-medium text-ink" />,
+      footer: <Money value={totalEarnings} />,
+    },
+    {
+      key: 'perDay',
+      ...numericColumnSizing('За смену'),
+      header: 'За смену',
+      numeric: true,
+      hideBelow: 'xl',
+      sortValue: (m) => m.perDay ?? null,
+      render: (m) =>
+        m.perDay != null ? (
+          <span className="block">
+            <Money value={m.perDay} />
+            {m.workedShifts != null && (
+              <span className="block text-2xs text-ink-3">
+                {m.workedShifts} {pluralShifts(m.workedShifts)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'paidAmount',
+      ...numericColumnSizing('Выплачено'),
+      header: 'Выплачено',
+      numeric: true,
+      sortable: true,
+      hideBelow: 'md',
+      sortValue: (m) => m.paidAmount || 0,
+      render: (m) => <Money value={m.paidAmount || 0} />,
+      footer: <Money value={totalPaid} />,
+    },
+    {
+      key: 'remainingAmount',
+      ...numericColumnSizing('Остаток'),
+      header: 'Остаток',
+      numeric: true,
+      sortable: true,
+      sortValue: (m) => m.remainingAmount ?? m.totalEarnings,
+      render: (m) => {
+        const rem = m.remainingAmount ?? m.totalEarnings;
+        return <Money value={rem} className={cn('font-semibold', remainingClass(rem))} />;
+      },
+      footer: <Money value={totalRemaining} className={remainingClass(totalRemaining)} />,
+    },
+    {
+      key: 'checkCount',
+      ...numericColumnSizing('Чеков'),
+      header: 'Чеков',
+      numeric: true,
+      sortable: true,
+      hideBelow: 'lg',
+      footer: totalChecks,
+    },
+    {
+      key: 'actions',
+      header: <span className="sr-only">Действия</span>,
+      interactive: true,
+      align: 'right',
+      render: (m) => (
+        <>
+          <div className="hidden items-center justify-end gap-1 md:flex">
+            {canPayout && (
+              <Button size="sm" variant="secondary" icon={Banknote} onClick={() => openPayModal(m)}>
+                Выплатить
+              </Button>
+            )}
+            {canRates && (
+              <IconButton
+                size="sm"
+                label={`Изменить процент за ${formatMonthYear(periodMonthYear)}`}
+                icon={Percent}
+                onClick={() => setRateTarget(m)}
+              />
+            )}
+            <IconButton size="sm" label="Выплаты и штрафы" icon={History} onClick={() => openHistory(m)} />
+          </div>
+          <div className="flex justify-end md:hidden">
+            <DropdownMenu
+              aria-label={`Действия: ${m.masterName}`}
+              trigger={<IconButton size="sm" label="Действия" icon={MoreHorizontal} />}
+              items={rowMenu(m)}
+            />
+          </div>
+        </>
+      ),
+    },
+  ];
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Зарплаты мастеров" icon={DollarSign} />
-
-      {/* 149 — «Выплата вне программы»: получатель без аккаунта в системе. */}
-      {canPayout && (
-        <div className="flex justify-end">
-          <button type="button" className="btn-secondary" onClick={() => setOutsideModalOpen(true)}>
-            <Banknote className="w-4 h-4" />
-            Выплата вне программы
-          </button>
-        </div>
-      )}
-
-      {/* Date filter */}
-      <DatePeriodPicker
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onChange={(from, to) => {
-          setDateFrom(from);
-          setDateTo(to);
-        }}
+    <div className="space-y-5">
+      <PageHeader
+        title="Зарплата"
+        icon={Coins}
+        subtitle="Начисления, выплаты и остатки сотрудников за период"
+        actions={
+          // 149 — «Выплата вне программы»: получатель без аккаунта в системе.
+          canPayout ? (
+            <Button variant="secondary" icon={Banknote} onClick={() => setOutsideModalOpen(true)}>
+              Выплата вне программы
+            </Button>
+          ) : undefined
+        }
       />
+
+      <Toolbar>
+        <MonthPager from={dateFrom} to={dateTo} todayKey={tenantToday} onChange={setPeriod} />
+        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
+      </Toolbar>
 
       <QueryState
         isLoading={isLoading}
@@ -923,408 +1152,155 @@ function AdminSalaryView() {
         onRetry={refetch}
         isFetching={isFetching}
         isEmpty={masters.length === 0}
-        empty={{ icon: Users, title: 'Нет данных', description: 'За выбранный период нет данных по зарплатам' }}
+        empty={{
+          icon: Users,
+          title: 'За период начислений нет',
+          description: 'Начисления появятся после проведения чеков за выбранный период',
+        }}
+        errorTitle="Не удалось загрузить зарплату"
+        loader={
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <SkeletonCard key={i} lines={1} />
+              ))}
+            </div>
+            <DataTable<MasterSalary> columns={columns} rows={[]} rowKey={(m) => m.masterId} isLoading />
+          </div>
+        }
         minHeight="min-h-[40vh]"
       >
-        <>
-          {/* Summary KPIs — fill desktop width */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            <div className="stat-card">
-              <div className="stat-label">Выручка</div>
-              <div className="stat-value text-gray-900">{formatMoney(totalRevenue)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Начислено</div>
-              <div className="stat-value text-green-600">{formatMoney(totalEarnings)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Выплачено</div>
-              <div className="stat-value text-blue-600">{formatMoney(totalPaid)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Остаток</div>
-              <div className="stat-value text-red-600">{formatMoney(totalRemaining)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Чеков</div>
-              <div className="stat-value text-gray-900">{totalChecks}</div>
-            </div>
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            <StatCard compact label="Выручка" value={formatMoney(totalRevenue)} />
+            <StatCard compact label="Начислено" value={formatMoney(totalEarnings)} />
+            <StatCard compact label="Выплачено" value={formatMoney(totalPaid)} />
+            <StatCard
+              compact
+              label="Остаток"
+              value={<Money value={totalRemaining} className={remainingClass(totalRemaining)} />}
+              hint={totalRemaining > 0 ? 'К выплате' : totalRemaining < 0 ? 'Переплата' : undefined}
+              tone={totalRemaining > 0 ? 'warn' : totalRemaining < 0 ? 'bad' : 'neutral'}
+            />
+            <StatCard compact label="Чеков" value={totalChecks} />
           </div>
 
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {masters.map((master) => {
-              const isExpanded = expandedRows.has(master.masterId);
-              return (
-                <div
-                  key={master.masterId}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
-                >
-                  <div className="p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-gray-900 text-sm">{master.masterName}</span>
-                      <span className="text-xs text-gray-400">{master.salaryPercent}%</span>
-                    </div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <p className="text-[10px] text-gray-500 uppercase">Выручка</p>
-                        <p className="text-sm font-medium text-gray-900">{formatMoney(master.totalRevenue)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[10px] text-gray-500 uppercase">Заработок</p>
-                        <p className="text-sm font-bold text-green-600">{formatMoney(master.totalEarnings)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[10px] text-gray-500 uppercase">Чеков</p>
-                        <p className="text-sm font-medium text-gray-600">{master.checkCount}</p>
-                      </div>
-                    </div>
-
-                    {/* Paid / Remaining row */}
-                    <div className="flex items-center justify-between mb-3 bg-gray-50 rounded-lg px-3 py-2">
-                      <div>
-                        <p className="text-[10px] text-gray-500 uppercase">Выплачено</p>
-                        <p className="text-sm font-medium text-blue-600">{formatMoney(master.paidAmount || 0)}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[10px] text-gray-500 uppercase">Остаток</p>
-                        <p className="text-sm font-bold text-red-600">
-                          {formatMoney(master.remainingAmount ?? master.totalEarnings)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Average per worked shift/day */}
-                    {(master.workedShifts != null || master.perDay != null) && (
-                      <p className="mb-3 text-xs text-gray-500 tabular-nums">
-                        В среднем за смену:{' '}
-                        <span className="font-semibold text-gray-700">
-                          {master.perDay != null ? formatMoney(master.perDay) : '—'}
-                        </span>
-                        {master.workedShifts != null && (
-                          <span className="text-gray-400">
-                            {' · '}
-                            {master.workedShifts} {pluralShifts(master.workedShifts)}
-                          </span>
-                        )}
-                      </p>
-                    )}
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-2">
-                      {canPayout && (
-                        <button
-                          onClick={() => openPayModal(master)}
-                          className="btn-primary flex-1 justify-center text-xs py-2"
-                        >
-                          <Banknote className="w-3.5 h-3.5" />
-                          Выплатить
-                        </button>
-                      )}
-                      {canRates && (
-                        <button
-                          onClick={() => setRateTarget(master)}
-                          className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
-                          title={`Изменить процент за ${formatMonthYear(periodMonthYear)}`}
-                        >
-                          <Percent className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => toggleHistory(master.masterId)}
-                        className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
-                      >
-                        <History className="w-3.5 h-3.5" />
-                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Expandable payment history + Round 15 corrections */}
-                  {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-2 space-y-2">
-                      <div>
-                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">
-                          Выплаты за {formatMonthYear(periodMonthYear)}
-                        </p>
-                        <PayoutsHistorySection
-                          userId={master.masterId}
-                          monthYear={periodMonthYear}
-                          canManage={canPayout}
-                          onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
-                          onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
-                          onSettle={(p) => settlePayoutMutation.mutate(p.id)}
-                          settlingId={settlePayoutMutation.isPending ? settlePayoutMutation.variables : undefined}
-                        />
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">История выплат</p>
-                        <PaymentHistorySection
-                          userId={master.masterId}
-                          canManage={canPayout}
-                          onReverse={(p) => openCorrection({ kind: 'reverse-payment', payment: p })}
-                        />
-                      </div>
-                      {canPayout && (
-                        <div>
-                          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Штрафы за период</p>
-                          <FinesHistorySection
-                            userId={master.masterId}
-                            dateFrom={dateFrom}
-                            dateTo={dateTo}
-                            canManage={canPayout}
-                            onEdit={(f) => openCorrection({ kind: 'edit-fine', fine: f })}
-                            onDelete={handleDeleteFine}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Totals card */}
-            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-gray-900 text-sm">Итого</span>
-                <div className="flex items-center gap-4 text-sm">
-                  <span className="font-semibold text-gray-900">{formatMoney(totalRevenue)}</span>
-                  <span className="font-bold text-green-600">{formatMoney(totalEarnings)}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Мастер</th>
-                  <th className="text-right">% ставка</th>
-                  <th className="text-right">Выручка</th>
-                  <th className="text-right">Заработок</th>
-                  <th className="text-right">За смену</th>
-                  <th className="text-right">Выплачено</th>
-                  <th className="text-right">Остаток</th>
-                  <th className="text-right">Чеков</th>
-                  <th className="text-right">Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {masters.map((master) => {
-                  const isExpanded = expandedRows.has(master.masterId);
-                  return (
-                    <Fragment key={master.masterId}>
-                      <tr>
-                        <td className="font-medium text-gray-900">{master.masterName}</td>
-                        <td className="text-right text-gray-600 tabular-nums">{master.salaryPercent}%</td>
-                        <td className="text-right text-gray-900 tabular-nums">{formatMoney(master.totalRevenue)}</td>
-                        <td className="text-right font-medium text-green-600 tabular-nums">
-                          {formatMoney(master.totalEarnings)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {master.perDay != null ? (
-                            <>
-                              <span className="font-medium text-gray-900">{formatMoney(master.perDay)}</span>
-                              {master.workedShifts != null && (
-                                <span className="block text-[11px] text-gray-400">
-                                  {master.workedShifts} {pluralShifts(master.workedShifts)}
-                                </span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </td>
-                        <td className="text-right text-blue-600 tabular-nums">{formatMoney(master.paidAmount || 0)}</td>
-                        <td className="text-right font-medium text-red-600 tabular-nums">
-                          {formatMoney(master.remainingAmount ?? master.totalEarnings)}
-                        </td>
-                        <td className="text-right text-gray-600 tabular-nums">{master.checkCount}</td>
-                        <td className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {canPayout && (
-                              <button onClick={() => openPayModal(master)} className="btn-primary text-xs py-1.5 px-3">
-                                <Banknote className="w-3.5 h-3.5" />
-                                Выплатить
-                              </button>
-                            )}
-                            {canRates && (
-                              <button
-                                onClick={() => setRateTarget(master)}
-                                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                                title={`Изменить процент за ${formatMonthYear(periodMonthYear)}`}
-                              >
-                                <Percent className="w-4 h-4" />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => toggleHistory(master.masterId)}
-                              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                              title="История выплат"
-                            >
-                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr>
-                          <td colSpan={9} className="bg-gray-50 px-6 py-3 space-y-3">
-                            <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-2">
-                                Выплаты за {formatMonthYear(periodMonthYear)}: {master.masterName}
-                              </p>
-                              <PayoutsHistorySection
-                                userId={master.masterId}
-                                monthYear={periodMonthYear}
-                                canManage={canPayout}
-                                onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
-                                onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
-                                onSettle={(p) => settlePayoutMutation.mutate(p.id)}
-                                settlingId={settlePayoutMutation.isPending ? settlePayoutMutation.variables : undefined}
-                              />
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-2">
-                                История выплат: {master.masterName}
-                              </p>
-                              <PaymentHistorySection
-                                userId={master.masterId}
-                                canManage={canPayout}
-                                onReverse={(p) => openCorrection({ kind: 'reverse-payment', payment: p })}
-                              />
-                            </div>
-                            {canPayout && (
-                              <div>
-                                <p className="text-xs text-gray-500 font-semibold mb-2">Штрафы за период</p>
-                                <FinesHistorySection
-                                  userId={master.masterId}
-                                  dateFrom={dateFrom}
-                                  dateTo={dateTo}
-                                  canManage={canPayout}
-                                  onEdit={(f) => openCorrection({ kind: 'edit-fine', fine: f })}
-                                  onDelete={handleDeleteFine}
-                                />
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-gray-300">
-                  <td className="font-semibold text-gray-900">Итого</td>
-                  <td></td>
-                  <td className="text-right font-semibold text-gray-900 tabular-nums">{formatMoney(totalRevenue)}</td>
-                  <td className="text-right font-semibold text-green-600 tabular-nums">{formatMoney(totalEarnings)}</td>
-                  <td></td>
-                  <td className="text-right font-semibold text-blue-600 tabular-nums">{formatMoney(totalPaid)}</td>
-                  <td className="text-right font-semibold text-red-600 tabular-nums">{formatMoney(totalRemaining)}</td>
-                  <td className="text-right font-semibold text-gray-600 tabular-nums">{totalChecks}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </>
+          <DataTable<MasterSalary>
+            columns={columns}
+            rows={masters}
+            rowKey={(m) => m.masterId}
+            caption="Зарплата сотрудников за период"
+            className="overflow-x-auto"
+          />
+        </div>
       </QueryState>
+
+      {/* ── Выплаты и штрафы сотрудника ─────────────────────────────────── */}
+      <Drawer
+        open={historyOpen && historyTarget !== null}
+        onClose={() => setHistoryOpen(false)}
+        title={historyTarget?.masterName ?? 'Сотрудник'}
+        subtitle={`Выплаты и штрафы · ${formatMonthYear(periodMonthYear)}`}
+        size="lg"
+      >
+        {historyTarget && (
+          <div className="space-y-6">
+            <section>
+              <h3 className="mb-1 text-xs font-semibold text-ink-3">Выплаты за {formatMonthYear(periodMonthYear)}</h3>
+              <PayoutsHistorySection
+                userId={historyTarget.masterId}
+                monthYear={periodMonthYear}
+                timeZone={timeZone}
+                canManage={canPayout}
+                onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
+                onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
+                onSettle={(p) => settlePayoutMutation.mutate(p.id)}
+                settlingId={settlePayoutMutation.isPending ? settlePayoutMutation.variables : undefined}
+              />
+            </section>
+            <section>
+              <h3 className="mb-1 text-xs font-semibold text-ink-3">История выплат</h3>
+              <PaymentHistorySection
+                userId={historyTarget.masterId}
+                timeZone={timeZone}
+                canManage={canPayout}
+                onReverse={(p) => openCorrection({ kind: 'reverse-payment', payment: p })}
+              />
+            </section>
+            {canPayout && (
+              <section>
+                <h3 className="mb-1 text-xs font-semibold text-ink-3">Штрафы за период</h3>
+                <FinesHistorySection
+                  userId={historyTarget.masterId}
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  timeZone={timeZone}
+                  canManage={canPayout}
+                  onEdit={(f) => openCorrection({ kind: 'edit-fine', fine: f })}
+                  onDelete={(f) => setFineToDelete(f)}
+                />
+              </section>
+            )}
+          </div>
+        )}
+      </Drawer>
 
       {/* ── Payment modal ──────────────────────────────────────────────── */}
       <Modal
         isOpen={payModalOpen}
         onClose={() => setPayModalOpen(false)}
         title={`Выплата: ${payForm.userName}`}
+        description={`Зарплатный период — ${formatMonthYear(payForm.monthYear)}`}
         size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPayModalOpen(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" form="salary-pay-form" icon={Banknote} loading={createPaymentMutation.isPending}>
+              Выплатить
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handlePaySubmit} className="space-y-4">
-          {/* Type toggle */}
-          <div>
-            <label className="label">Тип выплаты</label>
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setPayForm({ ...payForm, type: 'salary' })}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  payForm.type === 'salary' ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Зарплата
-              </button>
-              <button
-                type="button"
-                onClick={() => setPayForm({ ...payForm, type: 'advance' })}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  payForm.type === 'advance' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Аванс
-              </button>
-            </div>
-          </div>
-
-          {/* Amount */}
-          <div>
-            <label className="label">Сумма</label>
-            <input
-              type="number"
-              className="input"
+        <form id="salary-pay-form" onSubmit={handlePaySubmit} className="space-y-4">
+          <Field label="Тип выплаты">
+            <SegmentedControl
+              aria-label="Тип выплаты"
+              fullWidth
+              options={PAYOUT_TYPE_OPTIONS}
+              value={payForm.type}
+              onChange={(type) => setPayForm({ ...payForm, type })}
+            />
+          </Field>
+          <Field label="Сумма" htmlFor="pay-amount" required>
+            <Input
+              id="pay-amount"
+              inputMode="decimal"
               value={payForm.amount}
               onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })}
               placeholder="0"
-              min="0"
-              step="1"
               required
+              rightSlot={<span className="text-sm">₽</span>}
             />
-          </div>
-
-          {/* Month selector */}
-          <div>
-            <label className="label">Месяц</label>
-            <select
-              className="input"
+          </Field>
+          <Field label="Месяц" htmlFor="pay-month">
+            <Select
+              id="pay-month"
+              options={monthOptions}
               value={payForm.monthYear}
               onChange={(e) => setPayForm({ ...payForm, monthYear: e.target.value })}
-            >
-              {monthOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Comment */}
-          <div>
-            <label className="label">Комментарий</label>
-            <input
+            />
+          </Field>
+          <Field label="Комментарий" htmlFor="pay-comment">
+            <Input
+              id="pay-comment"
               type="text"
-              className="input"
               value={payForm.comment}
               onChange={(e) => setPayForm({ ...payForm, comment: e.target.value })}
               placeholder="Необязательно"
             />
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={() => setPayModalOpen(false)} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={createPaymentMutation.isPending} className="btn-primary">
-              {createPaymentMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Banknote className="w-4 h-4" />
-              )}
-              Выплатить
-            </button>
-          </div>
+          </Field>
         </form>
       </Modal>
 
@@ -1333,70 +1309,63 @@ function AdminSalaryView() {
         isOpen={outsideModalOpen}
         onClose={() => setOutsideModalOpen(false)}
         title="Выплата вне программы"
+        description="Для получателей без аккаунта в системе: маркетолог, уборщица"
         size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOutsideModalOpen(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" form="salary-outside-form" icon={Banknote} loading={outsideMutation.isPending}>
+              Записать
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleOutsideSubmit} className="space-y-4">
-          <p className="text-xs text-gray-500">
-            Для получателей без аккаунта в системе (маркетолог, уборщица). Сумма запишется в «Расходы» и уменьшит
-            прибыль выбранного месяца; в кассе — сегодняшней датой.
+        <form id="salary-outside-form" onSubmit={handleOutsideSubmit} className="space-y-4">
+          <p className="text-xs leading-snug text-ink-3">
+            Сумма запишется в «Расходы» и уменьшит прибыль выбранного месяца; в кассе — сегодняшней датой.
           </p>
-          <div>
-            <label className="label">Получатель *</label>
-            <input
+          <Field label="Получатель" htmlFor="outside-name" required>
+            <Input
+              id="outside-name"
               type="text"
-              className="input"
+              autoComplete="off"
               value={outsideForm.recipientName}
               onChange={(e) => setOutsideForm({ ...outsideForm, recipientName: e.target.value })}
               placeholder="Например: Маркетолог Ирина"
               required
             />
-          </div>
-          <div>
-            <label className="label">Сумма *</label>
-            <input
-              type="number"
-              className="input"
+          </Field>
+          <Field label="Сумма" htmlFor="outside-amount" required>
+            <Input
+              id="outside-amount"
+              inputMode="decimal"
               value={outsideForm.amount}
               onChange={(e) => setOutsideForm({ ...outsideForm, amount: e.target.value })}
               placeholder="0"
-              min="0"
-              step="1"
               required
+              rightSlot={<span className="text-sm">₽</span>}
             />
-          </div>
-          <div>
-            <label className="label">За месяц *</label>
-            <input
+          </Field>
+          <Field label="За месяц" htmlFor="outside-month" required>
+            <Input
+              id="outside-month"
               type="month"
-              className="input"
               value={outsideForm.periodMonth}
               onChange={(e) => setOutsideForm({ ...outsideForm, periodMonth: e.target.value })}
               required
             />
-          </div>
-          <div>
-            <label className="label">Комментарий</label>
-            <input
+          </Field>
+          <Field label="Комментарий" htmlFor="outside-comment">
+            <Input
+              id="outside-comment"
               type="text"
-              className="input"
               value={outsideForm.comment}
               onChange={(e) => setOutsideForm({ ...outsideForm, comment: e.target.value })}
               placeholder="Необязательно"
             />
-          </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={() => setOutsideModalOpen(false)} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={outsideMutation.isPending} className="btn-primary">
-              {outsideMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Banknote className="w-4 h-4" />
-              )}
-              Записать
-            </button>
-          </div>
+          </Field>
         </form>
       </Modal>
 
@@ -1426,10 +1395,25 @@ function AdminSalaryView() {
               : 'Отменить выплату?'
         }
         size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCorrection(null)}>
+              Закрыть
+            </Button>
+            <Button
+              type="submit"
+              form="salary-correction-form"
+              variant={isDestructiveCorrection ? 'danger' : 'primary'}
+              loading={correctionPending}
+            >
+              {isDestructiveCorrection ? 'Отменить выплату' : 'Сохранить'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleCorrectionSubmit} className="space-y-4">
+        <form id="salary-correction-form" onSubmit={handleCorrectionSubmit} className="space-y-4">
           {correction?.kind === 'cancel-payout' && (
-            <p className="text-xs text-gray-500">
+            <p className="text-sm leading-relaxed text-ink-2">
               {correction.payout.type === 'advance' ? 'Аванс' : 'Зарплата'} {formatMoney(correction.payout.amount)}.{' '}
               {correction.payout.status === 'accepted'
                 ? 'Связанный расход будет сторнирован: сумма вернётся в «Остаток», касса и лента расходов обновятся. Прибыль не изменится.'
@@ -1437,78 +1421,75 @@ function AdminSalaryView() {
             </p>
           )}
           {correction?.kind === 'reverse-payment' && (
-            <p className="text-xs text-gray-500">
+            <p className="text-sm leading-relaxed text-ink-2">
               Выплата {formatMoney(correction.payment.amount)} будет отменена (сторно): «выплачено» уменьшится,
               связанный расход будет сторнирован. Прибыль не изменится.
             </p>
           )}
 
           {(correction?.kind === 'edit-payout' || correction?.kind === 'edit-fine') && (
-            <div>
-              <label className="label">Сумма</label>
-              <input
-                type="number"
-                className="input"
+            <Field
+              label="Сумма"
+              htmlFor="correction-amount"
+              required
+              hint={
+                correction?.kind === 'edit-payout'
+                  ? 'Сотруднику придёт пуш с новой суммой — подтверждение остаётся за ним'
+                  : undefined
+              }
+            >
+              <Input
+                id="correction-amount"
+                inputMode="decimal"
                 value={correctionAmount}
                 onChange={(e) => setCorrectionAmount(e.target.value)}
-                min="0"
-                step="1"
                 required
+                rightSlot={<span className="text-sm">₽</span>}
               />
-              {correction?.kind === 'edit-payout' && (
-                <p className="text-xs text-gray-400 mt-1">
-                  Сотруднику придёт пуш с новой суммой — подтверждение остаётся за ним
-                </p>
-              )}
-            </div>
+            </Field>
           )}
           {correction?.kind === 'edit-fine' && (
-            <div>
-              <label className="label">Причина *</label>
-              <input
+            <Field label="Причина" htmlFor="correction-comment" required>
+              <Input
+                id="correction-comment"
                 type="text"
-                className="input"
                 value={correctionComment}
                 onChange={(e) => setCorrectionComment(e.target.value)}
                 placeholder="За что начислен штраф"
                 required
               />
-            </div>
+            </Field>
           )}
-          {(correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment') && (
-            <div>
-              <label className="label">Причина отмены</label>
-              <input
+          {isDestructiveCorrection && (
+            <Field label="Причина отмены" htmlFor="correction-reason">
+              <Input
+                id="correction-reason"
                 type="text"
-                className="input"
                 value={correctionReason}
                 onChange={(e) => setCorrectionReason(e.target.value)}
                 placeholder="Например: выдана ошибочно"
               />
-            </div>
+            </Field>
           )}
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={() => setCorrection(null)} className="btn-secondary">
-              Закрыть
-            </button>
-            <button
-              type="submit"
-              disabled={correctionPending}
-              className={
-                correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment'
-                  ? 'btn-primary !bg-red-600 hover:!bg-red-700'
-                  : 'btn-primary'
-              }
-            >
-              {correctionPending && <Loader2 className="w-4 h-4 animate-spin" />}
-              {correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment'
-                ? 'Отменить выплату'
-                : 'Сохранить'}
-            </button>
-          </div>
         </form>
       </Modal>
+
+      <ConfirmDialog
+        isOpen={fineToDelete !== null}
+        onClose={() => setFineToDelete(null)}
+        onConfirm={() => {
+          if (fineToDelete) deleteFineMutation.mutate(fineToDelete.id);
+        }}
+        title="Удалить штраф"
+        message={
+          fineToDelete
+            ? `Штраф «${fineToDelete.comment}» на ${formatMoney(fineToDelete.amount)} будет удалён, остаток к выплате вырастет.`
+            : ''
+        }
+        confirmText="Удалить"
+        variant="danger"
+        loading={deleteFineMutation.isPending}
+      />
     </div>
   );
 }

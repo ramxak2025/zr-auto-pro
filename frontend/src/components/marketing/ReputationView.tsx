@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -7,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Gift,
+  MessageSquare,
   Send,
   Settings2,
   Star,
@@ -19,13 +21,44 @@ import toast from 'react-hot-toast';
 
 import { marketingApi } from '../../api/services';
 import type { ReviewAlert, ReviewResponse, ReviewSettings } from '../../types';
-import MasterLeaderboard from './MasterLeaderboard';
-import { EmptyState, LoadingBlock, SectionCard, Stars, SaveButton } from './marketingKit';
+import { Button } from '../../ui/Button';
+import { IconButton } from '../../ui/IconButton';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { StatCard } from '../../ui/StatCard';
+import { Textarea } from '../../ui/Textarea';
+import { Toolbar, ToolbarGroup } from '../../ui/Toolbar';
+import { cn } from '../../ui/cn';
+import { focusRing, toneChip, toneSoft, toneText } from '../../ui/tokens';
+import MasterLeaderboard, { ratingTone } from './MasterLeaderboard';
+import {
+  EmptyState,
+  InfoNote,
+  LoadingBlock,
+  SaveButton,
+  SectionCard,
+  SectionError,
+  Stars,
+  plural,
+} from './marketingKit';
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+type RatingFilter = 'all' | 'positive' | 'negative';
+const RATING_FILTERS: RatingFilter[] = ['all', 'positive', 'negative'];
+
+function currentMonthKey(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
 
 // ─── Unread negative-review / churn alerts ──────────────────────────
 function AlertsCard() {
   const qc = useQueryClient();
-  const { data: alerts = [] } = useQuery({
+  const {
+    data: alerts = [],
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'alerts'],
     queryFn: () => marketingApi.getAlerts().then((r) => r.data),
   });
@@ -39,33 +72,42 @@ function AlertsCard() {
     onError: () => toast.error('Не удалось отметить'),
   });
 
+  if (isError) {
+    return (
+      <SectionError
+        message="Не удалось загрузить оповещения по отзывам"
+        onRetry={() => refetch()}
+        loading={isFetching}
+      />
+    );
+  }
   const unread = alerts.filter((a: ReviewAlert) => !a.isRead);
   if (unread.length === 0) return null;
 
   return (
-    <SectionCard icon={Bell} iconClass="bg-red-50 text-red-600" title={`Требуют внимания (${unread.length})`}>
-      <div className="space-y-2">
+    <SectionCard icon={Bell} iconTone="bad" title={`Требуют внимания (${unread.length})`} dense bodyPadding="sm">
+      <ul className="space-y-2">
         {unread.slice(0, 6).map((a: ReviewAlert) => (
-          <div key={a.id} className="flex items-start gap-3 rounded-xl bg-red-50 p-3">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-500" />
+          <li key={a.id} className={cn('flex items-start gap-3 rounded-lg p-3', toneSoft.bad)}>
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-bad" aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-gray-900">
+              <p className="text-sm font-medium text-ink">
                 {a.alertType === 'consecutive_negative'
                   ? `${a.employeeName ?? 'Мастер'}: 3 негативных отзыва подряд`
                   : `Риск ухода клиента: ${a.clientName ?? '—'}`}
               </p>
-              <p className="mt-0.5 text-xs text-gray-500">{new Date(a.createdAt).toLocaleDateString('ru-RU')}</p>
+              <p className="mt-0.5 text-xs text-ink-3">{new Date(a.createdAt).toLocaleDateString('ru-RU')}</p>
             </div>
-            <button
+            <IconButton
+              label="Скрыть"
+              icon={X}
+              size="sm"
               onClick={() => markRead.mutate(a.id)}
-              className="press-soft text-gray-400 hover:text-gray-600"
-              aria-label="Скрыть"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+              className="-mr-1 -mt-1"
+            />
+          </li>
         ))}
-      </div>
+      </ul>
     </SectionCard>
   );
 }
@@ -73,7 +115,13 @@ function AlertsCard() {
 // ─── «Подарок за отзыв» + запрос отзыва ─────────────────────────────
 function MotivationCard({ onGoToSettings }: { onGoToSettings: () => void }) {
   const qc = useQueryClient();
-  const { data: settings } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'settings'],
     queryFn: () => marketingApi.getSettings().then((r) => r.data),
   });
@@ -100,43 +148,51 @@ function MotivationCard({ onGoToSettings }: { onGoToSettings: () => void }) {
   return (
     <SectionCard
       icon={Gift}
-      iconClass="bg-amber-50 text-amber-600"
       title="Подарок за отзыв"
       subtitle="Показывается клиенту на странице оценки и подставляется как {motivation} в запросе"
+      dense
+      bodyPadding="sm"
     >
-      <textarea
-        rows={2}
-        value={motivation}
-        onChange={(e) => {
-          setMotivation(e.target.value);
-          setDirty(true);
-        }}
-        placeholder="Например: Замена воздушного фильтра в подарок за честный отзыв"
-        className="input resize-none"
-      />
+      {isLoading ? (
+        <LoadingBlock lines={2} />
+      ) : isError ? (
+        <SectionError message="Не удалось загрузить настройки отзывов" onRetry={() => refetch()} loading={isFetching} />
+      ) : (
+        <div className="space-y-3">
+          <Textarea
+            rows={2}
+            value={motivation}
+            aria-label="Текст подарка за отзыв"
+            onChange={(e) => {
+              setMotivation(e.target.value);
+              setDirty(true);
+            }}
+            placeholder="Например: Замена воздушного фильтра в подарок за честный отзыв"
+            className="resize-none"
+          />
 
-      <div className="mt-3 flex items-center gap-2 rounded-xl bg-gray-50 px-3.5 py-3">
-        <Send className="h-4 w-4 flex-shrink-0 text-gray-400" />
-        <p className="min-w-0 flex-1 text-xs text-gray-600">
-          Запрос отзыва уходит клиенту{' '}
-          {settings?.autoSendEnabled ? (
-            <span className="font-medium text-green-600">автоматически</span>
-          ) : (
-            <span className="font-medium text-gray-500">вручную (автоотправка выключена)</span>
-          )}{' '}
-          после закрытия заказ-наряда.
-        </p>
-        <button onClick={onGoToSettings} className="btn-secondary btn-sm flex-shrink-0">
-          <Settings2 className="h-3.5 w-3.5" />
-          Настроить
-        </button>
-      </div>
+          <InfoNote icon={Send}>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 flex-1">
+                Запрос отзыва уходит клиенту{' '}
+                {settings?.autoSendEnabled ? (
+                  <span className="font-medium text-ok-text">автоматически</span>
+                ) : (
+                  <span className="font-medium">вручную (автоотправка выключена)</span>
+                )}{' '}
+                после закрытия заказ-наряда.
+              </span>
+              <Button variant="secondary" size="sm" icon={Settings2} onClick={onGoToSettings}>
+                Настроить
+              </Button>
+            </div>
+          </InfoNote>
 
-      {dirty && (
-        <div className="mt-3">
-          <SaveButton onClick={() => save.mutate({ motivationMessage: motivation })} saving={save.isPending}>
-            Сохранить подарок
-          </SaveButton>
+          {dirty && (
+            <SaveButton onClick={() => save.mutate({ motivationMessage: motivation })} saving={save.isPending}>
+              Сохранить подарок
+            </SaveButton>
+          )}
         </div>
       )}
     </SectionCard>
@@ -145,15 +201,38 @@ function MotivationCard({ onGoToSettings }: { onGoToSettings: () => void }) {
 
 // ─── Owner reputation hub ───────────────────────────────────────────
 function OwnerReputation({ onGoToSettings }: { onGoToSettings: () => void }) {
-  const [month, setMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
-  const [filter, setFilter] = useState<'all' | 'positive' | 'negative'>('all');
+  // Месяц и фильтр — в URL (?month=2026-09&rating=negative) рядом с вкладкой.
+  const [params, setParams] = useSearchParams();
+  const rawMonth = params.get('month');
+  const month = rawMonth && MONTH_RE.test(rawMonth) ? rawMonth : currentMonthKey();
+  const rawFilter = params.get('rating') as RatingFilter | null;
+  const filter: RatingFilter = rawFilter && RATING_FILTERS.includes(rawFilter) ? rawFilter : 'all';
+
+  const update = (next: { month?: string; rating?: RatingFilter }) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        const m = next.month ?? month;
+        const r = next.rating ?? filter;
+        if (m === currentMonthKey()) p.delete('month');
+        else p.set('month', m);
+        if (r === 'all') p.delete('rating');
+        else p.set('rating', r);
+        return p;
+      },
+      { replace: true },
+    );
+
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedMasterId, setSelectedMasterId] = useState<string | null>(null);
 
-  const { data: reviews = [], isLoading } = useQuery({
+  const {
+    data: reviews = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'reviews', month],
     queryFn: () => marketingApi.getReviews({ month }).then((r) => r.data),
     placeholderData: keepPreviousData,
@@ -162,17 +241,21 @@ function OwnerReputation({ onGoToSettings }: { onGoToSettings: () => void }) {
 
   const monthLabel = useMemo(() => {
     const [y, m] = month.split('-');
-    return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+    const label = new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('ru-RU', {
+      month: 'long',
+      year: 'numeric',
+    });
+    return label.charAt(0).toUpperCase() + label.slice(1);
   }, [month]);
 
   const shiftMonth = (dir: number) => {
     const [y, m] = month.split('-').map(Number);
     const d = new Date(y, m - 1 + dir);
-    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    update({ month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` });
   };
 
   const total = reviews.length;
-  const avgRating = total > 0 ? (reviews.reduce((s, r) => s + r.rating, 0) / total).toFixed(1) : '0.0';
+  const avgRating = total > 0 ? reviews.reduce((s, r) => s + r.rating, 0) / total : 0;
   const positiveCount = reviews.filter((r) => r.rating >= 4).length;
   const negativeCount = reviews.filter((r) => r.rating <= 3).length;
 
@@ -196,277 +279,280 @@ function OwnerReputation({ onGoToSettings }: { onGoToSettings: () => void }) {
       .sort((a, b) => b.avg - a.avg);
   }, [reviews]);
 
-  return (
-    <div className="space-y-4">
-      <AlertsCard />
+  const fmtDay = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 
-      {/* Month picker */}
-      <div className="card flex items-center justify-between px-3 py-2">
-        <button
-          onClick={() => shiftMonth(-1)}
-          className="press-soft rounded-lg p-2 text-gray-500 hover:bg-gray-100"
-          aria-label="Предыдущий месяц"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <span className="text-sm font-bold capitalize text-gray-900">{monthLabel}</span>
-        <button
-          onClick={() => shiftMonth(1)}
-          className="press-soft rounded-lg p-2 text-gray-500 hover:bg-gray-100"
-          aria-label="Следующий месяц"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      </div>
+  return (
+    <div className="space-y-5">
+      <Toolbar>
+        <ToolbarGroup>
+          <IconButton label="Предыдущий месяц" icon={ChevronLeft} variant="secondary" onClick={() => shiftMonth(-1)} />
+          <span className="min-w-[10rem] text-center text-sm font-semibold text-ink" aria-live="polite">
+            {monthLabel}
+          </span>
+          <IconButton label="Следующий месяц" icon={ChevronRight} variant="secondary" onClick={() => shiftMonth(1)} />
+        </ToolbarGroup>
+        {total > 0 && (
+          <SegmentedControl
+            aria-label="Фильтр отзывов"
+            value={filter}
+            onChange={(v) => update({ rating: v })}
+            options={[
+              { value: 'all', label: `Все · ${total}` },
+              { value: 'positive', label: `Положительные · ${positiveCount}`, icon: ThumbsUp },
+              { value: 'negative', label: `Отрицательные · ${negativeCount}`, icon: ThumbsDown },
+            ]}
+          />
+        )}
+      </Toolbar>
 
       {/* Summary */}
-      {total > 0 && (
-        <div className="grid grid-cols-3 gap-2">
-          <div className="card p-3 text-center">
-            <p className="text-2xl font-bold tabular-nums text-gray-900">{total}</p>
-            <p className="mt-0.5 text-[11px] text-gray-400">Всего</p>
-          </div>
-          <div className="card p-3 text-center">
-            <p className="text-2xl font-bold tabular-nums text-amber-500">
-              {avgRating}
-              <span className="text-sm">★</span>
-            </p>
-            <p className="mt-0.5 text-[11px] text-gray-400">Средний</p>
-          </div>
-          <div className="card p-3 text-center">
-            <p className="text-2xl font-bold tabular-nums text-green-600">
-              {Math.round((positiveCount / total) * 100)}%
-            </p>
-            <p className="mt-0.5 text-[11px] text-gray-400">Позитивных</p>
-          </div>
-        </div>
-      )}
+      <div className="grid grid-cols-3 gap-3">
+        <StatCard compact label="Отзывов за месяц" value={total} icon={MessageSquare} loading={isLoading} />
+        <StatCard
+          compact
+          label="Средняя оценка"
+          value={total > 0 ? `${avgRating.toFixed(1).replace('.', ',')} ★` : '—'}
+          icon={Star}
+          tone={total > 0 ? ratingTone(avgRating) : 'neutral'}
+          loading={isLoading}
+        />
+        <StatCard
+          compact
+          label="Положительных"
+          value={total > 0 ? `${Math.round((positiveCount / total) * 100)}%` : '—'}
+          icon={ThumbsUp}
+          tone={total > 0 ? (positiveCount / total >= 0.8 ? 'ok' : 'warn') : 'neutral'}
+          loading={isLoading}
+        />
+      </div>
 
-      {/* Filter chips */}
-      {total > 0 && (
-        <div className="flex gap-2">
-          {(
-            [
-              ['all', `Все (${total})`, 'primary'],
-              ['positive', `👍 ${positiveCount}`, 'green'],
-              ['negative', `👎 ${negativeCount}`, 'red'],
-            ] as const
-          ).map(([key, label, tone]) => {
-            const active = filter === key;
-            const activeCls =
-              tone === 'green'
-                ? 'bg-green-50 text-green-700 border-green-200'
-                : tone === 'red'
-                  ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-primary-50 text-primary-700 border-primary-200';
-            return (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`press-soft flex-1 rounded-xl border py-2 text-xs font-semibold transition-colors ${
-                  active ? activeCls : 'border-transparent bg-gray-50 text-gray-500'
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3 lg:items-start">
+        {/* ── Лента отзывов ── */}
+        <div className="lg:col-span-2">
+          <SectionCard
+            icon={Star}
+            iconTone="accent"
+            title="Все отзывы"
+            subtitle={`За ${monthLabel}`}
+            bodyPadding="none"
+          >
+            {isLoading ? (
+              <LoadingBlock className="px-4" lines={4} />
+            ) : isError ? (
+              <div className="p-4">
+                <SectionError message="Не удалось загрузить отзывы" onRetry={() => refetch()} loading={isFetching} />
+              </div>
+            ) : total === 0 ? (
+              <EmptyState
+                icon={Star}
+                title="Отзывов за этот месяц нет"
+                hint="Выберите другой месяц или дождитесь оценок"
+              />
+            ) : filteredReviews.length === 0 ? (
+              <EmptyState icon={Star} title="Нет отзывов под выбранным фильтром" />
+            ) : (
+              <ul className="divide-y divide-line">
+                {filteredReviews.map((r) => {
+                  const isGood = r.rating >= 4;
+                  const isExpanded = expandedId === r.id;
+                  const tone = isGood ? 'ok' : 'bad';
+                  return (
+                    <li key={r.id} className="px-4 py-2.5">
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={cn(
+                            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-sm font-semibold tabular-nums',
+                            toneChip[tone],
+                          )}
+                          aria-label={`Оценка ${r.rating} из 5`}
+                        >
+                          {r.rating}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          {r.clientId ? (
+                            <Link
+                              to={`/clients/${r.clientId}`}
+                              className={cn(
+                                'block truncate text-sm font-medium text-ink hover:text-accent-text',
+                                focusRing,
+                              )}
+                            >
+                              {r.clientName || 'Клиент'}
+                            </Link>
+                          ) : (
+                            <p className="truncate text-sm font-medium text-ink">{r.clientName || 'Клиент'}</p>
+                          )}
+                          <p className="truncate text-xs text-ink-3">
+                            {r.employeeName && `${r.employeeName} · `}
+                            {r.carMakeModel && `${r.carMakeModel} · `}
+                            {fmtDay(r.createdAt)}
+                          </p>
+                        </div>
+                        {r.comment && (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                            aria-expanded={isExpanded}
+                            className={cn(
+                              'inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-ink-2 hover:bg-surface-3 hover:text-ink',
+                              focusRing,
+                            )}
+                          >
+                            <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span className="hidden sm:inline">Комментарий</span>
+                            <ChevronDown
+                              className={cn(
+                                'h-3.5 w-3.5 transition-transform duration-150',
+                                isExpanded && 'rotate-180',
+                              )}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        )}
+                      </div>
+                      {isExpanded && r.comment && (
+                        <p className={cn('ml-11 mt-2 rounded-lg px-3 py-2 text-sm', toneSoft[tone])}>{r.comment}</p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </SectionCard>
         </div>
-      )}
 
-      {isLoading ? (
-        <LoadingBlock />
-      ) : total === 0 ? (
-        <SectionCard icon={Star} title="Отзывы">
-          <EmptyState icon={Star} title="Отзывов за этот месяц нет" hint="Выберите другой месяц или дождитесь оценок" />
-        </SectionCard>
-      ) : (
-        <>
-          {/* Leaderboard (expandable) */}
+        {/* ── Правая колонка ── */}
+        <div className="space-y-5">
+          <AlertsCard />
+
           {employeeStats.length > 0 && (
-            <SectionCard icon={Trophy} iconClass="bg-amber-50 text-amber-600" title="Рейтинг мастеров">
-              <div className="space-y-2">
+            <SectionCard icon={Trophy} iconTone="accent" title="Рейтинг мастеров" dense bodyPadding="none">
+              <ul className="divide-y divide-line">
                 {employeeStats.map((e, idx) => {
                   const avgRounded = Math.round(e.avg * 10) / 10;
-                  const isGood = avgRounded >= 4;
+                  const tone = ratingTone(avgRounded);
                   const isSelected = selectedMasterId === e.id;
                   const masterReviews = reviews.filter((r) => r.employeeId === e.id);
                   return (
-                    <div key={e.id}>
+                    <li key={e.id}>
                       <button
+                        type="button"
                         onClick={() => setSelectedMasterId(isSelected ? null : e.id)}
-                        className={`flex w-full items-center gap-3 rounded-xl p-3 text-left transition-all ${
-                          isSelected
-                            ? 'border border-primary-200 bg-primary-50'
-                            : isGood
-                              ? 'bg-green-50 hover:bg-green-100'
-                              : 'bg-red-50 hover:bg-red-100'
-                        }`}
+                        aria-expanded={isSelected}
+                        className={cn(
+                          'flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-surface-2',
+                          isSelected && 'bg-accent-soft/60',
+                          focusRing,
+                        )}
                       >
-                        <div
-                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${
-                            idx === 0
-                              ? 'bg-amber-500'
-                              : idx === 1
-                                ? 'bg-gray-400'
-                                : idx === 2
-                                  ? 'bg-amber-700'
-                                  : 'bg-gray-300'
-                          }`}
+                        <span
+                          className={cn(
+                            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-sm font-semibold tabular-nums',
+                            idx < 3 ? toneChip.accent : toneChip.neutral,
+                          )}
+                          aria-label={`${idx + 1} место`}
                         >
                           {idx + 1}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-gray-900">{e.name}</p>
-                          <div className="mt-0.5 flex items-center gap-2">
-                            <Stars rating={Math.round(e.avg)} />
-                            <span
-                              className={`text-xs font-bold tabular-nums ${isGood ? 'text-green-600' : 'text-red-600'}`}
-                            >
-                              {avgRounded}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold text-ink">{e.name}</span>
+                          <span className="mt-0.5 flex items-center gap-2">
+                            <Stars rating={Math.round(e.avg)} label={`Средняя оценка ${avgRounded}`} />
+                            <span className={cn('text-xs font-semibold tabular-nums', toneText[tone])}>
+                              {avgRounded.toFixed(1).replace('.', ',')}
                             </span>
-                          </div>
-                        </div>
-                        <div className="flex-shrink-0 text-right">
-                          <p className="text-sm font-bold tabular-nums text-gray-900">{e.count}</p>
-                          <p className="text-[10px] text-gray-400">
-                            отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}
-                          </p>
-                        </div>
-                        {e.negative > 0 && <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-500" />}
+                          </span>
+                        </span>
+                        <span className="flex-shrink-0 text-right">
+                          <span className="block text-sm font-semibold tabular-nums text-ink">{e.count}</span>
+                          <span className="block text-2xs text-ink-3">
+                            {plural(e.count, ['отзыв', 'отзыва', 'отзывов'])}
+                          </span>
+                        </span>
+                        {e.negative > 0 && (
+                          <AlertTriangle
+                            className="h-4 w-4 flex-shrink-0 text-bad"
+                            aria-label="Есть негативные отзывы"
+                          />
+                        )}
                         <ChevronDown
-                          className={`h-4 w-4 flex-shrink-0 text-gray-300 transition-transform ${isSelected ? 'rotate-180' : ''}`}
+                          className={cn(
+                            'h-4 w-4 flex-shrink-0 text-ink-4 transition-transform duration-150',
+                            isSelected && 'rotate-180',
+                          )}
+                          aria-hidden="true"
                         />
                       </button>
 
                       {isSelected && (
-                        <div className="ml-3 mt-2 space-y-2 border-l-2 border-primary-200 pl-3">
-                          <div className="flex items-center gap-4 py-1 text-xs text-gray-500">
+                        <div className="space-y-2 border-t border-line bg-surface-2/60 px-4 py-3">
+                          <div className="flex items-center gap-4 text-xs text-ink-3">
                             <span className="flex items-center gap-1">
-                              <ThumbsUp className="h-3 w-3 text-green-500" />
+                              <ThumbsUp className="h-3 w-3 text-ok" aria-hidden="true" />
                               {masterReviews.filter((r) => r.rating >= 4).length} положит.
                             </span>
                             <span className="flex items-center gap-1">
-                              <ThumbsDown className="h-3 w-3 text-red-500" />
+                              <ThumbsDown className="h-3 w-3 text-bad" aria-hidden="true" />
                               {e.negative} негатив.
                             </span>
                           </div>
                           {masterReviews.map((r) => {
                             const good = r.rating >= 4;
                             return (
-                              <div key={r.id} className={`rounded-lg p-3 ${good ? 'bg-green-50' : 'bg-red-50'}`}>
+                              <div key={r.id} className="rounded-lg border border-line bg-surface p-2.5">
                                 <div className="flex items-center gap-2">
-                                  <div
-                                    className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white ${good ? 'bg-green-500' : 'bg-red-500'}`}
+                                  <span
+                                    className={cn(
+                                      'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-2xs font-semibold tabular-nums',
+                                      toneChip[good ? 'ok' : 'bad'],
+                                    )}
+                                    aria-label={`Оценка ${r.rating} из 5`}
                                   >
                                     {r.rating}
-                                  </div>
+                                  </span>
                                   <div className="min-w-0 flex-1">
                                     {r.clientId ? (
-                                      <a
-                                        href={`/clients/${r.clientId}`}
-                                        className="block truncate text-sm font-medium text-primary-600 hover:underline"
+                                      <Link
+                                        to={`/clients/${r.clientId}`}
+                                        className={cn(
+                                          'block truncate text-sm font-medium text-accent-text hover:underline',
+                                          focusRing,
+                                        )}
                                       >
                                         {r.clientName || 'Клиент'}
-                                      </a>
+                                      </Link>
                                     ) : (
-                                      <p className="truncate text-sm font-medium text-gray-900">
+                                      <p className="truncate text-sm font-medium text-ink">
                                         {r.clientName || 'Клиент'}
                                       </p>
                                     )}
                                   </div>
-                                  <span className="flex-shrink-0 text-[10px] text-gray-400">
-                                    {new Date(r.createdAt).toLocaleDateString('ru-RU', {
-                                      day: 'numeric',
-                                      month: 'short',
-                                    })}
+                                  <span className="flex-shrink-0 text-2xs tabular-nums text-ink-3">
+                                    {fmtDay(r.createdAt)}
                                   </span>
                                 </div>
                                 {(r.carMakeModel || r.carPlate) && (
-                                  <p className="ml-8 mt-1 text-xs text-gray-500">
+                                  <p className="ml-8 mt-1 text-xs text-ink-3">
                                     {r.carMakeModel}
                                     {r.carPlate && ` · ${r.carPlate}`}
                                   </p>
                                 )}
-                                {r.comment && (
-                                  <p className={`ml-8 mt-1.5 text-xs ${good ? 'text-green-700' : 'text-red-700'}`}>
-                                    {r.comment}
-                                  </p>
-                                )}
+                                {r.comment && <p className="ml-8 mt-1 text-xs text-ink-2">{r.comment}</p>}
                               </div>
                             );
                           })}
                         </div>
                       )}
-                    </div>
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             </SectionCard>
           )}
 
-          {/* Review feed */}
-          <SectionCard icon={Star} iconClass="bg-primary-50 text-primary-600" title="Все отзывы">
-            {filteredReviews.length === 0 ? (
-              <p className="py-4 text-center text-sm text-gray-400">Нет отзывов под выбранным фильтром</p>
-            ) : (
-              <div className="space-y-1">
-                {filteredReviews.map((r) => {
-                  const isGood = r.rating >= 4;
-                  const isExpanded = expandedId === r.id;
-                  return (
-                    <div key={r.id}>
-                      <button
-                        onClick={() => setExpandedId(isExpanded ? null : r.id)}
-                        className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-colors ${
-                          isGood ? 'hover:bg-green-50' : 'hover:bg-red-50'
-                        } ${isExpanded ? (isGood ? 'bg-green-50' : 'bg-red-50') : ''}`}
-                      >
-                        <div
-                          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${isGood ? 'bg-green-500' : 'bg-red-500'}`}
-                        >
-                          {r.rating}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-gray-900">{r.clientName || 'Клиент'}</p>
-                          <p className="text-xs text-gray-400">
-                            {r.employeeName && `${r.employeeName} · `}
-                            {r.carMakeModel && `${r.carMakeModel} · `}
-                            {new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-                          </p>
-                        </div>
-                        {r.clientId && (
-                          <a
-                            href={`/clients/${r.clientId}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="flex-shrink-0 text-xs text-primary-500 hover:underline"
-                          >
-                            Профиль
-                          </a>
-                        )}
-                        {r.comment && (
-                          <ChevronDown
-                            className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                          />
-                        )}
-                      </button>
-                      {isExpanded && r.comment && (
-                        <div
-                          className={`mx-3 mb-1 rounded-lg px-3 py-2 text-sm ${isGood ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}
-                        >
-                          {r.comment}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </SectionCard>
-        </>
-      )}
-
-      <MotivationCard onGoToSettings={onGoToSettings} />
+          <MotivationCard onGoToSettings={onGoToSettings} />
+        </div>
+      </div>
     </div>
   );
 }

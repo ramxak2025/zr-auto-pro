@@ -19,7 +19,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { BottomSheet } from './BottomSheet';
 import GostPlateBadge from './GostPlateBadge';
+import VinText from './VinText';
 import { useColors } from '../contexts/ThemeContext';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { carVin } from '../utils/vinUi';
 import { formatPhone } from '../../../shared/validation/phone';
 import { spacing, borderRadius } from '../theme';
 import type { Client, Car } from '../../../shared/types';
@@ -37,6 +40,8 @@ const PLATE_H = 40; // тот же рост бейджа, что в PlateResultC
 
 export default function ClientCarPickerSheet({ visible, client, onClose, onPick }: ClientCarPickerSheetProps) {
   const palette = useColors();
+  // 171 — VIN под маркой, только при включённой опции и когда VIN у машины есть.
+  const vinEnabled = useVinEnabled();
   const cars = client?.cars || [];
 
   return (
@@ -77,6 +82,9 @@ export default function ClientCarPickerSheet({ visible, client, onClose, onPick 
               <Text variant="bodyEmph" color={palette.text.primary} numberOfLines={1} style={styles.carMake}>
                 {car.makeModel || 'Без модели'}
               </Text>
+              {vinEnabled && carVin(car) ? (
+                <VinText vin={carVin(car)!} size={11} color={palette.text.tertiary} />
+              ) : null}
               {!!car.comment && (
                 <Text variant="footnote" color={palette.text.tertiary} numberOfLines={1}>
                   {car.comment}

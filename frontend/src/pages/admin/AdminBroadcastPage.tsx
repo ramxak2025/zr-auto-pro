@@ -1,29 +1,43 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Megaphone,
-  Plus,
-  Trash2,
-  Loader2,
-  Send,
-  Link as LinkIcon,
-  X,
-  Eye,
   Ban,
-  History,
-  Filter,
-  Users,
-  Clock,
   CalendarClock,
   CheckCircle2,
+  Clock,
+  Eye,
+  Filter,
+  History,
+  Link as LinkIcon,
+  Megaphone,
+  Plus,
+  Send,
+  Trash2,
+  Users,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { notificationsApi, plansApi } from '../../api/services';
+import PageHeader from '../../components/PageHeader';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { AdminPageHeader, Chip, Segmented } from '../../components/admin/adminUi';
+import QueryState from '../../components/QueryState';
+import { Badge, StatusPill } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Card, CardHeader } from '../../ui/Card';
+import { Checkbox } from '../../ui/Checkbox';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Select } from '../../ui/Select';
+import { SkeletonText } from '../../ui/Skeleton';
+import { Textarea } from '../../ui/Textarea';
+import { cn } from '../../ui/cn';
+import { ToggleChip, formatDateRu } from '../../components/admin/adminUi';
+import { pluralRu } from '../../components/knowledge/utils';
 import type {
   BroadcastButton,
   BroadcastHistoryItem,
@@ -82,6 +96,8 @@ function toLocalInputValue(d: Date): string {
 
 export default function AdminBroadcastPage() {
   const queryClient = useQueryClient();
+  const uid = useId();
+  const formId = `${uid}-broadcast-form`;
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -114,6 +130,8 @@ export default function AdminBroadcastPage() {
     data: history,
     isLoading: historyLoading,
     isError: historyError,
+    refetch: refetchHistory,
+    isFetching: historyFetching,
   } = useQuery({
     queryKey: ['admin-broadcasts'],
     queryFn: () => notificationsApi.listBroadcasts(),
@@ -237,464 +255,442 @@ export default function AdminBroadcastPage() {
     setConfirmSendOpen(true);
   };
 
+  const visibleButtons = buttons.filter((b) => b.label.trim());
+
   return (
-    <div>
-      <AdminPageHeader
-        title="Рассылка владельцам"
-        subtitle="Объявления директорам автосервисов — с сегментами и планированием"
+    <div className="space-y-5">
+      <PageHeader
+        title="Рассылка"
+        icon={Megaphone}
+        subtitle="Объявления владельцам автосервисов — с сегментами и планированием"
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Composer */}
-        <form onSubmit={handleSubmit} className="card card-body space-y-5 self-start">
-          <div className="flex items-center gap-2 text-gray-500">
-            <Megaphone className="w-5 h-5" />
-            <span className="text-sm">Объявление получат директора выбранных автосервисов.</span>
-          </div>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:items-start">
+        {/* Композер */}
+        <Card padding="none">
+          <CardHeader title="Новое объявление" subtitle="Получат директора выбранных автосервисов" />
+          <form id={formId} onSubmit={handleSubmit} className="space-y-5 px-5 py-5">
+            <Field label="Заголовок" htmlFor={`${uid}-title`} required>
+              <Input
+                id={`${uid}-title`}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Например: Обновление приложения"
+                maxLength={120}
+                required
+              />
+            </Field>
 
-          <div>
-            <label className="label">Заголовок</label>
-            <input
-              type="text"
-              className="input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Например: Обновление приложения"
-              maxLength={120}
-              required
-            />
-          </div>
+            <Field label="Текст" htmlFor={`${uid}-body`} required hint={`${body.length} / 1000`}>
+              <Textarea
+                id={`${uid}-body`}
+                rows={4}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Что нового / что нужно сделать владельцам"
+                maxLength={1000}
+                required
+              />
+            </Field>
 
-          <div>
-            <label className="label">Текст</label>
-            <textarea
-              className="input"
-              rows={4}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Что нового / что нужно сделать владельцам"
-              maxLength={1000}
-              required
-            />
-          </div>
+            <Field label="Картинка (URL, необязательно)" htmlFor={`${uid}-image`}>
+              <Input
+                id={`${uid}-image`}
+                type="url"
+                inputMode="url"
+                value={imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+                placeholder="https://…"
+              />
+            </Field>
 
-          <div>
-            <label className="label">Картинка (URL, необязательно)</label>
-            <input
-              type="url"
-              className="input"
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://..."
-            />
-          </div>
-
-          {/* Buttons editor */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="label mb-0">Кнопки (до {MAX_BUTTONS})</label>
-              <button
-                type="button"
-                onClick={addButton}
-                disabled={buttons.length >= MAX_BUTTONS}
-                className="btn-ghost btn-sm"
-              >
-                <Plus className="w-4 h-4" />
-                Добавить
-              </button>
-            </div>
-
-            {buttons.length === 0 ? (
-              <p className="text-xs text-gray-400">Без кнопок объявление можно будет только закрыть.</p>
-            ) : (
-              <div className="space-y-3">
-                {buttons.map((btn, i) => (
-                  <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        className="input"
-                        value={btn.label}
-                        onChange={(e) => updateButton(i, { label: e.target.value })}
-                        placeholder="Текст кнопки"
-                        maxLength={40}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeButton(i)}
-                        className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors flex-shrink-0"
-                        title="Удалить кнопку"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        className="input flex-shrink-0 w-36"
-                        value={btn.action}
-                        onChange={(e) => updateButton(i, { action: e.target.value as 'dismiss' | 'link' })}
-                      >
-                        <option value="dismiss">Закрыть</option>
-                        <option value="link">Ссылка</option>
-                      </select>
-                      {btn.action === 'link' && (
-                        <input
-                          type="url"
-                          className="input"
-                          value={btn.url}
-                          onChange={(e) => updateButton(i, { url: e.target.value })}
-                          placeholder="https://..."
-                        />
-                      )}
-                    </div>
-                  </div>
-                ))}
+            {/* Кнопки объявления */}
+            <fieldset>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <legend className="float-left text-sm font-medium text-ink-2">Кнопки (до {MAX_BUTTONS})</legend>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={Plus}
+                  onClick={addButton}
+                  disabled={buttons.length >= MAX_BUTTONS}
+                >
+                  Добавить
+                </Button>
               </div>
-            )}
-          </div>
 
-          {/* ── Targeting (segments) ───────────────────────────────────────── */}
-          <div className="rounded-xl border border-gray-200 p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-semibold text-gray-900">Кому отправить</span>
-            </div>
+              {buttons.length === 0 ? (
+                <p className="text-xs text-ink-3">Без кнопок объявление можно будет только закрыть.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {buttons.map((btn, i) => (
+                    <li key={i} className="space-y-2 rounded-lg border border-line bg-surface-2 p-3">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={btn.label}
+                          onChange={(e) => updateButton(i, { label: e.target.value })}
+                          placeholder="Текст кнопки"
+                          aria-label={`Текст кнопки ${i + 1}`}
+                          maxLength={40}
+                        />
+                        <IconButton
+                          label={`Удалить кнопку ${i + 1}`}
+                          icon={Trash2}
+                          variant="danger"
+                          onClick={() => removeButton(i)}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          aria-label={`Действие кнопки ${i + 1}`}
+                          className="w-36 flex-shrink-0"
+                          value={btn.action}
+                          onChange={(e) => updateButton(i, { action: e.target.value as 'dismiss' | 'link' })}
+                        >
+                          <option value="dismiss">Закрыть</option>
+                          <option value="link">Ссылка</option>
+                        </Select>
+                        {btn.action === 'link' && (
+                          <Input
+                            type="url"
+                            inputMode="url"
+                            value={btn.url}
+                            onChange={(e) => updateButton(i, { url: e.target.value })}
+                            placeholder="https://…"
+                            aria-label={`Ссылка кнопки ${i + 1}`}
+                            invalid={btn.url.trim().length === 0}
+                          />
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </fieldset>
 
-            <Segmented<TargetMode>
-              value={targetMode}
-              onChange={setTargetMode}
-              options={[
-                { value: 'all', label: 'Всем' },
-                { value: 'segment', label: 'По сегменту' },
-              ]}
-            />
+            {/* ── Кому отправить ─────────────────────────────────────────── */}
+            <fieldset className="space-y-4 rounded-lg border border-line p-4">
+              <legend className="flex items-center gap-2 px-1 text-sm font-semibold text-ink">
+                <Filter className="h-4 w-4 text-ink-3" aria-hidden="true" />
+                Кому отправить
+              </legend>
 
-            {targetMode === 'segment' && (
-              <div className="space-y-4 pt-1">
-                {/* Plans */}
-                <div>
-                  <p className="label">Тариф</p>
-                  {plans && plans.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {plans.map((p) => (
-                        <Chip key={p.id} active={planIds.includes(p.id)} onClick={() => togglePlan(p.id)}>
-                          {p.name}
-                        </Chip>
+              <SegmentedControl<TargetMode>
+                aria-label="Получатели"
+                value={targetMode}
+                onChange={setTargetMode}
+                options={[
+                  { value: 'all', label: 'Всем' },
+                  { value: 'segment', label: 'По сегменту' },
+                ]}
+              />
+
+              {targetMode === 'segment' && (
+                <div className="space-y-4">
+                  <Field label="Тариф">
+                    {plans && plans.length > 0 ? (
+                      <div className="flex flex-wrap gap-2" role="group" aria-label="Тарифы сегмента">
+                        {plans.map((p) => (
+                          <ToggleChip key={p.id} active={planIds.includes(p.id)} onClick={() => togglePlan(p.id)}>
+                            {p.name}
+                          </ToggleChip>
+                        ))}
+                      </div>
+                    ) : (
+                      <SkeletonText lines={1} className="max-w-xs" />
+                    )}
+                  </Field>
+
+                  <Field label="Статус подписки">
+                    <div className="flex flex-wrap gap-2" role="group" aria-label="Статусы подписки">
+                      {STATUS_OPTIONS.map((s) => (
+                        <ToggleChip
+                          key={s.value}
+                          active={statuses.includes(s.value)}
+                          onClick={() => toggleStatus(s.value)}
+                        >
+                          {s.label}
+                        </ToggleChip>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-xs text-gray-400">Тарифы загружаются…</p>
-                  )}
-                </div>
+                  </Field>
 
-                {/* Subscription status */}
-                <div>
-                  <p className="label">Статус подписки</p>
-                  <div className="flex flex-wrap gap-2">
-                    {STATUS_OPTIONS.map((s) => (
-                      <Chip key={s.value} active={statuses.includes(s.value)} onClick={() => toggleStatus(s.value)}>
-                        {s.label}
-                      </Chip>
-                    ))}
-                  </div>
-                </div>
+                  <Field label="Активность">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <SegmentedControl<ActivityMode>
+                        aria-label="Активность"
+                        value={activity}
+                        onChange={setActivity}
+                        options={[
+                          { value: 'any', label: 'Любая' },
+                          { value: 'active', label: 'Активные' },
+                          { value: 'dormant', label: 'Спящие' },
+                        ]}
+                      />
+                      {activity !== 'any' && (
+                        <span className="flex items-center gap-2 text-sm text-ink-2">
+                          окно
+                          <Input
+                            inputMode="numeric"
+                            aria-label="Окно активности, дней"
+                            value={String(activityWindowDays)}
+                            onChange={(e) =>
+                              setActivityWindowDays(
+                                Math.max(1, Math.min(365, Number(e.target.value.replace(/\D/g, '')) || 1)),
+                              )
+                            }
+                            className="w-20 tabular-nums"
+                          />
+                          дн.
+                        </span>
+                      )}
+                    </div>
+                  </Field>
 
-                {/* Activity */}
-                <div>
-                  <p className="label">Активность</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Segmented<ActivityMode>
-                      value={activity}
-                      onChange={setActivity}
-                      options={[
-                        { value: 'any', label: 'Любая' },
-                        { value: 'active', label: 'Активные' },
-                        { value: 'dormant', label: 'Спящие' },
-                      ]}
-                    />
-                    {activity !== 'any' && (
-                      <label className="flex items-center gap-2 text-sm text-gray-600">
-                        окно
-                        <input
-                          type="number"
-                          min={1}
-                          max={365}
-                          value={activityWindowDays}
-                          onChange={(e) =>
-                            setActivityWindowDays(Math.max(1, Math.min(365, Number(e.target.value) || 1)))
-                          }
-                          className="input w-20 py-1.5"
-                        />
-                        дн.
-                      </label>
-                    )}
-                  </div>
-                </div>
-
-                {/* Include inactive */}
-                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                  <input
-                    type="checkbox"
+                  <Checkbox
+                    label="Включить отключённые компании"
                     checked={includeInactive}
                     onChange={(e) => setIncludeInactive(e.target.checked)}
-                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  Включить отключённые компании
-                </label>
-              </div>
-            )}
-
-            {/* Recipients summary */}
-            <div className="flex items-start gap-2 rounded-lg bg-gray-50 px-3 py-2.5">
-              <Users className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-              <div className="text-sm">
-                <span className="text-gray-500">Получатели: </span>
-                <span className="font-medium text-gray-900">{recipientsText}</span>
-                {targetMode === 'segment' && (
-                  <p className="text-xs text-gray-400 mt-0.5">Точное число рассчитывается в момент отправки.</p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Scheduling ─────────────────────────────────────────────────── */}
-          <div className="rounded-xl border border-gray-200 p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-semibold text-gray-900">Когда отправить</span>
-            </div>
-
-            <Segmented<ScheduleMode>
-              value={scheduleMode}
-              onChange={setScheduleMode}
-              options={[
-                { value: 'now', label: 'Сейчас' },
-                { value: 'later', label: 'Запланировать' },
-              ]}
-            />
-
-            {scheduleMode === 'later' && (
-              <div>
-                <input
-                  type="datetime-local"
-                  className="input"
-                  value={scheduledAt}
-                  min={toLocalInputValue(new Date())}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                />
-                {scheduledAt && !scheduleValid && (
-                  <p className="text-xs text-red-500 mt-1">Время отправки должно быть в будущем.</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between pt-1 border-t border-gray-200">
-            <p className="text-xs text-gray-400">{isScheduled ? `Отправится ${whenText}` : 'Отправится сразу'}</p>
-            <button type="submit" disabled={!canSend} className="btn-primary">
-              {sendMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  {isScheduled ? 'Планирование…' : 'Отправка…'}
-                </>
-              ) : isScheduled ? (
-                <>
-                  <CalendarClock className="w-4 h-4" />
-                  Запланировать
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  Отправить
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-
-        {/* Live preview — прилипает при прокрутке длинного композера */}
-        <div className="self-start lg:sticky lg:top-4">
-          <p className="text-sm font-medium text-gray-500 mb-3">Предпросмотр</p>
-          <div className="rounded-3xl bg-gray-100 p-6 flex items-center justify-center min-h-[320px]">
-            <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl overflow-hidden">
-              {imageUrl.trim() && (
-                <img
-                  src={imageUrl.trim()}
-                  alt=""
-                  className="w-full h-40 object-cover bg-gray-100"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              )}
-              <div className="p-5">
-                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary-50 mx-auto mb-3">
-                  <Megaphone className="w-6 h-6 text-primary-600" />
                 </div>
-                <h3 className="text-lg font-bold text-gray-900 text-center">
-                  {title.trim() || 'Заголовок объявления'}
-                </h3>
-                <p className="text-sm text-gray-600 text-center mt-2 whitespace-pre-line">
-                  {body.trim() || 'Здесь будет текст вашего объявления для владельцев автосервисов.'}
-                </p>
+              )}
 
-                <div className="mt-5 space-y-2">
-                  {buttons.filter((b) => b.label.trim()).length === 0 ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white font-semibold py-2.5 rounded-xl"
-                    >
-                      <X className="w-4 h-4" />
-                      Понятно
-                    </button>
-                  ) : (
-                    buttons
-                      .filter((b) => b.label.trim())
-                      .map((b, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          disabled
-                          className={`w-full flex items-center justify-center gap-2 font-semibold py-2.5 rounded-xl ${
-                            i === 0 ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          {b.action === 'link' && <LinkIcon className="w-4 h-4" />}
-                          {b.label.trim()}
-                        </button>
-                      ))
+              {/* Сводка по получателям */}
+              <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-sm">
+                <Users className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                <p>
+                  <span className="text-ink-3">Получатели: </span>
+                  <span className="font-medium text-ink">{recipientsText}</span>
+                  {targetMode === 'segment' && (
+                    <span className="block text-xs text-ink-3">Точное число рассчитывается в момент отправки.</span>
                   )}
-                </div>
+                </p>
               </div>
-            </div>
-          </div>
+            </fieldset>
 
-          {/* Delivery summary chips under the preview */}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <span className="badge-gray inline-flex items-center gap-1">
-              <Users className="w-3.5 h-3.5" />
-              {targetMode === 'all' ? 'Всем' : 'Сегмент'}
-            </span>
-            <span className="badge-blue inline-flex items-center gap-1">
-              {isScheduled ? <CalendarClock className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
-              {isScheduled ? whenText : 'Сразу'}
-            </span>
-          </div>
-        </div>
-      </div>
+            {/* ── Когда отправить ───────────────────────────────────────── */}
+            <fieldset className="space-y-3 rounded-lg border border-line p-4">
+              <legend className="flex items-center gap-2 px-1 text-sm font-semibold text-ink">
+                <Clock className="h-4 w-4 text-ink-3" aria-hidden="true" />
+                Когда отправить
+              </legend>
 
-      {/* History */}
-      <div className="mt-10">
-        <div className="flex items-center gap-2 mb-4">
-          <History className="w-5 h-5 text-gray-500" />
-          <h2 className="text-lg font-semibold text-gray-900">История рассылок</h2>
-        </div>
+              <SegmentedControl<ScheduleMode>
+                aria-label="Время отправки"
+                value={scheduleMode}
+                onChange={setScheduleMode}
+                options={[
+                  { value: 'now', label: 'Сейчас' },
+                  { value: 'later', label: 'Запланировать' },
+                ]}
+              />
 
-        {historyLoading ? (
-          <div className="card card-body flex items-center justify-center py-10 text-gray-400">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            <span className="ml-2 text-sm">Загрузка...</span>
-          </div>
-        ) : historyError ? (
-          <div className="card card-body text-center py-10">
-            <p className="text-sm text-red-600">Не удалось загрузить историю рассылок.</p>
-            <button
-              type="button"
-              onClick={() => queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] })}
-              className="btn-secondary btn-sm mt-3"
-            >
-              Повторить
-            </button>
-          </div>
-        ) : !history || history.length === 0 ? (
-          <div className="card card-body text-center py-10 text-gray-400">
-            <Megaphone className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-            <p className="text-sm">Вы ещё не отправляли рассылок.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {history.map((item) => {
-              const isCancelled = item.cancelledAt !== null;
-              const isScheduledPending = !isCancelled && item.sentAt === null && item.scheduledAt !== null;
-              const isSent = !isCancelled && item.sentAt !== null;
-              const isCancelling = cancelMutation.isPending && cancelMutation.variables === item.id;
-              const segmentText = item.targetAll ? 'Всем' : describeSegment(item.segment, plans);
-              return (
-                <div
-                  key={item.id}
-                  className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3.5 flex items-start justify-between gap-4"
+              {scheduleMode === 'later' && (
+                <Field
+                  label="Дата и время"
+                  htmlFor={`${uid}-when`}
+                  error={scheduledAt && !scheduleValid ? 'Время отправки должно быть в будущем.' : undefined}
+                  className="max-w-xs"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-gray-900 truncate">{item.title}</span>
-                      {isCancelled ? (
-                        <span className="badge-red text-xs">Отменена</span>
-                      ) : isScheduledPending ? (
-                        <span className="badge-blue text-xs inline-flex items-center gap-1">
-                          <CalendarClock className="w-3 h-3" />
-                          Запланировано
-                        </span>
-                      ) : (
-                        <span className="badge-green text-xs inline-flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Отправлено
-                        </span>
-                      )}
-                      <span className="badge-gray text-xs inline-flex items-center gap-1" title={segmentText}>
-                        <Users className="w-3 h-3" />
-                        <span className="max-w-[220px] truncate">{segmentText}</span>
-                      </span>
+                  <Input
+                    id={`${uid}-when`}
+                    type="datetime-local"
+                    className="tabular-nums"
+                    value={scheduledAt}
+                    min={toLocalInputValue(new Date())}
+                    invalid={!!scheduledAt && !scheduleValid}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                  />
+                </Field>
+              )}
+            </fieldset>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+              <p className="text-xs text-ink-3">
+                {isScheduled ? `Отправится ${whenText}` : 'Отправится сразу после подтверждения'}
+              </p>
+              <Button
+                type="submit"
+                icon={isScheduled ? CalendarClock : Send}
+                disabled={!canSend}
+                loading={sendMutation.isPending}
+              >
+                {isScheduled ? 'Запланировать' : 'Отправить'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+
+        {/* Предпросмотр — прилипает при прокрутке длинного композера */}
+        <div className="lg:sticky lg:top-0">
+          <Card padding="none">
+            <CardHeader as="h2" title="Предпросмотр" subtitle="Так объявление увидит владелец" dense />
+            <div className="p-4">
+              <div className="flex min-h-[300px] items-center justify-center rounded-lg bg-surface-3 p-5">
+                <div
+                  className="w-full max-w-sm overflow-hidden rounded-xl border border-line bg-surface shadow-pop"
+                  aria-hidden="true"
+                >
+                  {imageUrl.trim() && (
+                    <img
+                      src={imageUrl.trim()}
+                      alt=""
+                      className="h-40 w-full bg-surface-2 object-cover"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  )}
+                  <div className="p-5">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent">
+                      <Megaphone className="h-6 w-6" />
                     </div>
-                    {item.body && <p className="text-sm text-gray-600 mt-1 line-clamp-2">{item.body}</p>}
-                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 flex-wrap">
-                      {isScheduledPending && item.scheduledAt ? (
-                        <span className="inline-flex items-center gap-1 text-blue-600">
-                          <Clock className="w-3.5 h-3.5" />
-                          отправка {format(parseISO(item.scheduledAt), 'd MMM yyyy, HH:mm', { locale: ru })}
+                    <h3 className="text-center text-md font-semibold text-ink">
+                      {title.trim() || 'Заголовок объявления'}
+                    </h3>
+                    <p className="mt-2 whitespace-pre-line text-center text-sm text-ink-2">
+                      {body.trim() || 'Здесь будет текст вашего объявления для владельцев автосервисов.'}
+                    </p>
+
+                    <div className="mt-5 space-y-2">
+                      {visibleButtons.length === 0 ? (
+                        <span className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent text-sm font-semibold text-white">
+                          <X className="h-4 w-4" />
+                          Понятно
                         </span>
-                      ) : isSent && item.sentAt ? (
-                        <span>отправлено {format(parseISO(item.sentAt), 'd MMM yyyy, HH:mm', { locale: ru })}</span>
                       ) : (
-                        <span>создано {format(parseISO(item.createdAt), 'd MMM yyyy, HH:mm', { locale: ru })}</span>
-                      )}
-                      {isSent && item.recipientCount > 0 && (
-                        <span className="inline-flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5" />
-                          {item.recipientCount} {item.recipientCount === 1 ? 'получатель' : 'получателей'}
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1">
-                        <Eye className="w-3.5 h-3.5" />
-                        {item.seenCount} {item.seenCount === 1 ? 'просмотр' : 'просмотров'}
-                      </span>
-                      {isCancelled && (
-                        <span>
-                          отменена {format(parseISO(item.cancelledAt as string), 'd MMM, HH:mm', { locale: ru })}
-                        </span>
+                        visibleButtons.map((b, i) => (
+                          <span
+                            key={i}
+                            className={cn(
+                              'flex h-10 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold',
+                              i === 0 ? 'bg-accent text-white' : 'bg-surface-3 text-ink',
+                            )}
+                          >
+                            {b.action === 'link' && <LinkIcon className="h-4 w-4" />}
+                            {b.label.trim()}
+                          </span>
+                        ))
                       )}
                     </div>
                   </div>
-
-                  {!isCancelled && (
-                    <button
-                      type="button"
-                      onClick={() => setCancelId(item.id)}
-                      disabled={isCancelling}
-                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-white border border-gray-200 hover:bg-red-50 hover:border-red-200 rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      {isCancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
-                      Отменить
-                    </button>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Badge icon={Users}>{targetMode === 'all' ? 'Всем' : 'Сегмент'}</Badge>
+                <Badge tone="accent" icon={isScheduled ? CalendarClock : Send}>
+                  {isScheduled ? whenText : 'Сразу'}
+                </Badge>
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
 
-      {/* Confirm: send / schedule new broadcast */}
+      {/* История */}
+      <Card padding="none">
+        <CardHeader
+          icon={History}
+          iconTone="neutral"
+          title="История рассылок"
+          subtitle={
+            history ? `${history.length} ${pluralRu(history.length, 'рассылка', 'рассылки', 'рассылок')}` : undefined
+          }
+          divider={!!history && history.length > 0}
+        />
+        {historyLoading ? (
+          <div className="space-y-4 px-5 pb-5" aria-busy="true">
+            <SkeletonText lines={2} />
+            <SkeletonText lines={2} />
+          </div>
+        ) : (
+          <QueryState
+            isLoading={false}
+            isError={historyError}
+            onRetry={refetchHistory}
+            isFetching={historyFetching}
+            errorTitle="Не удалось загрузить историю рассылок"
+            isEmpty={!history || history.length === 0}
+            empty={{ icon: Megaphone, title: 'Вы ещё не отправляли рассылок' }}
+            minHeight="py-10"
+          >
+            <ul className="divide-y divide-line">
+              {(history ?? []).map((item) => {
+                const isCancelled = item.cancelledAt !== null;
+                const isScheduledPending = !isCancelled && item.sentAt === null && item.scheduledAt !== null;
+                const isSent = !isCancelled && item.sentAt !== null;
+                const isCancelling = cancelMutation.isPending && cancelMutation.variables === item.id;
+                const segmentText = item.targetAll ? 'Всем' : describeSegment(item.segment, plans);
+                return (
+                  <li key={item.id} className="flex items-start justify-between gap-4 px-5 py-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-sm font-semibold text-ink">{item.title}</h3>
+                        {isCancelled ? (
+                          <StatusPill tone="bad">Отменена</StatusPill>
+                        ) : isScheduledPending ? (
+                          <StatusPill tone="info">Запланирована</StatusPill>
+                        ) : (
+                          <StatusPill tone="ok">Отправлена</StatusPill>
+                        )}
+                        <Badge icon={Users} title={segmentText} className="max-w-[260px]">
+                          {segmentText}
+                        </Badge>
+                      </div>
+                      {item.body && <p className="mt-1 line-clamp-2 text-sm text-ink-2">{item.body}</p>}
+                      <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-ink-3">
+                        {isScheduledPending && item.scheduledAt ? (
+                          <span className="inline-flex items-center gap-1 text-info-text">
+                            <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                            отправка {formatDateRu(item.scheduledAt)}
+                          </span>
+                        ) : isSent && item.sentAt ? (
+                          <span className="inline-flex items-center gap-1">
+                            <CheckCircle2 className="h-3.5 w-3.5 text-ok" aria-hidden="true" />
+                            отправлено {formatDateRu(item.sentAt)}
+                          </span>
+                        ) : (
+                          <span>создано {formatDateRu(item.createdAt)}</span>
+                        )}
+                        {isSent && item.recipientCount > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                            {item.recipientCount}{' '}
+                            {pluralRu(item.recipientCount, 'получатель', 'получателя', 'получателей')}
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1">
+                          <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                          {item.seenCount} {pluralRu(item.seenCount, 'просмотр', 'просмотра', 'просмотров')}
+                        </span>
+                        {isCancelled && (
+                          <span>отменена {formatDateRu(item.cancelledAt as string, 'd MMM, HH:mm')}</span>
+                        )}
+                      </p>
+                    </div>
+
+                    {!isCancelled && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={Ban}
+                        onClick={() => setCancelId(item.id)}
+                        loading={isCancelling}
+                        className="flex-shrink-0 text-bad-text"
+                      >
+                        Отменить
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </QueryState>
+        )}
+      </Card>
+
+      {/* Подтверждение отправки / планирования */}
       <ConfirmDialog
         isOpen={confirmSendOpen}
         onClose={() => setConfirmSendOpen(false)}
@@ -705,7 +701,7 @@ export default function AdminBroadcastPage() {
         variant="primary"
       />
 
-      {/* Confirm: cancel an active / scheduled broadcast */}
+      {/* Подтверждение отмены активной / запланированной рассылки */}
       <ConfirmDialog
         isOpen={!!cancelId}
         onClose={() => setCancelId(null)}

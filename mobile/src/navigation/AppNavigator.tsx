@@ -36,6 +36,8 @@ import SalaryScreen from '../screens/SalaryScreen';
 import SalaryEmployeeScreen from '../screens/SalaryEmployeeScreen';
 import MotivationScreen from '../screens/MotivationScreen';
 import ReportsScreen from '../screens/ReportsScreen';
+import ReportsHubScreen from '../screens/reports/ReportsHubScreen';
+import ReportRunScreen from '../screens/reports/ReportRunScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
 import CashShiftScreen from '../screens/CashShiftScreen';
 import InstallmentsScreen from '../screens/InstallmentsScreen';
@@ -171,7 +173,13 @@ const GatedSuppliers = gated('suppliers_view', SuppliersScreen);
 const GatedPurchaseOrders = gated('suppliers_view', PurchaseOrdersScreen);
 const GatedCashFlow = gated('cashflow_view', CashFlowScreen);
 const GatedSalary = gated('salary_view', SalaryScreen);
-const GatedReports = gated('reports_view', ReportsScreen);
+// «Отчёты» (2026-09-25): маршрут Reports ведёт в хаб конструктора отчётов,
+// старый финансовый экран живёт под FinancialReport, один отчёт — ReportRun
+// ({ reportId }). Все три под одним фича-гейтом reports_view, права на
+// конкретные отчёты считает сервер (GET /reports/builder/catalog).
+const GatedReports = gated('reports_view', ReportsHubScreen);
+const GatedFinancialReport = gated('reports_view', ReportsScreen);
+const GatedReportRun = gated('reports_view', ReportRunScreen);
 const GatedUsers = gated('users_manage', UsersScreen);
 // Роли (Bitrix24-style, 114) — часть управления пользователями, поэтому тот же
 // subscription-gate 'users_manage'. Module-scope identity — как у остальных
@@ -494,6 +502,8 @@ function MoreStackNavigator() {
           navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning' } }). */}
       <MoreStack.Screen name="Planning" component={PlanningScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
+      <MoreStack.Screen name="FinancialReport" component={GatedFinancialReport} />
+      <MoreStack.Screen name="ReportRun" component={GatedReportRun} />
       {/* «Маркетинг» hub → four direction sub-screens. All live in MoreStack so
           the floating tab bar stays visible and back-nav steps in-section
           (sub-screen → Маркетинг → Ещё). */}

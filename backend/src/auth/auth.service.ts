@@ -48,6 +48,10 @@ const USER_WITH_TENANT_COLUMNS = `
       -- company_manage (мастер получил бы 403 и остался без пояса). Поле
       -- аддитивное — старые сборки его просто игнорируют.
       'timezone',COALESCE(NULLIF(btrim(t.timezone),''),'Europe/Moscow'),
+      -- 171 — опция «VIN-код автомобиля» едет тем же путём и по той же причине,
+      -- что timezone: мастеру в Кассе нужно знать, показывать ли поле VIN и
+      -- режим поиска по VIN, а /my-company закрыт ключом company_manage.
+      'vinEnabled',COALESCE(t.vin_enabled,false),
       'subscriptionEnd',t.subscription_end,
       'subscriptionNote',COALESCE(t.subscription_note,''),
       'createdAt',t.created_at,'updatedAt',t.updated_at)::text

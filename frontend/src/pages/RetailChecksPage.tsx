@@ -1,32 +1,31 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ShoppingBag, FileText } from 'lucide-react';
+import { FileText, ShoppingBag } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { checksApi } from '../api/services';
-import QueryState from '../components/QueryState';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { zoned } from '../utils/tenantTime';
+import PageHeader from '../components/PageHeader';
 import Pagination from '../components/Pagination';
-import { useClickableRow } from '../hooks/useClickableRow';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Money } from '../ui/Money';
+import { CheckStatusBadge, PaymentBadge } from '../components/checks/checkBadges';
 import type { Check, PaginatedResponse } from '../types';
-import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
-const clickableRowProps = useClickableRow;
+const LIMIT = 20;
+/** Сортируемый заголовок DataTable: кнопка flex-row-reverse уезжает по базовой линии — выравниваем по середине. */
+const SORT_HEADER_FIX = '[&>button]:align-middle';
 
-const paymentMethodBadge: Record<string, string> = {
-  cash: 'badge-green',
-  card: 'badge-blue',
-  warranty: 'badge-yellow',
-  cash_card: 'badge-gray',
-  installment: 'badge-blue',
-};
-
+/**
+ * Чеки «Розничного покупателя» — продажи без привязки к клиенту. Точка входа —
+ * карточка «Розничный покупатель» на странице «Клиенты» (G2). Страница в URL
+ * (?page=), строки — ссылки на деталь чека.
+ */
 export default function RetailChecksPage() {
-  const navigate = useNavigate();
-  const [page, setPage] = useState(1);
-  const limit = 20;
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
+  const timeZone = useTenantTimezone();
 
   const {
     data: checksData,
@@ -37,7 +36,7 @@ export default function RetailChecksPage() {
   } = useQuery<PaginatedResponse<Check>>({
     queryKey: ['checks', 'retail', page],
     queryFn: async () => {
-      const res = await checksApi.getAll({ page, limit, retail: 'true' });
+      const res = await checksApi.getAll({ page, limit: LIMIT, retail: 'true' });
       return res.data;
     },
   });
@@ -45,126 +44,76 @@ export default function RetailChecksPage() {
   const checks = checksData?.data ?? [];
   const total = checksData?.total ?? 0;
 
+  const columns: DataTableColumn<Check>[] = [
+    {
+      key: 'number',
+      header: '№',
+      primary: true,
+      width: 72,
+      render: (c) => <span className="tabular-nums">{c.number}</span>,
+    },
+    {
+      key: 'date',
+      header: 'Дата',
+      sortable: true,
+      width: 160,
+      className: 'whitespace-nowrap',
+      headerClassName: SORT_HEADER_FIX,
+      sortValue: (c) => c.date,
+      render: (c) => (
+        <span className="tabular-nums">
+          {format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
+          <span className="ml-1.5 text-xs text-ink-3">{format(zoned(c.date, timeZone), 'HH:mm')}</span>
+        </span>
+      ),
+    },
+    { key: 'master', header: 'Мастер', hideBelow: 'md', render: (c) => c.master?.fullName ?? '—' },
+    {
+      key: 'total',
+      header: 'Сумма',
+      numeric: true,
+      sortable: true,
+      width: 140,
+      headerClassName: SORT_HEADER_FIX,
+      sortValue: (c) => c.totalRevenue,
+      render: (c) => (
+        <Money value={c.totalRevenue} className={c.isReturned ? 'text-ink-3 line-through' : 'font-semibold text-ink'} />
+      ),
+      footer: (rows) => <Money value={rows.reduce((s, c) => s + (c.totalRevenue || 0), 0)} />,
+    },
+    { key: 'payment', header: 'Оплата', hideBelow: 'sm', render: (c) => <PaymentBadge check={c} /> },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (c) => <CheckStatusBadge check={c} />,
+      footer: <span className="text-xs font-medium text-ink-3">Итого на странице</span>,
+    },
+  ];
+
   return (
-    <div>
-      <button onClick={() => navigate('/clients')} className="btn-secondary mb-4">
-        <ArrowLeft className="w-4 h-4" />
-        Назад к клиентам
-      </button>
+    <div className="space-y-5">
+      <PageHeader
+        title="Розничный покупатель"
+        icon={ShoppingBag}
+        backTo="/clients"
+        subtitle={total > 0 ? `Чеки без привязки к клиенту · ${total}` : 'Чеки без привязки к клиенту'}
+      />
 
-      {/* Retail buyer header */}
-      <div className="card p-6 mb-6">
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100">
-            <ShoppingBag className="h-6 w-6 text-blue-600" />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">Розничный покупатель</h2>
-            <p className="text-sm text-gray-500">Чеки без привязки к клиенту</p>
-          </div>
-          <div className="ml-auto text-right">
-            <p className="text-sm text-gray-500">Всего чеков</p>
-            <p className="text-xl font-bold text-gray-900 tabular-nums">{total}</p>
-          </div>
-        </div>
-      </div>
+      <DataTable
+        caption="Чеки розничного покупателя"
+        columns={columns}
+        rows={checks}
+        rowKey={(c) => c.id}
+        rowHref={(c) => `/checks/${c.id}`}
+        rowLabel={(c) => `Чек №${c.number}`}
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        emptyState={{ icon: FileText, title: 'Нет чеков', description: 'Розничных продаж без клиента пока не было' }}
+      />
 
-      {/* Checks list */}
-      <div className="card p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Чеки</h2>
-
-        <QueryState
-          isLoading={isLoading}
-          isError={isError}
-          onRetry={refetch}
-          isFetching={isFetching}
-          isEmpty={checks.length === 0}
-          empty={{ icon: FileText, title: 'Нет чеков', description: 'Нет чеков на розничного покупателя' }}
-        >
-          <>
-            {/* Mobile cards */}
-            <div className="md:hidden space-y-3">
-              {checks.map((check) => (
-                <div
-                  key={check.id}
-                  {...clickableRowProps(() => navigate(`/checks/${check.id}`), { label: `Чек №${check.number}` })}
-                  className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
-                    check.isDeferred ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-gray-900">#{check.number}</span>
-                      <span className="text-xs text-gray-400">
-                        {format(new Date(check.date), 'dd.MM.yy', { locale: ru })}
-                      </span>
-                      {check.isDeferred && (
-                        <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
-                          Отложен
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-sm font-bold text-gray-900 tabular-nums">
-                      {formatMoney(check.totalRevenue)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-gray-700 truncate">{check.master?.fullName ?? '\u2014'}</p>
-                    </div>
-                    <span className={`ml-2 flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-                      {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Desktop table */}
-            <div className="hidden md:block table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Дата</th>
-                    <th>Мастер</th>
-                    <th>Сумма</th>
-                    <th>Оплата</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {checks.map((check) => (
-                    <tr
-                      key={check.id}
-                      {...clickableRowProps(() => navigate(`/checks/${check.id}`), { label: `Чек №${check.number}` })}
-                      className={`cursor-pointer hover:bg-gray-50 ${check.isDeferred ? 'bg-red-50' : ''}`}
-                    >
-                      <td className="font-medium">
-                        <span>{check.number}</span>
-                        {check.isDeferred && (
-                          <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
-                            Отложен
-                          </span>
-                        )}
-                      </td>
-                      <td>{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</td>
-                      <td>{check.master?.fullName ?? '\u2014'}</td>
-                      <td className="font-semibold tabular-nums">{formatMoney(check.totalRevenue)}</td>
-                      <td>
-                        <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
-                          {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-          </>
-        </QueryState>
-      </div>
+      <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParams({ page: String(p) })} />
     </div>
   );
 }

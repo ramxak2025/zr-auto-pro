@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Gift, Percent } from 'lucide-react';
+import { Gift, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { loyaltyApi } from '../../api/services';
 import type { LoyaltySettings } from '../../types';
-import { LoadingBlock, SaveButton, SectionCard, Toggle } from './marketingKit';
+import { Field } from '../../ui/Field';
+import { Input } from '../../ui/Input';
+import { InfoNote, LoadingBlock, SaveButton, SectionCard, SectionError, Toggle } from './marketingKit';
 
 export default function LoyaltyView() {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['loyalty', 'settings'],
     queryFn: () => loyaltyApi.getSettings().then((r) => r.data),
   });
@@ -37,75 +45,79 @@ export default function LoyaltyView() {
     onError: () => toast.error('Ошибка сохранения'),
   });
 
-  if (isLoading || !settings) return <LoadingBlock />;
-
   return (
-    <div className="space-y-5">
+    <div className="max-w-3xl space-y-5">
       <SectionCard
         icon={Gift}
-        iconClass="bg-rose-50 text-rose-600"
+        iconTone="accent"
         title="Программа лояльности"
         subtitle="Бонусы клиентам за заказы — начисление и списание при оплате"
-        right={<Toggle checked={!!form.enabled} onChange={(v) => set({ enabled: v })} label="Программа лояльности" />}
+        right={
+          settings ? (
+            <Toggle checked={!!form.enabled} onChange={(v) => set({ enabled: v })} label="Программа лояльности" />
+          ) : undefined
+        }
       >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Начисление, % от чека</label>
-              <div className="flex items-center">
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
+        {isLoading ? (
+          <LoadingBlock lines={2} />
+        ) : isError || !settings ? (
+          <SectionError
+            message="Не удалось загрузить настройки лояльности"
+            onRetry={() => refetch()}
+            loading={isFetching}
+          />
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field
+                label="Начисление, % от чека"
+                htmlFor="loyalty-accrual"
+                hint="Сколько бонусов начисляется с каждого заказа"
+              >
+                <Input
+                  id="loyalty-accrual"
+                  inputMode="numeric"
                   value={form.accrualPercent ?? 0}
                   onChange={(e) => set({ accrualPercent: clampPct(parseInt(e.target.value) || 0) })}
-                  className="input rounded-r-none"
+                  rightSlot={<span className="text-sm text-ink-3">%</span>}
                 />
-                <span className="flex items-center rounded-r-lg border border-l-0 border-gray-300 bg-gray-100 px-3 py-2.5 text-gray-500">
-                  <Percent className="h-4 w-4" />
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-gray-400">Сколько бонусов начисляется с каждого заказа</p>
-            </div>
-            <div>
-              <label className="label">Оплата бонусами, до %</label>
-              <div className="flex items-center">
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
+              </Field>
+              <Field
+                label="Оплата бонусами, до %"
+                htmlFor="loyalty-redeem"
+                hint="Какую часть чека можно закрыть бонусами"
+              >
+                <Input
+                  id="loyalty-redeem"
+                  inputMode="numeric"
                   value={form.redeemMaxPercent ?? 0}
                   onChange={(e) => set({ redeemMaxPercent: clampPct(parseInt(e.target.value) || 0) })}
-                  className="input rounded-r-none"
+                  rightSlot={<span className="text-sm text-ink-3">%</span>}
                 />
-                <span className="flex items-center rounded-r-lg border border-l-0 border-gray-300 bg-gray-100 px-3 py-2.5 text-gray-500">
-                  <Percent className="h-4 w-4" />
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-gray-400">Какую часть чека можно закрыть бонусами</p>
+              </Field>
             </div>
+
+            {!form.enabled && (
+              <InfoNote icon={Info}>
+                Программа выключена: новые бонусы не начисляются, но накопленные клиентами бонусы остаются и их можно
+                списать.
+              </InfoNote>
+            )}
+
+            {dirty && (
+              <SaveButton
+                onClick={() =>
+                  save.mutate({
+                    enabled: form.enabled,
+                    accrualPercent: form.accrualPercent,
+                    redeemMaxPercent: form.redeemMaxPercent,
+                  })
+                }
+                saving={save.isPending}
+              />
+            )}
           </div>
-
-          {!form.enabled && (
-            <p className="rounded-xl bg-gray-50 px-3.5 py-3 text-xs text-gray-500">
-              Программа выключена: новые бонусы не начисляются, но накопленные клиентами бонусы остаются и их можно
-              списать.
-            </p>
-          )}
-
-          {dirty && (
-            <SaveButton
-              onClick={() =>
-                save.mutate({
-                  enabled: form.enabled,
-                  accrualPercent: form.accrualPercent,
-                  redeemMaxPercent: form.redeemMaxPercent,
-                })
-              }
-              saving={save.isPending}
-            />
-          )}
-        </div>
+        )}
       </SectionCard>
     </div>
   );

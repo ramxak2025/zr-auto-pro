@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import {
@@ -12,20 +12,37 @@ import {
   ArrowLeft,
   Users,
   Car as CarIcon,
-  Loader2,
   RefreshCw,
+  Check,
+  type LucideIcon,
 } from 'lucide-react';
 import { importsApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
+import { formatVin } from '../../../shared/utils/vin';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
+import { useVinEnabled } from '../hooks/useVinEnabled';
 import ConfirmDialog from '../components/ConfirmDialog';
+import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import { Badge } from '../ui/Badge';
+import { Button, buttonClasses } from '../ui/Button';
+import { Card, CardBody, CardHeader } from '../ui/Card';
+import { Checkbox } from '../ui/Checkbox';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Field } from '../ui/Field';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { Select } from '../ui/Select';
+import { StatCard } from '../ui/StatCard';
+import { cn } from '../ui/cn';
+import { toneChip, toneSoft, type Tone } from '../ui/tokens';
 import type {
   ImportRowInput,
   ImportPreviewResponse,
   ImportConfirmResponse,
   ImportConfirmRequest,
   ImportClientGroup,
+  ImportPlannedCar,
   ImportRowIssue,
   ImportIssueKind,
 } from '../../../shared/api/types';
@@ -76,6 +93,7 @@ type CanonicalField =
   | 'phoneRaw'
   | 'carPlate'
   | 'carModel'
+  | 'carVin'
   | 'clientComment'
   | 'notes'
   | 'originalClientText';
@@ -86,12 +104,15 @@ const FIELD_LABELS: Record<CanonicalField, string> = {
   phone: 'Телефон (нормализованный)',
   phoneRaw: 'Телефон (как в файле)',
   carPlate: 'Госномер',
-  carModel: 'Марка/модель авто',
+  carModel: 'Марка и модель авто',
+  carVin: 'VIN',
   clientComment: 'Комментарий клиента',
   notes: 'Пометки качества данных',
   originalClientText: 'Исходный текст клиента',
 };
 
+// Полный порядок полей; «VIN» показывается только при включённой опции
+// (171) — при выключенной мастер маппинга байт-в-байт прежний.
 const FIELD_ORDER: CanonicalField[] = [
   'sourceRow',
   'clientName',
@@ -99,10 +120,24 @@ const FIELD_ORDER: CanonicalField[] = [
   'phoneRaw',
   'carPlate',
   'carModel',
+  'carVin',
   'clientComment',
   'notes',
   'originalClientText',
 ];
+
+const EMPTY_COLUMN_MAP: Record<CanonicalField, number> = {
+  sourceRow: -1,
+  clientName: -1,
+  phone: -1,
+  phoneRaw: -1,
+  carPlate: -1,
+  carModel: -1,
+  carVin: -1,
+  clientComment: -1,
+  notes: -1,
+  originalClientText: -1,
+};
 
 // Auto-detect a column index for each canonical field by header keyword.
 function detectColumnMapping(headers: string[]): Record<CanonicalField, number> {
@@ -111,17 +146,7 @@ function detectColumnMapping(headers: string[]): Record<CanonicalField, number> 
       .trim()
       .toLowerCase(),
   );
-  const map: Record<CanonicalField, number> = {
-    sourceRow: -1,
-    clientName: -1,
-    phone: -1,
-    phoneRaw: -1,
-    carPlate: -1,
-    carModel: -1,
-    clientComment: -1,
-    notes: -1,
-    originalClientText: -1,
-  };
+  const map: Record<CanonicalField, number> = { ...EMPTY_COLUMN_MAP };
   lower.forEach((h, i) => {
     if (!h) return;
     if (map.sourceRow < 0 && /(source.?row|номер.?строк|row.?num|^№$|^id$)/.test(h)) map.sourceRow = i;
@@ -137,6 +162,10 @@ function detectColumnMapping(headers: string[]): Record<CanonicalField, number> 
       map.phone = i;
     } else if (map.phoneRaw < 0 && /(phone_raw|phone.?raw|phoneraw|телефон.?сыр|raw.?phone)/.test(h)) {
       map.phoneRaw = i;
+    } else if (map.carVin < 0 && /(^vin$|\bvin\b|car_vin|car.?vin|vin.?код|^вин$|вин.?код|вин.?номер)/.test(h)) {
+      // 171 — «VIN» / «car_vin» из шаблона сервера. Раньше проверки госномера и
+      // модели: «VIN авто» иначе ушёл бы в марку/модель по слову «авто».
+      map.carVin = i;
     } else if (map.carPlate < 0 && /(plate|госном|номер.?авт|car_plate|плашк)/.test(h)) {
       map.carPlate = i;
     } else if (map.carModel < 0 && /(model|марк|car_model|car.?make|модель|авто)/.test(h)) {
@@ -169,6 +198,9 @@ const ISSUE_LABELS: Record<ImportIssueKind, string> = {
   duplicate_in_file: 'Повтор в файле',
   multiple_name_candidates: 'Несколько имён на один телефон',
   name_conflict_same_phone: 'Конфликт имени',
+  // 171 — колонка VIN (учитывается только при включённой опции «VIN-код автомобиля»).
+  invalid_vin: 'VIN не распознан',
+  duplicate_vin: 'VIN уже занят или повторяется',
 };
 
 // `duplicate_phone` is emitted by the backend for duplicate-skips — it is not
@@ -200,30 +232,35 @@ const SEVERITY: Record<ImportIssueKind, 'error' | 'warning'> = {
   duplicate_in_file: 'warning',
   multiple_name_candidates: 'warning',
   name_conflict_same_phone: 'warning',
+  invalid_vin: 'warning',
+  duplicate_vin: 'warning',
 };
 
 type Step = 'upload' | 'mapping' | 'preview' | 'done';
+const STEPS: { key: Step; label: string }[] = [
+  { key: 'upload', label: 'Загрузка' },
+  { key: 'mapping', label: 'Колонки' },
+  { key: 'preview', label: 'Проверка' },
+  { key: 'done', label: 'Готово' },
+];
+
+/** Пять первых строк файла — «как мы их прочитали» по текущему маппингу. */
+interface SampleRow {
+  idx: number;
+  cells: Partial<Record<CanonicalField, string>>;
+}
 
 export default function ImportClientsCarsPage() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
+  const vinEnabled = useVinEnabled();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>('upload');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<string[][]>([]);
-  const [columnMap, setColumnMap] = useState<Record<CanonicalField, number>>(() => ({
-    sourceRow: -1,
-    clientName: -1,
-    phone: -1,
-    phoneRaw: -1,
-    carPlate: -1,
-    carModel: -1,
-    clientComment: -1,
-    notes: -1,
-    originalClientText: -1,
-  }));
+  const [columnMap, setColumnMap] = useState<Record<CanonicalField, number>>(() => ({ ...EMPTY_COLUMN_MAP }));
   const [allowForeignPlates, setAllowForeignPlates] = useState(true);
 
   const [previewing, setPreviewing] = useState(false);
@@ -235,6 +272,9 @@ export default function ImportClientsCarsPage() {
   // Duplicate decisions: global default + per-group overrides (key = phoneKey).
   const [dupDefault, setDupDefault] = useState<DuplicateAction>('skip');
   const [dupOverrides, setDupOverrides] = useState<Record<string, DuplicateAction>>({});
+
+  // Поля мастера: VIN — только при включённой опции.
+  const fields = useMemo(() => (vinEnabled ? FIELD_ORDER : FIELD_ORDER.filter((f) => f !== 'carVin')), [vinEnabled]);
 
   // ─── Permission gate ──────────────────────────────────────────────────────
   // Импорт создаёт/меняет клиентов и авто — backend imports/ гейтится ключом
@@ -343,6 +383,8 @@ export default function ImportClientsCarsPage() {
         phoneRaw: cell(columnMap.phoneRaw) || null,
         carPlate: cell(columnMap.carPlate) || null,
         carModel: cell(columnMap.carModel) || null,
+        // 171 — VIN уходит только при включённой опции; сервер нормализует сам.
+        ...(vinEnabled ? { carVin: cell(columnMap.carVin) || null } : {}),
         clientComment: cell(columnMap.clientComment) || null,
         notes: cell(columnMap.notes) || null,
         originalClientText: cell(columnMap.originalClientText) || null,
@@ -368,10 +410,7 @@ export default function ImportClientsCarsPage() {
       setDupDefault('skip');
       setStep('preview');
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        (err instanceof Error ? err.message : 'Не удалось получить предпросмотр');
-      toast.error(msg);
+      toast.error(apiErrorMessage(err) || (err instanceof Error ? err.message : 'Не удалось получить предпросмотр'));
     } finally {
       setPreviewing(false);
     }
@@ -404,10 +443,7 @@ export default function ImportClientsCarsPage() {
           `, авто: ${data.summary.carsWillCreate}.`,
       );
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        (err instanceof Error ? err.message : 'Не удалось выполнить импорт');
-      toast.error(msg);
+      toast.error(apiErrorMessage(err) || (err instanceof Error ? err.message : 'Не удалось выполнить импорт'));
     } finally {
       setConfirming(false);
     }
@@ -425,8 +461,17 @@ export default function ImportClientsCarsPage() {
         ['Дмитриев Дмитрий', '89887654321', 'В456ЕК05', 'Lada Priora', ''],
         ['Петров Пётр', '9001112233', '', '', 'Клиент без авто — можно оставить госномер пустым'],
       ];
+      const cols = [{ wch: 28 }, { wch: 20 }, { wch: 14 }, { wch: 24 }, { wch: 44 }];
+      if (vinEnabled) {
+        // 171 — колонка VIN после марки/модели; распознаётся автодетектом («VIN»).
+        headers.splice(4, 0, 'VIN');
+        examples[0].splice(4, 0, 'XTA219010K0123456');
+        examples[1].splice(4, 0, '');
+        examples[2].splice(4, 0, '');
+        cols.splice(4, 0, { wch: 20 });
+      }
       const ws = XLSX.utils.aoa_to_sheet([headers, ...examples]);
-      ws['!cols'] = [{ wch: 28 }, { wch: 20 }, { wch: 14 }, { wch: 24 }, { wch: 44 }];
+      ws['!cols'] = cols;
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Клиенты');
       XLSX.writeFile(wb, 'Шаблон импорта клиентов Autexa.xlsx');
@@ -491,549 +536,537 @@ export default function ImportClientsCarsPage() {
     return out;
   }, [preview]);
 
+  const sampleRows = useMemo<SampleRow[]>(
+    () =>
+      rawRows.slice(0, 5).map((row, idx) => {
+        const cells: Partial<Record<CanonicalField, string>> = {};
+        for (const f of fields) {
+          const i = columnMap[f];
+          cells[f] = i >= 0 ? String(row[i] ?? '') : '';
+        }
+        return { idx, cells };
+      }),
+    [rawRows, columnMap, fields],
+  );
+
+  const headerOptions = useMemo(
+    () => [
+      { value: '-1', label: '— не использовать —' },
+      ...headers.map((h, i) => ({ value: String(i), label: h || `(колонка ${i + 1})` })),
+    ],
+    [headers],
+  );
+
   if (!canImport) {
     return (
-      <div className="max-w-2xl mx-auto py-12 text-center">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Импорт клиентов и автомобилей</h1>
-        <p className="text-gray-500">Импорт доступен только директору, администратору или владельцу сервиса.</p>
+      <div className="space-y-5">
+        <PageHeader backTo="/clients" title="Импорт клиентов и авто" />
+        <Card>
+          <EmptyState
+            icon={Upload}
+            title="Импорт недоступен"
+            description="Импорт доступен директору, администратору или владельцу сервиса — нужно право на редактирование клиентов."
+            action={{ label: 'К списку клиентов', onClick: () => navigate('/clients') }}
+          />
+        </Card>
       </div>
     );
   }
 
   if (isMobileViewport) {
     return (
-      <div className="max-w-md mx-auto py-12 px-4 text-center">
-        <div className="mx-auto h-16 w-16 rounded-2xl bg-primary-50 flex items-center justify-center mb-4">
-          <FileSpreadsheet className="h-8 w-8 text-primary-600" />
-        </div>
-        <h1 className="text-xl font-semibold text-gray-900 mb-2">Откройте на компьютере</h1>
-        <p className="text-sm text-gray-500 mb-6">
-          Импорт больших Excel/CSV-файлов с сопоставлением колонок неудобен на телефоне. Откройте Autexa на ноутбуке или
-          ПК — там этот раздел появится в «Клиентах».
-        </p>
-        <button onClick={() => navigate('/clients')} className="btn-primary inline-flex">
-          <ArrowLeft className="w-4 h-4" />
-          Назад к клиентам
-        </button>
+      <div className="space-y-5">
+        <PageHeader backTo="/clients" title="Импорт клиентов и авто" />
+        <Card>
+          <EmptyState
+            icon={FileSpreadsheet}
+            title="Откройте на компьютере"
+            description="Импорт больших Excel/CSV-файлов с сопоставлением колонок неудобен на телефоне. Откройте Autexa на ноутбуке или ПК — раздел появится в «Клиентах»."
+            action={{ label: 'Назад к клиентам', onClick: () => navigate('/clients') }}
+          />
+        </Card>
       </div>
     );
   }
 
+  const stepIndex = STEPS.findIndex((s) => s.key === step);
+
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-6xl mx-auto pb-20">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/clients')}
-            className="p-2 -ml-2 text-gray-500 hover:text-gray-900 rounded-lg hover:bg-gray-100"
-            title="Назад"
+    <div className="space-y-5 pb-10">
+      <PageHeader
+        backTo="/clients"
+        icon={Upload}
+        title="Импорт клиентов и авто"
+        subtitle="Excel или CSV → клиенты и их автомобили"
+        actions={
+          <Button
+            variant="secondary"
+            icon={Download}
+            onClick={downloadTemplate}
+            title={`Excel-файл с колонками: имя, телефон, госномер, марка и модель${vinEnabled ? ', VIN' : ''}, комментарий`}
           >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <h1 className="page-title mb-0">Импорт клиентов и авто</h1>
-            <p className="text-sm text-gray-500">Excel/CSV → клиенты и их автомобили</p>
-          </div>
-        </div>
-        <button
-          onClick={downloadTemplate}
-          className="btn-secondary"
-          title="Excel-файл с колонками: имя, телефон, госномер, марка и модель, комментарий"
-        >
-          <Download className="w-4 h-4" />
-          Скачать шаблон (Excel)
-        </button>
-      </div>
+            Скачать шаблон (Excel)
+          </Button>
+        }
+      />
 
       {/* Stepper */}
-      <div className="mb-6 grid grid-cols-4 gap-2">
-        {(['upload', 'mapping', 'preview', 'done'] as Step[]).map((s, i) => {
-          const labels: Record<Step, string> = {
-            upload: '1. Загрузка',
-            mapping: '2. Колонки',
-            preview: '3. Проверка',
-            done: '4. Готово',
-          };
-          const isCurrent = step === s;
-          const isPast =
-            (step === 'mapping' && i === 0) || (step === 'preview' && i <= 1) || (step === 'done' && i <= 2);
+      <ol className="grid grid-cols-4 gap-2" aria-label="Шаги импорта">
+        {STEPS.map((s, i) => {
+          const isCurrent = i === stepIndex;
+          const isPast = i < stepIndex;
           return (
-            <div
-              key={s}
-              className={`text-xs font-semibold rounded-lg px-3 py-2 text-center border ${
+            <li
+              key={s.key}
+              aria-current={isCurrent ? 'step' : undefined}
+              className={cn(
+                'flex h-9 items-center justify-center gap-2 rounded-lg border text-xs font-semibold',
                 isCurrent
-                  ? 'bg-primary-600 text-white border-primary-600'
+                  ? 'border-accent bg-accent text-white'
                   : isPast
-                    ? 'bg-primary-50 text-primary-700 border-primary-200'
-                    : 'bg-gray-50 text-gray-400 border-gray-100'
-              }`}
+                    ? 'border-accent/30 bg-accent-soft text-accent-text'
+                    : 'border-line bg-surface text-ink-3',
+              )}
             >
-              {labels[s]}
-            </div>
+              <span
+                className={cn(
+                  'flex h-5 w-5 items-center justify-center rounded-full text-2xs tabular-nums',
+                  isCurrent ? 'bg-white/20' : isPast ? 'bg-accent/15' : 'bg-surface-3',
+                )}
+                aria-hidden="true"
+              >
+                {isPast ? <Check className="h-3 w-3" /> : i + 1}
+              </span>
+              {s.label}
+            </li>
           );
         })}
-      </div>
+      </ol>
 
       {/* Step 1: Upload */}
       {step === 'upload' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
-          <div className="mx-auto h-16 w-16 rounded-2xl bg-primary-50 flex items-center justify-center mb-4">
-            <FileSpreadsheet className="h-8 w-8 text-primary-600" />
+        <Card padding="md">
+          <div className="mx-auto max-w-lg py-6 text-center">
+            <span className={cn('mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl', toneChip.accent)}>
+              <FileSpreadsheet className="h-7 w-7" aria-hidden="true" />
+            </span>
+            <h2 className="text-md font-semibold text-ink">Загрузите файл с клиентами и авто</h2>
+            <p className="mt-2 text-sm text-ink-3">
+              Excel (.xlsx, .xls) или CSV. Один телефон с разными госномерами — это один клиент с несколькими авто.
+              Сотрудников и пользователей не импортируем.
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              aria-label="Файл импорта"
+              onChange={handleFileChange}
+            />
+            <Button icon={Upload} onClick={() => fileInputRef.current?.click()} className="mt-6">
+              Выбрать файл
+            </Button>
+            <p className="mt-6 text-xs text-ink-3">
+              Проще всего — скачать шаблон Excel (кнопка сверху) и вставить данные в колонки: имя, телефон, госномер,
+              марка и модель{vinEnabled ? ', VIN' : ''}, комментарий. Если названия колонок другие — на следующем шаге
+              сопоставите вручную.
+            </p>
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Загрузите файл с клиентами и авто</h2>
-          <p className="text-sm text-gray-500 mb-6 max-w-md mx-auto">
-            Excel (.xlsx, .xls) или CSV. Один телефон с разными госномерами — это один клиент с несколькими авто.
-            Сотрудников/пользователей не импортируем.
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            className="hidden"
-            onChange={handleFileChange}
-          />
-          <button onClick={() => fileInputRef.current?.click()} className="btn-primary inline-flex">
-            <Upload className="w-4 h-4" />
-            Выбрать файл
-          </button>
-          <div className="mt-6 text-xs text-gray-400">
-            Проще всего — скачать шаблон Excel (кнопка сверху) и вставить данные в колонки: имя, телефон, госномер,
-            марка и модель, комментарий. Если названия колонок другие — на следующем шаге сопоставите вручную.
-          </div>
-        </div>
+        </Card>
       )}
 
       {/* Step 2: Mapping */}
       {step === 'mapping' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Сопоставьте колонки</h2>
-              <p className="text-sm text-gray-500">
-                Файл «{fileName}» — найдено {rawRows.length.toLocaleString('ru-RU')} строк, {headers.length} колонок.
-              </p>
-            </div>
-            <button onClick={reset} className="btn-secondary">
-              <RefreshCw className="w-4 h-4" />
-              Другой файл
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {FIELD_ORDER.map((field) => {
-              const required = field === 'clientName' || field === 'phone';
-              return (
-                <div key={field} className="grid grid-cols-1 md:grid-cols-3 items-center gap-3">
-                  <label className="text-sm font-medium text-gray-700">
-                    {FIELD_LABELS[field]} {required && <span className="text-red-500">*</span>}
-                  </label>
-                  <div className="md:col-span-2">
-                    <select
-                      value={columnMap[field]}
+        <Card padding="none">
+          <CardHeader
+            icon={FileSpreadsheet}
+            title="Сопоставьте колонки"
+            subtitle={`Файл «${fileName}» — строк: ${rawRows.length.toLocaleString('ru-RU')}, колонок: ${headers.length}`}
+            actions={
+              <Button variant="secondary" icon={RefreshCw} onClick={reset}>
+                Другой файл
+              </Button>
+            }
+          />
+          <CardBody>
+            <div className="grid gap-x-8 gap-y-3 lg:grid-cols-2">
+              {fields.map((field) => {
+                const required = field === 'clientName' || field === 'phone';
+                const selectId = `map-${field}`;
+                return (
+                  <Field key={field} label={FIELD_LABELS[field]} htmlFor={selectId} required={required} inline>
+                    <Select
+                      id={selectId}
+                      value={String(columnMap[field])}
                       onChange={(e) => setColumnMap((prev) => ({ ...prev, [field]: parseInt(e.target.value, 10) }))}
-                      className="input"
-                    >
-                      <option value={-1}>— не использовать —</option>
-                      {headers.map((h, i) => (
-                        <option key={i} value={i}>
-                          {h || `(колонка ${i + 1})`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Sample preview */}
-          <div className="mt-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Первые 5 строк (как мы их прочитали)</h3>
-            <div className="overflow-x-auto rounded-xl border border-gray-100">
-              <table className="min-w-full text-xs">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {FIELD_ORDER.map((f) => (
-                      <th key={f} className="text-left px-3 py-2 font-semibold text-gray-700 whitespace-nowrap">
-                        {FIELD_LABELS[f]}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {rawRows.slice(0, 5).map((row, ri) => (
-                    <tr key={ri} className="hover:bg-gray-50">
-                      {FIELD_ORDER.map((f) => {
-                        const idx = columnMap[f];
-                        const val = idx >= 0 ? String(row[idx] ?? '') : '';
-                        return (
-                          <td key={f} className="px-3 py-2 text-gray-700 whitespace-nowrap max-w-xs truncate">
-                            {val || <span className="text-gray-300">—</span>}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      options={headerOptions}
+                    />
+                  </Field>
+                );
+              })}
             </div>
-          </div>
 
-          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-4">
-            <label className="inline-flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
+            {/* Sample preview */}
+            <div className="mt-6">
+              <h3 className="mb-2 text-sm font-semibold text-ink">Первые 5 строк — как мы их прочитали</h3>
+              <DataTable
+                dense
+                caption="Предпросмотр первых строк файла"
+                rows={sampleRows}
+                rowKey={(r) => r.idx}
+                columns={fields.map(
+                  (f) =>
+                    ({
+                      key: f,
+                      header: FIELD_LABELS[f],
+                      truncate: true,
+                      width: f === 'sourceRow' ? 90 : 180,
+                      render: (r: SampleRow) =>
+                        r.cells[f] ? (
+                          <span className={cn(f === 'carVin' && 'font-mono text-xs')} title={r.cells[f]}>
+                            {r.cells[f]}
+                          </span>
+                        ) : (
+                          <span className="text-ink-4">—</span>
+                        ),
+                    }) satisfies DataTableColumn<SampleRow>,
+                )}
+              />
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 border-t border-line pt-4 md:flex-row md:items-center md:justify-between">
+              <Checkbox
                 checked={allowForeignPlates}
                 onChange={(e) => setAllowForeignPlates(e.target.checked)}
-                className="rounded border-gray-300"
+                label="Импортировать иностранные и нестандартные номера"
+                description="Такие авто создаются с предупреждением"
               />
-              Импортировать иностранные/нестандартные номера (с предупреждением)
-            </label>
-            <button type="button" onClick={runPreview} disabled={previewing} className="btn-primary">
-              {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              {previewing ? 'Проверяем…' : 'Проверить и показать предпросмотр'}
-            </button>
-          </div>
-        </div>
+              <Button icon={CheckCircle2} onClick={runPreview} loading={previewing}>
+                Проверить и показать предпросмотр
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       {/* Step 3: Preview */}
-      {step === 'preview' && previewing && <LoadingSpinner />}
       {step === 'preview' && preview && (
-        <div className="space-y-4">
+        <div className="space-y-5">
           {/* Summary */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SummaryCard
-              icon={<FileSpreadsheet className="w-5 h-5" />}
-              color="bg-blue-50 text-blue-700"
-              label="Всего строк"
-              value={preview.summary.totalRows}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard compact label="Всего строк" value={preview.summary.totalRows} icon={FileSpreadsheet} />
+            <StatCard
+              compact
+              label="Клиентов"
+              value={preview.summary.clientsWillCreate}
+              hint={`новых · уже есть: ${preview.summary.clientsWillReuse}`}
+              icon={Users}
+              tone="accent"
             />
-            <SummaryCard
-              icon={<Users className="w-5 h-5" />}
-              color="bg-emerald-50 text-emerald-700"
-              label="Клиентов будет"
-              value={`${preview.summary.clientsWillCreate} новых · ${preview.summary.clientsWillReuse} есть`}
+            <StatCard
+              compact
+              label="Автомобилей"
+              value={preview.summary.carsWillCreate}
+              hint={`новых · уже есть: ${preview.summary.carsAlreadyExist}`}
+              icon={CarIcon}
             />
-            <SummaryCard
-              icon={<CarIcon className="w-5 h-5" />}
-              color="bg-indigo-50 text-indigo-700"
-              label="Авто"
-              value={`${preview.summary.carsWillCreate} новых · ${preview.summary.carsAlreadyExist} есть`}
-            />
-            <SummaryCard
-              icon={<XCircle className="w-5 h-5" />}
-              color="bg-rose-50 text-rose-700"
-              label="Пропущено"
-              value={`${preview.summary.rowsSkipped} (ошибки: ${preview.summary.errors})`}
+            <StatCard
+              compact
+              label="Пропущено строк"
+              value={preview.summary.rowsSkipped}
+              hint={`ошибок: ${preview.summary.errors}`}
+              icon={XCircle}
+              tone={preview.summary.rowsSkipped > 0 ? 'warn' : 'neutral'}
             />
           </div>
 
           {/* Duplicates: «Заменить» / «Пропустить» decisions */}
           {duplicateGroups.length > 0 && (
-            <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-5">
-              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-base font-semibold text-gray-900">
-                    Уже есть в базе: {duplicateGroups.length} {duplicateGroups.length === 1 ? 'клиент' : 'клиентов'}
-                  </h3>
-                  <p className="text-sm text-gray-500 max-w-2xl">
-                    «Заменить» — обновить имя и комментарий существующего клиента данными из файла и добавить его новые
-                    авто. Клиент не удаляется: история (заказ-наряды, долги, бонусы) сохраняется. «Пропустить» —
-                    оставить запись в базе без изменений.
-                  </p>
-                </div>
-                <div
-                  className="flex rounded-xl border border-gray-200 overflow-hidden shrink-0"
-                  role="group"
-                  aria-label="Действие для всех дублей"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDupDefault('replace');
+            <Card padding="none">
+              <CardHeader
+                icon={Users}
+                iconTone="warn"
+                title={`Уже есть в базе: ${duplicateGroups.length} ${duplicateGroups.length === 1 ? 'клиент' : 'клиентов'}`}
+                subtitle="«Заменить» — обновить имя и комментарий данными из файла и добавить новые авто; история сохраняется. «Пропустить» — оставить без изменений."
+                actions={
+                  <SegmentedControl
+                    aria-label="Действие для всех дублей"
+                    size="sm"
+                    value={dupDefault}
+                    onChange={(v) => {
+                      setDupDefault(v);
                       setDupOverrides({});
                     }}
-                    className={`px-3 py-2 text-xs font-semibold ${
-                      dupDefault === 'replace' ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    Заменить все
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDupDefault('skip');
-                      setDupOverrides({});
-                    }}
-                    className={`px-3 py-2 text-xs font-semibold border-l border-gray-200 ${
-                      dupDefault === 'skip' ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    Пропустить все
-                  </button>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-gray-100 max-h-96 overflow-y-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-semibold text-gray-700">В файле</th>
-                      <th className="text-left px-3 py-2 font-semibold text-gray-700">Уже в базе</th>
-                      <th className="text-left px-3 py-2 font-semibold text-gray-700">Новых авто</th>
-                      <th className="text-right px-3 py-2 font-semibold text-gray-700">Действие</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {duplicateGroups.map((g) => {
-                      const effective = dupOverrides[g.phoneKey] ?? dupDefault;
-                      const newCars = g.cars.filter(
-                        (c) => !c.existsForCurrentClient && !c.conflictsWithClientId,
-                      ).length;
-                      return (
-                        <tr key={g.phoneKey} className={effective === 'replace' ? 'bg-primary-50/40' : undefined}>
-                          <td className="px-3 py-2">
-                            <div className="font-medium text-gray-900">
-                              {g.fileFullName || <span className="text-gray-400">без имени</span>}
-                            </div>
-                            <div className="font-mono text-xs text-gray-500">{g.phoneDisplay || g.phoneKey}</div>
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="font-medium text-gray-900">{g.existingClientName || 'Клиент'}</div>
-                            <div className="font-mono text-xs text-gray-500">
-                              {displayPhone(g.existingClientPhone) || g.phoneDisplay || g.phoneKey}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-gray-600">{newCars > 0 ? `+${newCars}` : '—'}</td>
-                          <td className="px-3 py-2 text-right">
-                            <select
-                              value={effective}
-                              onChange={(e) =>
-                                setDupOverrides((prev) => ({
-                                  ...prev,
-                                  [g.phoneKey]: e.target.value as DuplicateAction,
-                                }))
-                              }
-                              className="input !w-auto text-xs py-1"
-                              aria-label={`Действие для ${g.existingClientName || g.phoneKey}`}
-                            >
-                              <option value="replace">Заменить</option>
-                              <option value="skip">Пропустить</option>
-                            </select>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                    options={[
+                      { value: 'replace', label: 'Заменить все' },
+                      { value: 'skip', label: 'Пропустить все' },
+                    ]}
+                  />
+                }
+              />
+              <DataTable
+                bare
+                dense
+                caption="Клиенты, которые уже есть в базе"
+                rows={duplicateGroups}
+                rowKey={(g) => g.phoneKey}
+                maxHeight="24rem"
+                rowClassName={(g) =>
+                  (dupOverrides[g.phoneKey] ?? dupDefault) === 'replace' ? '[&>td]:bg-accent-soft/40' : undefined
+                }
+                columns={[
+                  {
+                    key: 'file',
+                    header: 'В файле',
+                    render: (g) => (
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-ink">
+                          {g.fileFullName || <span className="font-normal text-ink-3">без имени</span>}
+                        </span>
+                        <span className="block text-xs tabular-nums text-ink-3">{g.phoneDisplay || g.phoneKey}</span>
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'existing',
+                    header: 'Уже в базе',
+                    render: (g) => (
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-ink">{g.existingClientName || 'Клиент'}</span>
+                        <span className="block text-xs tabular-nums text-ink-3">
+                          {displayPhone(g.existingClientPhone) || g.phoneDisplay || g.phoneKey}
+                        </span>
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'newCars',
+                    header: 'Новых авто',
+                    numeric: true,
+                    width: 110,
+                    render: (g) => {
+                      const n = g.cars.filter((c) => !c.existsForCurrentClient && !c.conflictsWithClientId).length;
+                      return n > 0 ? `+${n}` : <span className="text-ink-4">—</span>;
+                    },
+                  },
+                  {
+                    key: 'action',
+                    header: 'Действие',
+                    interactive: true,
+                    width: 160,
+                    align: 'right',
+                    render: (g) => (
+                      <Select
+                        size="sm"
+                        aria-label={`Действие для ${g.existingClientName || g.phoneKey}`}
+                        value={dupOverrides[g.phoneKey] ?? dupDefault}
+                        onChange={(e) =>
+                          setDupOverrides((prev) => ({
+                            ...prev,
+                            [g.phoneKey]: e.target.value as DuplicateAction,
+                          }))
+                        }
+                        options={[
+                          { value: 'replace', label: 'Заменить' },
+                          { value: 'skip', label: 'Пропустить' },
+                        ]}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            </Card>
           )}
 
           {/* Plate conflicts — cars owned by ANOTHER client are never re-attached */}
           {plateConflicts.length > 0 && (
-            <div className="bg-white rounded-2xl border border-rose-200 shadow-sm p-5">
-              <h3 className="text-base font-semibold text-gray-900 mb-1">
-                Госномер уже у другого клиента: {plateConflicts.length}
-              </h3>
-              <p className="text-sm text-gray-500 mb-3">
-                Эти авто прикреплены к другим клиентам и не будут перенесены или продублированы — строки пропускаются.
-              </p>
-              <div className="max-h-48 overflow-auto rounded-lg bg-gray-50 px-3 py-2 space-y-1 text-xs">
-                {plateConflicts.map((p, i) => (
-                  <div key={i} className="text-gray-600">
-                    <span className="font-mono text-gray-400">#{p.sourceRow}</span> · Госномер{' '}
-                    <span className="font-mono">{p.plate}</span> (в файле — {p.groupName}) уже у клиента «{p.owner}»
-                  </div>
-                ))}
-              </div>
-            </div>
+            <Card padding="none">
+              <CardHeader
+                icon={CarIcon}
+                iconTone="bad"
+                title={`Госномер уже у другого клиента: ${plateConflicts.length}`}
+                subtitle="Эти авто прикреплены к другим клиентам и не будут перенесены или продублированы — строки пропускаются"
+              />
+              <CardBody padding="sm">
+                <ul className="max-h-48 space-y-1 overflow-auto rounded-lg bg-surface-2 px-3 py-2 text-xs text-ink-2">
+                  {plateConflicts.map((p, i) => (
+                    <li key={i}>
+                      <span className="font-mono text-ink-3">#{p.sourceRow}</span> · Госномер{' '}
+                      <span className="font-mono">{p.plate}</span> (в файле — {p.groupName}) уже у клиента «{p.owner}»
+                    </li>
+                  ))}
+                </ul>
+              </CardBody>
+            </Card>
           )}
 
           {/* Issue groups */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100">
+          <Card padding="none" className="divide-y divide-line">
             <IssueGroup
               title="Пропущенные строки"
-              icon={<XCircle className="w-5 h-5 text-rose-600" />}
+              icon={XCircle}
               total={preview.skippedRows.length}
               by={skippedByKind}
-              tone="error"
+              tone="bad"
             />
             <IssueGroup
               title="Предупреждения"
-              icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
+              icon={AlertTriangle}
               total={preview.issues.filter((i) => SEVERITY[i.kind] === 'warning').length}
               by={issuesByKind}
               filter={(k) => SEVERITY[k] === 'warning'}
-              tone="warning"
+              tone="warn"
             />
             <IssueGroup
               title="Ошибки уровня строки"
-              icon={<XCircle className="w-5 h-5 text-rose-600" />}
+              icon={XCircle}
               total={preview.issues.filter((i) => SEVERITY[i.kind] === 'error').length}
               by={issuesByKind}
               filter={(k) => SEVERITY[k] === 'error'}
-              tone="error"
+              tone="bad"
             />
-          </div>
+          </Card>
 
           {/* Sample of grouped clients */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h3 className="text-base font-semibold text-gray-900 mb-2">Первые 20 клиентов после группировки</h3>
-            <div className="overflow-x-auto rounded-xl border border-gray-100">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-semibold text-gray-700">Имя</th>
-                    <th className="text-left px-3 py-2 font-semibold text-gray-700">Телефон</th>
-                    <th className="text-left px-3 py-2 font-semibold text-gray-700">Статус</th>
-                    <th className="text-left px-3 py-2 font-semibold text-gray-700">Авто</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {preview.groups.slice(0, 20).map((g) => (
-                    <tr key={g.phoneKey}>
-                      <td className="px-3 py-2 font-medium text-gray-900">{g.fullName}</td>
-                      <td className="px-3 py-2 text-gray-600 font-mono text-xs">{g.phoneDisplay || g.phoneKey}</td>
-                      <td className="px-3 py-2 text-xs">
-                        {g.existingClientId ? (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
-                            Уже есть
-                          </span>
-                        ) : (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                            Будет создан
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-gray-600">
-                        {g.cars.length === 0 ? (
-                          <span className="text-gray-400">нет авто</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {g.cars.map((c, i) => (
-                              <span
-                                key={i}
-                                className={`inline-block px-2 py-0.5 rounded-md font-mono text-[10px] ${
-                                  c.conflictsWithClientId
-                                    ? 'bg-rose-50 text-rose-700'
-                                    : c.existsForCurrentClient
-                                      ? 'bg-amber-50 text-amber-700'
-                                      : c.isForeign
-                                        ? 'bg-violet-50 text-violet-700'
-                                        : 'bg-emerald-50 text-emerald-700'
-                                }`}
-                                title={`${c.makeModel}${c.rawModel ? ` (raw: ${c.rawModel})` : ''}`}
-                              >
-                                {c.plateDisplay}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {preview.groups.length > 20 && (
-              <p className="text-xs text-gray-400 mt-2">… и ещё {preview.groups.length - 20} клиентов</p>
-            )}
-          </div>
+          <Card padding="none">
+            <CardHeader
+              icon={Users}
+              title="Первые 20 клиентов после группировки"
+              subtitle={
+                preview.groups.length > 20
+                  ? `… и ещё ${preview.groups.length - 20} — в файле ${preview.groups.length} клиентов`
+                  : `Всего клиентов в файле: ${preview.groups.length}`
+              }
+            />
+            <DataTable
+              bare
+              dense
+              caption="Клиенты после группировки по телефону"
+              rows={preview.groups.slice(0, 20)}
+              rowKey={(g) => g.phoneKey}
+              columns={[
+                {
+                  key: 'name',
+                  header: 'Имя',
+                  render: (g) => <span className="font-medium text-ink">{g.fullName}</span>,
+                },
+                {
+                  key: 'phone',
+                  header: 'Телефон',
+                  width: 170,
+                  render: (g) => <span className="tabular-nums">{g.phoneDisplay || g.phoneKey}</span>,
+                },
+                {
+                  key: 'status',
+                  header: 'Статус',
+                  width: 130,
+                  render: (g) =>
+                    g.existingClientId ? (
+                      <Badge tone="warn" size="sm">
+                        Уже есть
+                      </Badge>
+                    ) : (
+                      <Badge tone="ok" size="sm">
+                        Будет создан
+                      </Badge>
+                    ),
+                },
+                {
+                  key: 'cars',
+                  header: 'Автомобили',
+                  render: (g) =>
+                    g.cars.length === 0 ? (
+                      <span className="text-ink-4">нет авто</span>
+                    ) : (
+                      <span className="flex flex-wrap gap-1">
+                        {g.cars.map((c, i) => (
+                          <PlannedCarChip key={i} car={c} vinEnabled={vinEnabled} />
+                        ))}
+                      </span>
+                    ),
+                },
+              ]}
+            />
+          </Card>
 
           {/* Actions */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            <div className="text-sm text-gray-600">
+          <Card padding="md" className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm text-ink-2">
               Проверьте предупреждения{duplicateGroups.length > 0 ? ' и решения по дублям выше' : ''}. После
               «Подтвердить импорт» данные будут записаны в базу. Дубликаты не создаются
               {duplicateGroups.length > 0 ? ' — по каждому сработает выбранное действие' : ''}.
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setStep('mapping')} className="btn-secondary">
-                <ArrowLeft className="w-4 h-4" />
+            </p>
+            <div className="flex flex-shrink-0 gap-2">
+              <Button variant="secondary" icon={ArrowLeft} onClick={() => setStep('mapping')}>
                 Изменить колонки
-              </button>
-              <button onClick={() => setConfirmImportOpen(true)} disabled={confirming} className="btn-primary">
-                {confirming ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {confirming ? 'Импортируем…' : 'Подтвердить импорт'}
-              </button>
+              </Button>
+              <Button icon={CheckCircle2} onClick={() => setConfirmImportOpen(true)} loading={confirming}>
+                Подтвердить импорт
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* Step 4: Done */}
       {step === 'done' && result && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
-          <div className="mx-auto h-16 w-16 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4">
-            <CheckCircle2 className="h-8 w-8 text-emerald-600" />
+        <Card padding="md">
+          <div className="py-4 text-center">
+            <span className={cn('mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full', toneChip.ok)}>
+              <CheckCircle2 className="h-7 w-7" aria-hidden="true" />
+            </span>
+            <h2 className="text-md font-semibold text-ink">Импорт завершён</h2>
+            <p className="mt-1 text-xs text-ink-3">
+              Запись в журнале импорта: <span className="font-mono">{result.importRunId}</span>
+            </p>
           </div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">Импорт завершён</h2>
-          <p className="text-sm text-gray-500 mb-6">Запись в журнал импорта: {result.importRunId}</p>
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 max-w-4xl mx-auto mb-6">
-            <SummaryCard
-              icon={<Users className="w-5 h-5" />}
-              color="bg-emerald-50 text-emerald-700"
+          <div className="mx-auto mt-4 grid max-w-4xl grid-cols-2 gap-3 md:grid-cols-5">
+            <StatCard
+              compact
               label="Создано клиентов"
               value={result.summary.clientsWillCreate}
+              icon={Users}
+              tone="ok"
             />
-            <SummaryCard
-              icon={<RefreshCw className="w-5 h-5" />}
-              color="bg-blue-50 text-blue-700"
-              label="Заменено (обновлено)"
-              value={result.summary.clientsReplaced ?? 0}
-            />
-            <SummaryCard
-              icon={<Users className="w-5 h-5" />}
-              color="bg-amber-50 text-amber-700"
-              label="Дублей пропущено"
-              value={result.summary.duplicatesSkipped ?? 0}
-            />
-            <SummaryCard
-              icon={<CarIcon className="w-5 h-5" />}
-              color="bg-indigo-50 text-indigo-700"
-              label="Создано авто"
-              value={result.summary.carsWillCreate}
-            />
-            <SummaryCard
-              icon={<XCircle className="w-5 h-5" />}
-              color="bg-rose-50 text-rose-700"
+            <StatCard compact label="Обновлено" value={result.summary.clientsReplaced ?? 0} icon={RefreshCw} />
+            <StatCard compact label="Дублей пропущено" value={result.summary.duplicatesSkipped ?? 0} icon={Users} />
+            <StatCard compact label="Создано авто" value={result.summary.carsWillCreate} icon={CarIcon} tone="ok" />
+            <StatCard
+              compact
               label="Пропущено строк"
               value={result.summary.rowsSkipped}
+              icon={XCircle}
+              tone={result.summary.rowsSkipped > 0 ? 'warn' : 'neutral'}
             />
           </div>
 
           {result.skipped.length > 0 && (
-            <details className="text-left max-w-3xl mx-auto bg-gray-50 rounded-xl border border-gray-100 p-4 mb-6">
-              <summary className="cursor-pointer font-medium text-gray-700">
+            <details className="mx-auto mt-5 max-w-3xl rounded-lg border border-line bg-surface-2 px-4 py-3 text-left">
+              <summary className="cursor-pointer text-sm font-medium text-ink">
                 Подробнее по пропущенным ({result.skipped.length})
               </summary>
-              <div className="mt-3 max-h-72 overflow-auto text-xs space-y-1">
+              <ul className="mt-3 max-h-72 space-y-1 overflow-auto text-xs text-ink-2">
                 {result.skipped.map((s, i) => (
-                  <div key={i} className="text-gray-600">
-                    <span className="font-mono text-gray-400">#{s.sourceRow}</span> · [{issueLabel(s.reason)}]{' '}
-                    {s.message}
-                  </div>
+                  <li key={i}>
+                    <span className="font-mono text-ink-3">#{s.sourceRow}</span> · [{issueLabel(s.reason)}] {s.message}
+                  </li>
                 ))}
-              </div>
+              </ul>
             </details>
           )}
 
-          <div className="flex items-center justify-center gap-2">
-            <button onClick={reset} className="btn-secondary">
-              <Upload className="w-4 h-4" />
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+            <Button variant="secondary" icon={Upload} onClick={reset}>
               Импортировать ещё файл
-            </button>
-            <button onClick={() => navigate('/clients')} className="btn-primary">
-              <Users className="w-4 h-4" />
+            </Button>
+            <Link to="/clients" className={buttonClasses()}>
+              <Users className="h-4 w-4" aria-hidden="true" />
               Перейти к клиентам
-            </button>
+            </Link>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Confirm import — irreversible DB write, routed through the styled dialog */}
@@ -1052,79 +1085,100 @@ export default function ImportClientsCarsPage() {
 
 // ─── Small bits ──────────────────────────────────────────────────────────────
 
-function SummaryCard({
-  icon,
-  color,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  color: string;
-  label: string;
-  value: string | number;
-}) {
+/** Чип запланированного авто: госномер + (при включённой опции) VIN моноширинно. */
+function PlannedCarChip({ car, vinEnabled }: { car: ImportPlannedCar; vinEnabled: boolean }) {
+  const tone: Tone = car.conflictsWithClientId
+    ? 'bad'
+    : car.existsForCurrentClient
+      ? 'warn'
+      : car.isForeign
+        ? 'info'
+        : 'ok';
+  const hint = car.conflictsWithClientId
+    ? 'госномер у другого клиента'
+    : car.existsForCurrentClient
+      ? 'уже есть у клиента'
+      : car.isForeign
+        ? 'иностранный номер'
+        : 'будет создано';
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-      <div className={`inline-flex items-center justify-center h-9 w-9 rounded-xl ${color} mb-2`}>{icon}</div>
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="text-lg font-semibold text-gray-900">{value}</div>
-    </div>
+    <span
+      className={cn('inline-flex max-w-full flex-col rounded-md px-2 py-0.5 text-2xs leading-4', toneSoft[tone])}
+      title={`${car.makeModel}${car.rawModel ? ` (в файле: ${car.rawModel})` : ''} — ${hint}`}
+    >
+      <span className="font-mono font-semibold tabular-nums">{car.plateDisplay}</span>
+      {vinEnabled && car.vin && <span className="font-mono tabular-nums opacity-80">{formatVin(car.vin)}</span>}
+    </span>
   );
 }
 
 function IssueGroup({
   title,
-  icon,
+  icon: Icon,
   total,
   by,
   filter,
   tone,
 }: {
   title: string;
-  icon: React.ReactNode;
+  icon: LucideIcon;
   total: number;
   by: Map<
     ImportIssueKind,
     Array<{ sourceRow: number; message: string; kind?: ImportIssueKind; reason?: ImportIssueKind }>
   >;
   filter?: (k: ImportIssueKind) => boolean;
-  tone: 'error' | 'warning';
+  tone: 'bad' | 'warn';
 }) {
   const entries = Array.from(by.entries()).filter(([k]) => (filter ? filter(k) : true));
+  const iconChip = (
+    <span
+      className={cn(
+        'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+        total === 0 ? toneChip.neutral : toneChip[tone],
+      )}
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
+    </span>
+  );
   if (total === 0) {
     return (
-      <div className="px-5 py-4 flex items-center justify-between text-sm text-gray-400">
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="font-medium text-gray-700">{title}</span>
-        </div>
-        <span>—</span>
+      <div className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
+        <span className="flex items-center gap-3">
+          {iconChip}
+          <span className="font-medium text-ink">{title}</span>
+        </span>
+        <span className="text-ink-3">нет</span>
       </div>
     );
   }
   return (
-    <details className="px-5 py-4">
-      <summary className="cursor-pointer flex items-center justify-between text-sm">
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className={`font-medium ${tone === 'error' ? 'text-rose-700' : 'text-amber-700'}`}>{title}</span>
-          <span className="text-xs text-gray-400">{total}</span>
-        </div>
+    <details className="group px-5 py-3">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-sm [&::-webkit-details-marker]:hidden">
+        <span className="flex items-center gap-3">
+          {iconChip}
+          <span className="font-medium text-ink">{title}</span>
+          <Badge tone={tone} size="sm">
+            {total}
+          </Badge>
+        </span>
+        <span className="text-xs text-ink-3 group-open:hidden">Показать</span>
+        <span className="hidden text-xs text-ink-3 group-open:inline">Скрыть</span>
       </summary>
-      <div className="mt-3 space-y-2">
+      <div className="mt-3 space-y-3 pl-11">
         {entries.map(([kind, items]) => (
           <div key={kind} className="text-xs">
-            <div className="font-semibold text-gray-700 mb-1">
-              {issueLabel(kind)} <span className="text-gray-400">({items.length})</span>
-            </div>
-            <div className="max-h-48 overflow-auto rounded-lg bg-gray-50 px-3 py-2 space-y-1">
+            <p className="mb-1 font-semibold text-ink-2">
+              {issueLabel(kind)} <span className="font-normal text-ink-3">({items.length})</span>
+            </p>
+            <ul className="max-h-48 space-y-1 overflow-auto rounded-lg bg-surface-2 px-3 py-2 text-ink-2">
               {items.slice(0, 50).map((it, i) => (
-                <div key={i} className="text-gray-600">
-                  <span className="font-mono text-gray-400">#{it.sourceRow}</span> · {it.message}
-                </div>
+                <li key={i}>
+                  <span className="font-mono text-ink-3">#{it.sourceRow}</span> · {it.message}
+                </li>
               ))}
-              {items.length > 50 && <div className="text-gray-400">… и ещё {items.length - 50}</div>}
-            </div>
+              {items.length > 50 && <li className="text-ink-3">… и ещё {items.length - 50}</li>}
+            </ul>
           </div>
         ))}
       </div>

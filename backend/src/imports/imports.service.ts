@@ -4,6 +4,8 @@ import { PG_POOL } from '../database.module';
 import { ClientsService } from '../clients/clients.service';
 import { normalizePhone, phoneSearchKey } from '../common/normalize-phone';
 import { normalizePlate } from './normalize-plate';
+import { VinService } from '../vin/vin.service';
+import { isValidVin, normalizeVin } from '../vin/vin.util';
 import { ImportRowInputDto } from './dto/import-clients-cars.dto';
 
 // ─── Issue codes (kept in sync with shared/api/types.ts ImportIssueKind) ────
@@ -21,7 +23,11 @@ type ImportIssueKind =
   | 'duplicate_in_file'
   | 'multiple_name_candidates'
   | 'name_conflict_same_phone'
-  | 'duplicate_phone';
+  | 'duplicate_phone'
+  // 171 — колонка VIN (только при включённой опции тенанта): не распознан /
+  // уже занят другой машиной или повторяется в файле — авто создаётся без VIN.
+  | 'invalid_vin'
+  | 'duplicate_vin';
 
 export interface RowIssue {
   sourceRow: number;
@@ -40,6 +46,11 @@ export interface PlannedCar {
   existsForCurrentClient?: boolean;
   conflictsWithClientId?: string | null;
   conflictsWithClientName?: string | null;
+  /**
+   * 171 — VIN (нормализованный): запишется в новую машину либо допишется
+   * существующей машине этого клиента, у которой VIN нет; null/absent — без VIN.
+   */
+  vin?: string | null;
 }
 
 export interface ClientGroup {
@@ -202,6 +213,8 @@ export class ImportsService {
     // 161 — «на каком филиале виден клиент» решает ОДИН источник
     // (ClientsService.separatePointFor), а не копия правила в импорте.
     private readonly clients: ClientsService,
+    // 171 — колонка VIN пишется только при включённой опции тенанта.
+    private readonly vin: VinService,
   ) {}
 
   // ─── Template ─────────────────────────────────────────────────────────────
@@ -213,6 +226,9 @@ export class ImportsService {
       'phone_raw',
       'car_plate',
       'car_model',
+      // 171 — VIN (17 символов); учитывается только при включённой опции
+      // «VIN-код автомобиля» в настройках компании, иначе колонка игнорируется.
+      'car_vin',
       'notes',
       'original_client_text',
     ].join(';');
@@ -224,6 +240,7 @@ export class ImportsService {
         '8 (999) 123-45-67',
         'А123АА77',
         'Toyota Camry',
+        'JTNBE40K503123456',
         '',
         'Иванов Иван 89991234567 А123АА77 Тойота камри',
       ].join(';'),
@@ -234,12 +251,13 @@ export class ImportsService {
         '8 (999) 123-45-67',
         'В456ВВ99',
         'Lada Granta',
+        'XTA219010K0123456',
         'same_phone_different_plate',
         '',
       ].join(';'),
-      ['3', 'Петров Пётр', '', '', 'Е789ЕЕ77', 'Kia Rio', 'no_phone', ''].join(';'),
-      ['4', 'Сидоров', '+79007770000', '9007770000', 'Х001ХХ50', '', 'unclear_car_model', ''].join(';'),
-      ['5', 'Foreign Driver', '+995555111222', '+995 555 111 222', 'BG-3845-PA', 'BMW 3', 'foreign_plate', ''].join(
+      ['3', 'Петров Пётр', '', '', 'Е789ЕЕ77', 'Kia Rio', '', 'no_phone', ''].join(';'),
+      ['4', 'Сидоров', '+79007770000', '9007770000', 'Х001ХХ50', '', '', 'unclear_car_model', ''].join(';'),
+      ['5', 'Foreign Driver', '+995555111222', '+995 555 111 222', 'BG-3845-PA', 'BMW 3', '', 'foreign_plate', ''].join(
         ';',
       ),
     ].join('\n');
@@ -426,7 +444,7 @@ export class ImportsService {
 
           // Re-check by exact plate within this client (case-insensitive on the key).
           const { rows: existingCar } = await dbClient.query(
-            `SELECT id, client_id FROM cars
+            `SELECT id, client_id, vin FROM cars
              WHERE tenant_id = $1
                AND REPLACE(REPLACE(REPLACE(UPPER(plate_number), ' ', ''), '-', ''), '/', '') = $2
              LIMIT 1`,
@@ -436,7 +454,24 @@ export class ImportsService {
           if (existingCar.length > 0) {
             const owner = existingCar[0].client_id;
             if (owner === clientId) {
-              // Same client already has this plate → skip (idempotent).
+              // Same client already has this plate → the row itself is
+              // idempotent; the only thing the file can add is a VIN to a car
+              // that has none (171 — как cars.create дописывает VIN найденной
+              // по номеру машине). Занятость перепроверяется в транзакции без
+              // самой машины; уже заполненный VIN файл не трогает.
+              if (car.vin && !existingCar[0].vin) {
+                const { rows: vinTaken } = await dbClient.query(
+                  'SELECT 1 FROM cars WHERE tenant_id = $1 AND vin = $2 AND id <> $3 LIMIT 1',
+                  [tenantID, car.vin, existingCar[0].id],
+                );
+                if (vinTaken.length === 0) {
+                  await dbClient.query('UPDATE cars SET vin = $1 WHERE id = $2 AND tenant_id = $3 AND vin IS NULL', [
+                    car.vin,
+                    existingCar[0].id,
+                    tenantID,
+                  ]);
+                }
+              }
               continue;
             }
             // Belongs to someone else — surface as skipped, do not steal.
@@ -466,13 +501,24 @@ export class ImportsService {
           }
           const comment = commentParts.length > 0 ? commentParts.join('; ') : null;
 
+          // 171 — VIN из плана (уже отфильтрован от занятых), с повторной
+          // проверкой внутри транзакции: между превью и подтверждением его мог
+          // занять другой импорт или Касса, а уникальность VIN не на уровне БД.
+          let vin: string | null = car.vin ?? null;
+          if (vin) {
+            const { rows: vinTaken } = await dbClient.query(
+              'SELECT 1 FROM cars WHERE tenant_id = $1 AND vin = $2 LIMIT 1',
+              [tenantID, vin],
+            );
+            if (vinTaken.length > 0) vin = null;
+          }
           const { rows: insCar } = await dbClient.query(
-            `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id)
-             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, vin)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
             // Store the canonical plate key without spaces / separators.
             // Display formatting happens in the UI; the DB stores the compact
             // form so search / dedup / API responses are uniform.
-            [car.plateKey || car.plateDisplay, car.makeModel, comment, clientId, tenantID],
+            [car.plateKey || car.plateDisplay, car.makeModel, comment, clientId, tenantID, vin],
           );
           createdCarIds.push(insCar[0].id);
         }
@@ -590,6 +636,8 @@ export class ImportsService {
   ): Promise<PlanResult> {
     const issues: RowIssue[] = [];
     const skippedRows: SkippedRow[] = [];
+    // 171 — при выключенной опции колонка VIN молча игнорируется (без предупреждений).
+    const vinEnabled = await this.vin.isEnabled(tenantID);
 
     // Step 1: per-row classification.
     interface ClassifiedRow {
@@ -606,6 +654,8 @@ export class ImportsService {
       isUnclearModel: boolean;
       isForeignPlate: boolean;
       hasPlate: boolean;
+      /** 171 — нормализованный валидный VIN из колонки, иначе null. */
+      vin: string | null;
     }
 
     const classified: ClassifiedRow[] = [];
@@ -701,6 +751,23 @@ export class ImportsService {
 
       const makeModel = isUnclearModel || !rawCarModel ? PLACEHOLDER_MAKE_MODEL : rawCarModel;
 
+      // 171 — VIN: только при включённой опции и только у строки с госномером
+      // (без номера авто не создаётся). Не распознан → предупреждение, без VIN.
+      let vin: string | null = null;
+      const rawVin = (row.carVin || '').trim();
+      if (vinEnabled && rawVin && hasPlate) {
+        const normalizedVin = normalizeVin(rawVin);
+        if (isValidVin(normalizedVin)) {
+          vin = normalizedVin;
+        } else {
+          issues.push({
+            sourceRow: row.sourceRow,
+            kind: 'invalid_vin',
+            message: `VIN не распознан: "${rawVin}" — авто будет создано без VIN`,
+          });
+        }
+      }
+
       classified.push({
         sourceRow: row.sourceRow,
         // Group by the last-10 key so «79884444485», «89884444485» and
@@ -718,6 +785,7 @@ export class ImportsService {
         isUnclearModel,
         isForeignPlate,
         hasPlate,
+        vin,
       });
     }
 
@@ -786,7 +854,7 @@ export class ImportsService {
     const plateKeys = Array.from(new Set(classified.filter((c) => c.hasPlate && c.plate.key).map((c) => c.plate.key)));
     let existingCarsByPlateKey = new Map<
       string,
-      { id: string; clientId: string; clientName: string; plateNumber: string }
+      { id: string; clientId: string; clientName: string; plateNumber: string; vin: string | null }
     >();
     if (plateKeys.length > 0) {
       const { rows: existingCars } = await this.pool.query<{
@@ -795,9 +863,11 @@ export class ImportsService {
         client_name: string | null;
         owner_point_id: string | null;
         plate_number: string;
+        vin: string | null;
         key: string;
       }>(
         `SELECT ca.id, ca.client_id, cl.full_name AS client_name, cl.point_id AS owner_point_id, ca.plate_number,
+                ca.vin,
                 REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') AS key
          FROM cars ca
          LEFT JOIN clients cl ON cl.id = ca.client_id
@@ -819,10 +889,26 @@ export class ImportsService {
                 ? r.client_name || ''
                 : '',
             plateNumber: r.plate_number,
+            // 171 — VIN существующей машины: файл дописывает VIN только машине
+            // без него (см. планирование ниже и apply).
+            vin: r.vin ?? null,
           },
         ]),
       );
     }
+
+    // 171 — VIN, уже занятые машинами тенанта: такое авто импортируется без VIN
+    // (уникальность VIN держит сервис, не БД — см. CarsService.assertVinUnique).
+    const vinKeys = Array.from(new Set(classified.map((c) => c.vin).filter((v): v is string => !!v)));
+    const existingCarIdByVin = new Map<string, string>();
+    if (vinKeys.length > 0) {
+      const { rows: vinRows } = await this.pool.query<{ id: string; vin: string }>(
+        'SELECT id, vin FROM cars WHERE tenant_id = $1 AND vin = ANY($2::text[])',
+        [tenantID, vinKeys],
+      );
+      for (const r of vinRows) existingCarIdByVin.set(r.vin, r.id);
+    }
+    const seenVinsInFile = new Map<string, number>();
 
     // Step 4: build groups.
     const groups: ClientGroup[] = [];
@@ -910,6 +996,43 @@ export class ImportsService {
         seenPlatesInFile.set(r.plate.key, { sourceRow: r.sourceRow, phoneKey });
 
         const existingCar = existingCarsByPlateKey.get(r.plate.key);
+        const ownedByCurrentClient = !!existingCar && !!existing && existingCar.clientId === existing.id;
+
+        // 171 — VIN планируется ТОЛЬКО туда, где он реально запишется: в новую
+        // машину или в машину этого же клиента без VIN (как cars.create
+        // дописывает VIN найденной по номеру машине). Чужой номер (строка
+        // ниже пропускается) и машина с уже заполненным VIN файлом не меняются —
+        // и такой VIN НЕ регистрируется как «встречался в файле», иначе
+        // следующая строка с тем же VIN получала бы ложный duplicate_vin.
+        // Занят другой машиной базы или уже записан ранее в файле → авто без
+        // VIN (предупреждение, не ошибка).
+        let vin = r.vin;
+        if (vin) {
+          const takenBy = existingCarIdByVin.get(vin);
+          const seenVinRow = seenVinsInFile.get(vin);
+          if (existingCar && !ownedByCurrentClient) {
+            vin = null;
+          } else if (ownedByCurrentClient && existingCar?.vin) {
+            vin = null;
+          } else if (takenBy && takenBy !== existingCar?.id) {
+            issues.push({
+              sourceRow: r.sourceRow,
+              kind: 'duplicate_vin',
+              message: `VIN ${vin} уже есть у другой машины в базе — авто будет создано без VIN`,
+            });
+            vin = null;
+          } else if (seenVinRow !== undefined) {
+            issues.push({
+              sourceRow: r.sourceRow,
+              kind: 'duplicate_vin',
+              message: `VIN ${vin} уже встречался в файле (строка ${seenVinRow}) — здесь пропущен`,
+            });
+            vin = null;
+          } else {
+            seenVinsInFile.set(vin, r.sourceRow);
+          }
+        }
+
         const planned: PlannedCar = {
           plateKey: r.plate.key,
           plateDisplay: r.plate.display,
@@ -917,10 +1040,11 @@ export class ImportsService {
           rawModel: r.rawCarModel,
           isForeign: r.isForeignPlate,
           sourceRow: r.sourceRow,
+          vin,
         };
 
         if (existingCar) {
-          if (existing && existingCar.clientId === existing.id) {
+          if (ownedByCurrentClient) {
             planned.existsForCurrentClient = true;
             carsAlreadyExist++;
           } else {

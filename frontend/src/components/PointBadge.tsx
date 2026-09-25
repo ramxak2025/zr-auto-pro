@@ -1,6 +1,7 @@
 import { Building2, Home } from 'lucide-react';
 
 import { usePointAccess, pointKindLabel } from '../hooks/usePoints';
+import { Badge } from '../ui/Badge';
 
 /**
  * PointBadge — подпись «этой СТРОКЕ принадлежит такой-то автосервис».
@@ -32,12 +33,8 @@ export default function PointBadge({ pointId, className }: { pointId?: string | 
   const Icon = point.isMain ? Home : Building2;
 
   return (
-    <span
-      className={`inline-flex max-w-[200px] items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 ${className ?? ''}`}
-      title={`${pointKindLabel(point)}: ${point.name}`}
-    >
-      <Icon className="h-3 w-3 flex-shrink-0 text-gray-400" />
-      <span className="truncate">{point.name}</span>
-    </span>
+    <Badge outline size="sm" icon={Icon} title={`${pointKindLabel(point)}: ${point.name}`} className={className}>
+      {point.name}
+    </Badge>
   );
 }

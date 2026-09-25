@@ -1,5 +1,6 @@
 import type { Check, Tenant } from '../types';
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatVin, normalizeVin } from '../../../shared/utils/vin';
 
 const fmt = (value: number): string =>
   (value ?? 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -15,7 +16,20 @@ const fmt = (value: number): string =>
  *
  * All user-supplied text is run through esc() before it touches innerHTML.
  */
-export async function generateOrderPdf(check: Check, tenant?: Partial<Tenant> | null): Promise<void> {
+export interface OrderPdfOptions {
+  /**
+   * 171 — VIN автомобиля заказа. Печатается под маркой/моделью ТОЛЬКО когда
+   * опция «VIN-код автомобиля» включена у тенанта (решает вызывающий — он же
+   * знает `useVinEnabled()`); при выключенной опции поле не передаётся.
+   */
+  vin?: string | null;
+}
+
+export async function generateOrderPdf(
+  check: Check,
+  tenant?: Partial<Tenant> | null,
+  options: OrderPdfOptions = {},
+): Promise<void> {
   const companyName = tenant?.name || 'Автосервис';
   const legalName = tenant?.legalName || '';
   const inn = tenant?.inn || '';
@@ -109,9 +123,13 @@ export async function generateOrderPdf(check: Check, tenant?: Partial<Tenant> | 
   const infoRow = (label: string, value: string): string =>
     `<tr><td style="${tdBase};width:150px;color:#666;background:#fafafa">${esc(label)}</td><td style="${tdBase};font-weight:600">${value}</td></tr>`;
 
+  const vinRaw = options.vin ?? check.car?.vin ?? null;
+  const vin = vinRaw ? normalizeVin(vinRaw) : '';
   const carValue = check.car?.makeModel
     ? `${esc(check.car.makeModel)}${check.car.plateNumber ? `&nbsp;&nbsp;<span style="font-weight:700">${esc(check.car.plateNumber)}</span>` : ''}`
-    : '—';
+    : check.car?.plateNumber
+      ? `<span style="font-weight:700">${esc(check.car.plateNumber)}</span>`
+      : '—';
 
   // Hidden container for rendering (offscreen, like generateReceiptPdf.ts)
   const container = document.createElement('div');
@@ -144,6 +162,7 @@ export async function generateOrderPdf(check: Check, tenant?: Partial<Tenant> | 
       ${infoRow('Клиент', check.client?.fullName ? esc(check.client.fullName) : 'Розничный покупатель')}
       ${check.client?.phone ? infoRow('Телефон', esc(check.client.phone)) : ''}
       ${infoRow('Автомобиль', carValue)}
+      ${vin ? infoRow('VIN', `<span style="font-family:'Courier New',Courier,monospace;letter-spacing:.5px">${esc(formatVin(vin))}</span>`) : ''}
       ${check.mileage ? infoRow('Пробег', `${check.mileage.toLocaleString('ru-RU')} км`) : ''}
       ${check.master?.fullName ? infoRow('Ответственный мастер', esc(check.master.fullName)) : ''}
     </tbody>

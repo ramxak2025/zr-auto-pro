@@ -1,83 +1,139 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CalendarDays,
-  Clock,
-  Plus,
-  Trash2,
-  Loader2,
-  CheckCircle2,
-  XCircle,
   AlertTriangle,
+  BarChart3,
+  CalendarDays,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  ChevronDown,
-  Users,
-  BarChart3,
-  Trophy,
-  TrendingUp,
-  Medal,
+  Clock,
+  Plus,
   Settings,
+  Trash2,
+  Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import {
-  format,
-  eachDayOfInterval,
-  startOfMonth,
-  endOfMonth,
-  addMonths,
-  subMonths,
-  addDays,
-  isToday,
-  getDay,
-} from 'date-fns';
+import { addDays, addMonths, eachDayOfInterval, endOfMonth, format, getDay, startOfMonth, subMonths } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+import { attendanceScore, calculateAttendanceStats, emptyBreakdown } from '../../../shared/utils/attendance';
 import { scheduleApi, usersApi } from '../api/services';
 import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { formatDayKey } from '../../../shared/utils/formatters';
-import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
-import InlineLoader from '../components/InlineLoader';
-import EmptyState from '../components/EmptyState';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  PageHeader,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  SkeletonCard,
+  StatCard,
+  StatusPill,
+  TabPanel,
+  Tabs,
+  Toolbar,
+  cn,
+} from '../ui';
+import type { DataTableColumn, TabItem } from '../ui';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
+import UserAvatar from '../components/company/UserAvatar';
+import {
+  LEGEND_KINDS,
+  SCHEDULE_STATUS,
+  scheduleCellOf,
+  shortTime,
+  todayStatusOf,
+  type ScheduleStatusKind,
+} from '../components/company/scheduleStatus';
 
 type TabType = 'schedule' | 'today' | 'mystats' | 'attendance' | 'settings';
+type SettingsSection = 'service' | 'masters';
 
-// Correct Russian day abbreviations (date-fns 'EE' locale gives wrong 2-char prefix for Сб)
+// Русские сокращения дней недели (date-fns 'EE' даёт неверный 2-символьный префикс для Сб).
 const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн–Вс
+const CELL_W = 44;
 
-function AttendanceRatingTab({
-  entries,
-  users,
-  dateFrom,
-  dateTo,
-}: {
-  entries: ScheduleEntry[];
-  users: User[];
-  dateFrom: string;
-  dateTo: string;
-}) {
+interface MyStats {
+  totalScheduled: number;
+  totalWorked: number;
+  totalLate: number;
+  totalLateMinor: number;
+  totalLateMajor: number;
+  totalOnTime: number;
+  totalDaysOff: number;
+  avgLateMinutes: number;
+}
+
+interface WorkMode {
+  id: string;
+  name: string;
+  shiftStart: string;
+  shiftEnd: string;
+}
+
+type QuickStatus = 'shift' | 'dayoff' | 'sick' | 'late_minor' | 'late_major' | 'absent';
+
+const QUICK_STATUSES: { status: QuickStatus; kind: ScheduleStatusKind; label: string }[] = [
+  { status: 'shift', kind: 'planned', label: 'Смена' },
+  { status: 'dayoff', kind: 'dayOff', label: 'Выходной' },
+  { status: 'sick', kind: 'sick', label: 'Больничный' },
+  { status: 'late_minor', kind: 'lateMinor', label: 'Опоздал до часа' },
+  { status: 'late_major', kind: 'lateMajor', label: 'Опоздал больше часа' },
+  { status: 'absent', kind: 'absent', label: 'Прогул' },
+];
+
+/** 'YYYY-MM' → первое число месяца локальной полуночью; мусор → null. */
+function parseMonthKey(key: string | null): Date | null {
+  if (!key || !/^\d{4}-\d{2}$/.test(key)) return null;
+  const [y, m] = key.split('-').map(Number);
+  if (m < 1 || m > 12) return null;
+  return new Date(y, m - 1, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Рейтинг посещаемости
+// ---------------------------------------------------------------------------
+function AttendanceRatingTab({ users }: { users: User[] }) {
   // Месяц рейтинга — текущий У АВТОСЕРВИСА (157): выборка смен уезжает на
   // сервер границами месяца, а он режет сутки поясом тенанта. По часам браузера
   // в ночь на 1-е число вкладка открывалась в пустом следующем месяце.
   const { month: tenantMonth } = useTenantCalendar();
   const [selectedMonth, setSelectedMonth] = useState(tenantMonth);
 
-  const queryClient = useQueryClient();
-
-  // Fetch entries for selected month
   const monthStart = `${selectedMonth}-01`;
   const monthEnd = (() => {
     const [y, m] = selectedMonth.split('-').map(Number);
     return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
   })();
 
-  const { data: monthEntries } = useQuery<ScheduleEntry[]>({
+  const {
+    data: monthEntries,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd });
@@ -85,15 +141,11 @@ function AttendanceRatingTab({
     },
   });
 
-  const allEntries = monthEntries ?? entries;
-
-  // Which row is expanded to show the day-by-day breakdown
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
-  // Compute stats per user via SHARED utility — same logic everywhere.
-  const stats = useMemo(() => calculateAttendanceStats(allEntries as any), [allEntries]);
+  // Статистика по каждому — ОБЩЕЙ утилитой: одна логика везде.
+  const stats = useMemo(() => calculateAttendanceStats((monthEntries ?? []) as any), [monthEntries]);
 
-  // Rank users by attendance score
   const ranked = useMemo(() => {
     return users
       .map((u) => {
@@ -108,6 +160,7 @@ function AttendanceRatingTab({
     const [y, m] = selectedMonth.split('-').map(Number);
     const d = new Date(y, m - 1 + dir);
     setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    setExpandedUserId(null);
   };
 
   const monthLabel = (() => {
@@ -115,178 +168,187 @@ function AttendanceRatingTab({
     return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
   })();
 
+  const fmtDate = (d: string) => {
+    const [, m, day] = d.split('-');
+    return `${parseInt(day)}.${m}`;
+  };
+
   return (
     <div className="space-y-4">
-      {/* Month picker */}
-      <div className="flex items-center justify-center gap-3">
-        <button
-          aria-label="Предыдущий месяц"
+      <Toolbar>
+        <IconButton
+          label="Предыдущий месяц"
+          icon={ChevronLeft}
+          variant="secondary"
+          size="sm"
           onClick={() => shiftMonth(-1)}
-          className="p-2 rounded-lg hover:bg-gray-100"
-        >
-          <ChevronLeft className="h-5 w-5 text-gray-500" />
-        </button>
-        <span className="text-sm font-bold text-gray-900 capitalize min-w-[150px] text-center">{monthLabel}</span>
-        <button aria-label="Следующий месяц" onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-gray-100">
-          <ChevronRight className="h-5 w-5 text-gray-500" />
-        </button>
-      </div>
+        />
+        <h2 className="min-w-[10rem] text-center text-md font-semibold capitalize text-ink" aria-live="polite">
+          {monthLabel}
+        </h2>
+        <IconButton
+          label="Следующий месяц"
+          icon={ChevronRight}
+          variant="secondary"
+          size="sm"
+          onClick={() => shiftMonth(1)}
+        />
+        {selectedMonth !== tenantMonth && (
+          <Button variant="ghost" size="sm" onClick={() => setSelectedMonth(tenantMonth)}>
+            К текущему
+          </Button>
+        )}
+      </Toolbar>
 
-      {/* Ranking */}
-      <div className="space-y-2">
-        {ranked.map((u, idx) => {
-          const s = u.stats;
-          const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
-          const scoreColor = u.score >= 90 ? 'text-green-600' : u.score >= 70 ? 'text-yellow-600' : 'text-red-600';
-          const scoreBg = u.score >= 90 ? 'bg-green-50' : u.score >= 70 ? 'bg-yellow-50' : 'bg-red-50';
-
-          const isExpanded = expandedUserId === u.id;
-          const fmtDate = (d: string) => {
-            const [, m, day] = d.split('-');
-            return `${parseInt(day)}.${m}`;
-          };
-          return (
-            <div
-              key={u.id}
-              className={`bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}
-            >
-              <button
-                type="button"
-                onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
-                className="w-full p-4 text-left hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  {/* Rank */}
-                  <div
-                    className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                      idx === 0
-                        ? 'bg-amber-100 text-amber-700'
-                        : idx === 1
-                          ? 'bg-gray-200 text-gray-700'
-                          : idx === 2
-                            ? 'bg-orange-100 text-orange-700'
-                            : 'bg-gray-50 text-gray-400'
-                    }`}
-                  >
-                    {medal || idx + 1}
+      {isLoading && !monthEntries ? (
+        <div className="space-y-2">
+          <SkeletonCard lines={1} />
+          <SkeletonCard lines={1} />
+          <SkeletonCard lines={1} />
+        </div>
+      ) : isError && !monthEntries ? (
+        <ErrorRow message="Не удалось загрузить посещаемость за месяц" onRetry={() => refetch()} loading={isFetching} />
+      ) : ranked.length === 0 ? (
+        <EmptyState icon={Users} title="Нет сотрудников" description="Рейтинг строится по мастерам и администраторам" />
+      ) : (
+        <ol className="space-y-2">
+          {ranked.map((u, idx) => {
+            const s = u.stats;
+            const scoreTone = u.score >= 90 ? 'ok' : u.score >= 70 ? 'warn' : 'bad';
+            const isExpanded = expandedUserId === u.id;
+            const detailId = `rating-details-${u.id}`;
+            const segments: { kind: ScheduleStatusKind; value: number; bar: string }[] = [
+              { kind: 'planned', value: s.full, bar: 'bg-ok' },
+              { kind: 'lateMinor', value: s.lateMinor, bar: 'bg-warn' },
+              { kind: 'lateMajor', value: s.lateMajor, bar: 'bg-orange-500' },
+              { kind: 'absent', value: s.absent, bar: 'bg-bad' },
+            ];
+            const allDetails: { kind: ScheduleStatusKind; title: string; count: number; dates: string[] }[] = [
+              { kind: 'planned', title: 'Полная смена', count: s.full, dates: s.fullDates },
+              { kind: 'lateMinor', title: 'Опоздал до часа', count: s.lateMinor, dates: s.lateMinorDates },
+              { kind: 'lateMajor', title: 'Опоздал больше часа', count: s.lateMajor, dates: s.lateMajorDates },
+              { kind: 'absent', title: 'Прогул', count: s.absent, dates: s.absentDates },
+              { kind: 'sick', title: 'Больничный', count: s.sick, dates: s.sickDates },
+              { kind: 'dayOff', title: 'Выходной', count: s.dayOff, dates: s.dayOffDates },
+            ];
+            const details = allDetails.filter((d) => d.dates.length > 0);
+            return (
+              <li key={u.id}>
+                <Card padding="none" className={cn(idx === 0 && 'border-accent/40')}>
+                  <div className="flex items-center gap-3 px-4 py-3">
+                    <span
+                      className={cn(
+                        'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm font-semibold tabular-nums',
+                        idx === 0
+                          ? 'bg-accent text-white'
+                          : idx < 3
+                            ? 'bg-accent-soft text-accent-text'
+                            : 'bg-surface-3 text-ink-2',
+                      )}
+                      aria-label={`Место ${idx + 1}`}
+                    >
+                      {idx + 1}
+                    </span>
+                    <UserAvatar name={u.fullName} src={u.avatar} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink">{u.fullName}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge tone="ok" icon={SCHEDULE_STATUS.planned.icon} size="sm">
+                          {s.full}
+                        </Badge>
+                        {s.lateMinor > 0 && (
+                          <Badge tone="warn" icon={SCHEDULE_STATUS.lateMinor.icon} size="sm">
+                            {s.lateMinor}
+                          </Badge>
+                        )}
+                        {s.lateMajor > 0 && (
+                          <Badge tone="warn" icon={SCHEDULE_STATUS.lateMajor.icon} size="sm">
+                            {s.lateMajor}
+                          </Badge>
+                        )}
+                        {s.absent > 0 && (
+                          <Badge tone="bad" icon={SCHEDULE_STATUS.absent.icon} size="sm">
+                            {s.absent}
+                          </Badge>
+                        )}
+                        {s.sick > 0 && (
+                          <Badge tone="info" icon={SCHEDULE_STATUS.sick.icon} size="sm">
+                            {s.sick}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    <MiniStat label="Посещаемость" value={`${u.score} %`} tone={scoreTone} align="right" size="sm" />
+                    <IconButton
+                      label={isExpanded ? 'Скрыть даты' : 'Показать даты'}
+                      icon={isExpanded ? ChevronUp : ChevronDown}
+                      size="sm"
+                      onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
+                      aria-expanded={isExpanded}
+                      aria-controls={detailId}
+                    />
                   </div>
 
-                  {/* Name */}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-gray-900 truncate">{u.fullName}</p>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">
-                        ✅ {s.full}
-                      </span>
-                      {s.lateMinor > 0 && (
-                        <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">
-                          ⏰ {s.lateMinor}
-                        </span>
-                      )}
-                      {s.lateMajor > 0 && (
-                        <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">
-                          ⚠️ {s.lateMajor}
-                        </span>
-                      )}
-                      {s.absent > 0 && (
-                        <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">
-                          ❌ {s.absent}
-                        </span>
-                      )}
-                      {s.sick > 0 && (
-                        <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">
-                          🏥 {s.sick}
-                        </span>
-                      )}
+                  {s.total > 0 && (
+                    <div className="px-4 pb-3">
+                      <div
+                        className="flex h-1.5 overflow-hidden rounded-full bg-surface-3"
+                        role="img"
+                        aria-label={`Смен: ${s.full}, опозданий до часа: ${s.lateMinor}, больше часа: ${s.lateMajor}, прогулов: ${s.absent}`}
+                      >
+                        {segments
+                          .filter((seg) => seg.value > 0)
+                          .map((seg) => (
+                            <div
+                              key={seg.kind}
+                              className={seg.bar}
+                              style={{ width: `${(seg.value / s.total) * 100}%` }}
+                            />
+                          ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
-                  {/* Score */}
-                  <div className={`flex-shrink-0 ${scoreBg} rounded-xl px-3 py-1.5 text-center`}>
-                    <p className={`text-lg font-bold ${scoreColor}`}>{u.score}%</p>
-                    <p className="text-[9px] text-gray-400">посещ.</p>
-                  </div>
-                  {isExpanded ? (
-                    <ChevronUp className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                  )}
-                </div>
-
-                {/* Progress bar */}
-                {s.total > 0 && (
-                  <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden flex">
-                    {s.full > 0 && (
-                      <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />
-                    )}
-                    {s.lateMinor > 0 && (
-                      <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />
-                    )}
-                    {s.lateMajor > 0 && (
-                      <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />
-                    )}
-                    {s.absent > 0 && (
-                      <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />
-                    )}
-                  </div>
-                )}
-              </button>
-
-              {/* Expandable breakdown — shows EXACTLY which dates count where */}
-              {isExpanded && (
-                <div className="border-t border-gray-100 px-4 py-3 bg-gray-50 space-y-2 text-xs">
-                  {s.fullDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-green-700">✅ Полная смена ({s.full}): </span>
-                      <span className="text-gray-600">{s.fullDates.map(fmtDate).join(', ')}</span>
+                  {isExpanded && (
+                    <div id={detailId} className="space-y-1.5 border-t border-line bg-surface-2 px-4 py-3 text-xs">
+                      {details.length === 0 ? (
+                        <p className="text-ink-3">Нет данных за этот месяц</p>
+                      ) : (
+                        details.map((d) => {
+                          const Icon = SCHEDULE_STATUS[d.kind].icon;
+                          return (
+                            <p key={d.kind} className="flex items-start gap-1.5">
+                              <Icon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ink-3" aria-hidden="true" />
+                              <span>
+                                <span className="font-medium text-ink">
+                                  {d.title} ({d.count}):
+                                </span>{' '}
+                                <span className="text-ink-2">{d.dates.map(fmtDate).join(', ')}</span>
+                              </span>
+                            </p>
+                          );
+                        })
+                      )}
                     </div>
                   )}
-                  {s.lateMinorDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-yellow-700">⏰ Опоздал &lt;1ч ({s.lateMinor}): </span>
-                      <span className="text-gray-600">{s.lateMinorDates.map(fmtDate).join(', ')}</span>
-                    </div>
-                  )}
-                  {s.lateMajorDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-orange-700">⚠️ Опоздал &gt;1ч ({s.lateMajor}): </span>
-                      <span className="text-gray-600">{s.lateMajorDates.map(fmtDate).join(', ')}</span>
-                    </div>
-                  )}
-                  {s.absentDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-red-700">❌ Прогул ({s.absent}): </span>
-                      <span className="text-gray-600">{s.absentDates.map(fmtDate).join(', ')}</span>
-                    </div>
-                  )}
-                  {s.sickDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-rose-700">🏥 Больничный ({s.sick}): </span>
-                      <span className="text-gray-600">{s.sickDates.map(fmtDate).join(', ')}</span>
-                    </div>
-                  )}
-                  {s.dayOffDates.length > 0 && (
-                    <div>
-                      <span className="font-semibold text-gray-500">🌙 Выходной ({s.dayOff}): </span>
-                      <span className="text-gray-600">{s.dayOffDates.map(fmtDate).join(', ')}</span>
-                    </div>
-                  )}
-                  {s.total === 0 && s.sick === 0 && s.dayOff === 0 && (
-                    <p className="text-gray-400 text-center">Нет данных за этот месяц</p>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                </Card>
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Страница
+// ---------------------------------------------------------------------------
 export default function SchedulePage() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const formId = useId();
   // «Сегодня» в графике — по календарю АВТОСЕРВИСА: тем же поясом сервер решает,
   // какие дни уже отработаны (salary.workedShiftsByUser).
   const { timeZone, today: tenantToday, month: tenantMonth } = useTenantCalendar();
@@ -300,11 +362,54 @@ export default function SchedulePage() {
   // POST/PATCH/DELETE /schedule*; волна Битрикс24). Просмотр — schedule_view.
   const canEdit = hasPermission('schedule_manage');
 
-  const [tab, setTab] = useState<TabType>('schedule');
+  // Вкладка, месяц сетки и раздел настроек — в URL: F5 и пересылка ссылки
+  // возвращают на то же место.
+  const tabItems = useMemo<TabItem<TabType>[]>(
+    () => [
+      { key: 'schedule', label: 'График', icon: CalendarDays },
+      { key: 'today', label: 'Сегодня', icon: Clock },
+      { key: 'mystats', label: 'Смены', icon: Users },
+      { key: 'attendance', label: 'Рейтинг', icon: BarChart3 },
+      ...(canEdit ? [{ key: 'settings' as const, label: 'Настройки', icon: Settings }] : []),
+    ],
+    [canEdit],
+  );
+  const requestedTab = params.get('tab') as TabType | null;
+  const tab: TabType = tabItems.some((t) => t.key === requestedTab) ? (requestedTab as TabType) : 'schedule';
+  const settingsTab: SettingsSection = params.get('section') === 'masters' ? 'masters' : 'service';
+
+  const updateParams = useCallback(
+    (patch: Record<string, string | null>) => {
+      setParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          for (const [k, v] of Object.entries(patch)) {
+            if (v === null) p.delete(k);
+            else p.set(k, v);
+          }
+          return p;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+  const setTab = (next: TabType) => updateParams({ tab: next === 'schedule' ? null : next });
+  const setSettingsTab = (next: SettingsSection) => updateParams({ section: next === 'service' ? null : next });
 
   // Стартовый месяц — текущий У АВТОСЕРВИСА: в ночь на 1-е число график по
   // часам браузера открывался уже в следующем месяце (пустая сетка).
-  const [currentMonth, setCurrentMonth] = useState(tenantMonthStart);
+  const currentMonth = useMemo(
+    () => parseMonthKey(params.get('month')) ?? tenantMonthStart,
+    [params, tenantMonthStart],
+  );
+  const setCurrentMonth = useCallback(
+    (d: Date) => {
+      const key = format(d, 'yyyy-MM');
+      updateParams({ month: key === tenantMonth ? null : key });
+    },
+    [tenantMonth, updateParams],
+  );
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
@@ -329,6 +434,7 @@ export default function SchedulePage() {
   const [pendingChanges, setPendingChanges] = useState<
     Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
   >({});
+  const [applying, setApplying] = useState(false);
 
   // Master reorder dialog
   const [reorderDialog, setReorderDialog] = useState<{ userId: string; name: string; currentIndex: number } | null>(
@@ -345,13 +451,12 @@ export default function SchedulePage() {
     note: '',
   });
 
-  // Settings tab state
-  const [settingsTab, setSettingsTab] = useState<'service' | 'masters'>('service');
-
   // Queries — queryFn returns plain data (NOT AxiosResponse) so setQueryData works
   const {
     data: scheduleData,
     isLoading: scheduleLoading,
+    isError: scheduleError,
+    isFetching: scheduleFetching,
     refetch: refetchSchedule,
   } = useQuery({
     queryKey: ['schedule', dateFrom, dateTo],
@@ -361,7 +466,13 @@ export default function SchedulePage() {
     },
   });
 
-  const { data: todayData, isLoading: todayLoading } = useQuery({
+  const {
+    data: todayData,
+    isLoading: todayLoading,
+    isError: todayError,
+    isFetching: todayFetching,
+    refetch: refetchToday,
+  } = useQuery({
     queryKey: ['schedule-today'],
     queryFn: async () => {
       const res = await scheduleApi.getToday();
@@ -370,36 +481,37 @@ export default function SchedulePage() {
     enabled: tab === 'today',
   });
 
-  const { data: myStatsData } = useQuery({
+  const {
+    data: myStatsData,
+    isLoading: myStatsLoading,
+    isError: myStatsError,
+    isFetching: myStatsFetching,
+    refetch: refetchMyStats,
+  } = useQuery({
     queryKey: ['my-schedule-stats'],
-    queryFn: () => scheduleApi.getMyStats(),
-    select: (res) =>
-      res.data as {
-        totalScheduled: number;
-        totalWorked: number;
-        totalLate: number;
-        totalLateMinor: number;
-        totalLateMajor: number;
-        totalOnTime: number;
-        totalDaysOff: number;
-        avgLateMinutes: number;
-      },
+    queryFn: async () => (await scheduleApi.getMyStats()).data as MyStats,
     enabled: tab === 'mystats',
   });
 
   // Команда ТЕКУЩЕГО филиала (167): строки сетки — сотрудники этого
   // автосервиса (назначенные на него + не назначенные никуда), а дни строк
   // сервер отдаёт только этого филиала. Ключ под префиксом ['users'], чтобы
-  // инвалидации справочника сотрудников дёргали и его.
-  const { data: usersData } = useQuery({
+  // инвалидации справочника сотрудников дёргали и его. В слоте лежит МАССИВ —
+  // так же его пишет «Планирование» (одна форма слота на всех потребителей и
+  // на IndexedDB-снимок; ответ axios с функциями туда не клонируется).
+  const {
+    data: usersData,
+    isError: usersError,
+    refetch: refetchUsers,
+    isFetching: usersFetching,
+  } = useQuery({
     queryKey: ['users', 'point'],
-    queryFn: () => usersApi.getAll({ scope: 'point' }),
-    select: (res) => res.data as User[],
+    queryFn: async () => (await usersApi.getAll({ scope: 'point' })).data as User[],
   });
 
-  const entries = scheduleData ?? [];
-  const todayStatuses = todayData ?? [];
-  const users = usersData ?? [];
+  const entries = useMemo(() => scheduleData ?? [], [scheduleData]);
+  const todayStatuses = useMemo(() => todayData ?? [], [todayData]);
+  const users = useMemo(() => usersData ?? [], [usersData]);
 
   // Days of the current month
   const monthDays = useMemo(() => {
@@ -408,9 +520,8 @@ export default function SchedulePage() {
     } catch {
       return [];
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFrom, dateTo]);
-
-  const scheduleQueryKey = ['schedule', dateFrom, dateTo];
 
   // Build user -> date -> entry map.
   // Defensive against missing userId/date (stale SW cache, partial payloads).
@@ -443,19 +554,19 @@ export default function SchedulePage() {
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
     onMutate: async (orderedIds: string[]) => {
       await queryClient.cancelQueries({ queryKey: ['users', 'point'] });
-      const prev = queryClient.getQueryData<any>(['users', 'point']);
-      queryClient.setQueryData<any>(['users', 'point'], (old: any) => {
-        if (!old?.data) return old;
-        const byId = new Map(old.data.map((u: any) => [u.id, u]));
+      const prev = queryClient.getQueryData<User[]>(['users', 'point']);
+      queryClient.setQueryData<User[]>(['users', 'point'], (old) => {
+        if (!Array.isArray(old)) return old;
+        const byId = new Map(old.map((u) => [u.id, u]));
         const reordered = orderedIds
           .map((id, i) => {
             const u = byId.get(id);
-            return u ? { ...u, sortOrder: i } : null;
+            return u ? ({ ...u, sortOrder: i } as User) : null;
           })
-          .filter(Boolean);
+          .filter((u): u is User => u !== null);
         // Add any users not in orderedIds (new users)
-        const remaining = old.data.filter((u: any) => !orderedIds.includes(u.id));
-        return { ...old, data: [...reordered, ...remaining] };
+        const remaining = old.filter((u) => !orderedIds.includes(u.id));
+        return [...reordered, ...remaining];
       });
       return prev;
     },
@@ -466,31 +577,10 @@ export default function SchedulePage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 
-  const moveMaster = (userId: string, direction: 'up' | 'down') => {
-    const current = scheduleUsers.map((u) => u.id);
-    const idx = current.indexOf(userId);
-    if (idx < 0) return;
-    const newIdx = direction === 'up' ? Math.max(0, idx - 1) : Math.min(current.length - 1, idx + 1);
-    if (idx === newIdx) return;
-    const reordered = [...current];
-    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
-    updateOrderMutation.mutate(reordered);
-  };
-
-  const moveMasterToPosition = (userId: string, newPos: number) => {
-    const current = scheduleUsers.map((u) => u.id);
-    const idx = current.indexOf(userId);
-    if (idx < 0 || idx === newPos) return;
-    const reordered = current.filter((id) => id !== userId);
-    reordered.splice(newPos, 0, userId);
-    updateOrderMutation.mutate(reordered);
-    setReorderDialog(null);
-  };
-
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
-    // Include masters AND admins — both work on shifts and appear in schedule.
-    // Exclude only director/superadmin (management, not shift workers).
+    // Мастера И администраторы — оба работают сменами и видны в графике.
+    // Директор/суперадмин (владельцы) в графике не отображаются — требование продукта.
     const activeUsers = users.filter((u) => u.isActive && (u.role === 'master' || u.role === 'admin'));
     const activeIds = new Set(activeUsers.map((u) => u.id));
 
@@ -512,37 +602,21 @@ export default function SchedulePage() {
     return activeUsers;
   }, [entries, users]);
 
-  // Month navigation
-  const goToPrevMonth = useCallback(() => setCurrentMonth((m) => subMonths(m, 1)), []);
-  const goToNextMonth = useCallback(() => setCurrentMonth((m) => addMonths(m, 1)), []);
-  const goToToday = useCallback(() => setCurrentMonth(tenantMonthStart), [tenantMonthStart]);
-
-  // Instant cache update — mutates React Query cache directly
-  const patchCache = (userId: string, date: string, changes: Partial<ScheduleEntry>, isNew: boolean) => {
-    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
-      if (!old) return old;
-      if (isNew) {
-        return [
-          ...old,
-          {
-            id: `t-${Date.now()}`,
-            tenantId: '',
-            userId,
-            date,
-            shiftStart: '09:00',
-            shiftEnd: '18:00',
-            isDayOff: false,
-            lateMinutes: 0,
-            isManualOverride: false,
-            ...changes,
-          } as ScheduleEntry,
-        ];
-      }
-      return old.map((e) =>
-        e.userId === userId && String(e.date || '').slice(0, 10) === date ? { ...e, ...changes } : e,
-      );
-    });
+  const moveMasterToPosition = (userId: string, newPos: number) => {
+    const current = scheduleUsers.map((u) => u.id);
+    const idx = current.indexOf(userId);
+    if (idx < 0 || idx === newPos) return;
+    const reordered = current.filter((id) => id !== userId);
+    reordered.splice(newPos, 0, userId);
+    updateOrderMutation.mutate(reordered);
+    setReorderDialog(null);
   };
+
+  // Month navigation
+  const goToPrevMonth = useCallback(() => setCurrentMonth(subMonths(currentMonth, 1)), [currentMonth, setCurrentMonth]);
+  const goToNextMonth = useCallback(() => setCurrentMonth(addMonths(currentMonth, 1)), [currentMonth, setCurrentMonth]);
+  const goToToday = useCallback(() => setCurrentMonth(tenantMonthStart), [tenantMonthStart, setCurrentMonth]);
+  const isCurrentMonth = format(currentMonth, 'yyyy-MM') === tenantMonth;
 
   const createMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.create(data),
@@ -554,9 +628,9 @@ export default function SchedulePage() {
       }, 1500);
       closeModal();
     },
-    onError: () => {
+    onError: (err: unknown) => {
       refetchSchedule();
-      toast.error('Ошибка');
+      toast.error(apiErrorMessage(err) ?? 'Ошибка');
     },
   });
 
@@ -569,9 +643,9 @@ export default function SchedulePage() {
       }, 1500);
       closeModal();
     },
-    onError: () => {
+    onError: (err: unknown) => {
       refetchSchedule();
-      toast.error('Ошибка');
+      toast.error(apiErrorMessage(err) ?? 'Ошибка');
     },
   });
 
@@ -582,8 +656,8 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
       toast.success('Запись удалена');
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка удаления');
     },
   });
 
@@ -612,22 +686,6 @@ export default function SchedulePage() {
       isDayOff: false,
       isSickDay: false,
       note: '',
-    });
-    setModalOpen(true);
-  };
-
-  const openEdit = (entry: ScheduleEntry) => {
-    if (!canEdit) return;
-    setEditingEntry(entry);
-    const isSick = (entry.note || '').toLowerCase().includes('больнич');
-    setEntryForm({
-      userId: entry.userId,
-      date: String(entry.date || '').slice(0, 10),
-      shiftStart: entry.shiftStart || '09:00',
-      shiftEnd: entry.shiftEnd || '18:00',
-      isDayOff: entry.isDayOff && !isSick,
-      isSickDay: isSick,
-      note: entry.note || '',
     });
     setModalOpen(true);
   };
@@ -661,13 +719,18 @@ export default function SchedulePage() {
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
   // Work modes query
-  const { data: workModesData } = useQuery({
+  const {
+    data: workModesData,
+    isLoading: workModesLoading,
+    isError: workModesError,
+    isFetching: workModesFetching,
+    refetch: refetchWorkModes,
+  } = useQuery({
     queryKey: ['work-modes'],
-    queryFn: () => scheduleApi.getWorkModes(),
-    select: (res) => res.data,
+    queryFn: async () => (await scheduleApi.getWorkModes()).data as WorkMode[],
     enabled: tab === 'settings',
   });
-  const workModes = workModesData ?? [];
+  const workModes = useMemo(() => workModesData ?? [], [workModesData]);
 
   const createWorkModeMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.createWorkMode(data),
@@ -675,18 +738,11 @@ export default function SchedulePage() {
       queryClient.invalidateQueries({ queryKey: ['work-modes'] });
       toast.success('Режим работы создан');
     },
-  });
-
-  const updateWorkModeMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.updateWorkMode(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['work-modes'] });
-      toast.success('Режим обновлён');
-    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Не удалось создать режим'),
   });
 
   // Quick status change — directly creates/updates entry without opening modal
-  const quickSetStatus = (status: 'shift' | 'dayoff' | 'sick' | 'late_minor' | 'late_major' | 'absent' | 'delete') => {
+  const quickSetStatus = (status: QuickStatus | 'delete') => {
     if (!quickPopup) return;
     const { userId, date, entry } = quickPopup;
 
@@ -702,9 +758,7 @@ export default function SchedulePage() {
     // Бизнес-«сегодня» — календарный день В ПОЯСЕ АВТОСЕРВИСА (tenants.timezone,
     // 157), тот же, каким сервер считает отработанные смены. Будущий день — это
     // ПЛАН: факт прихода (actualArrival) и статус «вовремя» ему не пришиваем,
-    // иначе зарплата считала бы смену раньше, чем она отработана. Раньше здесь
-    // стоял фиксированный московский сдвиг — у автосервиса восточнее Москвы
-    // «сегодня» на несколько часов считалось будущим.
+    // иначе зарплата считала бы смену раньше, чем она отработана.
     const isFutureDay = date > formatDayKey(new Date(), timeZone);
 
     const lateStatus =
@@ -769,20 +823,25 @@ export default function SchedulePage() {
 
   // Apply all pending changes at once
   const applyPendingChanges = async () => {
-    const entries = Object.values(pendingChanges);
-    if (entries.length === 0) return;
+    const changes = Object.values(pendingChanges);
+    if (changes.length === 0 || applying) return;
+    setApplying(true);
 
     const failures: string[] = [];
-    for (const change of entries) {
-      try {
-        if (change.existingEntryId) {
-          await scheduleApi.update(change.existingEntryId, change.payload);
-        } else {
-          await scheduleApi.create(change.payload);
+    try {
+      for (const change of changes) {
+        try {
+          if (change.existingEntryId) {
+            await scheduleApi.update(change.existingEntryId, change.payload);
+          } else {
+            await scheduleApi.create(change.payload);
+          }
+        } catch {
+          failures.push(change.userId);
         }
-      } catch {
-        failures.push(change.userId);
       }
+    } finally {
+      setApplying(false);
     }
 
     setPendingChanges({});
@@ -790,9 +849,9 @@ export default function SchedulePage() {
     queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
 
     if (failures.length === 0) {
-      toast.success(`Применено ${entries.length} изм.`);
+      toast.success(`Применено изменений: ${changes.length}`);
     } else {
-      toast.error(`Ошибок: ${failures.length}`);
+      toast.error(`Не удалось применить: ${failures.length}`);
     }
   };
 
@@ -800,764 +859,673 @@ export default function SchedulePage() {
     setPendingChanges({});
   };
 
-  // Cell rendering helpers
-  const getCellContent = (entry: ScheduleEntry | undefined, dateStr?: string) => {
-    if (!entry) return null;
-    const note = (entry.note || '').toLowerCase();
-    const lateMin = entry.lateMinutes || 0;
-    // «Сегодня» и «прошедший день» — по календарю АВТОСЕРВИСА, ровно как
-    // isFutureDay выше и как сервер считает отработанные смены (157). По часам
-    // браузера подсветка текущего дня уезжала на соседнюю колонку у любого, кто
-    // открыл график из другого региона.
-    const todayKey = formatDayKey(new Date(), timeZone);
-    const isPast = dateStr ? dateStr < todayKey : false;
-    const isToday = dateStr === todayKey;
-
-    // Больничный
-    if (note.includes('больнич')) {
-      return { label: '🏥', bgColor: 'bg-rose-50', textColor: 'text-rose-500', borderColor: 'border-rose-200' };
-    }
-    // Прогул (из note)
-    if (note.includes('прогул')) {
-      return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
-    }
-    // Выходной
-    if (entry.isDayOff) {
-      return { label: '🌙', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
-    }
-    // Опоздание >1ч (восклицательный в треугольнике)
-    if (entry.lateStatus === 'late_major' || lateMin >= 60) {
-      return { label: '⚠️', bgColor: 'bg-yellow-100', textColor: 'text-yellow-700', borderColor: 'border-yellow-400' };
-    }
-    // Опоздание <1ч (будильник на жёлтом)
-    if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) {
-      return { label: '⏰', bgColor: 'bg-yellow-50', textColor: 'text-yellow-600', borderColor: 'border-yellow-300' };
-    }
-    // Открыл смену вовремя — показываем время начала смены зелёным
-    if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
-      const time = entry.shiftStart?.slice(0, 5) || '✓';
-      return { label: time, bgColor: 'bg-green-100', textColor: 'text-green-700', borderColor: 'border-green-300' };
-    }
-    // Прогул для прошедших дней без смены
-    if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
-      return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
-    }
-    // Запланирована смена (сегодня или будущее) — зелёная галочка
-    if (entry.shiftStart) {
-      return { label: '✓', bgColor: 'bg-green-50', textColor: 'text-green-600', borderColor: 'border-green-200' };
-    }
-    return null;
-  };
-
-  // Today tab helpers
-  const getStatusBadge = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">
-          Выходной
-        </span>
-      );
-    if (!status.hasSchedule)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">
-          Нет расписания
-        </span>
-      );
-    if (status.lateStatus === 'late_major')
-      return (
-        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">
-          Опоздание &gt;1ч
-        </span>
-      );
-    if (status.lateStatus === 'late_minor')
-      return (
-        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">
-          Опоздание &lt;1ч
-        </span>
-      );
-    if (status.isWorking)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">
-          На смене
-        </span>
-      );
-    return (
-      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">
-        Прогул
-      </span>
-    );
-  };
-
-  const getStatusIcon = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff) return <XCircle className="w-5 h-5 text-gray-900" />;
-    if (status.lateStatus === 'late_major') return <AlertTriangle className="w-5 h-5 text-orange-500" />;
-    if (status.lateStatus === 'late_minor') return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
-    if (status.isWorking) return <CheckCircle2 className="w-5 h-5 text-green-500" />;
-    if (status.hasSchedule) return <XCircle className="w-5 h-5 text-red-500" />;
-    return <Clock className="w-5 h-5 text-gray-400" />;
-  };
-
+  const pendingCount = Object.keys(pendingChanges).length;
+  const todayKey = formatDayKey(new Date(), timeZone);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const quickUser = quickPopup ? users.find((u) => u.id === quickPopup.userId) : null;
+
+  const todayColumns = useMemo<DataTableColumn<TodayEmployeeStatus>[]>(
+    () => [
+      {
+        key: 'fullName',
+        header: 'Сотрудник',
+        render: (s) => (
+          <span className="inline-flex items-center gap-2.5">
+            <UserAvatar name={s.fullName} size="sm" />
+            <span className="font-medium text-ink">{s.fullName}</span>
+          </span>
+        ),
+      },
+      {
+        key: 'status',
+        header: 'Статус',
+        render: (s) => {
+          const st = todayStatusOf(s);
+          return (
+            <StatusPill tone={st.tone} live={st.tone === 'ok'}>
+              {st.label}
+            </StatusPill>
+          );
+        },
+      },
+      {
+        key: 'shift',
+        header: 'Смена',
+        hideBelow: 'sm',
+        render: (s) =>
+          !s.isDayOff && s.hasSchedule && s.shiftStart ? (
+            <span className="tabular-nums">
+              {shortTime(s.shiftStart)}–{shortTime(s.shiftEnd)}
+            </span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          ),
+      },
+      {
+        key: 'arrival',
+        header: 'Пришёл',
+        hideBelow: 'md',
+        render: (s) =>
+          s.actualArrival ? (
+            <span className="tabular-nums">{shortTime(s.actualArrival)}</span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          ),
+      },
+      {
+        key: 'late',
+        header: 'Опоздание',
+        numeric: true,
+        hideBelow: 'md',
+        render: (s) =>
+          s.lateMinutes > 0 ? (
+            <span className="text-warn-text">{s.lateMinutes} мин</span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          ),
+      },
+      {
+        key: 'note',
+        header: 'Заметка',
+        hideBelow: 'lg',
+        truncate: true,
+        width: 220,
+        render: (s) => s.note || <span className="text-ink-3">—</span>,
+      },
+    ],
+    [],
+  );
+
+  const legend = (
+    <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3" aria-label="Легенда">
+      {LEGEND_KINDS.map((kind) => {
+        const def = SCHEDULE_STATUS[kind];
+        const Icon = def.icon;
+        return (
+          <li key={kind} className="flex items-center gap-1.5">
+            <span
+              className={cn('flex h-5 w-5 items-center justify-center rounded border', def.cell)}
+              aria-hidden="true"
+            >
+              <Icon className="h-3 w-3" />
+            </span>
+            {def.short}
+          </li>
+        );
+      })}
+    </ul>
+  );
 
   return (
-    <div className="pb-6">
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Расписание</h1>
-        {canEdit && (
-          <button onClick={() => openCreate()} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Добавить
-          </button>
-        )}
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Расписание"
+        icon={CalendarDays}
+        subtitle="График смен, посещаемость и режимы работы"
+        actions={
+          canEdit ? (
+            <Button variant="secondary" icon={Plus} onClick={() => openCreate()}>
+              Добавить запись
+            </Button>
+          ) : undefined
+        }
+      />
 
-      {/* Pending changes Apply bar */}
-      {Object.keys(pendingChanges).length > 0 && (
-        <div className="sticky top-0 z-40 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3 flex items-center justify-between shadow-sm">
+      {/* Несохранённые изменения — липкая полоса поверх любой вкладки */}
+      {pendingCount > 0 && (
+        <div
+          role="status"
+          className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warn/30 bg-warn-soft px-4 py-2.5 shadow-card"
+        >
+          <p className="flex items-center gap-2 text-sm font-medium text-warn-text">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            Несохранённых изменений: <span className="tabular-nums">{pendingCount}</span>
+          </p>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600" />
-            <span className="text-xs font-semibold text-amber-800">
-              Несохранённых изменений: {Object.keys(pendingChanges).length}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={discardPendingChanges}
-              className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1"
-            >
-              Отмена
-            </button>
-            <button
-              onClick={applyPendingChanges}
-              className="text-xs font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700"
-            >
+            <Button variant="secondary" size="sm" onClick={discardPendingChanges} disabled={applying}>
+              Отменить
+            </Button>
+            <Button size="sm" onClick={applyPendingChanges} loading={applying}>
               Применить
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {/* Tabs — icon-first on mobile, icon+label on desktop */}
-      <div className="mb-5 bg-gray-100 rounded-2xl p-1 flex items-center gap-0.5">
-        {(
-          [
-            { key: 'schedule', label: 'График', icon: CalendarDays },
-            { key: 'today', label: 'Сегодня', icon: Clock },
-            { key: 'mystats', label: 'Смены', icon: Users },
-            { key: 'attendance', label: 'Рейтинг', icon: BarChart3 },
-            ...(canEdit ? [{ key: 'settings' as const, label: 'Настр.', icon: Settings }] : []),
-          ] as const
-        ).map((t) => {
-          const Icon = t.icon;
-          const active = tab === (t.key as TabType);
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key as TabType)}
-              className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-xl transition-all ${
-                active ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
-              }`}
-            >
-              <Icon className="w-[18px] h-[18px]" />
-              <span className="text-[10px] font-semibold leading-none truncate max-w-full">{t.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      <Tabs items={tabItems} value={tab} onChange={setTab} aria-label="Разделы расписания" idPrefix="schedule" />
 
-      {/* Schedule Tab - Grid: rows=employees, columns=dates */}
-      {tab === 'schedule' && (
-        <div>
-          {/* Month Navigation */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-4">
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3">
-              <div className="flex items-center justify-between">
-                <button
-                  aria-label="Предыдущий месяц"
-                  onClick={goToPrevMonth}
-                  className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-all duration-200 active:scale-95"
-                >
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-                <div className="text-center">
-                  <h2 className="text-white font-semibold text-lg capitalize">
-                    {format(currentMonth, 'LLLL yyyy', { locale: ru })}
-                  </h2>
-                  {format(currentMonth, 'yyyy-MM') !== tenantMonth && (
-                    <button
-                      onClick={goToToday}
-                      className="text-white/80 hover:text-white text-[10px] mt-0.5 transition-colors underline decoration-white/40"
-                    >
-                      К текущему
-                    </button>
-                  )}
-                </div>
-                <button
-                  aria-label="Следующий месяц"
-                  onClick={goToNextMonth}
-                  className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-all duration-200 active:scale-95"
-                >
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Legend */}
-            <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
-                <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-green-50 border border-green-200 flex items-center justify-center text-[10px]">
-                    ✓
-                  </span>
-                  Смена
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-[10px]">
-                    🌙
-                  </span>
-                  Вых
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-rose-50 border border-rose-200 flex items-center justify-center text-[10px]">
-                    🏥
-                  </span>
-                  Б/Л
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-yellow-50 border border-yellow-300 flex items-center justify-center text-[10px]">
-                    ⏰
-                  </span>
-                  &lt;1ч
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-orange-50 border border-orange-300 flex items-center justify-center text-[10px]">
-                    ⚠️
-                  </span>
-                  &gt;1ч
-                </span>
-              </div>
-            </div>
-
-            {scheduleLoading ? (
-              <InlineLoader />
-            ) : scheduleUsers.length === 0 ? (
-              <div className="py-16">
-                <EmptyState
-                  icon={Users}
-                  title="Нет сотрудников"
-                  description="Добавьте сотрудников для составления расписания"
-                />
-              </div>
-            ) : (
-              /* Grid Table — horizontal scroll on mobile */
-              <div className="relative">
-                <div className="flex">
-                  {/* Sticky employee names column */}
-                  <div className="flex-shrink-0 sticky left-0 z-10 bg-white border-r border-gray-200">
-                    {/* Corner header */}
-                    <div className="h-10 border-b border-gray-200 bg-gray-50 px-3 flex items-center">
-                      <span className="text-[10px] font-semibold text-gray-500 uppercase">Сотрудник</span>
-                    </div>
-                    {/* Employee rows — fixed height, no wrapping */}
-                    {scheduleUsers.map((u, idx) => (
-                      <div
-                        key={u.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() =>
-                          canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })
-                        }
-                        onKeyDown={(e) =>
-                          e.key === 'Enter' &&
-                          canEdit &&
-                          setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })
-                        }
-                        className="h-12 min-h-[48px] max-h-[48px] border-b border-gray-50 px-3 flex items-center gap-2 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors cursor-pointer"
-                      >
-                        <span className="text-[10px] font-bold text-gray-300 w-5 flex-shrink-0">{idx + 1}</span>
-                        <span className="text-xs font-medium text-gray-800 truncate flex-1">{u.fullName}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Scrollable dates area */}
-                  <div className="overflow-x-auto flex-1" ref={scrollRef}>
-                    <div style={{ minWidth: `${monthDays.length * 44}px` }}>
-                      {/* Date headers */}
-                      <div className="flex border-b border-gray-200 bg-gray-50">
-                        {monthDays.map((day) => {
-                          const dayOfWeek = getDay(day);
-                          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                          const isTodayDate = isToday(day);
-                          return (
-                            <div
-                              key={format(day, 'yyyy-MM-dd')}
-                              className={`w-11 flex-shrink-0 h-10 flex flex-col items-center justify-center ${
-                                isTodayDate ? 'bg-blue-100' : isWeekend ? 'bg-red-50/50' : ''
-                              }`}
-                            >
-                              <span
-                                className={`text-[9px] font-medium ${isWeekend ? 'text-red-400' : 'text-gray-400'}`}
-                              >
-                                {DAY_ABBR[getDay(day)]}
-                              </span>
-                              <span
-                                className={`text-xs font-bold ${
-                                  isTodayDate ? 'text-blue-600' : isWeekend ? 'text-red-500' : 'text-gray-700'
-                                }`}
-                              >
-                                {format(day, 'd')}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* Employee schedule rows */}
-                      {scheduleUsers.map((u) => (
-                        <div key={u.id} className="flex border-b border-gray-50 h-12 min-h-[48px] max-h-[48px]">
-                          {monthDays.map((day) => {
-                            const dateStr = format(day, 'yyyy-MM-dd');
-                            const entry = entryMap[u.id]?.[dateStr];
-                            const cellData = getCellContent(entry, dateStr);
-                            const dayOfWeek = getDay(day);
-                            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                            const isTodayDate = isToday(day);
-
-                            const openCell = () => {
-                              if (canEdit) setQuickPopup({ userId: u.id, date: dateStr, entry });
-                            };
-                            return (
-                              <div
-                                key={dateStr}
-                                {...(canEdit
-                                  ? {
-                                      role: 'button' as const,
-                                      tabIndex: 0,
-                                      'aria-label': `${u.fullName}, ${format(day, 'd MMMM', { locale: ru })}`,
-                                      onKeyDown: (e: React.KeyboardEvent) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                          e.preventDefault();
-                                          openCell();
-                                        }
-                                      },
-                                    }
-                                  : {})}
-                                onClick={openCell}
-                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
-                                  canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
-                                } ${isTodayDate ? 'bg-blue-50/40' : isWeekend ? 'bg-red-50/20' : ''}`}
-                              >
-                                {cellData ? (
-                                  <div
-                                    className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}
-                                  >
-                                    <span
-                                      className={`${/^[\d:]+$/.test(cellData.label) ? 'text-[10px] font-bold' : 'text-[15px] leading-none'} ${cellData.textColor}`}
-                                    >
-                                      {cellData.label}
-                                    </span>
-                                  </div>
-                                ) : !isWeekend ? (
-                                  <div className="w-8 h-8 rounded-lg bg-green-50/50 border border-green-100 flex items-center justify-center">
-                                    <span className="text-[10px] text-green-400">✓</span>
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+      {/* График: строки — сотрудники, колонки — дни месяца */}
+      <TabPanel idPrefix="schedule" tabKey="schedule" active={tab === 'schedule'}>
+        <Card padding="none">
+          <Toolbar className="border-b border-line px-4 py-3" end={legend}>
+            <IconButton
+              label="Предыдущий месяц"
+              icon={ChevronLeft}
+              variant="secondary"
+              size="sm"
+              onClick={goToPrevMonth}
+            />
+            <h2 className="min-w-[10rem] text-center text-md font-semibold capitalize text-ink" aria-live="polite">
+              {format(currentMonth, 'LLLL yyyy', { locale: ru })}
+            </h2>
+            <IconButton
+              label="Следующий месяц"
+              icon={ChevronRight}
+              variant="secondary"
+              size="sm"
+              onClick={goToNextMonth}
+            />
+            {!isCurrentMonth && (
+              <Button variant="ghost" size="sm" onClick={goToToday}>
+                К текущему
+              </Button>
             )}
-          </div>
-        </div>
-      )}
+          </Toolbar>
 
-      {/* Today Tab */}
-      {tab === 'today' && (
-        <div>
-          {todayLoading ? (
-            <InlineLoader />
-          ) : todayStatuses.length === 0 ? (
+          {scheduleLoading && !scheduleData ? (
+            <div className="space-y-3 p-4" role="status" aria-label="Загрузка графика…">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : scheduleError && !scheduleData ? (
+            <div className="p-4">
+              <ErrorRow
+                message="Не удалось загрузить график"
+                onRetry={() => refetchSchedule()}
+                loading={scheduleFetching}
+              />
+            </div>
+          ) : usersError && scheduleUsers.length === 0 ? (
+            <div className="p-4">
+              <ErrorRow
+                message="Не удалось загрузить список сотрудников"
+                onRetry={() => refetchUsers()}
+                loading={usersFetching}
+              />
+            </div>
+          ) : scheduleUsers.length === 0 ? (
             <EmptyState
-              icon={CalendarDays}
-              title="Нет данных на сегодня"
-              description="Расписание на сегодня не настроено"
+              icon={Users}
+              title="Нет сотрудников"
+              description="Добавьте мастеров в разделе «Пользователи», чтобы составить график"
             />
           ) : (
-            <div className="space-y-3">
-              {todayStatuses.map((status) => (
-                <div
-                  key={status.userId}
-                  className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-4 transition-all duration-150 hover:shadow-md"
-                >
-                  <div className="flex-shrink-0">{getStatusIcon(status)}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-gray-900">{status.fullName}</span>
-                      {getStatusBadge(status)}
+            <div className="flex">
+              {/* Липкая колонка сотрудников: вне горизонтального скролла, строки выровнены фиксированной высотой */}
+              <div className="w-44 flex-shrink-0 border-r border-line bg-surface sm:w-56">
+                <div className="flex h-10 items-center border-b border-line bg-surface-2 px-3 text-xs font-semibold text-ink-3">
+                  Сотрудник
+                </div>
+                {scheduleUsers.map((u, idx) => {
+                  const rowInner = (
+                    <>
+                      <span className="w-4 flex-shrink-0 text-2xs font-semibold tabular-nums text-ink-4">
+                        {idx + 1}
+                      </span>
+                      <UserAvatar name={u.fullName} src={u.avatar} size="sm" />
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{u.fullName}</span>
+                    </>
+                  );
+                  return canEdit ? (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
+                      title="Изменить позицию в списке"
+                      aria-label={`${u.fullName} — изменить позицию в списке`}
+                      className="flex h-12 w-full items-center gap-2 border-b border-line px-3 text-left transition-colors hover:bg-surface-2 focus-ring"
+                    >
+                      {rowInner}
+                    </button>
+                  ) : (
+                    <div key={u.id} className="flex h-12 items-center gap-2 border-b border-line px-3">
+                      {rowInner}
                     </div>
-                    {!status.isDayOff && status.hasSchedule && (
-                      <div className="text-sm text-gray-500 mt-1">
-                        <span>
-                          Смена: {status.shiftStart?.slice(0, 5)} - {status.shiftEnd?.slice(0, 5)}
-                        </span>
-                        {status.lateMinutes > 0 && (
-                          <span className="ml-3 text-red-600">Опоздание: {status.lateMinutes} мин.</span>
-                        )}
-                        {status.actualArrival && (
-                          <span className="ml-3 text-gray-400">Пришёл: {status.actualArrival.slice(0, 5)}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* My Stats Tab */}
-      {tab === 'mystats' && (
-        <div>
-          {myStatsData ? (
-            <div className="space-y-4">
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Моя статистика за месяц</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="bg-blue-50 rounded-xl p-4 text-center">
-                    <p className="text-2xl font-bold text-blue-700">{myStatsData.totalWorked}</p>
-                    <p className="text-xs text-blue-600 mt-1">Рабочих дней</p>
-                  </div>
-                  <div className="bg-green-50 rounded-xl p-4 text-center">
-                    <p className="text-2xl font-bold text-green-700">{myStatsData.totalOnTime}</p>
-                    <p className="text-xs text-green-600 mt-1">Вовремя</p>
-                  </div>
-                  <div className="bg-red-50 rounded-xl p-4 text-center">
-                    <p className="text-2xl font-bold text-red-700">{myStatsData.totalLate}</p>
-                    <p className="text-xs text-red-600 mt-1">Опоздания</p>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-4 text-center">
-                    <p className="text-2xl font-bold text-gray-700">{myStatsData.totalDaysOff}</p>
-                    <p className="text-xs text-gray-600 mt-1">Выходные</p>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
 
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">Детализация опозданий</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Незначительные опоздания</span>
-                    <span className="text-sm font-semibold text-yellow-600">{myStatsData.totalLateMinor}</span>
+              {/* Прокручиваемая область дат */}
+              <div className="min-w-0 flex-1 overflow-x-auto" ref={scrollRef}>
+                <div style={{ minWidth: `${monthDays.length * CELL_W}px` }}>
+                  <div className="flex h-10 border-b border-line bg-surface-2">
+                    {monthDays.map((day) => {
+                      const dayOfWeek = getDay(day);
+                      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                      const dayKey = format(day, 'yyyy-MM-dd');
+                      const isTodayDate = dayKey === todayKey;
+                      return (
+                        <div
+                          key={dayKey}
+                          className={cn(
+                            'flex w-11 flex-shrink-0 flex-col items-center justify-center leading-none',
+                            isTodayDate && 'bg-accent-soft',
+                          )}
+                        >
+                          <span className={cn('text-2xs', isWeekend ? 'text-bad-text' : 'text-ink-3')}>
+                            {DAY_ABBR[dayOfWeek]}
+                          </span>
+                          <span
+                            className={cn(
+                              'mt-0.5 text-xs font-semibold tabular-nums',
+                              isTodayDate ? 'text-accent-text' : isWeekend ? 'text-bad-text' : 'text-ink',
+                            )}
+                          >
+                            {format(day, 'd')}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Серьёзные опоздания</span>
-                    <span className="text-sm font-semibold text-red-600">{myStatsData.totalLateMajor}</span>
-                  </div>
-                  <div className="flex items-center justify-between border-t pt-2">
-                    <span className="text-sm text-gray-500">Среднее опоздание</span>
-                    <span className="text-sm font-semibold text-gray-900">{myStatsData.avgLateMinutes} мин.</span>
-                  </div>
+
+                  {scheduleUsers.map((u) => (
+                    <div key={u.id} className="flex h-12 border-b border-line">
+                      {monthDays.map((day) => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const entry = entryMap[u.id]?.[dateStr];
+                        const cell = scheduleCellOf(entry, dateStr, todayKey);
+                        const dayOfWeek = getDay(day);
+                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                        const isTodayDate = dateStr === todayKey;
+                        const def = cell ? SCHEDULE_STATUS[cell.kind] : null;
+                        const CellIcon = def?.icon;
+                        const statusLabel = def
+                          ? cell?.time
+                            ? `${def.label}, с ${cell.time}`
+                            : def.label
+                          : isWeekend
+                            ? 'выходной день, записи нет'
+                            : 'записи нет';
+                        const content = def ? (
+                          <span
+                            className={cn('flex h-8 w-8 items-center justify-center rounded-lg border', def.cell)}
+                            aria-hidden="true"
+                          >
+                            {cell?.time ? (
+                              <span className="text-2xs font-semibold tabular-nums">{cell.time}</span>
+                            ) : (
+                              CellIcon && <CellIcon className="h-4 w-4" />
+                            )}
+                          </span>
+                        ) : !isWeekend ? (
+                          <span
+                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-dashed border-ok/30 text-ok/50"
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </span>
+                        ) : null;
+                        const cellCls = cn(
+                          'flex h-12 w-11 flex-shrink-0 items-center justify-center border-r border-line last:border-r-0',
+                          isTodayDate ? 'bg-accent-soft/40' : isWeekend ? 'bg-surface-2/70' : '',
+                        );
+                        return canEdit ? (
+                          <button
+                            key={dateStr}
+                            type="button"
+                            onClick={() => setQuickPopup({ userId: u.id, date: dateStr, entry })}
+                            aria-label={`${u.fullName}, ${format(day, 'd MMMM', { locale: ru })}: ${statusLabel}`}
+                            title={statusLabel}
+                            className={cn(
+                              cellCls,
+                              'transition-colors hover:bg-accent-soft/60 focus-ring focus-visible:z-10',
+                            )}
+                          >
+                            {content}
+                          </button>
+                        ) : (
+                          <div key={dateStr} className={cellCls} title={statusLabel}>
+                            {content}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
-          ) : (
-            <InlineLoader />
           )}
-        </div>
-      )}
+        </Card>
+      </TabPanel>
 
-      {/* Master reorder dialog */}
-      {reorderDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setReorderDialog(null)}>
-          <div className="absolute inset-0 bg-black/30" />
-          <div
-            className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xs max-h-[70vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 pt-4 pb-2 border-b border-gray-100">
-              <p className="text-sm font-bold text-gray-900 text-center">Позиция мастера</p>
-              <p className="text-xs text-gray-400 text-center truncate">{reorderDialog.name}</p>
-            </div>
-            <div className="overflow-y-auto py-1">
-              {scheduleUsers.map((_, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${
-                    idx === reorderDialog.currentIndex
-                      ? 'bg-primary-50 text-primary-700 font-semibold'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <span className="w-6 text-[11px] font-bold text-gray-400">{idx + 1}</span>
-                  <span className="flex-1">
-                    {idx === reorderDialog.currentIndex ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setReorderDialog(null)}
-              className="w-full text-center py-3 text-xs font-medium text-gray-500 border-t border-gray-100"
-            >
-              Отмена
-            </button>
+      {/* Сегодня */}
+      <TabPanel idPrefix="schedule" tabKey="today" active={tab === 'today'}>
+        <DataTable
+          rows={todayStatuses}
+          rowKey={(s) => s.userId}
+          columns={todayColumns}
+          isLoading={todayLoading && !todayData}
+          isError={todayError && !todayData}
+          onRetry={refetchToday}
+          isFetching={todayFetching}
+          caption="Статус сотрудников на сегодня"
+          emptyState={{
+            icon: CalendarDays,
+            title: 'Нет данных на сегодня',
+            description: 'Расписание на сегодня не настроено',
+          }}
+        />
+      </TabPanel>
+
+      {/* Мои смены */}
+      <TabPanel idPrefix="schedule" tabKey="mystats" active={tab === 'mystats'}>
+        {myStatsLoading && !myStatsData ? (
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonCard key={i} lines={1} />
+            ))}
           </div>
-        </div>
-      )}
+        ) : myStatsError && !myStatsData ? (
+          <ErrorRow
+            message="Не удалось загрузить вашу статистику"
+            onRetry={() => refetchMyStats()}
+            loading={myStatsFetching}
+          />
+        ) : myStatsData ? (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <StatCard label="Рабочих дней" value={myStatsData.totalWorked} hint="за месяц" icon={CalendarDays} />
+              <StatCard
+                label="Вовремя"
+                value={myStatsData.totalOnTime}
+                icon={Check}
+                tone={myStatsData.totalOnTime > 0 ? 'ok' : 'neutral'}
+              />
+              <StatCard
+                label="Опозданий"
+                value={myStatsData.totalLate}
+                icon={Clock}
+                tone={myStatsData.totalLate > 0 ? 'warn' : 'neutral'}
+              />
+              <StatCard label="Выходных" value={myStatsData.totalDaysOff} icon={SCHEDULE_STATUS.dayOff.icon} />
+            </div>
 
-      {/* Quick Status Popup — centered */}
-      {quickPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setQuickPopup(null)}>
-          <div className="absolute inset-0 bg-black/30" />
-          <div
-            className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[280px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 pt-4 pb-2">
-              <p className="text-sm font-bold text-gray-900 text-center">
-                {users.find((u) => u.id === quickPopup.userId)?.fullName}
-              </p>
-              <p className="text-xs text-gray-400 text-center">{quickPopup.date.split('-').reverse().join('.')}</p>
-            </div>
-            <div className="px-3 pb-4 grid grid-cols-3 gap-1.5">
-              {[
-                { status: 'shift' as const, emoji: '✅', label: 'Смена', bg: 'bg-green-50 active:bg-green-100' },
-                { status: 'dayoff' as const, emoji: '🌙', label: 'Выходной', bg: 'bg-gray-50 active:bg-gray-200' },
-                { status: 'sick' as const, emoji: '🏥', label: 'Больничный', bg: 'bg-rose-50 active:bg-rose-100' },
-                { status: 'late_minor' as const, emoji: '⏰', label: '<1ч', bg: 'bg-yellow-50 active:bg-yellow-100' },
-                { status: 'late_major' as const, emoji: '⚠️', label: '>1ч', bg: 'bg-orange-50 active:bg-orange-100' },
-                { status: 'absent' as const, emoji: '❌', label: 'Прогул', bg: 'bg-red-50 active:bg-red-100' },
-              ].map((item) => (
-                <button
-                  key={item.status}
-                  onClick={() => quickSetStatus(item.status)}
-                  className={`flex flex-col items-center gap-1 py-3 rounded-xl ${item.bg} transition-colors`}
-                >
-                  <span className="text-xl">{item.emoji}</span>
-                  <span className="text-[10px] font-semibold text-gray-700">{item.label}</span>
-                </button>
-              ))}
-            </div>
-            {quickPopup.entry && (
-              <button
-                onClick={() => {
-                  if (quickPopup.entry) setDeleteId(quickPopup.entry.id);
-                  setQuickPopup(null);
-                }}
-                className="w-full text-center py-3 text-xs font-medium text-red-600 border-t border-gray-100 rounded-b-2xl active:bg-red-50"
-              >
-                Удалить запись
-              </button>
-            )}
+            <Card padding="none" className="max-w-xl">
+              <CardHeader title="Детализация опозданий" as="h3" dense />
+              <CardBody padding="none">
+                <dl className="divide-y divide-line text-sm">
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <dt className="text-ink-2">Опоздания до часа</dt>
+                    <dd className="font-semibold tabular-nums text-warn-text">{myStatsData.totalLateMinor}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <dt className="text-ink-2">Опоздания больше часа</dt>
+                    <dd className="font-semibold tabular-nums text-bad-text">{myStatsData.totalLateMajor}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <dt className="text-ink-2">Среднее опоздание</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{myStatsData.avgLateMinutes} мин</dd>
+                  </div>
+                </dl>
+              </CardBody>
+            </Card>
           </div>
-        </div>
-      )}
+        ) : null}
+      </TabPanel>
 
-      {/* Attendance Rating Tab */}
-      {tab === 'attendance' && (
-        <AttendanceRatingTab entries={entries} users={scheduleUsers} dateFrom={dateFrom} dateTo={dateTo} />
-      )}
+      {/* Рейтинг посещаемости */}
+      <TabPanel idPrefix="schedule" tabKey="attendance" active={tab === 'attendance'}>
+        <AttendanceRatingTab users={scheduleUsers} />
+      </TabPanel>
 
-      {/* Settings Tab — Modern Minimalist */}
-      {tab === 'settings' && (
+      {/* Настройки */}
+      <TabPanel idPrefix="schedule" tabKey="settings" active={tab === 'settings'}>
         <div className="space-y-5">
-          {/* Settings sub-tabs */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setSettingsTab('masters')}
-              className={`px-4 py-2 text-sm font-medium rounded-xl transition-all ${
-                settingsTab === 'masters'
-                  ? 'bg-gray-900 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              Выходные мастеров
-            </button>
-            <button
-              onClick={() => setSettingsTab('service')}
-              className={`px-4 py-2 text-sm font-medium rounded-xl transition-all ${
-                settingsTab === 'service'
-                  ? 'bg-gray-900 text-white shadow-sm'
-                  : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              Режимы работы
-            </button>
-          </div>
+          <SegmentedControl
+            aria-label="Раздел настроек расписания"
+            value={settingsTab}
+            onChange={setSettingsTab}
+            options={[
+              { value: 'service', label: 'Режимы работы' },
+              { value: 'masters', label: 'Выходные мастеров' },
+            ]}
+          />
 
-          {/* Master Days Off tab */}
           {settingsTab === 'masters' && <MasterDaysOffCard users={users} />}
 
-          {/* Service Work Modes tab */}
           {settingsTab === 'service' && (
-            <div className="space-y-4">
-              {/* Work modes list + create */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-gray-100">
-                  <h3 className="text-sm font-semibold text-gray-900">Режимы работы</h3>
-                </div>
-                {workModes.length > 0 ? (
-                  <div className="divide-y divide-gray-50">
-                    {workModes.map((wm: any) => (
-                      <div key={wm.id} className="flex items-center justify-between px-5 py-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                            <Clock className="w-4 h-4 text-blue-500" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">{wm.name}</p>
-                            <p className="text-xs text-gray-400">
-                              {wm.shiftStart} — {wm.shiftEnd}
-                            </p>
-                          </div>
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start">
+              <Card padding="none">
+                <CardHeader
+                  icon={Clock}
+                  title="Режимы работы"
+                  subtitle="Шаблоны смен для быстрого заполнения графика"
+                />
+                {workModesLoading && !workModesData ? (
+                  <CardBody>
+                    <Skeleton className="h-10 w-full" />
+                  </CardBody>
+                ) : workModesError && !workModesData ? (
+                  <CardBody>
+                    <ErrorRow
+                      message="Не удалось загрузить режимы работы"
+                      onRetry={() => refetchWorkModes()}
+                      loading={workModesFetching}
+                    />
+                  </CardBody>
+                ) : workModes.length > 0 ? (
+                  <ul className="divide-y divide-line">
+                    {workModes.map((wm) => (
+                      <li key={wm.id} className="flex items-center gap-3 px-5 py-3">
+                        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+                          <Clock className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-ink">{wm.name}</p>
+                          <p className="text-xs tabular-nums text-ink-3">
+                            {wm.shiftStart} — {wm.shiftEnd}
+                          </p>
                         </div>
-                      </div>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 ) : (
-                  <div className="px-5 py-8 text-center text-sm text-gray-400">Нет режимов работы</div>
+                  <EmptyState
+                    compact
+                    icon={Clock}
+                    title="Нет режимов работы"
+                    description="Создайте первый режим ниже"
+                  />
                 )}
-                <div className="px-5 py-4 bg-gray-50/50 border-t border-gray-100">
-                  <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
-                </div>
-              </div>
+                <CardFooter className="block">
+                  <WorkModeForm
+                    onSubmit={(data) => createWorkModeMutation.mutate(data)}
+                    saving={createWorkModeMutation.isPending}
+                  />
+                </CardFooter>
+              </Card>
 
-              {/* Apply work mode */}
               {workModes.length > 0 && <ApplyWorkModeCard workModes={workModes} users={users} />}
             </div>
           )}
         </div>
-      )}
+      </TabPanel>
 
-      {/* Create / Edit Modal (for + button) */}
+      {/* Позиция мастера в списке */}
+      <Modal
+        isOpen={!!reorderDialog}
+        onClose={() => setReorderDialog(null)}
+        title="Позиция в списке"
+        description={reorderDialog?.name}
+        size="sm"
+        footer={
+          <Button variant="secondary" onClick={() => setReorderDialog(null)}>
+            Отмена
+          </Button>
+        }
+      >
+        {reorderDialog && (
+          <ul className="-mx-2 max-h-[50vh] overflow-y-auto">
+            {scheduleUsers.map((_, idx) => {
+              const current = idx === reorderDialog.currentIndex;
+              return (
+                <li key={idx}>
+                  <button
+                    type="button"
+                    onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
+                    disabled={current || updateOrderMutation.isPending}
+                    aria-current={current ? 'true' : undefined}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-ring',
+                      current ? 'bg-accent-soft font-medium text-accent-text' : 'text-ink hover:bg-surface-3',
+                    )}
+                  >
+                    <span className="w-6 text-xs font-semibold tabular-nums text-ink-3">{idx + 1}</span>
+                    <span className="flex-1">{current ? 'Текущая позиция' : `Переместить на ${idx + 1}`}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Modal>
+
+      {/* Быстрый выбор статуса дня */}
+      <Modal
+        isOpen={!!quickPopup}
+        onClose={() => setQuickPopup(null)}
+        title={quickUser?.fullName ?? 'Статус дня'}
+        description={quickPopup ? quickPopup.date.split('-').reverse().join('.') : undefined}
+        size="sm"
+        footer={
+          quickPopup?.entry ? (
+            <>
+              <Button
+                variant="ghost"
+                icon={Trash2}
+                className="mr-auto text-bad-text hover:text-bad-text"
+                onClick={() => {
+                  if (quickPopup.entry) setDeleteId(quickPopup.entry.id);
+                  setQuickPopup(null);
+                }}
+              >
+                Удалить запись
+              </Button>
+              <Button variant="secondary" onClick={() => setQuickPopup(null)}>
+                Отмена
+              </Button>
+            </>
+          ) : (
+            <Button variant="secondary" onClick={() => setQuickPopup(null)}>
+              Отмена
+            </Button>
+          )
+        }
+      >
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {QUICK_STATUSES.map((item) => {
+            const def = SCHEDULE_STATUS[item.kind];
+            const Icon = def.icon;
+            return (
+              <button
+                key={item.status}
+                type="button"
+                onClick={() => quickSetStatus(item.status)}
+                className="flex flex-col items-center gap-2 rounded-lg border border-line px-2 py-3 text-center transition-colors hover:border-line-strong hover:bg-surface-2 focus-ring"
+              >
+                <span
+                  className={cn('flex h-9 w-9 items-center justify-center rounded-lg border', def.cell)}
+                  aria-hidden="true"
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span className="text-xs font-medium leading-tight text-ink">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-3 text-xs text-ink-3">
+          Изменение попадёт в список несохранённых — примените их одной кнопкой.
+        </p>
+      </Modal>
+
+      {/* Создание / редактирование записи */}
       <Modal
         isOpen={modalOpen}
         onClose={closeModal}
         title={editingEntry ? 'Редактировать запись' : 'Новая запись расписания'}
         size="md"
+        footer={
+          <>
+            {editingEntry && (
+              <Button
+                variant="ghost"
+                icon={Trash2}
+                className="mr-auto text-bad-text hover:text-bad-text"
+                onClick={() => {
+                  setDeleteId(editingEntry.id);
+                  closeModal();
+                }}
+              >
+                Удалить
+              </Button>
+            )}
+            <Button variant="secondary" onClick={closeModal} disabled={isSaving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={formId} loading={isSaving}>
+              {editingEntry ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="label">Сотрудник</label>
-            <select
-              className="input"
+        <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="Сотрудник" htmlFor={`${formId}-user`} required>
+            <Select
+              id={`${formId}-user`}
               value={entryForm.userId}
               onChange={(e) => setEntryForm({ ...entryForm, userId: e.target.value })}
+              placeholder="Выберите сотрудника"
+              options={users.filter((u) => u.isActive).map((u) => ({ value: u.id, label: u.fullName }))}
               required
-            >
-              <option value="">Выберите сотрудника</option>
-              {users
-                .filter((u) => u.isActive)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.fullName}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">Дата</label>
-            <input
+            />
+          </Field>
+          <Field label="Дата" htmlFor={`${formId}-date`} required>
+            <Input
+              id={`${formId}-date`}
               type="date"
-              className="input"
               value={entryForm.date}
               onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })}
               required
             />
-          </div>
-          <div>
-            <label className="label">Тип</label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${!entryForm.isDayOff && !entryForm.isSickDay ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
-              >
-                Смена
-              </button>
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isDayOff && !entryForm.isSickDay ? 'border-gray-500 bg-gray-100 text-gray-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
-              >
-                Выходной
-              </button>
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isSickDay ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
-              >
-                Больничный
-              </button>
-            </div>
-          </div>
+          </Field>
+          <Field label="Тип">
+            <SegmentedControl
+              aria-label="Тип записи"
+              fullWidth
+              value={entryForm.isSickDay ? 'sick' : entryForm.isDayOff ? 'dayoff' : 'shift'}
+              onChange={(v) => setEntryForm({ ...entryForm, isDayOff: v === 'dayoff', isSickDay: v === 'sick' })}
+              options={[
+                { value: 'shift', label: 'Смена', icon: SCHEDULE_STATUS.planned.icon },
+                { value: 'dayoff', label: 'Выходной', icon: SCHEDULE_STATUS.dayOff.icon },
+                { value: 'sick', label: 'Больничный', icon: SCHEDULE_STATUS.sick.icon },
+              ]}
+            />
+          </Field>
           {!entryForm.isDayOff && !entryForm.isSickDay && (
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Начало</label>
-                <input
+              <Field label="Начало" htmlFor={`${formId}-start`}>
+                <Input
+                  id={`${formId}-start`}
                   type="time"
-                  className="input"
                   value={entryForm.shiftStart}
                   onChange={(e) => setEntryForm({ ...entryForm, shiftStart: e.target.value })}
                 />
-              </div>
-              <div>
-                <label className="label">Конец</label>
-                <input
+              </Field>
+              <Field label="Конец" htmlFor={`${formId}-end`}>
+                <Input
+                  id={`${formId}-end`}
                   type="time"
-                  className="input"
                   value={entryForm.shiftEnd}
                   onChange={(e) => setEntryForm({ ...entryForm, shiftEnd: e.target.value })}
                 />
-              </div>
+              </Field>
             </div>
           )}
-          <div className="flex items-center justify-between pt-4 border-t border-gray-200">
-            <div>
-              {editingEntry && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeleteId(editingEntry.id);
-                    closeModal();
-                  }}
-                  className="btn-danger btn-sm"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Удалить
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <button type="button" onClick={closeModal} className="btn-secondary">
-                Отмена
-              </button>
-              <button type="submit" disabled={isSaving} className="btn-primary">
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Сохранение...
-                  </>
-                ) : editingEntry ? (
-                  'Сохранить'
-                ) : (
-                  'Создать'
-                )}
-              </button>
-            </div>
-          </div>
         </form>
       </Modal>
 
-      {/* Delete Confirmation */}
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
@@ -1566,7 +1534,7 @@ export default function SchedulePage() {
           setDeleteId(null);
         }}
         title="Удалить запись"
-        message="Вы уверены, что хотите удалить эту запись расписания?"
+        message="Удалить эту запись расписания? Действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
       />
@@ -1574,7 +1542,17 @@ export default function SchedulePage() {
   );
 }
 
-function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
+// ---------------------------------------------------------------------------
+// Форма нового режима работы
+// ---------------------------------------------------------------------------
+function WorkModeForm({
+  onSubmit,
+  saving,
+}: {
+  onSubmit: (data: { name: string; shiftStart: string; shiftEnd: string }) => void;
+  saving: boolean;
+}) {
+  const idBase = useId();
   const [name, setName] = useState('');
   const [shiftStart, setShiftStart] = useState('09:00');
   const [shiftEnd, setShiftEnd] = useState('19:00');
@@ -1587,39 +1565,46 @@ function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-2">
-      <input
-        type="text"
-        className="input flex-1 text-sm"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Название режима"
-        required
-      />
-      <div className="flex gap-2">
-        <input
-          type="time"
-          className="input w-[100px] text-sm"
-          value={shiftStart}
-          onChange={(e) => setShiftStart(e.target.value)}
+    <form onSubmit={handleSubmit} className="flex w-full flex-col gap-3 sm:flex-row sm:items-end">
+      <Field label="Новый режим" htmlFor={`${idBase}-name`} className="min-w-0 flex-1">
+        <Input
+          id={`${idBase}-name`}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Название режима"
+          required
         />
-        <input
-          type="time"
-          className="input w-[100px] text-sm"
-          value={shiftEnd}
-          onChange={(e) => setShiftEnd(e.target.value)}
-        />
+      </Field>
+      <div className="flex gap-3">
+        <Field label="Начало" htmlFor={`${idBase}-start`}>
+          <Input
+            id={`${idBase}-start`}
+            type="time"
+            value={shiftStart}
+            onChange={(e) => setShiftStart(e.target.value)}
+            className="w-28"
+          />
+        </Field>
+        <Field label="Конец" htmlFor={`${idBase}-end`}>
+          <Input
+            id={`${idBase}-end`}
+            type="time"
+            value={shiftEnd}
+            onChange={(e) => setShiftEnd(e.target.value)}
+            className="w-28"
+          />
+        </Field>
       </div>
-      <button type="submit" className="btn-primary px-4 whitespace-nowrap text-sm">
-        <Plus className="w-4 h-4" /> Добавить
-      </button>
+      <Button type="submit" variant="secondary" icon={Plus} loading={saving} className="sm:mb-0">
+        Добавить
+      </Button>
     </form>
   );
 }
 
-const DAY_NAMES_FULL = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн-Вс
-
+// ---------------------------------------------------------------------------
+// Выходные дни мастеров
+// ---------------------------------------------------------------------------
 function MasterDaysOffCard({ users }: { users: User[] }) {
   const queryClient = useQueryClient();
   const activeUsers = users.filter((u) => u.isActive && u.role === 'master');
@@ -1632,7 +1617,7 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       toast.success('Выходные обновлены');
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const toggleDay = (user: User, day: number) => {
@@ -1641,47 +1626,33 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
     updateMutation.mutate({ userId: user.id, daysOff: next });
   };
 
-  if (activeUsers.length === 0) return null;
+  if (activeUsers.length === 0) {
+    return <EmptyState icon={Users} title="Нет мастеров" description="Выходные настраиваются только мастерам" />;
+  }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-900">Выходные дни мастеров</h3>
-        <p className="text-xs text-gray-400 mt-0.5">
-          Выберите дни недели — будущие даты обновятся автоматически, прошедшие останутся без изменений
-        </p>
-      </div>
-      <div className="divide-y divide-gray-50">
+    <Card padding="none" className="max-w-3xl">
+      <CardHeader
+        title="Выходные дни мастеров"
+        subtitle="Будущие даты обновятся автоматически, прошедшие останутся без изменений"
+      />
+      <ul className="divide-y divide-line">
         {activeUsers.map((u) => {
-          const initials = u.fullName
-            .split(' ')
-            .map((w) => w[0])
-            .join('')
-            .slice(0, 2);
           const offDays = u.daysOff || [];
+          const offLabel = [...offDays]
+            .sort((a, b) => ORDERED_DAYS.indexOf(a) - ORDERED_DAYS.indexOf(b))
+            .map((d) => DAY_ABBR[d])
+            .join(', ');
           return (
-            <div key={u.id} className="px-5 py-4">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600">
-                  {initials}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{u.fullName}</p>
-                  {offDays.length > 0 && (
-                    <p className="text-[11px] text-gray-400">
-                      Выходные:{' '}
-                      {offDays
-                        .sort((a, b) => {
-                          const order = [1, 2, 3, 4, 5, 6, 0];
-                          return order.indexOf(a) - order.indexOf(b);
-                        })
-                        .map((d) => DAY_NAMES_FULL[d])
-                        .join(', ')}
-                    </p>
-                  )}
+            <li key={u.id} className="px-5 py-4">
+              <div className="mb-3 flex items-center gap-3">
+                <UserAvatar name={u.fullName} src={u.avatar} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">{u.fullName}</p>
+                  <p className="text-xs text-ink-3">{offDays.length > 0 ? `Выходные: ${offLabel}` : 'Без выходных'}</p>
                 </div>
               </div>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1.5" role="group" aria-label={`Выходные дни: ${u.fullName}`}>
                 {ORDERED_DAYS.map((day) => {
                   const isOff = offDays.includes(day);
                   return (
@@ -1690,27 +1661,31 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
                       type="button"
                       onClick={() => toggleDay(u, day)}
                       disabled={updateMutation.isPending}
-                      className={`flex-1 h-9 rounded-lg text-xs font-semibold transition-all ${
-                        isOff
-                          ? 'bg-gray-900 text-white'
-                          : 'bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600'
-                      } disabled:opacity-50`}
+                      aria-pressed={isOff}
+                      className={cn(
+                        'h-9 flex-1 rounded-lg text-xs font-semibold transition-colors focus-ring disabled:opacity-50',
+                        isOff ? 'bg-accent text-white hover:bg-accent-hover' : 'bg-surface-3 text-ink-2 hover:bg-line',
+                      )}
                     >
-                      {DAY_NAMES_FULL[day]}
+                      {DAY_ABBR[day]}
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </li>
           );
         })}
-      </div>
-    </div>
+      </ul>
+    </Card>
   );
 }
 
-function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User[] }) {
+// ---------------------------------------------------------------------------
+// Применить режим работы на период
+// ---------------------------------------------------------------------------
+function ApplyWorkModeCard({ workModes, users }: { workModes: WorkMode[]; users: User[] }) {
   const queryClient = useQueryClient();
+  const idBase = useId();
   const [selectedMode, setSelectedMode] = useState('');
   const [selectedUser, setSelectedUser] = useState('');
   const [applyFrom, setApplyFrom] = useState(format(addDays(new Date(), 1), 'yyyy-MM-dd'));
@@ -1722,9 +1697,9 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
     onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      toast.success(`График применён (${res.data?.created || 0} записей)`);
+      toast.success(`График применён (записей: ${res.data?.created || 0})`);
     },
-    onError: () => toast.error('Ошибка при применении графика'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка при применении графика'),
   });
 
   const handleApply = () => {
@@ -1747,60 +1722,42 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
   const activeUsers = users.filter((u) => u.isActive && u.role === 'master');
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-900">Применить график</h3>
-      </div>
-      <div className="px-5 py-4 space-y-3">
-        <select className="input text-sm" value={selectedMode} onChange={(e) => setSelectedMode(e.target.value)}>
-          <option value="">Режим работы</option>
-          {workModes.map((wm: any) => (
-            <option key={wm.id} value={wm.id}>
-              {wm.name} ({wm.shiftStart}–{wm.shiftEnd})
-            </option>
-          ))}
-        </select>
-
-        <select className="input text-sm" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
-          <option value="">Все мастера</option>
-          {activeUsers.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.fullName}
-            </option>
-          ))}
-        </select>
-
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">С</label>
-            <input
-              type="date"
-              className="input text-xs py-2 px-2.5 flex-1 min-w-0"
-              value={applyFrom}
-              onChange={(e) => setApplyFrom(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">По</label>
-            <input
-              type="date"
-              className="input text-xs py-2 px-2.5 flex-1 min-w-0"
-              value={applyTo}
-              onChange={(e) => setApplyTo(e.target.value)}
-            />
-          </div>
+    <Card padding="none">
+      <CardHeader icon={CalendarDays} title="Применить график" subtitle="Заполнить смены по режиму на период" />
+      <CardBody className="space-y-4">
+        <Field label="Режим работы" htmlFor={`${idBase}-mode`} required>
+          <Select
+            id={`${idBase}-mode`}
+            value={selectedMode}
+            onChange={(e) => setSelectedMode(e.target.value)}
+            placeholder="Выберите режим"
+            options={workModes.map((wm) => ({ value: wm.id, label: `${wm.name} (${wm.shiftStart}–${wm.shiftEnd})` }))}
+          />
+        </Field>
+        <Field label="Сотрудник" htmlFor={`${idBase}-user`}>
+          <Select
+            id={`${idBase}-user`}
+            value={selectedUser}
+            onChange={(e) => setSelectedUser(e.target.value)}
+            placeholder="Все мастера"
+            options={activeUsers.map((u) => ({ value: u.id, label: u.fullName }))}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="С" htmlFor={`${idBase}-from`}>
+            <Input id={`${idBase}-from`} type="date" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
+          </Field>
+          <Field label="По" htmlFor={`${idBase}-to`}>
+            <Input id={`${idBase}-to`} type="date" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
+          </Field>
         </div>
-
-        <button
-          type="button"
-          onClick={handleApply}
-          disabled={applyMutation.isPending}
-          className="btn-primary w-full justify-center text-sm"
-        >
-          {applyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+      </CardBody>
+      <CardFooter>
+        <span className="text-xs text-ink-3">Существующие записи в периоде будут перезаписаны режимом</span>
+        <Button onClick={handleApply} loading={applyMutation.isPending}>
           Применить
-        </button>
-      </div>
-    </div>
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }

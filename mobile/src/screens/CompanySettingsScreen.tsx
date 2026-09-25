@@ -10,14 +10,16 @@ import {
   Alert,
   Switch,
   Platform,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { myCompanyApi, loyaltyApi, checksApi, pointsApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi, pointsApi, vinApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareView } from '../components/KeyboardAware';
+import VinInput from '../components/VinInput';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -30,8 +32,15 @@ import type {
   PosSettingsConflict,
   PaymentAcceptorInfo,
   PointsListResponse,
+  VinSettings,
+  VinDecodeResult,
+  UpdateVinSettingsRequest,
 } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
+import { VIN_SETTINGS_KEY } from '../hooks/useVinEnabled';
+import { vinDecodeSummary, vinSourceLabel } from '../utils/vinUi';
+import { isValidVin } from '../../../shared/utils/vin';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { formatPhone } from '../../../shared/validation/phone';
 import { RU_TIMEZONES, DEFAULT_TIMEZONE, timezoneOption, formatDateTime } from '../../../shared/utils/formatters';
 import { haptic } from '../platform/haptics';
@@ -433,6 +442,11 @@ export default function CompanySettingsScreen() {
               </View>
             </AnimatedCard>
           )}
+
+          {/* 171 — «Автомобили»: опция «VIN-код автомобиля» (по умолчанию выкл.),
+              источник расшифровки, ключ платного сервиса, проверка на VIN.
+              GET/PATCH /vin/settings — ключ company_manage, как у «Смен». */}
+          {canManageShifts && <VinSettingsSection index={4} />}
 
           {/* Режим кассовой смены (092) — ключ settings_manage (сервер: PATCH
               /checks/pos-settings). Self-contained card (own query + save),
@@ -1019,6 +1033,481 @@ function LoyaltySettingsSection({ index }: { index: number }) {
     </AnimatedCard>
   );
 }
+
+// ── «Автомобили»: VIN-код автомобиля (171, 2026-09-25) ─────────────────
+// Self-contained card под company_manage (тот же гейт, что у «Смен»). Читает
+// GET /vin/settings и PATCH'ит его по каждому действию отдельно:
+//   • тумблер «VIN-код автомобиля» — сразу (optimistic), как режим кассовой
+//     смены: включил — поле VIN и режим поиска «VIN» появляются во всём
+//     приложении без перелогина (useVinEnabled читает этот же кэш);
+//   • «Источник данных» — бесплатные справочники (provider: null) либо один
+//     из providers, которых отдаёт сервер (клиент их НЕ хардкодит);
+//   • учётные данные провайдера — секреты полем пароля, сервер значения не
+//     возвращает: показываем «Ключ сохранён · Заменить · Удалить»;
+//   • «Проверить на VIN…» — vinApi.decode с введённым VIN, результат + источник.
+// Ошибка загрузки (сервер без модуля VIN / нет сети) — плашка с «Повторить»,
+// а не сломанная карточка.
+function VinSettingsSection({ index }: { index: number }) {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+  const { refreshUser } = useAuth();
+
+  const settingsQuery = useQuery<VinSettings>({
+    queryKey: VIN_SETTINGS_KEY,
+    queryFn: async () => (await vinApi.getSettings()).data,
+    staleTime: 60_000,
+  });
+  const settings = settingsQuery.data;
+
+  // Черновик учётных данных провайдера (ключ/секрет) — живёт только до «Сохранить ключ».
+  const [credentials, setCredentials] = useState<Record<string, string>>({});
+  const [replacing, setReplacing] = useState(false);
+  // «Проверить на VIN…».
+  const [testVin, setTestVin] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<VinDecodeResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (data: UpdateVinSettingsRequest) => vinApi.updateSettings(data),
+    // Optimistic только для тумблера: он должен щёлкать мгновенно.
+    onMutate: async (next) => {
+      const empty = { prev: undefined as VinSettings | undefined, prevCompany: undefined as Tenant | undefined };
+      if (typeof next.enabled !== 'boolean') return empty;
+      await queryClient.cancelQueries({ queryKey: VIN_SETTINGS_KEY });
+      await queryClient.cancelQueries({ queryKey: ['my-company'] });
+      const prev = queryClient.getQueryData<VinSettings>(VIN_SETTINGS_KEY);
+      if (prev) queryClient.setQueryData<VinSettings>(VIN_SETTINGS_KEY, { ...prev, enabled: next.enabled });
+      // useVinEnabled читает ['my-company'] → профиль (снимок этого экрана он
+      // не смотрит): пишем флаг туда же, чтобы поле VIN в формах и сегмент
+      // «VIN» в Кассе переключились сразу, а не после ответа сервера.
+      const prevCompany = queryClient.getQueryData<Tenant>(['my-company']);
+      if (prevCompany) queryClient.setQueryData<Tenant>(['my-company'], { ...prevCompany, vinEnabled: next.enabled });
+      return { prev, prevCompany };
+    },
+    onSuccess: (res) => {
+      // Свежие настройки — в кэш экрана; флаг — в ['my-company'] (его читает
+      // useVinEnabled на всех экранах) и в профиль через refreshUser().
+      queryClient.setQueryData(VIN_SETTINGS_KEY, res.data);
+      queryClient.setQueryData<Tenant>(['my-company'], (company) =>
+        company ? { ...company, vinEnabled: res.data.enabled } : company,
+      );
+      queryClient.invalidateQueries({ queryKey: ['my-company'] });
+      void refreshUser();
+      setReplacing(false);
+      setCredentials({});
+      haptic('success');
+    },
+    onError: (err: unknown, _next, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(VIN_SETTINGS_KEY, ctx.prev);
+      if (ctx?.prevCompany) queryClient.setQueryData(['my-company'], ctx.prevCompany);
+      haptic('error');
+      Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Не удалось сохранить настройки VIN');
+    },
+  });
+
+  const enabled = settings?.enabled === true;
+  const providers = settings?.providers ?? [];
+  const provider = providers.find((p) => p.id === settings?.provider) ?? null;
+  const busy = mutation.isPending;
+
+  const selectProvider = (id: string | null) => {
+    if ((settings?.provider ?? null) === id) return;
+    haptic('select');
+    setCredentials({});
+    setReplacing(false);
+    mutation.mutate({ provider: id });
+  };
+
+  const saveCredentials = () => {
+    if (!provider) return;
+    const filled: Record<string, string> = {};
+    for (const f of provider.fields) filled[f.key] = (credentials[f.key] ?? '').trim();
+    if (provider.fields.some((f) => !filled[f.key])) {
+      haptic('warning');
+      Alert.alert('Заполните все поля', `Для сервиса «${provider.name}» нужны все учётные данные.`);
+      return;
+    }
+    mutation.mutate({ provider: provider.id, credentials: filled });
+  };
+
+  const removeCredentials = () => {
+    Alert.alert('Удалить ключ?', 'Расшифровка продолжит работать по бесплатным справочникам.', [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Удалить', style: 'destructive', onPress: () => mutation.mutate({ credentials: null }) },
+    ]);
+  };
+
+  const runTest = async () => {
+    if (!isValidVin(testVin) || testing) return;
+    setTesting(true);
+    setTestError(null);
+    setTestResult(null);
+    try {
+      const res = await vinApi.decode(testVin);
+      setTestResult(res.data);
+      haptic(res.data.makeModel ? 'success' : 'warning');
+    } catch (err) {
+      haptic('error');
+      setTestError(apiErrorMessage(err) ?? 'Не удалось проверить — нет связи с сервером');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const cardStyle = StyleSheet.flatten([
+    styles.card,
+    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+  ]);
+  const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
+  const labelStyle = StyleSheet.flatten([styles.label, { color: palette.text.secondary }]);
+  const inputStyle = StyleSheet.flatten([
+    styles.input,
+    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+  ]);
+  const canTest = isValidVin(testVin) && !testing;
+
+  return (
+    <AnimatedCard index={index}>
+      <View style={cardStyle}>
+        <View style={styles.cardHeader}>
+          <Ionicons name="car-sport-outline" size={16} color={palette.text.tertiary} />
+          <Text style={cardTitleStyle}>Автомобили</Text>
+        </View>
+
+        {settingsQuery.isError && !settings ? (
+          <View style={[styles.acceptorPlaque, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="cloud-offline-outline" size={15} color={palette.text.secondary} />
+            <Text style={[styles.acceptorPlaqueText, { color: palette.text.secondary }]}>
+              Не удалось загрузить настройки VIN
+            </Text>
+            <TouchableOpacity
+              onPress={() => void settingsQuery.refetch()}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Повторить загрузку настроек VIN"
+            >
+              <Text style={[vinStyles.inlineAction, { color: colors.primary[600] }]}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextWrap}>
+                <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>VIN-код автомобиля</Text>
+                <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+                  Поле VIN у машины, автоматическое определение марки и модели, поиск клиента по VIN.
+                </Text>
+              </View>
+              <Switch
+                value={enabled}
+                onValueChange={(v) => mutation.mutate({ enabled: v })}
+                disabled={busy || !settings}
+                trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
+                thumbColor={Platform.OS === 'android' ? colors.white : undefined}
+                ios_backgroundColor={palette.border.subtle}
+              />
+            </View>
+
+            {enabled && (
+              <>
+                <View style={styles.field}>
+                  <Text style={labelStyle}>Источник данных</Text>
+                  <View style={vinStyles.sourceRow}>
+                    <VinSourceChip
+                      active={!settings?.provider}
+                      label="Бесплатные справочники"
+                      onPress={() => selectProvider(null)}
+                      palette={palette}
+                      disabled={busy}
+                    />
+                    {providers.map((p) => (
+                      <VinSourceChip
+                        key={p.id}
+                        active={settings?.provider === p.id}
+                        label={p.name}
+                        onPress={() => selectProvider(p.id)}
+                        palette={palette}
+                        disabled={busy}
+                      />
+                    ))}
+                  </View>
+                  <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+                    {provider
+                      ? `Сначала ${provider.name} по вашему ключу, затем бесплатные справочники. Autexa за запросы не платит.`
+                      : 'Бесплатные справочники: марка определяется почти всегда, модель — не всегда, её можно дописать вручную.'}
+                  </Text>
+                </View>
+
+                {provider && (
+                  <View
+                    style={[
+                      vinStyles.providerBox,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    {provider.description ? (
+                      <Text style={[vinStyles.providerDescription, { color: palette.text.secondary }]}>
+                        {provider.description}
+                      </Text>
+                    ) : null}
+
+                    {settings?.hasCredentials && !replacing ? (
+                      <View style={vinStyles.savedRow}>
+                        <Ionicons name="key-outline" size={15} color={colors.green[600]} />
+                        <Text style={[vinStyles.savedText, { color: palette.text.primary }]}>Ключ сохранён</Text>
+                        <Text style={[vinStyles.savedDot, { color: palette.text.tertiary }]}>·</Text>
+                        <TouchableOpacity
+                          onPress={() => {
+                            haptic('select');
+                            setReplacing(true);
+                          }}
+                          hitSlop={8}
+                          disabled={busy}
+                          accessibilityRole="button"
+                          accessibilityLabel="Заменить ключ"
+                        >
+                          <Text style={[vinStyles.inlineAction, { color: colors.primary[600] }]}>Заменить</Text>
+                        </TouchableOpacity>
+                        <Text style={[vinStyles.savedDot, { color: palette.text.tertiary }]}>·</Text>
+                        <TouchableOpacity
+                          onPress={removeCredentials}
+                          hitSlop={8}
+                          disabled={busy}
+                          accessibilityRole="button"
+                          accessibilityLabel="Удалить ключ"
+                        >
+                          <Text style={[vinStyles.inlineAction, { color: colors.red[500] }]}>Удалить</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <>
+                        {provider.fields.map((f) => (
+                          <View key={f.key} style={styles.field}>
+                            <Text style={labelStyle}>{f.label}</Text>
+                            <TextInput
+                              value={credentials[f.key] ?? ''}
+                              onChangeText={(v) => setCredentials((prev) => ({ ...prev, [f.key]: v }))}
+                              style={inputStyle}
+                              placeholder={f.placeholder ?? ''}
+                              placeholderTextColor={palette.text.tertiary}
+                              // Секрет — поле пароля; сохранённое значение сервер
+                              // никогда не возвращает, поэтому поле всегда пустое.
+                              secureTextEntry={!!f.secret}
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              autoComplete="off"
+                              textContentType="none"
+                              importantForAutofill="no"
+                            />
+                          </View>
+                        ))}
+                        <View style={styles.acceptorActionsRow}>
+                          {replacing && (
+                            <TouchableOpacity
+                              style={[styles.acceptorModeBtn, { borderColor: palette.border.subtle, flex: 1 }]}
+                              onPress={() => {
+                                setReplacing(false);
+                                setCredentials({});
+                              }}
+                              disabled={busy}
+                              activeOpacity={0.8}
+                              accessibilityRole="button"
+                              accessibilityLabel="Отменить замену ключа"
+                            >
+                              <Text style={[styles.acceptorModeBtnText, { color: palette.text.secondary }]}>
+                                Отмена
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity
+                            style={[styles.acceptorSaveBtn, { backgroundColor: colors.primary[600], flex: 1 }]}
+                            onPress={saveCredentials}
+                            disabled={busy}
+                            activeOpacity={0.85}
+                            accessibilityRole="button"
+                            accessibilityLabel="Сохранить ключ"
+                          >
+                            {busy ? (
+                              <ActivityIndicator color={colors.white} size="small" />
+                            ) : (
+                              <>
+                                <Ionicons name="key-outline" size={15} color={colors.white} />
+                                <Text style={styles.acceptorSaveBtnText}>Сохранить ключ</Text>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    )}
+
+                    {provider.site ? (
+                      <TouchableOpacity
+                        style={vinStyles.linkRow}
+                        onPress={() => {
+                          haptic('tap');
+                          void Linking.openURL(provider.site as string).catch(() => {});
+                        }}
+                        accessibilityRole="link"
+                        accessibilityLabel={`Где получить ключ: ${provider.site}`}
+                      >
+                        <Ionicons name="open-outline" size={14} color={colors.primary[600]} />
+                        <Text style={[vinStyles.inlineAction, { color: colors.primary[600] }]}>Где получить ключ</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                )}
+
+                <View style={styles.field}>
+                  <Text style={labelStyle}>Проверить на VIN…</Text>
+                  <View style={vinStyles.testRow}>
+                    <View style={vinStyles.testInputWrap}>
+                      <VinInput
+                        value={testVin}
+                        onChangeText={(v) => {
+                          setTestVin(v);
+                          setTestResult(null);
+                          setTestError(null);
+                        }}
+                        decode={false}
+                        style={vinStyles.testInput}
+                        returnKeyType="search"
+                        onSubmitEditing={() => void runTest()}
+                      />
+                    </View>
+                    <TouchableOpacity
+                      style={[vinStyles.testBtn, { backgroundColor: canTest ? colors.primary[600] : palette.bg.muted }]}
+                      onPress={() => void runTest()}
+                      disabled={!canTest}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Проверить VIN"
+                    >
+                      {testing ? (
+                        <ActivityIndicator color={palette.text.tertiary} size="small" />
+                      ) : (
+                        <Text
+                          style={[vinStyles.testBtnText, { color: canTest ? colors.white : palette.text.tertiary }]}
+                        >
+                          Проверить
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                  {testResult && (
+                    <View style={[vinStyles.testResult, { backgroundColor: palette.bg.muted }]}>
+                      <Text style={[vinStyles.testResultTitle, { color: palette.text.primary }]}>
+                        {vinDecodeSummary(testResult)}
+                      </Text>
+                      <Text style={[styles.hint, { color: palette.text.tertiary, marginTop: 2 }]}>
+                        {testResult.valid
+                          ? `Источник: ${vinSourceLabel(testResult.source)}`
+                          : 'VIN некорректен — 17 символов латиницей и цифрами, без I, O и Q'}
+                      </Text>
+                      {(testResult.notes ?? []).map((note, i) => (
+                        <Text key={i} style={[styles.hint, { color: palette.text.tertiary }]}>
+                          {note}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
+                  {testError ? <Text style={[styles.hint, { color: colors.red[500] }]}>{testError}</Text> : null}
+                </View>
+              </>
+            )}
+          </>
+        )}
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// Радио-чип источника расшифровки — та же геометрия, что у фильтр-чипов
+// списков (Клиенты / Авто), чтобы настройки не выглядели «другим приложением».
+function VinSourceChip({
+  active,
+  label,
+  onPress,
+  palette,
+  disabled,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
+      style={[
+        vinStyles.sourceChip,
+        {
+          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+      accessibilityRole="radio"
+      accessibilityState={{ selected: active, disabled: !!disabled }}
+      accessibilityLabel={label}
+    >
+      <Ionicons
+        name={active ? 'radio-button-on' : 'radio-button-off'}
+        size={14}
+        color={active ? palette.accent.primary : palette.text.tertiary}
+      />
+      <Text
+        style={[vinStyles.sourceChipText, { color: active ? palette.accent.primaryText : palette.text.secondary }]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const vinStyles = StyleSheet.create({
+  sourceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  sourceChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: '100%',
+  },
+  sourceChipText: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1, flexShrink: 1 },
+  providerBox: { borderWidth: 1, borderRadius: borderRadius.xl, padding: spacing[3], gap: spacing[3] },
+  providerDescription: { fontSize: fontSize.xs, lineHeight: 17 },
+  savedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flexWrap: 'wrap' },
+  savedText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  savedDot: { fontSize: fontSize.sm },
+  inlineAction: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', minHeight: 32 },
+  testRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
+  testInputWrap: { flex: 1, minWidth: 0 },
+  testInput: { borderRadius: borderRadius.xl },
+  testBtn: {
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+    minHeight: 44,
+    minWidth: 104,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  testResult: {
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[1],
+  },
+  testResultTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+});
 
 const loyaltyStyles = StyleSheet.create({
   saveBtn: {

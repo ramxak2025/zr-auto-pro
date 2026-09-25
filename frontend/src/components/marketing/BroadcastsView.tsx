@@ -7,7 +7,6 @@ import {
   Car,
   CreditCard,
   Info,
-  Loader2,
   Send,
   ShieldCheck,
   Star,
@@ -18,6 +17,7 @@ import toast from 'react-hot-toast';
 
 import { bookingsApi, installmentsApi, marketingApi } from '../../api/services';
 import ConfirmDialog from '../ConfirmDialog';
+import { MiniStat } from '../dashboard/shared';
 import type {
   AutoMailingOverview,
   BroadcastPreview,
@@ -26,7 +26,24 @@ import type {
   SegmentBroadcastResult,
 } from '../../types';
 import type { SettingsSection } from './MarketingSettingsView';
-import { EmptyState, LoadingBlock, SectionCard, Toggle, lastVisitLabel, plural } from './marketingKit';
+import { Button } from '../../ui/Button';
+import { Field } from '../../ui/Field';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Select } from '../../ui/Select';
+import { Textarea } from '../../ui/Textarea';
+import { cn } from '../../ui/cn';
+import { toneChip } from '../../ui/tokens';
+import {
+  EmptyState,
+  InfoNote,
+  LoadingBlock,
+  SectionCard,
+  SectionError,
+  Toggle,
+  lastVisitLabel,
+  plural,
+} from './marketingKit';
 import { newUuid } from '../../utils/uuid';
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -53,41 +70,16 @@ type SegmentKind = 'winback' | 'source' | 'debt';
 // видит, ЧТО уйдёт клиенту, до того как включил. Выключение — мгновенно.
 const AUTO_META: Record<
   AutoMailingOverview['type'],
-  { label: string; icon: typeof Star; iconClass: string; section: SettingsSection | null }
+  { label: string; icon: typeof Star; section: SettingsSection | null }
 > = {
-  review: { label: 'Запрос отзыва', icon: Star, iconClass: 'bg-amber-50 text-amber-600', section: 'review' },
-  car_ready: {
-    label: 'Машина готова',
-    icon: Car,
-    iconClass: 'bg-emerald-50 text-emerald-600',
-    section: 'car-ready',
-  },
+  review: { label: 'Запрос отзыва', icon: Star, section: 'review' },
+  car_ready: { label: 'Машина готова', icon: Car, section: 'car-ready' },
   // Настройки записей (часы напоминания и т.п.) живут в мобильном разделе
   // «Записи» — на вебе управление сводится к тумблеру здесь.
-  booking_confirm: {
-    label: 'Подтверждение записи',
-    icon: CalendarClock,
-    iconClass: 'bg-indigo-50 text-indigo-600',
-    section: null,
-  },
-  booking_reminder: {
-    label: 'Напоминание о записи',
-    icon: AlarmClock,
-    iconClass: 'bg-sky-50 text-sky-600',
-    section: null,
-  },
-  installment_reminder: {
-    label: 'Оплата рассрочки',
-    icon: CreditCard,
-    iconClass: 'bg-violet-50 text-violet-600',
-    section: 'installments',
-  },
-  service_reminder: {
-    label: 'Давно не обслуживались',
-    icon: Bell,
-    iconClass: 'bg-teal-50 text-teal-600',
-    section: 'service',
-  },
+  booking_confirm: { label: 'Подтверждение записи', icon: CalendarClock, section: null },
+  booking_reminder: { label: 'Напоминание о записи', icon: AlarmClock, section: null },
+  installment_reminder: { label: 'Оплата рассрочки', icon: CreditCard, section: 'installments' },
+  service_reminder: { label: 'Давно не обслуживались', icon: Bell, section: 'service' },
 };
 
 function lastSentLabel(iso?: string | null): string {
@@ -108,7 +100,13 @@ function AutoMailings({ onGoToSettings }: { onGoToSettings: (s: SettingsSection)
   const qc = useQueryClient();
   const [confirmItem, setConfirmItem] = useState<AutoMailingOverview | null>(null);
 
-  const { data: mailings = [], isLoading } = useQuery({
+  const {
+    data: mailings = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'auto-mailings'],
     queryFn: () => marketingApi.getAutoMailings().then((r) => r.data),
   });
@@ -176,54 +174,58 @@ function AutoMailings({ onGoToSettings }: { onGoToSettings: (s: SettingsSection)
   return (
     <SectionCard
       icon={Zap}
-      iconClass="bg-primary-50 text-primary-600"
+      iconTone="accent"
       title="Автоматические рассылки"
       subtitle="Все сценарии авто-отправки клиентам — других нет. Каждая отправка видна в «Журнале»"
+      bodyPadding="sm"
     >
       {isLoading ? (
-        <LoadingBlock className="py-6" />
+        <LoadingBlock lines={3} />
+      ) : isError ? (
+        <SectionError message="Не удалось загрузить сценарии рассылок" onRetry={() => refetch()} loading={isFetching} />
       ) : mailings.length === 0 ? (
         <EmptyState icon={Zap} title="Автоматические рассылки не настроены" />
       ) : (
-        <div className="space-y-2">
+        <ul className="divide-y divide-line">
           {mailings.map((m: AutoMailingOverview) => {
             const meta = AUTO_META[m.type];
             const Icon = meta?.icon ?? Zap;
+            const title = m.humanTitle ?? meta?.label ?? m.type;
             return (
-              <div key={m.type} className="rounded-xl bg-gray-50 p-3">
+              <li key={m.type} className="py-3 first:pt-1 last:pb-1">
                 <div className="flex items-center gap-3">
                   <span
-                    className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta?.iconClass ?? 'bg-gray-100 text-gray-500'}`}
+                    className={cn(
+                      'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+                      m.enabled ? toneChip.accent : toneChip.neutral,
+                    )}
+                    aria-hidden="true"
                   >
                     <Icon className="h-4 w-4" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-gray-900">
-                      {m.humanTitle ?? meta?.label ?? m.type}
-                    </p>
-                    <p className="truncate text-xs text-gray-500">{m.trigger ?? m.summary}</p>
+                    <p className="truncate text-sm font-medium text-ink">{title}</p>
+                    <p className="truncate text-xs text-ink-3">{m.trigger ?? m.summary}</p>
                   </div>
                   <Toggle
                     checked={m.enabled}
                     onChange={() => requestToggle(m)}
-                    label={m.humanTitle ?? meta?.label ?? m.type}
+                    label={title}
+                    disabled={toggle.isPending}
                   />
                 </div>
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-gray-100 pt-2">
-                  <p className="truncate text-xs text-gray-400">{lastSentLabel(m.lastSentAt)}</p>
+                <div className="ml-11 mt-1.5 flex items-center justify-between gap-2">
+                  <p className="truncate text-2xs text-ink-3">{lastSentLabel(m.lastSentAt)}</p>
                   {meta?.section && (
-                    <button
-                      onClick={() => onGoToSettings(meta.section as SettingsSection)}
-                      className="flex-shrink-0 text-xs font-semibold text-primary-600 hover:text-primary-700"
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => onGoToSettings(meta.section as SettingsSection)}>
                       Настроить текст
-                    </button>
+                    </Button>
                   )}
                 </div>
-              </div>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
 
       {/* Подтверждение включения сценария — видно, что уйдёт клиенту */}
@@ -339,208 +341,202 @@ function ManualBroadcast() {
   const sourceMissing = kind === 'source' && !source.trim();
   const canSend = trimmed.length > 0 && !sourceMissing && !send.isPending && !previewing;
 
-  const segments: { key: SegmentKind; label: string }[] = [
-    { key: 'winback', label: 'Давно не приезжали' },
-    { key: 'source', label: 'По источнику' },
-    { key: 'debt', label: 'Есть долг' },
-  ];
-
   return (
     <SectionCard
       icon={Send}
-      iconClass="bg-emerald-50 text-emerald-600"
+      iconTone="accent"
       title="Ручная рассылка по сегменту"
       subtitle="Выберите, кому и через какой канал отправить сообщение"
     >
       <div className="space-y-4">
         {/* Segment */}
         <div>
-          <label className="label">Кому отправить</label>
-          <div className="flex flex-wrap gap-2">
-            {segments.map((s) => (
-              <button
-                key={s.key}
-                onClick={() => {
-                  setKind(s.key);
-                  setResult(null);
-                }}
-                className={`press-soft rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
-                  kind === s.key
-                    ? 'border-primary-200 bg-primary-50 text-primary-700'
-                    : 'border-transparent bg-gray-50 text-gray-500'
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <p className="label">Кому отправить</p>
+          <SegmentedControl
+            aria-label="Сегмент клиентов"
+            fullWidth
+            value={kind}
+            onChange={(k) => {
+              setKind(k);
+              setResult(null);
+            }}
+            options={[
+              { value: 'winback', label: 'Давно не приезжали' },
+              { value: 'source', label: 'По источнику' },
+              { value: 'debt', label: 'Есть долг' },
+            ]}
+          />
         </div>
 
         {kind === 'winback' && (
           <div>
-            <label className="label">Не приезжали более</label>
-            <div className="flex gap-2">
-              {WINBACK_PRESETS.map((d) => (
-                <button
-                  key={d}
-                  onClick={() => {
-                    setDays(d);
-                    setResult(null);
-                  }}
-                  className={`press-soft flex-1 rounded-xl border py-2 text-sm font-semibold transition-colors ${
-                    days === d
-                      ? 'border-primary-200 bg-primary-50 text-primary-700'
-                      : 'border-transparent bg-gray-50 text-gray-500'
-                  }`}
-                >
-                  {d} дн.
-                </button>
-              ))}
-            </div>
+            <p className="label">Не приезжали более</p>
+            <SegmentedControl
+              aria-label="Срок без визитов"
+              fullWidth
+              value={String(days)}
+              onChange={(d) => {
+                setDays(Number(d));
+                setResult(null);
+              }}
+              options={WINBACK_PRESETS.map((d) => ({ value: String(d), label: `${d} дн.` }))}
+            />
+            <p className="mt-1.5 text-xs text-ink-3">
+              Готовые сегменты для возврата клиентов: 30 / 60 / 90 / 180 дней.
+            </p>
           </div>
         )}
 
         {kind === 'source' && (
-          <div>
-            <label className="label">Источник клиента</label>
-            <input
+          <Field
+            label="Источник клиента"
+            htmlFor="broadcast-source"
+            hint="Точное значение поля «источник» в карточке клиента"
+          >
+            <Input
+              id="broadcast-source"
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              className="input"
               placeholder="Напр. Instagram, Авито, по рекомендации"
             />
-            <p className="mt-1 text-xs text-gray-400">Точное значение поля «источник» в карточке клиента.</p>
-          </div>
+          </Field>
         )}
 
         {/* Preview (win-back only) */}
         {kind === 'winback' && (
-          <div className="overflow-hidden rounded-xl border border-gray-100">
-            <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-gray-400" />
-                <span className="text-sm font-semibold text-gray-900">Получатели</span>
-              </div>
-              <span className="text-sm font-bold tabular-nums text-primary-600">{previewTotal}</span>
+          <div className="overflow-hidden rounded-lg border border-line">
+            <div className="flex items-center justify-between border-b border-line bg-surface-2 px-3 py-2">
+              <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+                <Users className="h-4 w-4 text-ink-4" aria-hidden="true" />
+                Получатели
+              </span>
+              <span className="text-sm font-semibold tabular-nums text-accent-text">{previewTotal}</span>
             </div>
             {winbackPreview.isLoading ? (
-              <LoadingBlock className="py-8" />
-            ) : previewTotal === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-400">Нет клиентов, которые так давно не приезжали</p>
-            ) : (
-              <div className="max-h-64 divide-y divide-gray-50 overflow-y-auto">
-                {previewClients.map((c) => (
-                  <div key={c.clientId} className="flex items-center gap-3 px-3 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-gray-900">{c.name || 'Без имени'}</p>
-                      <p className="truncate text-xs text-gray-400">{c.phone || '—'}</p>
-                    </div>
-                    <p className="flex-shrink-0 text-xs font-medium text-gray-600">{lastVisitLabel(c.lastVisit)}</p>
-                  </div>
-                ))}
+              <LoadingBlock className="px-3" lines={3} />
+            ) : winbackPreview.isError ? (
+              <div className="p-3">
+                <SectionError
+                  message="Не удалось загрузить список получателей"
+                  onRetry={() => winbackPreview.refetch()}
+                  loading={winbackPreview.isFetching}
+                />
               </div>
+            ) : previewTotal === 0 ? (
+              <p className="py-6 text-center text-sm text-ink-3">Нет клиентов, которые так давно не приезжали</p>
+            ) : (
+              <ul className="max-h-64 divide-y divide-line overflow-y-auto">
+                {previewClients.map((c) => (
+                  <li key={c.clientId} className="flex items-center gap-3 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink">{c.name || 'Без имени'}</p>
+                      <p className="truncate text-xs tabular-nums text-ink-3">{c.phone || '—'}</p>
+                    </div>
+                    <p className="flex-shrink-0 text-xs font-medium text-ink-2">{lastVisitLabel(c.lastVisit)}</p>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
 
         {kind !== 'winback' && (
-          <div className="flex items-start gap-2 rounded-xl bg-blue-50 p-3">
-            <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-800">
-              Точное число получателей и результат покажем сразу после отправки — дубли отсеет анти-спам-фильтр.
-            </p>
-          </div>
+          <InfoNote icon={Info} tone="info">
+            Точное число получателей и результат покажем сразу после отправки — дубли отсеет анти-спам-фильтр.
+          </InfoNote>
         )}
 
         {/* Channel */}
-        <div>
-          <label className="label">Канал</label>
-          <select value={integrationId} onChange={(e) => setIntegrationId(e.target.value)} className="input">
-            <option value="">Канал по умолчанию</option>
-            {channels.map((c: MessagingIntegration) => (
-              <option key={c.id} value={c.id}>
-                {PROVIDER_LABELS[c.providerType] || c.providerType}
-                {c.senderName ? ` · ${c.senderName}` : ''}
-              </option>
-            ))}
-          </select>
-          {channels.length === 0 && (
-            <p className="mt-1 text-xs text-amber-600">
-              Нет активных каналов рассылок — подключите их в разделе «Интеграции».
-            </p>
-          )}
-        </div>
+        <Field
+          label="Канал"
+          htmlFor="broadcast-channel"
+          error={
+            channels.length === 0 ? 'Нет активных каналов рассылок — подключите их в разделе «Интеграции»' : undefined
+          }
+        >
+          <Select
+            id="broadcast-channel"
+            value={integrationId}
+            onChange={(e) => setIntegrationId(e.target.value)}
+            options={[
+              { value: '', label: 'Канал по умолчанию' },
+              ...channels.map((c: MessagingIntegration) => ({
+                value: c.id,
+                label: `${PROVIDER_LABELS[c.providerType] || c.providerType}${c.senderName ? ` · ${c.senderName}` : ''}`,
+              })),
+            ]}
+          />
+        </Field>
 
         {/* Message */}
-        <div>
-          <label className="label">Сообщение</label>
-          <textarea
+        <Field label="Сообщение" htmlFor="broadcast-message">
+          <Textarea
+            id="broadcast-message"
             rows={4}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            className="input resize-none"
             placeholder="Текст сообщения для клиентов…"
           />
-        </div>
+        </Field>
 
         {/* Шаг подтверждения: сначала dry-run предпросмотр, потом отправка */}
         {preview ? (
-          <div className="space-y-3 rounded-xl border border-primary-100 bg-primary-50/50 p-4">
-            <p className="text-sm font-semibold text-gray-900">
+          <div className="space-y-3 rounded-lg border border-accent/30 bg-accent-soft p-4">
+            <p className="text-sm font-semibold text-ink">
               Уйдёт {preview.recipientsCount} {plural(preview.recipientsCount, ['клиенту', 'клиентам', 'клиентам'])}{' '}
               через {preview.channel ? PROVIDER_LABELS[preview.channel] || preview.channel : 'канал по умолчанию'}
             </p>
-            <p className="rounded-lg bg-white px-3 py-2 text-sm text-gray-700">«{trimmed}»</p>
+            <p className="rounded-md bg-surface px-3 py-2 text-sm text-ink-2">«{trimmed}»</p>
             {preview.sample.length > 0 && (
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-ink-3">
                 Среди получателей: {preview.sample.map((s) => `${s.name} (${s.phone})`).join(', ')}
               </p>
             )}
-            <p className="flex items-start gap-1.5 text-xs text-gray-500">
-              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-green-600" />
+            <p className="flex items-start gap-1.5 text-xs text-ink-3">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-ok" aria-hidden="true" />
               Не больше {preview.perClient24hCap} сообщений клиенту за 24 ч — часть может быть пропущена защитой от
               спама.
             </p>
-            <div className="flex gap-2">
-              <button onClick={() => setPreview(null)} className="btn-secondary flex-1">
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setPreview(null)} disabled={send.isPending}>
                 Отменить
-              </button>
-              <button onClick={() => send.mutate()} disabled={send.isPending} className="btn-primary flex-1">
-                {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
+              <Button icon={Send} onClick={() => send.mutate()} loading={send.isPending}>
                 Отправить
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button onClick={runPreview} disabled={!canSend} className="btn-primary w-full">
-            {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            Проверить и отправить{kind === 'winback' && previewTotal > 0 ? ` (${previewTotal})` : ''}
-          </button>
+          <div className="flex justify-end">
+            <Button icon={Send} onClick={runPreview} disabled={!canSend} loading={previewing}>
+              Проверить и отправить{kind === 'winback' && previewTotal > 0 ? ` (${previewTotal})` : ''}
+            </Button>
+          </div>
         )}
 
         {/* Result */}
         {result && (
-          <div className="rounded-xl border border-gray-100 p-4">
-            <div className="grid grid-cols-4 gap-2 text-center">
-              <div>
-                <p className="text-xl font-bold tabular-nums text-green-600">{result.sent}</p>
-                <p className="mt-0.5 text-[10px] text-gray-400">Отправлено</p>
-              </div>
-              <div>
-                <p className="text-xl font-bold tabular-nums text-amber-600">{result.skippedDedup}</p>
-                <p className="mt-0.5 text-[10px] text-gray-400">Дубли</p>
-              </div>
-              <div>
-                <p className="text-xl font-bold tabular-nums text-red-500">{result.failed}</p>
-                <p className="mt-0.5 text-[10px] text-gray-400">Ошибок</p>
-              </div>
-              <div>
-                <p className="text-xl font-bold tabular-nums text-gray-900">{result.total}</p>
-                <p className="mt-0.5 text-[10px] text-gray-400">Всего</p>
-              </div>
+          <div className="rounded-lg border border-line p-4" role="status">
+            <div className="grid grid-cols-4 gap-3">
+              <MiniStat label="Отправлено" value={result.sent} tone="ok" align="center" size="sm" />
+              <MiniStat
+                label="Дубли"
+                value={result.skippedDedup}
+                tone={result.skippedDedup > 0 ? 'warn' : 'neutral'}
+                align="center"
+                size="sm"
+              />
+              <MiniStat
+                label="Ошибок"
+                value={result.failed}
+                tone={result.failed > 0 ? 'bad' : 'neutral'}
+                align="center"
+                size="sm"
+              />
+              <MiniStat label="Всего" value={result.total} align="center" size="sm" />
             </div>
             {result.sent === 0 && result.total > 0 && result.skippedDedup === result.total && (
-              <p className="mt-3 text-center text-xs text-gray-500">
+              <p className="mt-3 text-center text-xs text-ink-3">
                 Все получатели уже получали это сообщение недавно — анти-спам-фильтр не отправил повторно.
               </p>
             )}
@@ -555,23 +551,14 @@ export default function BroadcastsView({ onGoToSettings }: { onGoToSettings: (s:
   return (
     <div className="space-y-5">
       {/* Anti-spam reassurance */}
-      <div className="flex items-start gap-2.5 rounded-xl border border-green-100 bg-green-50 px-3.5 py-3">
-        <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
-        <p className="text-xs text-green-800">
-          Защита от спама включена: одному клиенту не уйдёт одинаковое сообщение дважды за короткий срок. Повторы
-          попадают в «Дубли» и не тратят деньги.
-        </p>
-      </div>
+      <InfoNote icon={ShieldCheck} tone="ok">
+        Защита от спама включена: одному клиенту не уйдёт одинаковое сообщение дважды за короткий срок. Повторы попадают
+        в «Дубли» и не тратят деньги.
+      </InfoNote>
 
-      <ManualBroadcast />
-      <AutoMailings onGoToSettings={onGoToSettings} />
-
-      <div className="flex items-start gap-2 rounded-xl bg-gray-50 px-3.5 py-3">
-        <Bell className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
-        <p className="text-xs text-gray-500">
-          {plural(WINBACK_PRESETS.length, ['Пресет', 'Пресета', 'Пресетов'])} «давно не приезжали» (30 / 60 / 90 / 180
-          дней) — это готовые сегменты для возврата клиентов.
-        </p>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start">
+        <ManualBroadcast />
+        <AutoMailings onGoToSettings={onGoToSettings} />
       </div>
     </div>
   );

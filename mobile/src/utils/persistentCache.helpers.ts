@@ -262,6 +262,19 @@ export const PERSISTED_KEYS = [
   'purchase-order',
   // Маркетинг-отчёты — ['marketing-report', from, to] (период-ключ).
   'marketing-report',
+  // ── Конструктор отчётов (2026-09-25) ───────────────────────────────────
+  // ['report-catalog'] — единственный слот: какие отчёты доступны этому
+  // пользователю. Персистим, чтобы хаб «Отчёты» рисовался мгновенно на
+  // холодном старте (карточки — из shared-каталога, сервер лишь подтверждает
+  // доступ). ['report-filter-options', kind] — справочники фильтра (мастера /
+  // сотрудники / поставщики / филиалы), 4 фиксированных варианта.
+  // ['report-run', reportId, from, to, ids, groupBy] — сам отчёт: период-ключ,
+  // владелец возвращается к тем же месяцам; cap ниже держит 3 последних.
+  // Как и 'financial-report', снимок помечен реальным updatedAt → на mount
+  // всегда refetch, старые цифры живут только до первого ответа сервера.
+  'report-catalog',
+  'report-filter-options',
+  'report-run',
   // ── Филиалы (мульти-точки 156/160/163) ────────────────────────────────
   // ['points'] — единственный фиксированный слот: живые филиалы тенанта +
   // филиал ЭТОЙ сессии. Персистим, чтобы на холодном старте пункт «Филиалы» в
@@ -310,6 +323,7 @@ export const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
   salary: 3,
   cashflow: 3,
   expenses: 3,
+  'report-run': 3,
   // Id-keyed detail cards — keep the 10 most recently opened.
   client: 10,
   'client-checks': 10,

@@ -458,7 +458,8 @@ function KpiStrip() {
         format: 'money',
         pickValue: (pt) => pt.revenue || 0,
         total: (d) => d.totalRevenue,
-        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+        // «Отчёты» теперь хаб-каталог; подробный финансовый отчёт — FinancialReport.
+        navTo: () => ({ stack: 'MoreTab', screen: 'FinancialReport' }),
       },
       {
         key: 'profit',
@@ -482,7 +483,8 @@ function KpiStrip() {
         format: 'money',
         pickValue: (pt) => (pt.checkCount > 0 ? pt.revenue / pt.checkCount : 0),
         total: (_d, avgValue) => avgValue,
-        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+        // «Отчёты» теперь хаб-каталог; подробный финансовый отчёт — FinancialReport.
+        navTo: () => ({ stack: 'MoreTab', screen: 'FinancialReport' }),
       },
     ];
     return canSeeProfit ? all : all.filter((t) => t.key !== 'profit');
@@ -1451,15 +1453,33 @@ function CallsSnapshot() {
 //
 // Combines the 6 hero blocks. Не показывает ShiftControl — это фича мастера.
 // ── Call Funnel Widget ────────────────────────────────────────────────────────
+// Воронка обращений по РЕАЛЬНЫМ звонкам телефонии (правка №4, 2026-09-25).
+// Сервер отдаёт `telephony` — подключена ли телефония и не упал ли провайдер:
+//   • connected:false → приглашение подключить телефонию; кнопка ведёт в
+//     Маркетинг → Интеграции (только при праве settings_manage — остальным
+//     нажимать некуда);
+//   • error → «Не удалось получить звонки: …» + «Повторить» (refetch);
+//   • данные → две полосы плиток: звонков / дозвонились / пропущено / не
+//     перезвонили (оранжевый акцент, если > 0) и приехало / чеков / выручка /
+//     конверсия;
+//   • старый бэкенд без `telephony` → прежние четыре плитки, как раньше.
+// Виджет живёт только в стеке AdminDashboard (owner-class) — у мастера места
+// не занимает.
 function CallFunnelWidget() {
   const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { hasPermission } = useAuth();
 
   const now = new Date();
   const dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   const dateTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const monthLabel = now.toLocaleDateString('ru-RU', { month: 'long' });
 
-  const { data: funnel } = useQuery({
+  const {
+    data: funnel,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['call-funnel', dateFrom, dateTo],
     queryFn: async () => {
       const res = await reportsApi.callFunnel({ dateFrom, dateTo });
@@ -1471,22 +1491,157 @@ function CallFunnelWidget() {
 
   if (!funnel) return null;
 
-  const tiles = [
-    { label: 'Звонков', value: String(funnel.totalCalls), icon: 'call-outline' as const, color: colors.primary[600] },
-    { label: 'Приехало', value: String(funnel.arrivedClients), icon: 'car-outline' as const, color: colors.teal[600] },
-    {
-      label: 'Чеков создано',
-      value: String(funnel.createdChecks),
-      icon: 'receipt-outline' as const,
-      color: colors.orange[600],
-    },
-    {
-      label: 'Конверсия',
-      value: `${funnel.conversionRate.toFixed(0)}%`,
-      icon: 'trending-up-outline' as const,
-      color: colors.green[600],
-    },
-  ];
+  const telephony = funnel.telephony;
+  const providerLabel =
+    telephony?.provider === 'moizvonki' ? 'МоиЗвонки' : telephony?.provider === 'mango' ? 'Mango' : null;
+  const canManageIntegrations = hasPermission('settings_manage');
+  const orange = palette.mode === 'dark' ? colors.orange[400] : colors.orange[600];
+
+  const openIntegrations = () => {
+    haptic('tap');
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Integrations', initial: false } });
+  };
+
+  let body: React.ReactNode;
+  if (telephony && !telephony.connected) {
+    body = (
+      <View style={styles.funnelNotice}>
+        <View style={[styles.funnelNoticeIcon, { backgroundColor: palette.bg.muted }]}>
+          <Ionicons name="call-outline" size={18} color={palette.text.secondary} />
+        </View>
+        <Text style={[styles.funnelNoticeText, { color: palette.text.secondary }]}>
+          Подключите телефонию — и здесь появится воронка обращений: сколько звонили, дозвонились, пропустили и сколько
+          звонков доехало до чека.
+        </Text>
+        {canManageIntegrations && (
+          <TouchableOpacity
+            style={[styles.funnelNoticeBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={openIntegrations}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Подключить телефонию"
+          >
+            <Text style={styles.funnelNoticeBtnText}>Подключить телефонию</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  } else if (telephony?.error) {
+    body = (
+      <View style={styles.funnelNotice}>
+        <View style={[styles.funnelNoticeIcon, { backgroundColor: palette.bg.muted }]}>
+          <Ionicons name="alert-circle-outline" size={18} color={orange} />
+        </View>
+        <Text style={[styles.funnelNoticeText, { color: palette.text.secondary }]}>
+          Не удалось получить звонки: {telephony.error}
+        </Text>
+        <TouchableOpacity
+          style={[styles.funnelNoticeBtn, { backgroundColor: palette.bg.muted }]}
+          onPress={() => {
+            haptic('tap');
+            void refetch();
+          }}
+          disabled={isFetching}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Повторить запрос звонков"
+        >
+          <Text style={[styles.funnelNoticeBtnText, { color: palette.text.primary }]}>
+            {isFetching ? 'Обновляем…' : 'Повторить'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  } else if (telephony) {
+    const notCalledBack = funnel.notCalledBack ?? 0;
+    const strips: { label: string; value: string; accent?: boolean }[][] = [
+      [
+        { label: 'Звонков', value: String(funnel.totalCalls) },
+        { label: 'Дозвонились', value: String(funnel.answeredCalls ?? 0) },
+        { label: 'Пропущено', value: String(funnel.missedCalls ?? 0) },
+        { label: 'Не перезвонили', value: String(notCalledBack), accent: notCalledBack > 0 },
+      ],
+      [
+        { label: 'Приехало', value: String(funnel.arrivedClients) },
+        { label: 'Чеков', value: String(funnel.createdChecks) },
+        { label: 'Выручка', value: formatMoneyCompact(funnel.totalRevenue) },
+        { label: 'Конверсия', value: `${funnel.conversionRate.toFixed(0)}%` },
+      ],
+    ];
+    body = (
+      <View style={styles.funnelStrips}>
+        {strips.map((strip, si) => (
+          <View key={si} style={styles.funnelStrip}>
+            {strip.map((tile) => (
+              <View
+                key={tile.label}
+                style={[
+                  styles.funnelMiniTile,
+                  {
+                    backgroundColor: tile.accent ? softTint(colors.orange[500], palette.mode) : palette.bg.muted,
+                    borderColor: tile.accent ? colors.orange[400] : palette.border.subtle,
+                  },
+                ]}
+                accessibilityLabel={`${tile.label}: ${tile.value}`}
+              >
+                <Text
+                  style={[styles.funnelMiniValue, { color: tile.accent ? orange : palette.text.primary }]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
+                >
+                  {tile.value}
+                </Text>
+                <Text
+                  style={[styles.funnelMiniLabel, { color: tile.accent ? orange : palette.text.tertiary }]}
+                  numberOfLines={2}
+                >
+                  {tile.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    );
+  } else {
+    // Старый бэкенд без `telephony` — рендер как раньше.
+    const tiles = [
+      { label: 'Звонков', value: String(funnel.totalCalls), icon: 'call-outline' as const, color: colors.primary[600] },
+      {
+        label: 'Приехало',
+        value: String(funnel.arrivedClients),
+        icon: 'car-outline' as const,
+        color: colors.teal[600],
+      },
+      {
+        label: 'Чеков создано',
+        value: String(funnel.createdChecks),
+        icon: 'receipt-outline' as const,
+        color: colors.orange[600],
+      },
+      {
+        label: 'Конверсия',
+        value: `${funnel.conversionRate.toFixed(0)}%`,
+        icon: 'trending-up-outline' as const,
+        color: colors.green[600],
+      },
+    ];
+    body = (
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] }}>
+        {tiles.map((tile) => (
+          <View
+            key={tile.label}
+            style={[styles.funnelTile, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <Ionicons name={tile.icon} size={15} color={tile.color} />
+            <Text style={[styles.funnelTileValue, { color: palette.text.primary }]}>{tile.value}</Text>
+            <Text style={[styles.funnelTileLabel, { color: palette.text.tertiary }]}>{tile.label}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
 
   return (
     <AnimatedCard
@@ -1504,20 +1659,11 @@ function CallFunnelWidget() {
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary, fontSize: 11, letterSpacing: 0.5 }]}>
           ВОРОНКА ЗВОНКОВ
         </Text>
-        <Text style={[{ fontSize: 11, color: palette.text.tertiary }]}>{monthLabel}</Text>
+        <Text style={[{ fontSize: 11, color: palette.text.tertiary }]}>
+          {providerLabel ? `${monthLabel} · ${providerLabel}` : monthLabel}
+        </Text>
       </View>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] }}>
-        {tiles.map((tile) => (
-          <View
-            key={tile.label}
-            style={[styles.funnelTile, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-          >
-            <Ionicons name={tile.icon} size={15} color={tile.color} />
-            <Text style={[styles.funnelTileValue, { color: palette.text.primary }]}>{tile.value}</Text>
-            <Text style={[styles.funnelTileLabel, { color: palette.text.tertiary }]}>{tile.label}</Text>
-          </View>
-        ))}
-      </View>
+      {body}
     </AnimatedCard>
   );
 }
@@ -4788,6 +4934,27 @@ const styles = StyleSheet.create({
   },
   funnelTileValue: { fontSize: 20, fontWeight: '700', letterSpacing: -0.5 },
   funnelTileLabel: { fontSize: 11, fontWeight: '500' },
+  // Воронка звонков по телефонии (2026-09-25): две полосы по четыре компактные
+  // плитки + состояния «подключите телефонию» / «ошибка провайдера».
+  funnelStrips: { gap: spacing[1.5] },
+  funnelStrip: { flexDirection: 'row', gap: spacing[1.5] },
+  funnelMiniTile: {
+    flex: 1,
+    borderRadius: borderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[2],
+    paddingHorizontal: spacing[1],
+    alignItems: 'center',
+    gap: 2,
+  },
+  funnelMiniValue: { fontSize: 17, fontWeight: '700', letterSpacing: -0.4, fontVariant: ['tabular-nums'] },
+  // Две строки — «Не перезвонили» не влезает в четверть ширины одной строкой.
+  funnelMiniLabel: { fontSize: 10, lineHeight: 12, fontWeight: '500', textAlign: 'center' },
+  funnelNotice: { alignItems: 'flex-start', gap: spacing[2.5] },
+  funnelNoticeIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  funnelNoticeText: { fontSize: 13, lineHeight: 18 },
+  funnelNoticeBtn: { paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.xl },
+  funnelNoticeBtnText: { fontSize: 13, fontWeight: '600', color: colors.white },
   kpiHeaderRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
