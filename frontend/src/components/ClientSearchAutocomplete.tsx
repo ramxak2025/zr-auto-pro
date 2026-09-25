@@ -1,9 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, User, UserCheck, Loader2 } from 'lucide-react';
+import { Search, User, UserCheck, Loader2, X } from 'lucide-react';
 import { clientsApi } from '../api/services';
 import type { Client } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { cn } from '../ui/cn';
+import { Input } from '../ui/Input';
+import { Button } from '../ui/Button';
+import { focusRing } from '../ui/tokens';
 
 /**
  * ClientSearchAutocomplete — reusable client picker used by the «Сменить
@@ -15,23 +19,33 @@ import { formatPhone } from '../../../shared/validation/phone';
  * Behaviour (unchanged from the original inline copy in ClientDetailPage):
  * - типит ≥1 символ → dropdown с результатами (имя / телефон);
  * - выбор клиента → компактная карточка с кнопкой «Сбросить»;
- * - клик вне — закрывает dropdown.
+ * - клик вне — закрывает dropdown. ↑/↓ + Enter — выбор с клавиатуры.
  */
 export default function ClientSearchAutocomplete({
   selectedClient,
   onSelect,
   excludeClientId,
+  placeholder = 'Имя или телефон клиента…',
 }: {
   selectedClient: Client | null;
   onSelect: (client: Client | null) => void;
   excludeClientId?: string;
+  placeholder?: string;
 }) {
+  const id = useId();
+  const listId = `${id}-list`;
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data: clientsData, isLoading } = useQuery<{ data: Client[] }>({
+  const {
+    data: clientsData,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<{ data: Client[] }>({
     queryKey: ['clients', { search, limit: 10 }],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search, limit: 10 });
@@ -66,70 +80,112 @@ export default function ClientSearchAutocomplete({
 
   if (selectedClient) {
     return (
-      <div className="flex items-center gap-3 p-3 bg-primary-50 rounded-xl border border-primary-200">
-        <div className="p-1.5 bg-white rounded-lg">
-          <UserCheck className="w-4 h-4 text-primary-600" />
+      <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent-soft p-3">
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface text-accent">
+          <UserCheck className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-ink">{selectedClient.fullName}</p>
+          <p className="text-xs text-ink-3">{formatPhone(selectedClient.phone)}</p>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900">{selectedClient.fullName}</p>
-          <p className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</p>
-        </div>
-        <button
-          type="button"
-          onClick={handleClear}
-          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
-        >
+        <Button variant="ghost" size="sm" icon={X} onClick={handleClear}>
           Сбросить
-        </button>
+        </Button>
       </div>
     );
   }
 
+  const open = isOpen && search.length >= 1;
+  const activeId = open && clients[active] ? `${listId}-opt-${clients[active].id}` : undefined;
+
   return (
     <div ref={wrapperRef} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input
-          ref={inputRef}
-          type="text"
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setIsOpen(true);
-          }}
-          onFocus={() => {
-            if (search.length >= 1) setIsOpen(true);
-          }}
-          className="input pl-9"
-          placeholder="Поиск клиента по имени или телефону..."
-        />
-      </div>
+      <Input
+        ref={inputRef}
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={activeId}
+        aria-label="Поиск клиента"
+        autoComplete="off"
+        value={search}
+        onChange={(e) => {
+          setSearch(e.target.value);
+          setActive(0);
+          setIsOpen(true);
+        }}
+        onFocus={() => {
+          if (search.length >= 1) setIsOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (!open) return;
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActive((a) => Math.min(a + 1, Math.max(clients.length - 1, 0)));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActive((a) => Math.max(a - 1, 0));
+          } else if (e.key === 'Enter' && clients[active]) {
+            e.preventDefault();
+            handleSelect(clients[active]);
+          } else if (e.key === 'Escape') {
+            setIsOpen(false);
+          }
+        }}
+        leftIcon={Search}
+        placeholder={placeholder}
+      />
 
-      {isOpen && search.length >= 1 && (
-        <div className="absolute z-50 w-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 max-h-60 overflow-y-auto">
+      {open && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-label="Найденные клиенты"
+          className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-pop motion-safe:animate-pop-in"
+        >
           {isLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
-              <span className="ml-2 text-sm text-gray-500">Поиск...</span>
+            <div className="flex items-center justify-center gap-2 py-4 text-sm text-ink-3" role="status">
+              <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden="true" />
+              Поиск…
+            </div>
+          ) : isError ? (
+            <div className="flex items-center justify-between gap-3 px-3 py-3 text-sm text-bad-text" role="alert">
+              Не удалось найти клиентов
+              <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                Повторить
+              </Button>
             </div>
           ) : clients.length === 0 ? (
-            <div className="py-4 text-center text-sm text-gray-400">Клиенты не найдены</div>
+            <div className="py-4 text-center text-sm text-ink-3">Клиенты не найдены</div>
           ) : (
-            clients.map((client) => (
-              <button
+            clients.map((client, i) => (
+              // Мышь: клик выбирает; клавиатура ведётся из поля (aria-activedescendant).
+              // eslint-disable-next-line jsx-a11y/click-events-have-key-events
+              <div
                 key={client.id}
-                type="button"
+                id={`${listId}-opt-${client.id}`}
+                role="option"
+                tabIndex={-1}
+                aria-selected={i === active}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => handleSelect(client)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
+                className={cn(
+                  'flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
+                  i === active ? 'bg-surface-3' : 'hover:bg-surface-3',
+                  focusRing,
+                )}
               >
-                <div className="p-1.5 bg-gray-100 rounded-lg">
-                  <User className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{client.fullName}</p>
-                  <p className="text-xs text-gray-500">{formatPhone(client.phone)}</p>
-                </div>
-              </button>
+                <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+                  <User className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-ink">{client.fullName}</span>
+                  <span className="block text-xs text-ink-3">{formatPhone(client.phone)}</span>
+                </span>
+              </div>
             ))
           )}
         </div>

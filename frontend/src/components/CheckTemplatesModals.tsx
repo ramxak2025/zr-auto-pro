@@ -18,8 +18,19 @@ import toast from 'react-hot-toast';
 import { checkTemplatesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from './Modal';
+import ConfirmDialog from './ConfirmDialog';
+import EmptyState from './EmptyState';
 import { UserRole } from '../types';
 import type { CheckTemplate, CheckTemplateFolder } from '../types';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { Field } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { Select } from '../ui/Select';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 
 /**
  * Шаблоны чеков на web — parity с mobile (round 8): личные шаблоны + личные
@@ -83,24 +94,36 @@ function templateSummary(t: CheckTemplate): string {
 // Общие данные. Оба модала переиспользуют одни query-ключи — React Query
 // дедуплицирует; staleTime 60с как у остальных справочников кассы.
 function useTemplatesData() {
-  const { data: templates = [] } = useQuery<CheckTemplate[]>({
+  const templatesQuery = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
     staleTime: 60_000,
   });
-  const { data: folders = [] } = useQuery<CheckTemplateFolder[]>({
+  const foldersQuery = useQuery<CheckTemplateFolder[]>({
     queryKey: ['check-template-folders'],
     queryFn: async () => (await checkTemplatesApi.folders.list()).data,
     staleTime: 60_000,
   });
-  return { templates, folders };
+  return {
+    templates: templatesQuery.data ?? [],
+    folders: foldersQuery.data ?? [],
+    isLoading: templatesQuery.isLoading || foldersQuery.isLoading,
+    isError: templatesQuery.isError || foldersQuery.isError,
+    isFetching: templatesQuery.isFetching || foldersQuery.isFetching,
+    refetch: () => {
+      templatesQuery.refetch();
+      foldersQuery.refetch();
+    },
+  };
 }
 
 const sharedBadge = (
-  <span className="text-[9px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+  <Badge tone="accent" size="sm">
     Общий
-  </span>
+  </Badge>
 );
+
+const rowBtn = 'flex w-full items-center gap-2.5 rounded-lg py-2.5 pr-3 text-left transition-colors hover:bg-surface-3';
 
 // ── Picker + управление ─────────────────────────────────────────────────────
 
@@ -117,7 +140,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   // Owner-class зеркалит OWNER_CLASS_ROLES бэкенда.
   const isOwnerClass = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
-  const { templates, folders } = useTemplatesData();
+  const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData();
 
   const [mode, setMode] = useState<'pick' | 'manage'>('pick');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -128,6 +151,9 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const [folderDraft, setFolderDraft] = useState('');
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateDraft, setTemplateDraft] = useState('');
+  // Подтверждения удаления — ConfirmDialog вместо window.confirm.
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<FolderNode | null>(null);
+  const [deleteTemplateTarget, setDeleteTemplateTarget] = useState<CheckTemplate | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -237,36 +263,26 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     renameTemplateMutation.mutate({ id: editingTemplateId, name });
   };
 
-  const confirmDeleteFolder = (node: FolderNode) => {
-    if (window.confirm(`Удалить папку «${node.name}»? Подпапки удалятся, шаблоны из них останутся без папки.`)) {
-      removeFolderMutation.mutate(node.id);
-    }
-  };
-  const confirmDeleteTemplate = (t: CheckTemplate) => {
-    if (window.confirm(`Удалить шаблон «${t.name}»?`)) {
-      removeTemplateMutation.mutate(t.id);
-    }
-  };
-
   // ── Рендер: выбор шаблона ─────────────────────────────────────────────
   const renderPickTemplateRow = (t: CheckTemplate, depth: number) => (
-    <button
-      key={t.id}
-      type="button"
-      onClick={() => onApply(t)}
-      className="w-full flex items-center gap-2.5 py-2.5 pr-3 rounded-lg hover:bg-primary-50 text-left transition-colors group"
-      style={{ paddingLeft: 12 + depth * 18 }}
-    >
-      <FileText className="w-4 h-4 text-gray-400 group-hover:text-primary-500 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-900 truncate">{t.name}</span>
-          {isSharedTemplate(t) && sharedBadge}
-        </div>
-        <p className="text-xs text-gray-400">{templateSummary(t)}</p>
-      </div>
-      <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-primary-400 flex-shrink-0" />
-    </button>
+    <li key={t.id}>
+      <button
+        type="button"
+        onClick={() => onApply(t)}
+        className={cn(rowBtn, 'group', focusRing)}
+        style={{ paddingLeft: 12 + depth * 18 }}
+      >
+        <FileText className="h-4 w-4 flex-shrink-0 text-ink-4 group-hover:text-accent" aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-ink">{t.name}</span>
+            {isSharedTemplate(t) && sharedBadge}
+          </span>
+          <span className="block text-xs text-ink-3">{templateSummary(t)}</span>
+        </span>
+        <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4 group-hover:text-accent" aria-hidden="true" />
+      </button>
+    </li>
   );
 
   const renderPickFolder = (node: FolderNode, depth: number): ReactNode => {
@@ -274,36 +290,43 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     const inFolder = templatesByFolder.get(node.id) ?? [];
     const count = subtreeCount(node);
     return (
-      <div key={node.id}>
+      <li key={node.id}>
         <button
           type="button"
           onClick={() => toggleFolder(node.id)}
-          className="w-full flex items-center gap-2.5 py-2.5 pr-3 rounded-lg hover:bg-gray-50 text-left transition-colors"
+          aria-expanded={open}
+          className={cn(rowBtn, focusRing)}
           style={{ paddingLeft: 12 + depth * 18 }}
         >
           <ChevronRight
-            className={`w-3.5 h-3.5 text-gray-400 transition-transform flex-shrink-0 ${open ? 'rotate-90' : ''}`}
+            className={cn(
+              'h-3.5 w-3.5 flex-shrink-0 text-ink-4 transition-transform duration-150',
+              open && 'rotate-90',
+            )}
+            aria-hidden="true"
           />
           {open ? (
-            <FolderOpen className="w-4 h-4 text-amber-500 flex-shrink-0" />
+            <FolderOpen className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
           ) : (
-            <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+            <Folder className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
           )}
-          <span className="flex-1 text-sm font-medium text-gray-900 truncate">{node.name}</span>
-          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full flex-shrink-0">{count}</span>
+          <span className="flex-1 truncate text-sm font-medium text-ink">{node.name}</span>
+          <Badge size="sm" className="tabular-nums">
+            {count}
+          </Badge>
         </button>
         {open && (
-          <div>
+          <ul>
             {node.children.map((c) => renderPickFolder(c, depth + 1))}
             {inFolder.map((t) => renderPickTemplateRow(t, depth + 1))}
             {node.children.length === 0 && inFolder.length === 0 && (
-              <p className="text-xs text-gray-400 italic py-1.5" style={{ paddingLeft: 12 + (depth + 1) * 18 + 26 }}>
+              <li className="py-1.5 text-xs text-ink-3" style={{ paddingLeft: 12 + (depth + 1) * 18 + 26 }}>
                 Пусто
-              </p>
+              </li>
             )}
-          </div>
+          </ul>
         )}
-      </div>
+      </li>
     );
   };
 
@@ -316,9 +339,10 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     pending: boolean,
     placeholder: string,
   ) => (
-    <div className="flex items-center gap-1.5 flex-1 min-w-0">
-      <input
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      <Input
         type="text"
+        size="sm"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -331,25 +355,17 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
         autoFocus
         maxLength={120}
         placeholder={placeholder}
-        className="input text-sm py-1.5 flex-1 min-w-0"
+        aria-label={placeholder}
       />
-      <button
-        type="button"
+      <IconButton
+        label="Сохранить"
+        icon={CheckIcon}
+        size="sm"
+        variant="soft"
         onClick={onSubmit}
         disabled={pending || !value.trim()}
-        className="p-1.5 rounded-lg text-green-600 hover:bg-green-50 disabled:opacity-40"
-        title="Сохранить"
-      >
-        <CheckIcon className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100"
-        title="Отмена"
-      >
-        <X className="w-4 h-4" />
-      </button>
+      />
+      <IconButton label="Отмена" icon={X} size="sm" onClick={onCancel} />
     </div>
   );
 
@@ -357,14 +373,14 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const renderManageFolder = (node: FolderNode, depth: number): ReactNode => {
     const open = expanded.has(node.id);
     return (
-      <div key={node.id}>
+      <li key={node.id}>
         <div
-          className="flex items-center gap-1 py-1.5 pr-2 rounded-lg hover:bg-gray-50 group"
+          className="group flex items-center gap-1 rounded-lg py-1 pr-1 hover:bg-surface-3"
           style={{ paddingLeft: 8 + depth * 18 }}
         >
           {editingFolderId === node.id ? (
             <>
-              <Folder className="w-4 h-4 text-amber-500 flex-shrink-0 ml-1" />
+              <Folder className="ml-1 h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
               {inlineNameEditor(
                 folderDraft,
                 setFolderDraft,
@@ -379,53 +395,53 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               <button
                 type="button"
                 onClick={() => toggleFolder(node.id)}
-                className="flex items-center gap-2 flex-1 min-w-0 py-1 text-left"
+                aria-expanded={open}
+                className={cn('flex min-w-0 flex-1 items-center gap-2 rounded py-1.5 text-left', focusRing)}
               >
                 <ChevronRight
-                  className={`w-3.5 h-3.5 text-gray-400 transition-transform flex-shrink-0 ${open ? 'rotate-90' : ''}`}
+                  className={cn(
+                    'h-3.5 w-3.5 flex-shrink-0 text-ink-4 transition-transform duration-150',
+                    open && 'rotate-90',
+                  )}
+                  aria-hidden="true"
                 />
                 {open ? (
-                  <FolderOpen className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
                 ) : (
-                  <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                  <Folder className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
                 )}
-                <span className="text-sm font-medium text-gray-900 truncate">{node.name}</span>
+                <span className="truncate text-sm font-medium text-ink">{node.name}</span>
               </button>
-              <div className="flex items-center flex-shrink-0">
-                <button
-                  type="button"
+              <div className="flex flex-shrink-0 items-center">
+                <IconButton
+                  label="Создать подпапку"
+                  icon={FolderPlus}
+                  size="sm"
                   onClick={() => startCreateFolder(node.id)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50"
-                  title="Создать подпапку"
-                >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
+                />
+                <IconButton
+                  label="Переименовать папку"
+                  icon={Pencil}
+                  size="sm"
                   onClick={() => {
                     setFolderDraft(node.name);
                     setEditingFolderId(node.id);
                   }}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50"
-                  title="Переименовать"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => confirmDeleteFolder(node)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50"
-                  title="Удалить папку"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                />
+                <IconButton
+                  label="Удалить папку"
+                  icon={Trash2}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setDeleteFolderTarget(node)}
+                />
               </div>
             </>
           )}
         </div>
         {creatingIn?.parentId === node.id && (
           <div className="flex items-center gap-1 py-1" style={{ paddingLeft: 8 + (depth + 1) * 18 }}>
-            <FolderPlus className="w-4 h-4 text-amber-500 flex-shrink-0" />
+            <FolderPlus className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
             {inlineNameEditor(
               newFolderName,
               setNewFolderName,
@@ -436,8 +452,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
             )}
           </div>
         )}
-        {open && node.children.map((c) => renderManageFolder(c, depth + 1))}
-      </div>
+        {open && node.children.length > 0 && <ul>{node.children.map((c) => renderManageFolder(c, depth + 1))}</ul>}
+      </li>
     );
   };
 
@@ -446,8 +462,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     const shared = isSharedTemplate(t);
     const canEdit = !shared || isOwnerClass; // 403 для мастеров на общих — кнопки прячем
     return (
-      <div key={t.id} className="flex items-center gap-2 py-2 px-2 rounded-lg hover:bg-gray-50">
-        <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+      <li key={t.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-surface-3">
+        <FileText className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
         {editingTemplateId === t.id ? (
           inlineNameEditor(
             templateDraft,
@@ -459,21 +475,22 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
           )
         ) : (
           <>
-            <div className="flex-1 min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-900 truncate">{t.name}</span>
+                <span className="truncate text-sm font-medium text-ink">{t.name}</span>
                 {shared && sharedBadge}
               </div>
-              <p className="text-xs text-gray-400">{templateSummary(t)}</p>
+              <p className="text-xs text-ink-3">{templateSummary(t)}</p>
             </div>
             {/* Перемещение по папкам — только личные (общие вне папок by design) */}
             {!shared && (
-              <select
+              <Select
+                size="sm"
+                aria-label={`Папка шаблона «${t.name}»`}
                 value={t.folderId ?? ''}
                 onChange={(e) => moveTemplateMutation.mutate({ id: t.id, folderId: e.target.value || null })}
                 disabled={moveTemplateMutation.isPending}
-                className="input text-xs py-1.5 w-32 sm:w-40 flex-shrink-0"
-                title="Папка шаблона"
+                className="w-32 flex-shrink-0 sm:w-40"
               >
                 <option value="">Без папки</option>
                 {flatFolders.map((f) => (
@@ -482,123 +499,150 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                     {f.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
             {canEdit && (
-              <div className="flex items-center flex-shrink-0">
-                <button
-                  type="button"
+              <div className="flex flex-shrink-0 items-center">
+                <IconButton
+                  label="Переименовать шаблон"
+                  icon={Pencil}
+                  size="sm"
                   onClick={() => {
                     setTemplateDraft(t.name);
                     setEditingTemplateId(t.id);
                   }}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50"
-                  title="Переименовать"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => confirmDeleteTemplate(t)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50"
-                  title="Удалить шаблон"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                />
+                <IconButton
+                  label="Удалить шаблон"
+                  icon={Trash2}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setDeleteTemplateTarget(t)}
+                />
               </div>
             )}
           </>
         )}
-      </div>
+      </li>
     );
   };
 
   const isEmpty = templates.length === 0 && folders.length === 0;
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={mode === 'pick' ? 'Шаблоны чеков' : 'Управление шаблонами'}
-      size="lg"
-    >
-      {mode === 'pick' ? (
-        <div>
-          {isEmpty ? (
-            <div className="text-center py-8 text-gray-400">
-              <FileText className="w-10 h-10 mx-auto mb-3 opacity-50" />
-              <p className="text-sm font-medium">Нет сохранённых шаблонов</p>
-              <p className="text-xs mt-1">Добавьте услуги и товары в чек, затем нажмите «Сохранить как шаблон»</p>
-            </div>
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={mode === 'pick' ? 'Шаблоны чеков' : 'Управление шаблонами'}
+        description={mode === 'pick' ? 'Шаблон заменит текущие строки услуг и товаров' : undefined}
+        size="lg"
+        footer={
+          mode === 'pick' ? (
+            <Button variant="ghost" icon={Settings2} onClick={() => setMode('manage')} className="mr-auto">
+              Управлять шаблонами и папками
+            </Button>
           ) : (
-            <div className="-mx-2">
+            <Button variant="ghost" icon={ArrowLeft} onClick={() => setMode('pick')} className="mr-auto">
+              К выбору шаблона
+            </Button>
+          )
+        }
+      >
+        {isError ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center" role="alert">
+            <p className="text-sm text-ink-2">Не удалось загрузить шаблоны</p>
+            <Button variant="secondary" size="sm" onClick={refetch} loading={isFetching}>
+              Повторить
+            </Button>
+          </div>
+        ) : isLoading ? (
+          <p className="py-8 text-center text-sm text-ink-3" role="status">
+            Загружаем шаблоны…
+          </p>
+        ) : mode === 'pick' ? (
+          isEmpty ? (
+            <EmptyState
+              compact
+              icon={FileText}
+              title="Нет сохранённых шаблонов"
+              description="Добавьте услуги и товары в чек, затем нажмите «Сохранить как шаблон»"
+            />
+          ) : (
+            <ul className="-mx-2">
               {folderTree.map((node) => renderPickFolder(node, 0))}
               {rootPersonal.map((t) => renderPickTemplateRow(t, 0))}
               {sharedTemplates.map((t) => renderPickTemplateRow(t, 0))}
-            </div>
-          )}
-          <div className="mt-4 pt-3 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={() => setMode('manage')}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium text-gray-500 hover:text-primary-600 hover:bg-primary-50 transition-colors"
-            >
-              <Settings2 className="w-4 h-4" />
-              Управлять шаблонами и папками
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div>
-          <button
-            type="button"
-            onClick={() => setMode('pick')}
-            className="flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-primary-600 mb-3"
-          >
-            <ArrowLeft className="w-4 h-4" />К выбору шаблона
-          </button>
-
-          {/* Папки */}
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Папки</h3>
-            <button
-              type="button"
-              onClick={() => startCreateFolder(null)}
-              className="flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Новая папка
-            </button>
-          </div>
-          {creatingIn !== null && creatingIn.parentId === null && (
-            <div className="flex items-center gap-1 py-1 pl-2">
-              <FolderPlus className="w-4 h-4 text-amber-500 flex-shrink-0" />
-              {inlineNameEditor(
-                newFolderName,
-                setNewFolderName,
-                submitCreateFolder,
-                () => setCreatingIn(null),
-                createFolderMutation.isPending,
-                'Название папки',
+            </ul>
+          )
+        ) : (
+          <div className="space-y-5">
+            {/* Папки */}
+            <section aria-labelledby="tpl-folders">
+              <div className="mb-1 flex items-center justify-between">
+                <h3 id="tpl-folders" className="text-xs font-semibold uppercase tracking-wide text-ink-3">
+                  Папки
+                </h3>
+                <Button variant="ghost" size="sm" icon={Plus} onClick={() => startCreateFolder(null)}>
+                  Новая папка
+                </Button>
+              </div>
+              {creatingIn !== null && creatingIn.parentId === null && (
+                <div className="flex items-center gap-1 py-1 pl-2">
+                  <FolderPlus className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
+                  {inlineNameEditor(
+                    newFolderName,
+                    setNewFolderName,
+                    submitCreateFolder,
+                    () => setCreatingIn(null),
+                    createFolderMutation.isPending,
+                    'Название папки',
+                  )}
+                </div>
               )}
-            </div>
-          )}
-          {folderTree.length === 0 && creatingIn === null ? (
-            <p className="text-xs text-gray-400 italic py-2 pl-2">Нет папок — создайте первую</p>
-          ) : (
-            <div>{folderTree.map((node) => renderManageFolder(node, 0))}</div>
-          )}
+              {folderTree.length === 0 && creatingIn === null ? (
+                <p className="py-2 pl-2 text-xs text-ink-3">Нет папок — создайте первую</p>
+              ) : (
+                <ul>{folderTree.map((node) => renderManageFolder(node, 0))}</ul>
+              )}
+            </section>
 
-          {/* Шаблоны */}
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mt-5 mb-1">Шаблоны</h3>
-          {templates.length === 0 ? (
-            <p className="text-xs text-gray-400 italic py-2 pl-2">Нет шаблонов</p>
-          ) : (
-            <div>{templates.map((t) => renderManageTemplateRow(t))}</div>
-          )}
-        </div>
-      )}
-    </Modal>
+            {/* Шаблоны */}
+            <section aria-labelledby="tpl-list">
+              <h3 id="tpl-list" className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-3">
+                Шаблоны
+              </h3>
+              {templates.length === 0 ? (
+                <p className="py-2 pl-2 text-xs text-ink-3">Нет шаблонов</p>
+              ) : (
+                <ul>{templates.map((t) => renderManageTemplateRow(t))}</ul>
+              )}
+            </section>
+          </div>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deleteFolderTarget}
+        onClose={() => setDeleteFolderTarget(null)}
+        onConfirm={() => deleteFolderTarget && removeFolderMutation.mutate(deleteFolderTarget.id)}
+        title="Удалить папку"
+        message={`Удалить папку «${deleteFolderTarget?.name ?? ''}»? Подпапки удалятся, шаблоны из них останутся без папки.`}
+        confirmText="Удалить"
+        variant="danger"
+        loading={removeFolderMutation.isPending}
+      />
+      <ConfirmDialog
+        isOpen={!!deleteTemplateTarget}
+        onClose={() => setDeleteTemplateTarget(null)}
+        onConfirm={() => deleteTemplateTarget && removeTemplateMutation.mutate(deleteTemplateTarget.id)}
+        title="Удалить шаблон"
+        message={`Удалить шаблон «${deleteTemplateTarget?.name ?? ''}»? Это действие нельзя отменить.`}
+        confirmText="Удалить"
+        variant="danger"
+        loading={removeTemplateMutation.isPending}
+      />
+    </>
   );
 }
 
@@ -653,33 +697,47 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
   const composition: string[] = [];
   if (services.length > 0) composition.push(`услуг: ${services.length}`);
   if (products.length > 0) composition.push(`товаров: ${products.length}`);
+  const canSave = !!name.trim() && services.length + products.length > 0;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Сохранить как шаблон" size="md">
-      <p className="text-xs text-gray-400 mb-3">Состав: {composition.join(' · ') || 'пусто'}</p>
-      <div className="space-y-3">
-        <div>
-          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">Название</label>
-          <input
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Сохранить как шаблон"
+      description={`Состав: ${composition.join(' · ') || 'пусто'}`}
+      size="md"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={createMutation.isPending}>
+            Отмена
+          </Button>
+          <Button onClick={() => createMutation.mutate()} disabled={!canSave} loading={createMutation.isPending}>
+            Сохранить
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSave && !createMutation.isPending) createMutation.mutate();
+        }}
+      >
+        <Field label="Название" htmlFor="tpl-name" required>
+          <Input
+            id="tpl-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             autoFocus
             maxLength={120}
             placeholder="Например: ТО-1 (масло + фильтры)"
-            className="input w-full text-sm"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (name.trim() && !createMutation.isPending) createMutation.mutate();
-              }
-            }}
           />
-        </div>
+        </Field>
         {!shared && (
-          <div>
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">Папка</label>
-            <select value={folderId} onChange={(e) => setFolderId(e.target.value)} className="input w-full text-sm">
+          <Field label="Папка" htmlFor="tpl-folder">
+            <Select id="tpl-folder" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
               <option value="">Без папки</option>
               {flatFolders.map((f) => (
                 <option key={f.id} value={f.id}>
@@ -687,39 +745,23 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
                   {f.name}
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
         )}
         {isOwnerClass && (
-          <label className="flex items-start gap-2 cursor-pointer rounded-lg px-3 py-2.5 border border-gray-200 bg-gray-50">
-            <input
-              type="checkbox"
-              checked={shared}
-              onChange={(e) => setShared(e.target.checked)}
-              className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            <div>
-              <span className="text-sm font-medium text-gray-700">Общий шаблон</span>
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                Виден всем сотрудникам. Хранится вне личных папок; менять его сможет только руководитель.
-              </p>
-            </div>
-          </label>
+          <Checkbox
+            label="Общий шаблон"
+            description="Виден всем сотрудникам. Хранится вне личных папок; менять его сможет только руководитель."
+            checked={shared}
+            onChange={(e) => setShared(e.target.checked)}
+            className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2.5"
+          />
         )}
-      </div>
-      <div className="flex gap-2 mt-5">
-        <button type="button" onClick={onClose} className="btn-secondary flex-1">
-          Отмена
+        {/* Enter в поле названия сохраняет — невидимый submit для формы */}
+        <button type="submit" className="sr-only" tabIndex={-1} aria-hidden="true">
+          Сохранить
         </button>
-        <button
-          type="button"
-          onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || !name.trim() || services.length + products.length === 0}
-          className="btn-primary flex-1 disabled:opacity-50"
-        >
-          {createMutation.isPending ? 'Сохранение...' : 'Сохранить'}
-        </button>
-      </div>
+      </form>
     </Modal>
   );
 }

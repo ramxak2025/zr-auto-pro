@@ -3,10 +3,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, ChevronUp, ChevronDown, Eye, EyeOff, Bell, GripVertical } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Modal from './Modal';
-import LoadingSpinner from './LoadingSpinner';
+import ConfirmDialog from './ConfirmDialog';
 import { columnDotStyle } from './WorkStatusPicker';
 import { checksApi } from '../api/services';
 import type { WorkBoardColumn } from '../types';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { Skeleton } from '../ui/Skeleton';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 
 // Shared cache key for the full (active + inactive) column list. Lives under the
 // ['checks', …] prefix so the same invalidations that refresh the board / journal
@@ -14,37 +21,48 @@ import type { WorkBoardColumn } from '../types';
 export const BOARD_COLUMNS_KEY = ['checks', 'board-columns'] as const;
 
 // A small, friendly palette for quick selection; the native picker still allows
-// any hex.
+// any hex. Цвет колонки — смысл, заданный владельцем, поэтому остаётся inline.
 const PRESET_COLORS = ['#3B82F6', '#F59E0B', '#22C55E', '#8B5CF6', '#EF4444', '#14B8A6', '#EC4899', '#6B7280'];
 
 const DEFAULT_COLOR = '#3B82F6';
 
 function ColorField({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {PRESET_COLORS.map((c) => (
-        <button
-          key={c}
-          type="button"
-          onClick={() => onChange(c)}
-          className={`h-7 w-7 rounded-full border-2 transition-transform ${
-            value.toLowerCase() === c.toLowerCase() ? 'border-gray-900 scale-110' : 'border-white shadow-sm'
-          }`}
-          style={{ backgroundColor: c }}
-          aria-label={`Цвет ${c}`}
-        />
-      ))}
+    <div role="radiogroup" aria-label="Цвет колонки" className="flex flex-wrap items-center gap-2">
+      {PRESET_COLORS.map((c) => {
+        const checked = value.toLowerCase() === c.toLowerCase();
+        return (
+          <button
+            key={c}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            onClick={() => onChange(c)}
+            className={cn(
+              'h-7 w-7 rounded-full border-2 transition-transform duration-150',
+              focusRing,
+              checked ? 'scale-110 border-ink' : 'border-surface shadow-sm',
+            )}
+            style={{ backgroundColor: c }}
+            aria-label={`Цвет ${c}`}
+          />
+        );
+      })}
       <label
-        className="h-7 w-7 rounded-full border border-gray-200 overflow-hidden cursor-pointer relative"
+        className={cn(
+          'relative h-7 w-7 cursor-pointer overflow-hidden rounded-full border border-line-strong',
+          focusRing,
+        )}
         title="Свой цвет"
       >
+        <span className="sr-only">Свой цвет</span>
         <input
           type="color"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
         />
-        <span className="block h-full w-full" style={{ backgroundColor: value }} />
+        <span className="block h-full w-full" style={{ backgroundColor: value }} aria-hidden="true" />
       </label>
     </div>
   );
@@ -78,37 +96,34 @@ function ColumnForm({
   };
 
   return (
-    <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50/60 p-3">
-      <input
+    <div className="space-y-3 rounded-xl border border-line bg-surface-2 p-3">
+      <Input
         autoFocus
         value={label}
         onChange={(e) => setLabel(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit();
         }}
+        aria-label="Название колонки"
         placeholder="Название колонки (напр. «На диагностике»)"
-        className="input w-full"
         maxLength={40}
       />
       <ColorField value={color} onChange={setColor} />
-      <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={notifyClient}
-          onChange={(e) => setNotifyClient(e.target.checked)}
-          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-        />
-        Уведомлять клиента при входе в эту колонку («машина готова»)
-      </label>
+      <Checkbox
+        label="Уведомлять клиента при входе в эту колонку"
+        description="Например, «машина готова»"
+        checked={notifyClient}
+        onChange={(e) => setNotifyClient(e.target.checked)}
+      />
       <div className="flex items-center justify-end gap-2">
         {onCancel && (
-          <button type="button" onClick={onCancel} className="btn-secondary btn-sm" disabled={pending}>
+          <Button variant="secondary" size="sm" onClick={onCancel} disabled={pending}>
             Отмена
-          </button>
+          </Button>
         )}
-        <button type="button" onClick={submit} className="btn-primary btn-sm" disabled={pending}>
+        <Button size="sm" onClick={submit} loading={pending}>
           {submitLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -134,83 +149,70 @@ function ColumnRow({
   onMove: (dir: -1 | 1) => void;
 }) {
   return (
-    <div
-      className={`flex items-center gap-2.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 ${
-        column.isActive ? '' : 'opacity-60'
-      }`}
+    <li
+      className={cn(
+        'flex items-center gap-2 rounded-xl border border-line bg-surface px-2.5 py-2',
+        !column.isActive && 'opacity-60',
+      )}
     >
-      {/* Reorder */}
-      <div className="flex flex-col -my-1">
-        <button
-          type="button"
+      <div className="-my-1 flex flex-col">
+        <IconButton
+          label="Выше"
+          icon={ChevronUp}
+          size="sm"
+          className="h-6"
           onClick={() => onMove(-1)}
           disabled={busy || index === 0}
-          className="text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:hover:text-gray-300"
-          aria-label="Выше"
-        >
-          <ChevronUp className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
+        />
+        <IconButton
+          label="Ниже"
+          icon={ChevronDown}
+          size="sm"
+          className="h-6"
           onClick={() => onMove(1)}
           disabled={busy || index === total - 1}
-          className="text-gray-300 hover:text-gray-600 disabled:opacity-30 disabled:hover:text-gray-300"
-          aria-label="Ниже"
-        >
-          <ChevronDown className="h-4 w-4" />
-        </button>
+        />
       </div>
 
-      <GripVertical className="h-4 w-4 text-gray-300 flex-shrink-0" />
-      <span className="h-3 w-3 rounded-full flex-shrink-0" style={columnDotStyle(column.color)} />
+      <GripVertical className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+      <span className="h-3 w-3 flex-shrink-0 rounded-full" style={columnDotStyle(column.color)} aria-hidden="true" />
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-sm font-semibold text-gray-900 truncate">{column.label}</span>
-          {column.notifyClient && <Bell className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-semibold text-ink">{column.label}</span>
+          {column.notifyClient && (
+            <Bell className="h-3.5 w-3.5 flex-shrink-0 text-warn" aria-label="Уведомляет клиента" />
+          )}
         </div>
-        {!column.isActive && <span className="text-[11px] text-gray-400">Скрыта с доски</span>}
+        {!column.isActive && <span className="text-2xs text-ink-3">Скрыта с доски</span>}
       </div>
 
-      {/* Actions */}
-      <button
-        type="button"
+      <IconButton
+        label={column.isActive ? 'Скрыть с доски' : 'Показать на доске'}
+        icon={column.isActive ? Eye : EyeOff}
+        size="sm"
         onClick={onToggleActive}
         disabled={busy}
-        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-        title={column.isActive ? 'Скрыть с доски' : 'Показать на доске'}
-      >
-        {column.isActive ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-      </button>
-      <button
-        type="button"
-        onClick={onEdit}
-        disabled={busy}
-        className="p-1.5 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 disabled:opacity-50"
-        title="Изменить"
-      >
-        <Pencil className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onDelete}
-        disabled={busy}
-        className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
-        title="Удалить"
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
+      />
+      <IconButton label="Изменить колонку" icon={Pencil} size="sm" onClick={onEdit} disabled={busy} />
+      <IconButton label="Удалить колонку" icon={Trash2} size="sm" variant="danger" onClick={onDelete} disabled={busy} />
+    </li>
   );
 }
 
 export default function WorkBoardColumnsModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<WorkBoardColumn | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
-  const { data: columns, isLoading } = useQuery<WorkBoardColumn[]>({
+  const {
+    data: columns,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery<WorkBoardColumn[]>({
     queryKey: BOARD_COLUMNS_KEY,
     queryFn: async () => (await checksApi.boardColumns.list()).data,
     enabled: isOpen,
@@ -254,7 +256,7 @@ export default function WorkBoardColumnsModal({ isOpen, onClose }: { isOpen: boo
     mutationFn: (id: string) => checksApi.boardColumns.remove(id),
     onSuccess: () => {
       invalidate();
-      setConfirmDeleteId(null);
+      setConfirmDelete(null);
       toast.success('Колонка удалена');
     },
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Не удалось удалить колонку'),
@@ -271,104 +273,99 @@ export default function WorkBoardColumnsModal({ isOpen, onClose }: { isOpen: boo
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Настройка колонок доски" size="lg">
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : (
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Колонки доски настраиваются под ваш процесс. Порядок — слева направо на доске. Скрытые колонки временно
-            убираются с доски, не теряя заказ-наряды.
-          </p>
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Настройка колонок доски"
+        description="Порядок — слева направо на доске. Скрытые колонки временно убираются с доски, не теряя заказ-наряды."
+        size="lg"
+      >
+        {isLoading ? (
+          <div className="space-y-2.5" aria-busy="true" aria-label="Загрузка колонок">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-12" />
+            ))}
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center" role="alert">
+            <p className="text-sm text-ink-2">Не удалось загрузить колонки</p>
+            <Button variant="secondary" size="sm" onClick={() => refetch()} loading={isFetching}>
+              Повторить
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <ul className="space-y-2.5">
+              {sorted.length === 0 && (
+                <li className="rounded-xl border border-dashed border-line-strong py-8 text-center">
+                  <p className="text-sm text-ink-3">Пока нет колонок. Добавьте первую.</p>
+                </li>
+              )}
+              {sorted.map((column, index) =>
+                editingId === column.id ? (
+                  <li key={column.id}>
+                    <ColumnForm
+                      initial={column}
+                      submitLabel="Сохранить"
+                      pending={updateMutation.isPending}
+                      onSubmit={(data) => updateMutation.mutate({ id: column.id, ...data })}
+                      onCancel={() => setEditingId(null)}
+                    />
+                  </li>
+                ) : (
+                  <ColumnRow
+                    key={column.id}
+                    column={column}
+                    index={index}
+                    total={sorted.length}
+                    busy={busy}
+                    onEdit={() => setEditingId(column.id)}
+                    onToggleActive={() => updateMutation.mutate({ id: column.id, isActive: !column.isActive })}
+                    onDelete={() => {
+                      setEditingId(null);
+                      setConfirmDelete(column);
+                    }}
+                    onMove={(dir) => move(index, dir)}
+                  />
+                ),
+              )}
+            </ul>
 
-          {/* Columns list */}
-          <div className="space-y-2.5">
-            {sorted.length === 0 && (
-              <div className="rounded-xl border border-dashed border-gray-200 py-8 text-center">
-                <p className="text-sm text-gray-400">Пока нет колонок. Добавьте первую.</p>
-              </div>
-            )}
-            {sorted.map((column, index) =>
-              editingId === column.id ? (
-                <ColumnForm
-                  key={column.id}
-                  initial={column}
-                  submitLabel="Сохранить"
-                  pending={updateMutation.isPending}
-                  onSubmit={(data) => updateMutation.mutate({ id: column.id, ...data })}
-                  onCancel={() => setEditingId(null)}
-                />
-              ) : confirmDeleteId === column.id ? (
-                <div
-                  key={column.id}
-                  className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap"
-                >
-                  <p className="text-sm text-red-700">Удалить «{column.label}»? Заказ-наряды из неё уйдут с доски.</p>
-                  <div className="flex items-center gap-2 ml-auto">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="btn-secondary btn-sm"
-                      disabled={removeMutation.isPending}
-                    >
-                      Отмена
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeMutation.mutate(column.id)}
-                      className="btn-danger btn-sm"
-                      disabled={removeMutation.isPending}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <ColumnRow
-                  key={column.id}
-                  column={column}
-                  index={index}
-                  total={sorted.length}
-                  busy={busy}
-                  onEdit={() => {
-                    setConfirmDeleteId(null);
-                    setEditingId(column.id);
-                  }}
-                  onToggleActive={() => updateMutation.mutate({ id: column.id, isActive: !column.isActive })}
-                  onDelete={() => {
-                    setEditingId(null);
-                    setConfirmDeleteId(column.id);
-                  }}
-                  onMove={(dir) => move(index, dir)}
-                />
-              ),
+            {showAdd ? (
+              <ColumnForm
+                submitLabel="Добавить"
+                pending={createMutation.isPending}
+                onSubmit={(data) => createMutation.mutate(data)}
+                onCancel={() => setShowAdd(false)}
+              />
+            ) : (
+              <Button
+                variant="secondary"
+                fullWidth
+                icon={Plus}
+                onClick={() => {
+                  setEditingId(null);
+                  setShowAdd(true);
+                }}
+              >
+                Добавить колонку
+              </Button>
             )}
           </div>
+        )}
+      </Modal>
 
-          {/* Add */}
-          {showAdd ? (
-            <ColumnForm
-              submitLabel="Добавить"
-              pending={createMutation.isPending}
-              onSubmit={(data) => createMutation.mutate(data)}
-              onCancel={() => setShowAdd(false)}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingId(null);
-                setConfirmDeleteId(null);
-                setShowAdd(true);
-              }}
-              className="btn-secondary w-full justify-center"
-            >
-              <Plus className="h-4 w-4" />
-              Добавить колонку
-            </button>
-          )}
-        </div>
-      )}
-    </Modal>
+      <ConfirmDialog
+        isOpen={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && removeMutation.mutate(confirmDelete.id)}
+        title="Удалить колонку"
+        message={`Удалить «${confirmDelete?.label ?? ''}»? Заказ-наряды из неё уйдут с доски.`}
+        confirmText="Удалить"
+        variant="danger"
+        loading={removeMutation.isPending}
+      />
+    </>
   );
 }

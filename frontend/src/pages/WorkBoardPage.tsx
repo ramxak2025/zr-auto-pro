@@ -1,17 +1,26 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { LayoutGrid, User as UserIcon, Car, RefreshCw, Settings2, MapPin, BadgeCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
 import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
+import EmptyState from '../components/EmptyState';
 import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
 import WorkBoardColumnsModal from '../components/WorkBoardColumnsModal';
+import { PlateBadge } from '../components/checks/checkBadges';
+import { ErrorRow } from '../components/dashboard/shared';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Card } from '../ui/Card';
+import { IconButton } from '../ui/IconButton';
+import { Money } from '../ui/Money';
+import { Skeleton } from '../ui/Skeleton';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 import type { Check, ChecksBoard, PosSettings, User, WorkBoardColumn } from '../types';
-
-import { formatMoney } from '../../../shared/utils/formatters';
 
 // Stable query key — invalidated by setWorkStatus mutations everywhere.
 // Фильтр по исполнителю (Round 14) добавляется суффиксом — префикс совпадает,
@@ -45,79 +54,90 @@ function CheckCard({
 }) {
   const carLabel = check.car?.makeModel;
   const plate = check.car?.plateNumber;
+  const assignees = check.assignees ?? [];
 
   return (
-    <div className="card p-3.5 space-y-2.5">
-      {/* Header: number + total */}
+    <Card as="article" padding="sm" className="space-y-2.5" aria-label={`Заказ №${check.number}`}>
       <div className="flex items-start justify-between gap-2">
         <Link
           to={`/checks/${check.id}`}
-          className="text-sm font-bold text-gray-900 hover:text-primary-600 transition-colors"
+          className={cn('rounded-sm text-sm font-semibold text-ink hover:text-accent-text', focusRing)}
         >
-          Заказ #{check.number}
+          Заказ №{check.number}
         </Link>
-        <span className="text-sm font-bold text-primary-600 whitespace-nowrap">{formatMoney(check.totalRevenue)}</span>
+        <Money value={check.totalRevenue} className="text-sm font-semibold text-ink" />
       </div>
 
-      {/* Client */}
-      <div className="flex items-center gap-2 min-w-0">
-        <UserIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-        <span className="text-sm text-gray-700 truncate">{check.client?.fullName ?? 'Розничный покупатель'}</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <UserIcon className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+        <span className="truncate text-sm text-ink-2">{check.client?.fullName ?? 'Розничный покупатель'}</span>
       </div>
 
-      {/* Car */}
       {(carLabel || plate) && (
-        <div className="flex items-center gap-2 min-w-0">
-          <Car className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-          <span className="text-sm text-gray-500 truncate">{carLabel ?? '—'}</span>
-          {plate && (
-            <span className="ml-auto text-[11px] font-semibold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-md whitespace-nowrap">
-              {plate}
-            </span>
-          )}
+        <div className="flex min-w-0 items-center gap-2">
+          <Car className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-sm text-ink-2">{carLabel ?? '—'}</span>
+          {plate && <PlateBadge plate={plate} />}
         </div>
       )}
 
       {/* Место + исполнители (Round 14, режим «Кассир») */}
-      {(check.location?.name || (check.assignees?.length ?? 0) > 0) && (
+      {(check.location?.name || assignees.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5">
           {check.location?.name && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded-md">
-              <MapPin className="h-3 w-3 flex-shrink-0" />
+            <Badge tone="info" size="sm" icon={MapPin}>
               {check.location.name}
-            </span>
+            </Badge>
           )}
-          {(check.assignees ?? []).slice(0, 3).map((a) => (
-            <span key={a.id} className="text-[11px] font-medium text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded-md">
+          {assignees.slice(0, 3).map((a) => (
+            <Badge key={a.id} size="sm">
               {shortName(a.fullName)}
-            </span>
+            </Badge>
           ))}
-          {(check.assignees?.length ?? 0) > 3 && (
-            <span className="text-[11px] font-medium text-gray-400">+{(check.assignees?.length ?? 0) - 3}</span>
-          )}
+          {assignees.length > 3 && <span className="text-2xs font-medium text-ink-3">+{assignees.length - 3}</span>}
         </div>
       )}
 
       {/* «Оплачено — выдать» (Round 14): заказ оплачен (не отложен), стоит на
-          доске и ещё не выдан — мастеру пора отдавать машину клиенту.
-          Только при включённом режиме кассовой смены (см. shiftModeEnabled). */}
+          доске и ещё не выдан — мастеру пора отдавать машину клиенту. */}
       {shiftModeEnabled && !check.isDeferred && check.workStatus != null && !check.deliveredAt && (
-        <div className="flex items-center gap-1.5 rounded-lg bg-green-50 border border-green-200 px-2 py-1">
-          <BadgeCheck className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
-          <span className="text-[11px] font-bold uppercase tracking-wide text-green-700">Оплачено — выдать</span>
-        </div>
+        <Badge tone="ok" icon={BadgeCheck} className="w-full justify-center">
+          Оплачено — выдать
+        </Badge>
       )}
 
-      {/* Move control */}
       {canEdit && (
         <WorkStatusPicker
           value={check.workStatus}
           columns={columns}
           disabled={pending}
           onChange={(key) => onMove(check.id, key)}
-          className="w-full mt-1"
+          className="w-full"
         />
       )}
+    </Card>
+  );
+}
+
+function BoardSkeleton() {
+  return (
+    <div
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      aria-busy="true"
+      aria-label="Загрузка доски"
+    >
+      {Array.from({ length: 4 }).map((_, col) => (
+        <div key={col} className="space-y-3">
+          <Skeleton className="h-9 w-full" />
+          {Array.from({ length: col % 2 ? 1 : 2 }).map((__, i) => (
+            <div key={i} className="space-y-2 rounded-xl border border-line bg-surface p-4 shadow-card">
+              <Skeleton variant="text" className="w-1/2" />
+              <Skeleton variant="text" className="w-2/3" />
+              <Skeleton className="h-8 w-full" />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -133,8 +153,22 @@ export default function WorkBoardPage() {
 
   // Round 14: фильтр «машины конкретного мастера» — ?assigneeId= в board-запрос
   // (сервер матчит check_assignees ∪ главный мастер ∪ исполнители строк услуг).
-  const [assigneeFilter, setAssigneeFilter] = useState('');
-  const { data: masters } = useQuery<User[]>({
+  // Значение живёт в URL (?assignee=), чтобы F5 и пересылка ссылки его держали.
+  const [params, setParams] = useSearchParams();
+  const assigneeFilter = params.get('assignee') ?? '';
+  const setAssigneeFilter = (id: string) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set('assignee', id);
+    else next.delete('assignee');
+    setParams(next, { replace: true });
+  };
+
+  const {
+    data: masters,
+    isError: mastersError,
+    refetch: refetchMasters,
+    isFetching: mastersFetching,
+  } = useQuery<User[]>({
     queryKey: ['masters'],
     queryFn: async () => (await usersApi.getMasters()).data,
     staleTime: 60_000,
@@ -147,7 +181,8 @@ export default function WorkBoardPage() {
   });
 
   // Режим кассовой смены (092/Round 14) — гейтит бейдж «Оплачено — выдать»
-  // на карточках: вне режима выдача — не веха, бейдж не имеет смысла.
+  // на карточках: вне режима выдача — не веха, бейдж не имеет смысла. При
+  // ошибке запроса бейдж просто не показывается (fail-closed).
   const { data: posSettings } = useQuery<PosSettings>({
     queryKey: ['checks', 'pos-settings'],
     queryFn: async () => (await checksApi.getPosSettings()).data,
@@ -213,145 +248,168 @@ export default function WorkBoardPage() {
     return columns.reduce((sum, c) => sum + (data.groups[c.key]?.length ?? 0), 0);
   }, [data, columns]);
 
-  if (isLoading) return <LoadingSpinner />;
+  const mastersList = masters ?? [];
 
   return (
-    <div className="space-y-5 pb-6">
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
         title="Доска работ"
         icon={LayoutGrid}
-        subtitle="Активные заказ-наряды по стадиям. Не влияет на оплату."
+        subtitle={
+          isLoading
+            ? 'Активные заказ-наряды по стадиям. Не влияет на оплату.'
+            : `${total} на доске · стадии работ, не влияет на оплату`
+        }
         actions={
           <>
             {canConfigure && (
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="btn-ghost btn-sm"
-                title="Настроить колонки"
-                aria-label="Настроить колонки"
-              >
-                <Settings2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Настроить колонки</span>
-              </button>
+              <Button variant="secondary" icon={Settings2} onClick={() => setSettingsOpen(true)}>
+                Настроить колонки
+              </Button>
             )}
-            <button
+            <IconButton
+              label="Обновить доску"
+              icon={RefreshCw}
+              variant="secondary"
+              loading={isFetching && !isLoading}
               onClick={() => refetch()}
-              disabled={isFetching}
-              className="btn-ghost btn-sm"
-              title="Обновить"
-              aria-label="Обновить"
-            >
-              <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Обновить</span>
-            </button>
+            />
           </>
         }
       />
 
       {/* Фильтр по мастеру (Round 14): «Все» + чип на каждого сотрудника */}
-      {(masters ?? []).length > 0 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mb-1">
-          <button
-            type="button"
-            onClick={() => setAssigneeFilter('')}
-            className={`flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
-              !assigneeFilter ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
+      {mastersError ? (
+        <ErrorRow
+          message="Не удалось загрузить список сотрудников"
+          onRetry={() => refetchMasters()}
+          loading={mastersFetching}
+        />
+      ) : mastersList.length > 0 ? (
+        <div
+          role="group"
+          aria-label="Фильтр по исполнителю"
+          className="-mb-1 flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar"
+        >
+          <FilterChip active={!assigneeFilter} onClick={() => setAssigneeFilter('')}>
             Все
-          </button>
-          {(masters ?? []).map((m) => (
-            <button
+          </FilterChip>
+          {mastersList.map((m) => (
+            <FilterChip
               key={m.id}
-              type="button"
+              active={assigneeFilter === m.id}
               onClick={() => setAssigneeFilter(assigneeFilter === m.id ? '' : m.id)}
-              className={`flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                assigneeFilter === m.id ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
             >
               {shortName(m.fullName)}
-            </button>
+            </FilterChip>
           ))}
         </div>
-      )}
+      ) : null}
 
-      {isError ? (
-        <div className="card card-body text-center">
-          <p className="text-sm text-gray-500">Не удалось загрузить доску.</p>
-          <button onClick={() => refetch()} className="btn-secondary mt-3 mx-auto">
-            Повторить
-          </button>
-        </div>
-      ) : columns.length === 0 ? (
-        <div className="card card-body text-center">
-          <p className="text-sm text-gray-500">
-            На доске нет колонок.
-            {canConfigure
-              ? ' Нажмите «Настроить колонки», чтобы добавить стадии.'
-              : ' Обратитесь к руководителю, чтобы настроить доску.'}
-          </p>
-          {canConfigure && (
-            <button onClick={() => setSettingsOpen(true)} className="btn-primary mt-3 mx-auto">
-              <Settings2 className="h-4 w-4" />
-              Настроить колонки
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          {total === 0 && (
-            <div className="card card-body text-center">
-              <p className="text-sm text-gray-500">
-                Нет заказ-нарядов на доске. Откройте чек и нажмите «Поставить на доску».
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        loader={<BoardSkeleton />}
+        errorTitle="Не удалось загрузить доску"
+      >
+        {columns.length === 0 ? (
+          <EmptyState
+            icon={LayoutGrid}
+            title="На доске нет колонок"
+            description={
+              canConfigure
+                ? 'Добавьте стадии работ («Приёмка», «В работе», «Готово») — заказы будут двигаться по ним.'
+                : 'Обратитесь к руководителю, чтобы настроить доску.'
+            }
+            action={canConfigure ? { label: 'Настроить колонки', onClick: () => setSettingsOpen(true) } : undefined}
+          />
+        ) : (
+          <>
+            {total === 0 && (
+              <p className="rounded-lg border border-line bg-surface px-4 py-3 text-center text-sm text-ink-3 shadow-card">
+                {assigneeFilter
+                  ? 'У этого сотрудника нет заказов на доске.'
+                  : 'Нет заказ-нарядов на доске. Откройте чек и нажмите «Поставить на доску».'}
               </p>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {columns.map((column) => {
+                const items = data?.groups[column.key] ?? [];
+                return (
+                  <section key={column.id} className="flex min-w-0 flex-col" aria-labelledby={`col-${column.id}`}>
+                    <div
+                      className="mb-3 flex items-center gap-2 rounded-lg px-3 py-2"
+                      style={columnBadgeStyle(column.color)}
+                    >
+                      <span
+                        className="h-2 w-2 flex-shrink-0 rounded-full"
+                        style={columnDotStyle(column.color)}
+                        aria-hidden="true"
+                      />
+                      <h2 id={`col-${column.id}`} className="truncate text-sm font-semibold">
+                        {column.label}
+                      </h2>
+                      <span className="ml-auto text-xs font-semibold tabular-nums opacity-80">{items.length}</span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {items.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-line-strong py-8 text-center">
+                          <p className="text-xs text-ink-3">Пусто</p>
+                        </div>
+                      ) : (
+                        items.map((check) => (
+                          <CheckCard
+                            key={check.id}
+                            check={check}
+                            columns={columns}
+                            canEdit={canEdit}
+                            pending={moveMutation.isPending && moveMutation.variables?.id === check.id}
+                            onMove={handleMove}
+                            shiftModeEnabled={shiftModeEnabled}
+                          />
+                        ))
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
-          )}
-
-          {/* Columns */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {columns.map((column) => {
-              const items = data?.groups[column.key] ?? [];
-              return (
-                <div key={column.id} className="flex flex-col min-w-0">
-                  {/* Column header */}
-                  <div
-                    className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3"
-                    style={columnBadgeStyle(column.color)}
-                  >
-                    <span className="h-2 w-2 rounded-full" style={columnDotStyle(column.color)} />
-                    <span className="text-sm font-semibold">{column.label}</span>
-                    <span className="ml-auto text-xs font-bold tabular-nums opacity-70">{items.length}</span>
-                  </div>
-
-                  {/* Cards */}
-                  <div className="space-y-3">
-                    {items.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-gray-200 py-8 text-center">
-                        <p className="text-xs text-gray-500">Пусто</p>
-                      </div>
-                    ) : (
-                      items.map((check) => (
-                        <CheckCard
-                          key={check.id}
-                          check={check}
-                          columns={columns}
-                          canEdit={canEdit}
-                          pending={moveMutation.isPending && moveMutation.variables?.id === check.id}
-                          onMove={handleMove}
-                          shiftModeEnabled={shiftModeEnabled}
-                        />
-                      ))
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </QueryState>
 
       {canConfigure && <WorkBoardColumnsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'h-8 flex-shrink-0 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-[background-color,border-color,color] duration-150',
+        focusRing,
+        active
+          ? 'border-accent bg-accent text-white'
+          : 'border-line-strong bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
   );
 }

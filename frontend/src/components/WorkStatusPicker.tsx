@@ -1,4 +1,6 @@
 import type { WorkBoardColumn } from '../types';
+import { Select } from '../ui/Select';
+import { cn } from '../ui/cn';
 
 // ─── Owner-configurable kanban work-status visual system (board 091) ─────────
 // Columns are now tenant-defined (label + hex color), so colours/labels live on
@@ -6,8 +8,8 @@ import type { WorkBoardColumn } from '../types';
 // NULL workStatus = «не на доске». Shared by WorkBoardPage (columns + cards) and
 // CheckDetailPage (chip + picker) so the visuals never drift apart.
 
-/** gray-500 — fallback accent when a column has no (valid) color. */
-const NEUTRAL = '#6B7280';
+/** slate-500 — fallback accent when a column has no (valid) color. */
+const NEUTRAL = '#64748B';
 
 /** Resolve the column a check currently sits in (matched by key), or null. */
 export function resolveColumn(
@@ -46,7 +48,8 @@ export function columnDotStyle(color: string | null | undefined) {
 /**
  * Coloured pill reflecting a check's current board column. Shows «Не на доске»
  * when off-board, and a neutral pill with the raw key when the column is unknown
- * (deleted / de-activated / columns not yet loaded).
+ * (deleted / de-activated / columns not yet loaded). Цвет колонки задаёт
+ * владелец — это смысл, а не декор, поэтому он остаётся inline-стилем.
  */
 export function WorkStatusBadge({
   column,
@@ -57,26 +60,32 @@ export function WorkStatusBadge({
   workStatus: string | null | undefined;
   className?: string;
 }) {
+  const base =
+    'inline-flex h-[22px] max-w-full items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs font-medium';
   if (!workStatus) {
     return (
-      <span className={`badge bg-gray-100 text-gray-500 gap-1.5 ${className}`}>
-        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+      <span className={cn(base, 'bg-surface-3 text-ink-3', className)}>
+        <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-ink-4" aria-hidden="true" />
         Не на доске
       </span>
     );
   }
   if (!column) {
     return (
-      <span className={`badge bg-gray-100 text-gray-600 gap-1.5 ${className}`}>
-        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
-        {workStatus}
+      <span className={cn(base, 'bg-surface-3 text-ink-2', className)}>
+        <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-ink-4" aria-hidden="true" />
+        <span className="truncate">{workStatus}</span>
       </span>
     );
   }
   return (
-    <span className={`badge gap-1.5 ${className}`} style={columnBadgeStyle(column.color)}>
-      <span className="h-1.5 w-1.5 rounded-full" style={columnDotStyle(column.color)} />
-      {column.label}
+    <span className={cn(base, className)} style={columnBadgeStyle(column.color)}>
+      <span
+        className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        style={columnDotStyle(column.color)}
+        aria-hidden="true"
+      />
+      <span className="truncate">{column.label}</span>
     </span>
   );
 }
@@ -96,6 +105,7 @@ export function WorkStatusPicker({
   disabled = false,
   className = '',
   placeholder = 'Поставить на доску…',
+  size = 'sm',
 }: {
   value: string | null | undefined;
   columns: WorkBoardColumn[];
@@ -103,17 +113,19 @@ export function WorkStatusPicker({
   disabled?: boolean;
   className?: string;
   placeholder?: string;
+  size?: 'sm' | 'md';
 }) {
   const known = value ? columns.some((c) => c.key === value) : true;
   return (
-    <select
+    <Select
       value={value ?? ''}
       disabled={disabled}
+      size={size}
       onChange={(e) => {
         const next = e.target.value;
         if (next && next !== value) onChange(next);
       }}
-      className={`input py-1.5 text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed ${className}`}
+      className={cn('font-medium', className)}
       aria-label="Статус работы"
     >
       {!value && (
@@ -131,6 +143,6 @@ export function WorkStatusPicker({
           {c.label}
         </option>
       ))}
-    </select>
+    </Select>
   );
 }

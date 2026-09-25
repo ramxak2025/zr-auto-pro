@@ -1,18 +1,11 @@
-import { useState, memo, useCallback } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
-  Plus,
-  FileText,
+  BookOpen,
   Trash2,
-  Clock,
   MessageSquare,
-  TrendingUp,
-  Car,
-  User as UserIcon,
-  Percent,
   Gauge,
-  ShieldAlert,
   Package,
   PackagePlus,
   AlertTriangle,
@@ -22,84 +15,55 @@ import {
   ArrowLeftRight,
   Recycle,
   Undo2,
+  CalendarRange,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import toast from 'react-hot-toast';
 import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { zoned } from '../utils/tenantTime';
-import toast from 'react-hot-toast';
 import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import EmptyState from '../components/EmptyState';
-import InlineLoader from '../components/InlineLoader';
-import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
 import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
-import { useClickableRow } from '../hooks/useClickableRow';
-
+import ConfirmDialog from '../components/ConfirmDialog';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Toolbar } from '../ui/Toolbar';
+import { Tabs, TabPanel } from '../ui/Tabs';
+import { Select } from '../ui/Select';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Money } from '../ui/Money';
+import { Tooltip } from '../ui/Tooltip';
+import { cn } from '../ui/cn';
+import { focusRing, type Tone } from '../ui/tokens';
+import { CheckStatusBadge, PaymentBadge, PlateBadge } from '../components/checks/checkBadges';
 import type { Check, User, PaginatedResponse, StockMovement, TrashedCheck } from '../types';
-import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatQty } from '../utils/units';
 
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
-const clickableRowProps = useClickableRow;
+type JournalView = 'checks' | 'docs' | 'trash';
+const LIMIT = 20;
+/** Сортируемый числовой заголовок DataTable: выравнивание кнопки по середине (см. предложение в ui/). */
+const SORT_HEADER_FIX = '[&>button]:align-middle';
 
-const movementTypeConfig: Record<string, { label: string; color: string; bg: string; icon: typeof Package }> = {
-  writeoff: { label: 'Списание', color: 'text-red-600', bg: 'bg-red-50 border-red-200', icon: AlertTriangle },
-  inventory: {
-    label: 'Инвентаризация',
-    color: 'text-purple-600',
-    bg: 'bg-purple-50 border-purple-200',
-    icon: ClipboardCheck,
-  },
-  income: { label: 'Поступление', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200', icon: ArrowDown },
-  customer_return: { label: 'Возврат клиента', color: 'text-teal-700', bg: 'bg-teal-50 border-teal-200', icon: Undo2 },
-  expense: { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-50 border-green-200', icon: ArrowUp },
-  defect_transfer: {
-    label: 'Перемещение в брак',
-    color: 'text-amber-600',
-    bg: 'bg-amber-50 border-amber-200',
-    icon: ArrowLeftRight,
-  },
-  used_transfer: {
-    label: 'Перемещение в Б/У',
-    color: 'text-blue-600',
-    bg: 'bg-blue-50 border-blue-200',
-    icon: Recycle,
-  },
-  point_transfer: {
-    label: 'Перемещение в другой филиал',
-    color: 'text-indigo-600',
-    bg: 'bg-indigo-50 border-indigo-200',
-    icon: ArrowLeftRight,
-  },
-  defect_return_to_supplier: {
-    label: 'Возврат поставщику',
-    color: 'text-red-700',
-    bg: 'bg-red-50 border-red-200',
-    icon: Undo2,
-  },
+// ─── Складские документы: тип → подпись, тон, иконка ─────────────────────────
+const movementTypeConfig: Record<string, { label: string; tone: Tone; icon: typeof Package }> = {
+  writeoff: { label: 'Списание', tone: 'bad', icon: AlertTriangle },
+  inventory: { label: 'Инвентаризация', tone: 'info', icon: ClipboardCheck },
+  income: { label: 'Поступление', tone: 'accent', icon: ArrowDown },
+  customer_return: { label: 'Возврат клиента', tone: 'info', icon: Undo2 },
+  expense: { label: 'Продажа', tone: 'ok', icon: ArrowUp },
+  defect_transfer: { label: 'Перемещение в брак', tone: 'warn', icon: ArrowLeftRight },
+  used_transfer: { label: 'Перемещение в Б/У', tone: 'accent', icon: Recycle },
+  point_transfer: { label: 'Перемещение в другой филиал', tone: 'neutral', icon: ArrowLeftRight },
+  defect_return_to_supplier: { label: 'Возврат поставщику', tone: 'bad', icon: Undo2 },
 };
 
-// Special config for is_used_purchase=true rows. Distinct cyan palette
-// makes it impossible to confuse a б/у purchase with a regular
-// "Поступление" income line in the journal.
-const usedPurchaseConfig = {
-  label: 'Покупка Б/У',
-  color: 'text-cyan-700',
-  bg: 'bg-cyan-50 border-cyan-200',
-  icon: PackagePlus,
-};
-
-const paymentMethodBadge: Record<string, string> = {
-  cash: 'badge-green',
-  card: 'badge-blue',
-  warranty: 'badge-yellow',
-  cash_card: 'badge-gray',
-  installment: 'badge-blue',
-};
+// is_used_purchase=true — отдельная подпись, чтобы покупку Б/У не путать с обычным поступлением.
+const usedPurchaseConfig = { label: 'Покупка Б/У', tone: 'info' as Tone, icon: PackagePlus };
 
 /**
  * Удаление/восстановление чека двигает деньги И склад — единый список
@@ -131,328 +95,115 @@ const MONEY_STOCK_QUERY_KEYS: readonly string[][] = [
 const isQueuedOffline = (res: { status?: number; data?: { queued?: boolean } } | undefined): boolean =>
   res?.status === 202 && res?.data?.queued === true;
 
-// ─── Memoized mobile check card ──────────────────────────────────────────────
+// ─── Корзина (106): soft-deleted checks, restorable for 30 days ─────────────
+const TRASH_RETENTION_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Полных дней до окончательного удаления (30 дней от deletedAt). */
+function trashDaysLeft(deletedAt: string): number {
+  const expiresAt = new Date(deletedAt).getTime() + TRASH_RETENTION_DAYS * DAY_MS;
+  return Math.max(0, Math.ceil((expiresAt - Date.now()) / DAY_MS));
+}
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+
+// ─── Мобильная карточка чека (< md) ──────────────────────────────────────────
 const MobileCheckCard = memo(function MobileCheckCard({
   check,
   canDelete,
   canViewProfit,
-  onNavigate,
   onDelete,
   timeZone,
 }: {
   check: Check;
   canDelete: boolean;
   canViewProfit: boolean;
-  onNavigate: (id: string) => void;
-  onDelete: (e: React.MouseEvent, id: string, number: number) => void;
+  onDelete: (check: Check) => void;
   /** Пояс автосервиса — время чека показываем так, как его видит владелец. */
   timeZone: string;
 }) {
   return (
-    <div
-      {...clickableRowProps(() => onNavigate(check.id), { label: `Чек №${check.number}` })}
-      className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
-        check.isDeferred
-          ? 'bg-red-50/50 border-red-200'
-          : check.isWarranty
-            ? 'bg-amber-50/50 border-amber-200'
-            : check.isExecutor
-              ? 'bg-violet-50/60 border-violet-200'
-              : 'bg-white border-gray-100'
-      }`}
-    >
-      <div className="px-4 pt-3.5 pb-2.5">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-base font-bold text-gray-900">#{check.number}</span>
-            {check.isDeferred && (
-              <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                Отложен
-              </span>
-            )}
-            {/* Паритет с мобилкой (R6 #59): чек, где я исполнитель строки, а
-                пробил другой сотрудник — фиолетовый оттенок + бейдж, чтобы
-                отличать от своих. Отложен-красный приоритетнее. */}
-            {!check.isDeferred && check.isExecutor && (
-              <span className="text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                Исполнитель
-              </span>
-            )}
-            {check.isWarranty ? (
-              <span className="flex-shrink-0 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                <ShieldAlert className="w-3 h-3" />
-                Гарантия
-              </span>
-            ) : (
-              <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-                {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {canDelete && (
-              <button
-                type="button"
-                onClick={(e) => onDelete(e, check.id, check.number)}
-                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                aria-label={`Удалить чек №${check.number}`}
-                title="Удалить чек"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="space-y-1 mb-3">
-          <div className="flex items-center gap-2">
-            <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-            <p className="text-sm font-medium text-gray-800 truncate">
-              {check.client?.fullName ?? 'Розничный покупатель'}
-            </p>
-          </div>
-          {check.car && (
-            <div className="flex items-center gap-2">
-              <Car className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-              <p className="text-sm text-gray-600 truncate">
-                {check.car.makeModel}
-                <span className="text-gray-400 ml-1.5">{check.car.plateNumber}</span>
-              </p>
-            </div>
-          )}
-          {(check.mileage ?? 0) > 0 && (
-            <div className="flex items-center gap-2">
-              <Gauge className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-              <p className="text-sm text-gray-600">{(check.mileage ?? 0).toLocaleString('ru-RU')} км</p>
-            </div>
-          )}
-        </div>
-        {check.comment && (
-          <div className="flex items-start gap-2 mb-3 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
-            <MessageSquare className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-700 line-clamp-2">{check.comment}</p>
-          </div>
-        )}
-      </div>
-      <div
-        className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
-          check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
-        }`}
+    <article className="relative rounded-xl border border-line bg-surface shadow-card">
+      <Link
+        to={`/checks/${check.id}`}
+        aria-label={`Чек №${check.number}`}
+        className={cn('block rounded-xl px-4 pb-3 pt-3.5', focusRing)}
       >
-        <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
-          <div className="flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            <span>{format(zoned(check.date, timeZone), 'dd.MM.yy HH:mm', { locale: ru })}</span>
-          </div>
-          {check.master && <span className="truncate">{check.master.fullName}</span>}
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0">
-          {(check.discount ?? 0) > 0 && (
-            <div className="flex items-center gap-0.5">
-              <Percent className="w-3 h-3 text-orange-400" />
-              <span className="text-xs font-medium text-orange-500 tabular-nums">
-                -{formatMoney(check.discount ?? 0)}
-              </span>
-            </div>
+        <div className="mb-2 flex items-center gap-2 pr-9">
+          <span className="text-base font-semibold tabular-nums text-ink">№{check.number}</span>
+          <CheckStatusBadge check={check} size="sm" />
+          {!check.isDeferred && check.isExecutor && (
+            <Badge tone="info" size="sm">
+              Исполнитель
+            </Badge>
           )}
-          {check.isWarranty ? (
-            canViewProfit ? (
-              <div className="flex items-center gap-1">
-                <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-sm font-bold text-red-500 tabular-nums">
-                  -{formatMoney(check.warrantyLoss ?? 0)}
-                </span>
-              </div>
-            ) : (
-              <span className="text-sm font-semibold text-amber-600">По гарантии</span>
-            )
-          ) : (
-            <span className="text-sm font-bold text-gray-900 tabular-nums">{formatMoney(check.totalRevenue)}</span>
-          )}
-        </div>
-      </div>
-      {canViewProfit && !check.isWarranty && (
-        <div
-          className={`px-4 py-2 border-t flex items-center justify-between ${
-            check.isDeferred ? 'border-red-100' : 'border-gray-100'
-          }`}
-        >
-          <div className="flex items-center gap-1.5">
-            <TrendingUp className="w-3.5 h-3.5 text-gray-400" />
-            <span className="text-xs text-gray-400">Прибыль</span>
-          </div>
-          <span className={`text-sm font-bold tabular-nums ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-            {check.profit >= 0 ? '+' : ''}
-            {formatMoney(check.profit)}
+          <span className="ml-auto text-xs tabular-nums text-ink-3">
+            {format(zoned(check.date, timeZone), 'dd.MM.yy HH:mm', { locale: ru })}
           </span>
         </div>
+        <p className="truncate text-sm font-medium text-ink">{check.client?.fullName ?? 'Розничный покупатель'}</p>
+        {check.car && (
+          <p className="mt-0.5 flex items-center gap-2 text-sm text-ink-2">
+            <span className="truncate">{check.car.makeModel}</span>
+            {check.car.plateNumber && <PlateBadge plate={check.car.plateNumber} />}
+            {(check.mileage ?? 0) > 0 && (
+              <span className="ml-auto flex-shrink-0 text-xs tabular-nums text-ink-3">
+                {(check.mileage ?? 0).toLocaleString('ru-RU')} км
+              </span>
+            )}
+          </p>
+        )}
+        {check.comment && (
+          <p className="mt-1.5 line-clamp-2 flex items-start gap-1.5 text-xs text-ink-3">
+            <MessageSquare className="mt-0.5 h-3 w-3 flex-shrink-0 text-ink-4" aria-hidden="true" />
+            <span>{check.comment}</span>
+          </p>
+        )}
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <PaymentBadge check={check} size="sm" />
+            {check.master && <span className="truncate text-xs text-ink-3">{check.master.fullName}</span>}
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-3">
+            {canViewProfit && !check.isWarranty && (
+              <Money value={check.profit} signed colorize className="text-xs font-medium" />
+            )}
+            {check.isWarranty ? (
+              canViewProfit ? (
+                <Money value={-(check.warrantyLoss ?? 0)} colorize className="text-sm font-semibold" />
+              ) : (
+                <span className="text-sm font-semibold text-warn-text">По гарантии</span>
+              )
+            ) : (
+              <Money
+                value={check.totalRevenue}
+                className={cn('text-sm font-semibold', check.isReturned ? 'text-ink-3 line-through' : 'text-ink')}
+              />
+            )}
+          </div>
+        </div>
+      </Link>
+      {canDelete && (
+        <IconButton
+          label={`Удалить чек №${check.number}`}
+          icon={Trash2}
+          size="sm"
+          variant="danger"
+          onClick={() => onDelete(check)}
+          className="absolute right-2 top-2"
+        />
       )}
-    </div>
+    </article>
   );
 });
 
-// ─── Корзина (106): soft-deleted checks, restorable for 30 days ─────────────
-const TRASH_RETENTION_DAYS = 30;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Full days left before a trashed check is purged (30 days from deletedAt). */
-function trashDaysLeft(deletedAt: string): number {
-  const expiresAt = new Date(deletedAt).getTime() + TRASH_RETENTION_DAYS * DAY_MS;
-  return Math.max(0, Math.ceil((expiresAt - Date.now()) / DAY_MS));
-}
-
-function TrashSection({
-  items,
-  isLoading,
-  isError,
-  onRetry,
-  onRestore,
-  restoringId,
-  timeZone,
-}: {
-  items: TrashedCheck[];
-  isLoading: boolean;
-  isError: boolean;
-  onRetry: () => void;
-  onRestore: (id: string, number: number) => void;
-  restoringId: string | null;
-  /** Пояс автосервиса — см. MobileCheckCard. */
-  timeZone: string;
-}) {
-  if (isLoading) return <InlineLoader minHeight="min-h-[40vh]" />;
-
-  if (isError) {
-    return (
-      <div className="card card-body text-center">
-        <p className="text-sm text-gray-500">Не удалось загрузить корзину.</p>
-        <button type="button" onClick={onRetry} className="btn-secondary mt-3 mx-auto">
-          Повторить
-        </button>
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <EmptyState
-        icon={Trash2}
-        title="Корзина пуста"
-        description={`Удалённые заказ-наряды хранятся здесь ${TRASH_RETENTION_DAYS} дней, затем удаляются навсегда`}
-      />
-    );
-  }
-
-  return (
-    <>
-      {/* Mobile cards */}
-      <div className="md:hidden space-y-3">
-        {items.map((c) => {
-          const days = trashDaysLeft(c.deletedAt);
-          return (
-            <div key={c.id} className="rounded-2xl border border-gray-100 bg-white shadow-sm px-4 py-3.5">
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-base font-bold text-gray-900">#{c.number}</span>
-                  {c.isDeferred && (
-                    <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                      Отложен
-                    </span>
-                  )}
-                </div>
-                <span className="text-sm font-bold text-gray-900 flex-shrink-0 tabular-nums">
-                  {formatMoney(c.totalRevenue)}
-                </span>
-              </div>
-              <p className="text-sm font-medium text-gray-800 truncate">{c.clientName ?? 'Розничный покупатель'}</p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Чек от {format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
-              </p>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Удалён {format(zoned(c.deletedAt, timeZone), 'dd.MM.yyyy HH:mm', { locale: ru })}
-                {c.deletedByName ? ` · ${c.deletedByName}` : ''}
-              </p>
-              <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-gray-50">
-                <span className={`text-xs font-semibold ${days <= 5 ? 'text-red-500' : 'text-gray-400'}`}>
-                  Осталось {days} дн.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onRestore(c.id, c.number)}
-                  disabled={restoringId !== null}
-                  className="btn-secondary btn-sm"
-                >
-                  <Undo2 className="w-3.5 h-3.5" />
-                  Восстановить
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Desktop table */}
-      <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-12rem)]">
-        <table className="table">
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th>#</th>
-              <th>Дата</th>
-              <th>Клиент</th>
-              <th>Сумма</th>
-              <th>Удалён</th>
-              <th>До удаления</th>
-              <th className="w-40"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => {
-              const days = trashDaysLeft(c.deletedAt);
-              return (
-                <tr key={c.id}>
-                  <td className="font-medium">
-                    <span>{c.number}</span>
-                    {c.isDeferred && (
-                      <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
-                        Отложен
-                      </span>
-                    )}
-                  </td>
-                  <td className="text-sm">{format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}</td>
-                  <td className="text-sm font-medium">{c.clientName ?? 'Розничный покупатель'}</td>
-                  <td className="font-semibold tabular-nums">{formatMoney(c.totalRevenue)}</td>
-                  <td>
-                    <div className="text-sm">
-                      {format(zoned(c.deletedAt, timeZone), 'dd.MM.yyyy HH:mm', { locale: ru })}
-                    </div>
-                    {c.deletedByName && <div className="text-xs text-gray-400">{c.deletedByName}</div>}
-                  </td>
-                  <td>
-                    <span className={`text-sm font-semibold ${days <= 5 ? 'text-red-500' : 'text-gray-500'}`}>
-                      {days} дн.
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() => onRestore(c.id, c.number)}
-                      disabled={restoringId !== null}
-                      className="btn-secondary btn-sm"
-                    >
-                      <Undo2 className="w-3.5 h-3.5" />
-                      Восстановить
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
 export default function ChecksPage() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   // Время чека — в поясе автосервиса: сервер тем же поясом решает, в какой день
@@ -463,19 +214,30 @@ export default function ChecksPage() {
   // Корзина (106) — часть цикла удаления: тот же ключ checks_delete, что сервер
   // проверяет на GET /checks/trash и POST /checks/:id/restore (волна Битрикс24).
   const canSeeTrash = canDelete;
-  // Pre-fill the master filter from ?masterId=… so deep-links from the
-  // Employees page ("Чеки сотрудника" button) drop the user straight into
-  // a pre-filtered view.
-  const [searchParams] = useSearchParams();
-  const initialMasterId = searchParams.get('masterId') || '';
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [masterId, setMasterId] = useState(initialMasterId);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [showWarehouseDocs, setShowWarehouseDocs] = useState(false);
-  const [showTrash, setShowTrash] = useState(false);
-  const limit = 20;
+
+  // Состояние списка — в URL: F5, «Назад» и пересылка ссылки сохраняют фильтры.
+  // ?masterId= — тот же параметр, что deep-link со страницы «Сотрудники».
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
+  const search = params.get('q') ?? '';
+  const masterId = params.get('masterId') ?? '';
+  const dateFrom = params.get('from') ?? '';
+  const dateTo = params.get('to') ?? '';
+  const rawView = params.get('view');
+  const view: JournalView = rawView === 'docs' ? 'docs' : rawView === 'trash' && canSeeTrash ? 'trash' : 'checks';
+
+  const patchParams = (patch: Record<string, string | null>, resetPage = true) => {
+    const next = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === '') next.delete(k);
+      else next.set(k, v);
+    }
+    if (resetPage) next.delete('page');
+    setParams(next, { replace: true });
+  };
+
+  const [deleteTarget, setDeleteTarget] = useState<Check | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<TrashedCheck | null>(null);
 
   const { data: mastersData } = useQuery<User[]>({
     queryKey: ['masters'],
@@ -494,14 +256,15 @@ export default function ChecksPage() {
   } = useQuery<PaginatedResponse<Check>>({
     queryKey: ['checks', page, search, masterId, dateFrom, dateTo],
     queryFn: async () => {
-      const params: Record<string, any> = { page, limit };
-      if (search) params.search = search;
-      if (masterId) params.masterId = masterId;
-      if (dateFrom) params.dateFrom = dateFrom;
-      if (dateTo) params.dateTo = dateTo;
-      const res = await checksApi.getAll(params);
+      const queryParams: Record<string, any> = { page, limit: LIMIT };
+      if (search) queryParams.search = search;
+      if (masterId) queryParams.masterId = masterId;
+      if (dateFrom) queryParams.dateFrom = dateFrom;
+      if (dateTo) queryParams.dateTo = dateTo;
+      const res = await checksApi.getAll(queryParams);
       return res.data;
     },
+    enabled: view === 'checks',
   });
 
   const deleteMutation = useMutation({
@@ -522,19 +285,13 @@ export default function ChecksPage() {
     },
   });
 
-  const handleDelete = (e: React.MouseEvent, checkId: string, checkNumber: number) => {
-    e.stopPropagation();
-    if (window.confirm(`Переместить чек #${checkNumber} в корзину? Восстановить можно в течение 30 дней.`)) {
-      deleteMutation.mutate(checkId);
-    }
-  };
-
-  // Корзина (106): list is fetched only when the section is open AND the user
-  // is owner-class — a master never fires the owner-only request at all.
+  // Корзина (106): список грузится только на своей вкладке И только для
+  // owner-class — мастер owner-only запрос не дёргает вовсе.
   const {
     data: trashedChecks,
     isLoading: trashLoading,
     isError: trashIsError,
+    isFetching: trashFetching,
     refetch: refetchTrash,
   } = useQuery<TrashedCheck[]>({
     queryKey: ['checks', 'trash'],
@@ -542,7 +299,7 @@ export default function ChecksPage() {
       const res = await checksApi.trash();
       return res.data;
     },
-    enabled: canSeeTrash && showTrash,
+    enabled: canSeeTrash && view === 'trash',
   });
 
   const restoreMutation = useMutation({
@@ -560,414 +317,555 @@ export default function ChecksPage() {
       MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     },
     onError: (err: any) => {
-      // Surface the backend refusal verbatim — e.g. «Недостаточно товара на
-      // складе для восстановления: …» when stock can't be re-deducted.
+      // Текст отказа сервера дословно — например, «Недостаточно товара на
+      // складе для восстановления: …», когда остаток нельзя списать заново.
       toast.error(err?.response?.data?.message || 'Не удалось восстановить заказ-наряд');
     },
   });
 
-  const handleRestore = (id: string, number: number) => {
-    if (window.confirm(`Восстановить заказ-наряд #${number}?`)) {
-      restoreMutation.mutate(id);
-    }
-  };
-
-  const handleDateChange = (from: string, to: string) => {
-    setDateFrom(from);
-    setDateTo(to);
-    setPage(1);
-  };
-
-  const handleSearchChange = (value: string) => {
-    setSearch(value);
-    setPage(1);
-  };
-
-  const handleMasterChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setMasterId(e.target.value);
-    setPage(1);
-  };
-
-  // Stock movements query (write-offs, corrections, purchases)
-  const { data: movements } = useQuery<StockMovement[]>({
+  // Складские документы (списания, инвентаризации, поступления) — своя вкладка;
+  // запрос требует период (иначе сервер отдал бы всю историю склада).
+  const hasPeriod = !!dateFrom && !!dateTo;
+  const {
+    data: movements,
+    isLoading: movementsLoading,
+    isError: movementsError,
+    isFetching: movementsFetching,
+    refetch: refetchMovements,
+  } = useQuery<StockMovement[]>({
     queryKey: ['stock-movements-journal', dateFrom, dateTo, masterId],
     queryFn: async () => {
-      const params: Record<string, string> = {};
-      if (dateFrom) params.dateFrom = dateFrom;
-      if (dateTo) params.dateTo = dateTo;
-      if (masterId) params.masterId = masterId;
-      const res = await productsApi.getMovements(params as any);
+      const queryParams: Record<string, string> = {};
+      if (dateFrom) queryParams.dateFrom = dateFrom;
+      if (dateTo) queryParams.dateTo = dateTo;
+      if (masterId) queryParams.masterId = masterId;
+      const res = await productsApi.getMovements(queryParams as any);
       return res.data;
     },
-    enabled: !!dateFrom && !!dateTo,
+    enabled: view === 'docs' && hasPeriod,
   });
-
-  const recentMovements = (movements ?? []).filter((m) => m.type !== 'expense');
+  const recentMovements = useMemo(() => (movements ?? []).filter((m) => m.type !== 'expense'), [movements]);
 
   const checks = checksData?.data ?? [];
   const total = checksData?.total ?? 0;
-  const pageRevenue = checks.reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
-  const pageProfit = checks.reduce((sum, c) => sum + (c.profit || 0), 0);
-  const avgCheck = checks.length ? Math.round(pageRevenue / checks.length) : 0;
+
+  const masterOptions = useMemo(
+    () => (mastersData ?? []).map((m) => ({ value: m.id, label: m.fullName })),
+    [mastersData],
+  );
+
+  // ─── Колонки журнала ───────────────────────────────────────────────────────
+  const checkColumns = useMemo<DataTableColumn<Check>[]>(() => {
+    const cols: DataTableColumn<Check>[] = [
+      {
+        key: 'number',
+        header: '№',
+        primary: true,
+        width: 64,
+        className: 'whitespace-nowrap',
+        render: (c) => (
+          <span className="flex flex-col items-start gap-0.5">
+            <span className="tabular-nums">{c.number}</span>
+            {!c.isDeferred && c.isExecutor && (
+              <Badge tone="info" size="sm">
+                Исполнитель
+              </Badge>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'date',
+        header: 'Дата',
+        width: 112,
+        className: 'whitespace-nowrap',
+        render: (c) => (
+          <span className="tabular-nums text-ink-2">
+            {format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
+            <span className="block text-xs text-ink-3">{format(zoned(c.date, timeZone), 'HH:mm', { locale: ru })}</span>
+          </span>
+        ),
+      },
+      {
+        key: 'client',
+        header: 'Клиент',
+        render: (c) => (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate font-medium text-ink">{c.client?.fullName ?? 'Розничный покупатель'}</span>
+            {c.comment && (
+              <Tooltip content={c.comment}>
+                <button
+                  type="button"
+                  className={cn('inline-flex flex-shrink-0 rounded-sm text-ink-3 hover:text-ink', focusRing)}
+                  aria-label={`Комментарий: ${c.comment}`}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </Tooltip>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'car',
+        header: 'Автомобиль',
+        hideBelow: 'lg',
+        render: (c) =>
+          c.car ? (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-ink-2">{c.car.makeModel || '—'}</span>
+                {c.car.plateNumber && <PlateBadge plate={c.car.plateNumber} />}
+              </span>
+              {(c.mileage ?? 0) > 0 && (
+                <span className="flex items-center gap-1 text-xs tabular-nums text-ink-3">
+                  <Gauge className="h-3 w-3" aria-hidden="true" />
+                  {(c.mileage ?? 0).toLocaleString('ru-RU')} км
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          ),
+      },
+      {
+        key: 'master',
+        header: 'Мастер',
+        hideBelow: 'xl',
+        width: 140,
+        truncate: true,
+        render: (c) => <span title={c.master?.fullName}>{c.master?.fullName ?? '—'}</span>,
+      },
+    ];
+    cols.push({
+      key: 'revenue',
+      header: 'Выручка',
+      numeric: true,
+      sortable: true,
+      width: 120,
+      // Кнопка сортировки числового заголовка — flex-row-reverse, базовая линия
+      // берётся от иконки и текст уезжает вверх; выравниваем по середине.
+      headerClassName: SORT_HEADER_FIX,
+      sortValue: (c) => (c.isWarranty ? 0 : c.totalRevenue),
+      render: (c) =>
+        c.isWarranty ? (
+          <span className="text-xs font-medium text-warn-text">гарантия</span>
+        ) : (
+          <span className="flex flex-col items-end">
+            <Money
+              value={c.totalRevenue}
+              className={cn('font-semibold', c.isReturned ? 'text-ink-3 line-through' : 'text-ink')}
+            />
+            {(c.discount ?? 0) > 0 && (
+              <span className="text-2xs text-ink-3">
+                скидка <Money value={c.discount ?? 0} />
+              </span>
+            )}
+          </span>
+        ),
+      footer: (rows) => (
+        <Money value={rows.reduce((s, c) => s + (c.isWarranty || c.isReturned ? 0 : c.totalRevenue || 0), 0)} />
+      ),
+    });
+    if (canViewProfit) {
+      cols.push({
+        key: 'profit',
+        header: 'Прибыль',
+        numeric: true,
+        sortable: true,
+        width: 120,
+        headerClassName: SORT_HEADER_FIX,
+        sortValue: (c) => (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit),
+        render: (c) =>
+          c.isWarranty ? (
+            <Money value={-(c.warrantyLoss ?? 0)} colorize className="font-semibold" />
+          ) : (
+            <Money value={c.profit} signed colorize className="font-semibold" />
+          ),
+        footer: (rows) => (
+          <Money
+            value={rows.reduce((s, c) => s + (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit || 0), 0)}
+            signed
+            colorize
+          />
+        ),
+      });
+    }
+    cols.push(
+      { key: 'payment', header: 'Оплата', hideBelow: 'md', render: (c) => <PaymentBadge check={c} /> },
+      {
+        key: 'status',
+        header: 'Статус',
+        render: (c) => <CheckStatusBadge check={c} />,
+        footer: <span className="text-xs font-medium text-ink-3">Итого на странице</span>,
+      },
+    );
+    if (canDelete) {
+      cols.push({
+        key: 'actions',
+        header: '',
+        interactive: true,
+        width: 48,
+        render: (c) => (
+          <IconButton
+            label={`Удалить чек №${c.number}`}
+            icon={Trash2}
+            size="sm"
+            variant="danger"
+            onClick={() => setDeleteTarget(c)}
+          />
+        ),
+      });
+    }
+    return cols;
+  }, [canDelete, canViewProfit, timeZone]);
+
+  // ─── Колонки складских документов ──────────────────────────────────────────
+  const movementColumns = useMemo<DataTableColumn<StockMovement>[]>(
+    () => [
+      {
+        key: 'type',
+        header: 'Операция',
+        render: (m) => {
+          const cfg = m.isUsedPurchase ? usedPurchaseConfig : movementTypeConfig[m.type] || movementTypeConfig.expense;
+          return (
+            <Badge tone={cfg.tone} icon={cfg.icon}>
+              {cfg.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: 'product',
+        header: 'Товар',
+        render: (m) => <span className="font-medium text-ink">{m.product?.name || '—'}</span>,
+      },
+      {
+        key: 'qty',
+        header: 'Кол-во',
+        numeric: true,
+        width: 96,
+        render: (m) => {
+          const sign = m.quantity > 0 ? (m.type === 'income' || m.type === 'customer_return' ? '+' : '−') : '';
+          return (
+            <span
+              className={cn(
+                'font-medium',
+                sign === '+' ? 'text-ok-text' : sign === '−' ? 'text-bad-text' : 'text-ink-2',
+              )}
+            >
+              {sign}
+              {formatQty(Math.abs(m.quantity))}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'details',
+        header: 'Детали',
+        hideBelow: 'md',
+        render: (m) => {
+          const direction =
+            m.type === 'defect_transfer' || m.type === 'used_transfer'
+              ? `${m.sourceWarehouseName ?? 'Основной'} → ${m.targetWarehouseName ?? '—'}`
+              : m.type === 'defect_return_to_supplier'
+                ? `${m.warehouseName ?? 'Склад брака'}${m.supplierName ? ` → ${m.supplierName}` : ''}`
+                : m.isUsedPurchase && m.supplierName
+                  ? `${m.supplierName} → ${m.warehouseName ?? 'Склад Б/У'}`
+                  : null;
+          const parts = [direction, m.reason].filter(Boolean);
+          return parts.length > 0 ? (
+            <span className="text-ink-2">{parts.join(' · ')}</span>
+          ) : (
+            <span className="text-ink-3">—</span>
+          );
+        },
+      },
+      { key: 'user', header: 'Сотрудник', hideBelow: 'lg', render: (m) => m.user?.fullName ?? '—' },
+      {
+        key: 'date',
+        header: 'Дата',
+        width: 120,
+        render: (m) => (
+          <span className="tabular-nums text-ink-2">
+            {format(zoned(m.createdAt, timeZone), 'dd.MM HH:mm', { locale: ru })}
+          </span>
+        ),
+      },
+    ],
+    [timeZone],
+  );
+
+  // ─── Колонки корзины ───────────────────────────────────────────────────────
+  const trashColumns = useMemo<DataTableColumn<TrashedCheck>[]>(
+    () => [
+      {
+        key: 'check',
+        header: 'Чек',
+        render: (c) => (
+          <span className="flex flex-col">
+            <span className="flex items-center gap-2">
+              <span className="font-medium tabular-nums text-ink">№{c.number}</span>
+              {c.isDeferred && (
+                <Badge tone="warn" size="sm">
+                  Отложен
+                </Badge>
+              )}
+            </span>
+            <span className="text-xs tabular-nums text-ink-3">
+              {format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
+            </span>
+          </span>
+        ),
+      },
+      { key: 'client', header: 'Клиент', hideBelow: 'sm', render: (c) => c.clientName ?? 'Розничный покупатель' },
+      {
+        key: 'total',
+        header: 'Сумма',
+        numeric: true,
+        render: (c) => <Money value={c.totalRevenue} className="font-semibold text-ink" />,
+      },
+      {
+        key: 'deleted',
+        header: 'Удалён',
+        hideBelow: 'md',
+        render: (c) => (
+          <span className="flex flex-col">
+            <span className="tabular-nums text-ink-2">
+              {format(zoned(c.deletedAt, timeZone), 'dd.MM.yyyy HH:mm', { locale: ru })}
+            </span>
+            {c.deletedByName && <span className="text-xs text-ink-3">{c.deletedByName}</span>}
+          </span>
+        ),
+      },
+      {
+        key: 'left',
+        header: 'Осталось',
+        render: (c) => {
+          const days = trashDaysLeft(c.deletedAt);
+          return (
+            <Badge tone={days <= 5 ? 'bad' : 'neutral'} className="tabular-nums">
+              {days} {plural(days, 'день', 'дня', 'дней')}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: 'actions',
+        header: '',
+        interactive: true,
+        width: 160,
+        align: 'right',
+        render: (c) => (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={Undo2}
+            onClick={() => setRestoreTarget(c)}
+            disabled={restoreMutation.isPending}
+            loading={restoreMutation.isPending && restoreMutation.variables === c.id}
+          >
+            Восстановить
+          </Button>
+        ),
+      },
+    ],
+    [timeZone, restoreMutation.isPending, restoreMutation.variables],
+  );
+
+  const tabItems = [
+    { key: 'checks' as const, label: 'Чеки', icon: BookOpen },
+    { key: 'docs' as const, label: 'Документы склада', icon: Package },
+    ...(canSeeTrash ? [{ key: 'trash' as const, label: 'Корзина', icon: Trash2 }] : []),
+  ];
+
+  const subtitle =
+    view === 'checks'
+      ? isLoading
+        ? 'Заказ-наряды и розничные чеки'
+        : `${total.toLocaleString('ru-RU')} ${plural(total, 'чек', 'чека', 'чеков')}${hasPeriod || search || masterId ? ' по фильтру' : ''}`
+      : view === 'docs'
+        ? 'Списания, инвентаризации, поступления и перемещения'
+        : `Удалённые заказ-наряды хранятся ${TRASH_RETENTION_DAYS} дней`;
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <PageHeader
-        title="Чеки"
-        icon={FileText}
-        actions={
-          <Link to="/checks/new" className="btn-primary">
-            <Plus className="w-4 h-4" />
-            {'Новый чек'}
-          </Link>
-        }
+    <div className="space-y-5">
+      <PageHeader title="Журнал" icon={BookOpen} subtitle={subtitle} />
+
+      <Tabs
+        aria-label="Разделы журнала"
+        idPrefix="journal"
+        items={tabItems}
+        value={view}
+        onChange={(v) => patchParams({ view: v === 'checks' ? null : v })}
       />
 
-      {/* Filters */}
-      <div className="card card-body">
-        <div className="flex flex-col lg:flex-row gap-4">
-          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={handleDateChange} />
-          <div className="flex flex-col sm:flex-row gap-3 flex-1">
-            <div className="w-full sm:w-48">
-              <select value={masterId} onChange={handleMasterChange} className="input">
-                <option value="">{'Все мастера'}</option>
-                {mastersData?.map((master) => (
-                  <option key={master.id} value={master.id}>
-                    {master.fullName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex-1">
-              <SearchInput
-                value={search}
-                onChange={handleSearchChange}
-                placeholder={'Поиск по клиенту, авто, номеру...'}
-              />
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setShowWarehouseDocs(!showWarehouseDocs);
-              setShowTrash(false);
-              setPage(1);
-            }}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
-              showWarehouseDocs
-                ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            <Package className="w-3.5 h-3.5" />
-            Документы склада
-          </button>
-          {canSeeTrash && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowTrash(!showTrash);
-                setShowWarehouseDocs(false);
-                setPage(1);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
-                showTrash
-                  ? 'bg-red-100 text-red-700 border border-red-200'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Корзина
-            </button>
+      {view !== 'trash' && (
+        <Toolbar>
+          {view === 'checks' && (
+            <SearchInput
+              value={search}
+              onChange={(v) => patchParams({ q: v })}
+              placeholder="Клиент, авто, номер чека…"
+              aria-label="Поиск по журналу"
+              className="w-full sm:w-72"
+            />
           )}
-        </div>
-      </div>
-
-      {/* Stock Movements — write-offs, corrections, purchases with colors */}
-      {!showTrash && recentMovements.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Складские операции</p>
-          {(showWarehouseDocs ? recentMovements : recentMovements.slice(0, 5)).map((m) => {
-            // is_used_purchase=true rows override the default "Поступление"
-            // styling with the dedicated "Покупка Б/У" config.
-            const cfg = m.isUsedPurchase
-              ? usedPurchaseConfig
-              : movementTypeConfig[m.type] || movementTypeConfig.expense;
-            const Icon = cfg.icon;
-            const direction =
-              m.type === 'defect_transfer' || m.type === 'used_transfer'
-                ? `${m.sourceWarehouseName ?? 'Основной'} → ${m.targetWarehouseName ?? '—'}`
-                : m.type === 'defect_return_to_supplier'
-                  ? `${m.warehouseName ?? 'Склад брака'}${m.supplierName ? ` → ${m.supplierName}` : ''}`
-                  : m.isUsedPurchase && m.supplierName
-                    ? `${m.supplierName} → ${m.warehouseName ?? 'Склад Б/У'}`
-                    : null;
-            return (
-              <div key={m.id} className={`rounded-xl border shadow-sm p-3 flex items-center gap-3 ${cfg.bg}`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cfg.bg}`}>
-                  <Icon className={`w-4 h-4 ${cfg.color}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold ${cfg.color}`}>{cfg.label}</span>
-                    <span className="text-xs text-gray-500 truncate">{m.product?.name || '—'}</span>
-                  </div>
-                  <p className="text-[10px] text-gray-400">
-                    {m.quantity > 0 ? (m.type === 'income' || m.type === 'customer_return' ? '+' : '-') : ''}
-                    {Math.abs(m.quantity)} шт
-                    {direction ? ` · ${direction}` : ''}
-                    {m.reason ? ` · ${m.reason}` : ''}
-                    {m.user?.fullName ? ` · ${m.user.fullName}` : ''}
-                    {' · '}
-                    {format(zoned(m.createdAt, timeZone), 'dd.MM HH:mm', { locale: ru })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Summary strip — totals for the loaded page of checks */}
-      {!showTrash && !showWarehouseDocs && !isLoading && checks.length > 0 && (
-        <div className={`grid grid-cols-2 gap-2.5 ${canViewProfit ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Всего чеков</p>
-            <p className="text-base sm:text-lg font-bold text-gray-900 mt-0.5 tabular-nums">{total}</p>
-          </div>
-          <div className="rounded-xl bg-blue-50 p-3">
-            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Выручка (стр.)</p>
-            <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5 tabular-nums">
-              {formatMoney(pageRevenue)}
-            </p>
-          </div>
-          {canViewProfit && (
-            <div className="rounded-xl bg-green-50 p-3">
-              <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Прибыль (стр.)</p>
-              <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5 tabular-nums">
-                {formatMoney(pageProfit)}
-              </p>
-            </div>
-          )}
-          <div className="rounded-xl bg-indigo-50 p-3">
-            {/* «(стр.)» обязательна: среднее считается по 20 видимым строкам,
-                а сосед «Всего чеков» — по всей выборке; без пометки владелец
-                читал бы это как средний чек периода. */}
-            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Средний чек (стр.)</p>
-            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5 tabular-nums">
-              {formatMoney(avgCheck)}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Content */}
-      {showTrash ? (
-        <TrashSection
-          items={trashedChecks ?? []}
-          isLoading={trashLoading}
-          isError={trashIsError}
-          onRetry={() => refetchTrash()}
-          onRestore={handleRestore}
-          timeZone={timeZone}
-          restoringId={restoreMutation.isPending ? (restoreMutation.variables ?? null) : null}
-        />
-      ) : showWarehouseDocs ? (
-        recentMovements.length === 0 && (
-          <EmptyState
-            icon={Package}
-            title="Нет складских операций"
-            description="Выберите период для просмотра складских документов"
+          <Select
+            aria-label="Мастер"
+            placeholder="Все мастера"
+            options={masterOptions}
+            value={masterId}
+            onChange={(e) => patchParams({ masterId: e.target.value })}
+            className="w-full sm:w-52"
           />
-        )
-      ) : (
-        <QueryState
-          isLoading={isLoading}
-          isError={isError}
-          onRetry={refetch}
-          isFetching={isFetching}
-          isEmpty={checks.length === 0}
-          empty={{
-            icon: FileText,
-            title: 'Чеков не найдено',
-            description: 'Попробуйте изменить фильтры или создайте новый чек',
-          }}
-        >
-          <>
-            {/* Mobile cards (memoized) */}
-            <div className="md:hidden space-y-3">
-              {checks.map((check) => (
-                <MobileCheckCard
-                  key={check.id}
-                  check={check}
-                  canDelete={canDelete}
-                  canViewProfit={canViewProfit}
-                  onNavigate={(id) => navigate(`/checks/${id}`)}
-                  onDelete={handleDelete}
-                  timeZone={timeZone}
-                />
-              ))}
-            </div>
-
-            {/* Desktop table */}
-            <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-12rem)]">
-              <table className="table">
-                <thead className="sticky top-0 z-10">
-                  <tr>
-                    <th>#</th>
-                    <th>Дата</th>
-                    <th>Клиент</th>
-                    <th>Авто</th>
-                    <th>Мастер</th>
-                    {canViewProfit && <th>Скидка</th>}
-                    <th>Выручка</th>
-                    {canViewProfit && <th>Прибыль</th>}
-                    <th>Оплата</th>
-                    <th>Статус</th>
-                    {canDelete && <th className="w-10"></th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {checks.map((check) => (
-                    <tr
-                      key={check.id}
-                      {...clickableRowProps(() => navigate(`/checks/${check.id}`), { label: `Чек №${check.number}` })}
-                      className={`cursor-pointer ${
-                        check.isDeferred
-                          ? 'bg-red-50'
-                          : check.isWarranty
-                            ? 'bg-amber-50/60'
-                            : check.isExecutor
-                              ? 'bg-violet-50/60'
-                              : ''
-                      }`}
-                    >
-                      <td className="font-medium">
-                        <span>{check.number}</span>
-                        {check.isDeferred && (
-                          <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
-                            Отложен
-                          </span>
-                        )}
-                        {!check.isDeferred && check.isExecutor && (
-                          <span className="ml-1.5 text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full">
-                            Исполнитель
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <div className="text-sm">
-                          {format(zoned(check.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          {format(zoned(check.date, timeZone), 'HH:mm', { locale: ru })}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="text-sm font-medium">{check.client?.fullName ?? 'Розничный покупатель'}</div>
-                        {check.comment && (
-                          <div
-                            className="text-xs text-amber-600 bg-amber-50 rounded px-1.5 py-0.5 mt-0.5 truncate max-w-[200px] inline-flex items-center gap-1"
-                            title={check.comment}
-                          >
-                            <MessageSquare className="w-3 h-3 flex-shrink-0" />
-                            <span className="truncate">{check.comment}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        {check.car ? (
-                          <div>
-                            <div className="text-sm">{check.car.makeModel}</div>
-                            <div className="text-xs text-gray-400">{check.car.plateNumber}</div>
-                            {(check.mileage ?? 0) > 0 && (
-                              <div className="text-xs text-gray-400">
-                                {(check.mileage ?? 0).toLocaleString('ru-RU')} км
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td>{check.master?.fullName ?? '—'}</td>
-                      {canViewProfit && (
-                        <td>
-                          {(check.discount ?? 0) > 0 ? (
-                            <span className="text-sm text-orange-500 font-medium tabular-nums">
-                              -{formatMoney(check.discount ?? 0)}
-                            </span>
-                          ) : (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </td>
-                      )}
-                      <td
-                        className={`font-semibold tabular-nums ${check.isReturned ? 'text-gray-400 line-through' : ''}`}
-                      >
-                        {formatMoney(check.totalRevenue)}
-                      </td>
-                      {canViewProfit && (
-                        <td>
-                          {check.isWarranty ? (
-                            <span className="inline-flex items-center gap-1 font-semibold text-red-500 tabular-nums">
-                              <ShieldAlert className="w-3.5 h-3.5" />-{formatMoney(check.warrantyLoss ?? 0)}
-                            </span>
-                          ) : (
-                            <span
-                              className={`font-semibold tabular-nums ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}
-                            >
-                              {check.profit >= 0 ? '+' : ''}
-                              {formatMoney(check.profit)}
-                            </span>
-                          )}
-                        </td>
-                      )}
-                      <td>
-                        {check.isWarranty ? (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                            <ShieldAlert className="w-3 h-3" />
-                            Гарантия
-                          </span>
-                        ) : (
-                          <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
-                            {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        {check.isReturned ? (
-                          <span className="badge-danger">Возврат</span>
-                        ) : check.isDeferred ? (
-                          <span className="badge-warning">Отложен</span>
-                        ) : (
-                          <span className="badge-success">Проведён</span>
-                        )}
-                      </td>
-                      {canDelete && (
-                        <td>
-                          <button
-                            type="button"
-                            onClick={(e) => handleDelete(e, check.id, check.number)}
-                            className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                            aria-label={`Удалить чек №${check.number}`}
-                            title="Удалить чек"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-          </>
-        </QueryState>
+          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => patchParams({ from, to })} />
+          {(search || masterId || hasPeriod) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => patchParams({ q: null, masterId: null, from: null, to: null })}
+            >
+              Сбросить
+            </Button>
+          )}
+        </Toolbar>
       )}
+
+      <TabPanel idPrefix="journal" tabKey="checks" active={view === 'checks'} className="space-y-4">
+        {/* Мобильные карточки (< md): владелец открывает журнал с телефона. */}
+        <div className="space-y-3 md:hidden">
+          {isLoading ? (
+            <DataTable columns={checkColumns.slice(0, 3)} rows={[]} rowKey={() => ''} isLoading skeletonRows={4} />
+          ) : isError ? (
+            <DataTable
+              columns={checkColumns.slice(0, 3)}
+              rows={[]}
+              rowKey={() => ''}
+              isError
+              onRetry={() => refetch()}
+              isFetching={isFetching}
+            />
+          ) : checks.length === 0 ? (
+            <DataTable
+              columns={checkColumns.slice(0, 3)}
+              rows={[]}
+              rowKey={() => ''}
+              emptyState={{
+                icon: BookOpen,
+                title: 'Чеков не найдено',
+                description: 'Измените фильтры или создайте новый чек в Кассе',
+              }}
+            />
+          ) : (
+            checks.map((check) => (
+              <MobileCheckCard
+                key={check.id}
+                check={check}
+                canDelete={canDelete}
+                canViewProfit={canViewProfit}
+                onDelete={setDeleteTarget}
+                timeZone={timeZone}
+              />
+            ))
+          )}
+        </div>
+
+        <div className="hidden md:block">
+          <DataTable
+            caption="Журнал чеков"
+            columns={checkColumns}
+            rows={checks}
+            rowKey={(c) => c.id}
+            rowHref={(c) => `/checks/${c.id}`}
+            rowLabel={(c) => `Чек №${c.number}`}
+            isLoading={isLoading}
+            isError={isError}
+            onRetry={() => refetch()}
+            isFetching={isFetching}
+            emptyState={{
+              icon: BookOpen,
+              title: 'Чеков не найдено',
+              description: 'Измените фильтры или создайте новый чек в Кассе',
+            }}
+          />
+        </div>
+
+        <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => patchParams({ page: String(p) }, false)} />
+      </TabPanel>
+
+      <TabPanel idPrefix="journal" tabKey="docs" active={view === 'docs'}>
+        {!hasPeriod ? (
+          <DataTable
+            columns={movementColumns}
+            rows={[]}
+            rowKey={(m) => m.id}
+            emptyState={{
+              icon: CalendarRange,
+              title: 'Выберите период',
+              description:
+                'Складские документы показываются за выбранные даты — нажмите «Сегодня», «Неделя» или «Месяц».',
+            }}
+          />
+        ) : (
+          <DataTable
+            caption="Складские документы"
+            columns={movementColumns}
+            rows={recentMovements}
+            rowKey={(m) => m.id}
+            isLoading={movementsLoading}
+            isError={movementsError}
+            onRetry={() => refetchMovements()}
+            isFetching={movementsFetching}
+            emptyState={{
+              icon: Package,
+              title: 'Нет складских операций',
+              description: 'За выбранный период списаний, инвентаризаций и поступлений не было',
+            }}
+          />
+        )}
+      </TabPanel>
+
+      {canSeeTrash && (
+        <TabPanel idPrefix="journal" tabKey="trash" active={view === 'trash'}>
+          <DataTable
+            caption="Корзина заказ-нарядов"
+            columns={trashColumns}
+            rows={trashedChecks ?? []}
+            rowKey={(c) => c.id}
+            isLoading={trashLoading}
+            isError={trashIsError}
+            onRetry={() => refetchTrash()}
+            isFetching={trashFetching}
+            errorTitle="Не удалось загрузить корзину"
+            emptyState={{
+              icon: Trash2,
+              title: 'Корзина пуста',
+              description: `Удалённые заказ-наряды хранятся здесь ${TRASH_RETENTION_DAYS} дней, затем удаляются навсегда`,
+            }}
+          />
+        </TabPanel>
+      )}
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+        title="Удалить чек"
+        message={`Переместить чек №${deleteTarget?.number ?? ''} в корзину? Товары вернутся на склад, а чек уйдёт из кассы и отчётов. Восстановить можно в течение 30 дней.`}
+        confirmText="В корзину"
+        variant="danger"
+        loading={deleteMutation.isPending}
+      />
+      <ConfirmDialog
+        isOpen={!!restoreTarget}
+        onClose={() => setRestoreTarget(null)}
+        onConfirm={() => restoreTarget && restoreMutation.mutate(restoreTarget.id)}
+        title="Восстановить заказ-наряд"
+        message={`Вернуть чек №${restoreTarget?.number ?? ''} в журнал? Товары снова спишутся со склада, чек вернётся в кассу и отчёты.`}
+        confirmText="Восстановить"
+        loading={restoreMutation.isPending}
+      />
     </div>
   );
 }

@@ -7,7 +7,45 @@ OUT = os.environ.get('SHOT_OUT', '/Users/ramazan/Proects/zr-auto-pro/docs/web-re
 PHONE, PASSWORD = '+79000000000', 'AutexaDemo2026'
 PAGES = [('dashboard', '/dashboard'), ('checks', '/checks'), ('check-create', '/checks/new'),
          ('products', '/products'), ('clients', '/clients'), ('salary', '/salary'),
-         ('reports', '/reports'), ('company-settings', '/company-settings')]
+         ('reports', '/reports'), ('company-settings', '/company-settings'),
+         # G5 «Компания»
+         ('schedule', '/schedule'), ('employees', '/employees'), ('users', '/users'),
+         ('points', '/points'), ('integrations', '/integrations'), ('notifications', '/notifications'),
+         ('tariff', '/tariff'), ('more', '/more'),
+         # G2 «Клиенты и автомобили» — id клиента из демо-сида (Иван Петров).
+         ('client-detail', '/clients/de100000-0000-4000-a000-0000000000c1'), ('cars', '/cars'),
+         ('clients-import', '/clients/import'), ('calls', '/calls'), ('marketing', '/marketing'),
+         ('installments', '/installments'),
+         # G3 «Склад и поставщики» (детальные страницы и 375 px — tools/shots_warehouse.py)
+         ('services', '/services'), ('suppliers', '/suppliers'),
+         ('purchase-orders', '/purchase-orders'), ('equipment', '/equipment'),
+         # G6 «Вход · База знаний · superadmin» — вход (аноним), статья, учебный центр и
+         # панель платформы требуют других сессий: tools/shots_auth_admin.py.
+         ('knowledge', '/knowledge'),
+         # G4 «Деньги и отчёты» — период фиксируем в URL (демо-данные за сентябрь 2026);
+         # хаб отчётов, финансовый отчёт и экраны конструктора (11 отчётов — tools/shots_g4.py).
+         ('expenses', '/expenses?from=2026-09-01&to=2026-09-30'),
+         ('cashflow', '/cashflow?from=2026-09-01&to=2026-09-30'), ('planning', '/planning'),
+         ('reports-financial', '/reports/financial?from=2026-09-01&to=2026-09-30'),
+         ('report-summary', '/reports/summary?from=2026-09-01&to=2026-09-30'),
+         ('report-masters', '/reports/masters?from=2026-09-01&to=2026-09-30'),
+         ('report-salary', '/reports/salary?from=2026-09-01&to=2026-09-30'),
+         ('report-products', '/reports/products?from=2026-09-01&to=2026-09-30&groupBy=category'),
+         ('report-suppliers', '/reports/suppliers?from=2026-09-01&to=2026-09-30')]
+# Мобильные (375×812) снимки: базовые три + страницы групп фазы B.
+MOBILE_PAGES = [('dashboard', '/dashboard'), ('more', '/more'), ('checks', '/checks'),
+                ('clients', '/clients'), ('client-detail', '/clients/de100000-0000-4000-a000-0000000000c1'),
+                ('cars', '/cars'), ('calls', '/calls'), ('marketing', '/marketing'),
+                ('installments', '/installments'),
+                # G5 «Компания»
+                ('schedule', '/schedule'), ('users', '/users'), ('employees', '/employees'),
+                ('points', '/points'), ('integrations', '/integrations'),
+                ('company-settings', '/company-settings'),
+                # G4 «Деньги и отчёты»
+                ('salary', '/salary?from=2026-09-01&to=2026-09-30'),
+                ('expenses', '/expenses?from=2026-09-01&to=2026-09-30'),
+                ('cashflow', '/cashflow?from=2026-09-01&to=2026-09-30'), ('reports', '/reports'),
+                ('report-masters', '/reports/masters?from=2026-09-01&to=2026-09-30')]
 prefix = sys.argv[1] if len(sys.argv) > 1 else 'before'
 only = sys.argv[2].split(',') if len(sys.argv) > 2 else None
 
@@ -66,7 +104,7 @@ with sync_playwright() as p:
                                has_touch=True, locale='ru-RU', timezone_id='Europe/Moscow',
                                service_workers='block', storage_state=state)
     mpage = mctx.new_page()
-    for name, path in [('dashboard', '/dashboard'), ('more', '/more'), ('checks', '/checks')]:
+    for name, path in MOBILE_PAGES:
         if only and name not in only:
             continue
         attach(mpage, 'm-' + name)

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet,
@@ -14,6 +15,7 @@ import {
   TrendingUp,
   TrendingDown,
   Users,
+  History,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -30,18 +32,56 @@ import PageHeader from '../components/PageHeader';
 import PointBadge from '../components/PointBadge';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
+import { Card, CardBody, CardHeader } from '../ui/Card';
+import { StatCard } from '../ui/StatCard';
+import { StatusPill } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Field } from '../ui/Field';
+import { Input } from '../ui/Input';
+import { Money } from '../ui/Money';
+import { Skeleton } from '../ui/Skeleton';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { cn } from '../ui/cn';
+import type { Tone } from '../ui/tokens';
 
 const HISTORY_LIMIT = 20;
 
 function parseAmount(value: string): number {
-  const n = Number(value.replace(',', '.').trim());
+  const n = Number(value.replace(/\s/g, '').replace(',', '.').trim());
   return Number.isFinite(n) ? n : NaN;
 }
 
-function diffMeta(diff: number) {
-  if (diff > 0) return { label: `Излишек ${formatMoney(diff)}`, color: 'text-green-600', Icon: TrendingUp };
-  if (diff < 0) return { label: `Недостача ${formatMoney(Math.abs(diff))}`, color: 'text-red-600', Icon: TrendingDown };
-  return { label: 'Касса сходится', color: 'text-gray-700', Icon: Scale };
+function diffMeta(diff: number): { label: string; tone: Tone; Icon: typeof Scale } {
+  if (diff > 0) return { label: `Излишек ${formatMoney(diff)}`, tone: 'ok', Icon: TrendingUp };
+  if (diff < 0) return { label: `Недостача ${formatMoney(Math.abs(diff))}`, tone: 'bad', Icon: TrendingDown };
+  return { label: 'Касса сходится', tone: 'neutral', Icon: Scale };
+}
+
+const toneTextCls: Record<Tone, string> = {
+  neutral: 'text-ink',
+  accent: 'text-accent-text',
+  ok: 'text-ok-text',
+  warn: 'text-warn-text',
+  bad: 'text-bad-text',
+  info: 'text-info-text',
+};
+
+/** Строка Z-отчёта: подпись слева, сумма справа табличными цифрами. */
+function ReportRow({ label, value, strong, tone }: { label: string; value: ReactNode; strong?: boolean; tone?: Tone }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-line py-2 last:border-0">
+      <span className={cn('text-sm', strong ? 'font-semibold text-ink' : 'text-ink-2')}>{label}</span>
+      <span
+        className={cn(
+          'text-sm tabular-nums',
+          strong ? 'font-semibold' : 'font-medium',
+          tone ? toneTextCls[tone] : 'text-ink',
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
 }
 
 /** Printable-friendly full Z-report document. Reused for history + post-close. */
@@ -51,55 +91,42 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
   const timeZone = useTenantTimezone();
   const s = report.shift;
   const closed = s.status === 'closed';
-  const Row = ({ label, value, strong, color }: { label: string; value: string; strong?: boolean; color?: string }) => (
-    <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
-      <span className={`text-sm ${strong ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>{label}</span>
-      <span className={`text-sm tabular-nums ${strong ? 'font-bold' : 'font-medium'} ${color || 'text-gray-900'}`}>
-        {value}
-      </span>
-    </div>
-  );
+  const diff = report.difference != null ? diffMeta(report.difference) : null;
 
   return (
     <div className="space-y-5 print:text-black">
-      {/* Header */}
-      <div className="text-center pb-2">
-        <h3 className="text-lg font-bold text-gray-900">Z-отчёт по кассовой смене</h3>
-        <p className="text-xs text-gray-500 mt-1">
+      <div className="pb-1 text-center">
+        <h3 className="text-md font-semibold text-ink">Z-отчёт по кассовой смене</h3>
+        <p className="mt-1 text-xs tabular-nums text-ink-3">
           {formatDateTime(report.windowStart, timeZone)} —{' '}
           {closed && s.closedAt ? formatDateTime(s.closedAt, timeZone) : 'смена открыта'}
         </p>
-        <span
-          className={`inline-flex items-center gap-1 mt-2 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            closed ? 'bg-gray-100 text-gray-600' : 'bg-green-50 text-green-700'
-          }`}
-        >
-          {closed ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-          {closed ? 'Закрыта' : 'Открыта'}
-        </span>
+        <div className="mt-2 flex justify-center">
+          <StatusPill tone={closed ? 'neutral' : 'ok'} live={!closed}>
+            {closed ? 'Закрыта' : 'Открыта'}
+          </StatusPill>
+        </div>
       </div>
 
-      {/* Meta */}
-      <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 space-y-1">
-        {/* Автосервис смены (161). У мульти-точечного тенанта Z-отчёт без
-            подписи неотличим от отчёта соседнего филиала — а цифры в нём
-            разные, и печатают его как документ. */}
+      <div className="space-y-1.5 rounded-lg bg-surface-2 p-3 text-xs text-ink-2">
+        {/* Автосервис смены (161): у мульти-точечного тенанта Z-отчёт без
+            подписи неотличим от отчёта соседнего филиала. */}
         {s.pointId && (
           <div className="flex items-center justify-between gap-2">
             <span>Автосервис</span>
             <PointBadge pointId={s.pointId} />
           </div>
         )}
-        <div className="flex justify-between">
+        <div className="flex justify-between gap-2">
           <span>Открыл</span>
-          <span className="font-medium text-gray-800">
+          <span className="font-medium text-ink">
             {s.openedByName || '—'} · {formatDateTime(s.openedAt, timeZone)}
           </span>
         </div>
         {closed && (
-          <div className="flex justify-between">
+          <div className="flex justify-between gap-2">
             <span>Закрыл</span>
-            <span className="font-medium text-gray-800">
+            <span className="font-medium text-ink">
               {s.closedByName || '—'}
               {s.closedAt ? ` · ${formatDateTime(s.closedAt, timeZone)}` : ''}
             </span>
@@ -107,65 +134,58 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
         )}
       </div>
 
-      {/* Reconciliation */}
       <div>
-        <Row label="Разменная касса (открытие)" value={formatMoney(report.openingAmount)} />
-        <Row label="Выручка наличными" value={formatMoney(report.cashSales)} color="text-green-600" />
-        <Row label="Выручка картой" value={formatMoney(report.cardSales)} color="text-blue-600" />
-        <Row label="Общая выручка" value={formatMoney(report.totalRevenue)} />
-        <Row label="Расходы из кассы" value={`− ${formatMoney(report.cashExpenses)}`} color="text-rose-600" />
-        <Row label="Инкассация" value={`− ${formatMoney(report.collectionsTotal)}`} color="text-amber-600" />
-        <Row label="Чеков за смену" value={String(report.checksCount)} />
-        <Row label="Расчётный остаток в кассе" value={formatMoney(report.expectedAmount)} strong />
-        <Row
+        <ReportRow label="Разменная касса (открытие)" value={formatMoney(report.openingAmount)} />
+        <ReportRow label="Выручка наличными" value={formatMoney(report.cashSales)} tone="ok" />
+        <ReportRow label="Выручка картой" value={formatMoney(report.cardSales)} tone="accent" />
+        <ReportRow label="Общая выручка" value={formatMoney(report.totalRevenue)} />
+        <ReportRow label="Расходы из кассы" value={`− ${formatMoney(report.cashExpenses)}`} tone="bad" />
+        <ReportRow label="Инкассация" value={`− ${formatMoney(report.collectionsTotal)}`} tone="warn" />
+        <ReportRow label="Чеков за смену" value={String(report.checksCount)} />
+        <ReportRow label="Расчётный остаток в кассе" value={formatMoney(report.expectedAmount)} strong />
+        <ReportRow
           label="Фактический нал при закрытии"
           value={report.factualAmount == null ? '—' : formatMoney(report.factualAmount)}
           strong
         />
         {/* 155 — распределение нала при закрытии: сейф / размен на завтра */}
         {s.toSafeAmount != null && (
-          <Row label="Переведено в сейф" value={formatMoney(s.toSafeAmount)} color="text-amber-600" />
+          <ReportRow label="Переведено в сейф" value={formatMoney(s.toSafeAmount)} tone="warn" />
         )}
-        {s.carryoverAmount != null && (
-          <Row label="Осталось на размен" value={formatMoney(s.carryoverAmount)} color="text-gray-700" />
-        )}
+        {s.carryoverAmount != null && <ReportRow label="Осталось на размен" value={formatMoney(s.carryoverAmount)} />}
       </div>
 
-      {/* Difference */}
-      {report.difference != null && (
-        <div className="rounded-xl border border-gray-200 p-3 flex items-center justify-between">
-          <span className="text-sm font-semibold text-gray-700">Расхождение</span>
-          {(() => {
-            const m = diffMeta(report.difference);
-            return (
-              <span className={`flex items-center gap-1.5 text-base font-bold ${m.color}`}>
-                <m.Icon className="h-4 w-4" />
-                {m.label}
-              </span>
-            );
-          })()}
+      {diff && (
+        <div className="flex items-center justify-between rounded-lg border border-line p-3">
+          <span className="text-sm font-semibold text-ink">Расхождение</span>
+          <span
+            className={cn('flex items-center gap-1.5 text-base font-semibold tabular-nums', toneTextCls[diff.tone])}
+          >
+            <diff.Icon className="h-4 w-4" aria-hidden="true" />
+            {diff.label}
+          </span>
         </div>
       )}
 
       {/* 155 — разбивка выручки по принявшим оплату (checks.accepted_by) */}
       {(report.perAcceptor?.length ?? 0) > 0 && (
         <div>
-          <p className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5">
-            <Users className="h-3.5 w-3.5 text-gray-400" /> По сотрудникам
+          <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-ink">
+            <Users className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" /> По сотрудникам
           </p>
-          <div className="space-y-1">
+          <div>
             {report.perAcceptor!.map((a) => (
               <div
                 key={a.userId ?? '__none__'}
-                className="flex items-center justify-between gap-3 text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0"
+                className="flex items-center justify-between gap-3 border-b border-line py-1.5 text-xs text-ink-2 last:border-0"
               >
                 <span className="min-w-0 truncate">
                   {a.name || 'Не распределено'} · {a.checksCount} чек.
                 </span>
                 <span className="flex-shrink-0 tabular-nums">
-                  <span className="font-medium text-green-600">нал {formatMoney(a.cashSales)}</span>
-                  <span className="text-gray-300 mx-1">·</span>
-                  <span className="font-medium text-blue-600">карта {formatMoney(a.cardSales)}</span>
+                  <span className="font-medium text-ok-text">нал {formatMoney(a.cashSales)}</span>
+                  <span className="mx-1 text-ink-3">·</span>
+                  <span className="font-medium text-accent-text">карта {formatMoney(a.cardSales)}</span>
                 </span>
               </div>
             ))}
@@ -176,22 +196,22 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
       {/* 155 — фактическая сдача по сотрудникам при закрытии */}
       {(report.settlements?.length ?? 0) > 0 && (
         <div>
-          <p className="text-sm font-semibold text-gray-900 mb-2">Сдано</p>
-          <div className="space-y-1">
+          <p className="mb-2 text-sm font-semibold text-ink">Сдано</p>
+          <div>
             {report.settlements!.map((st) => {
               const d = st.actualAmount - st.expectedAmount;
               return (
                 <div
                   key={st.userId ?? '__none__'}
-                  className="flex items-center justify-between gap-3 text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0"
+                  className="flex items-center justify-between gap-3 border-b border-line py-1.5 text-xs text-ink-2 last:border-0"
                 >
                   <span className="min-w-0 truncate">
                     {st.name || 'Не распределено'} · расчётно {formatMoney(st.expectedAmount)}
                   </span>
                   <span className="flex-shrink-0 tabular-nums">
-                    <span className="font-medium text-gray-900">{formatMoney(st.actualAmount)}</span>
+                    <span className="font-medium text-ink">{formatMoney(st.actualAmount)}</span>
                     {d !== 0 && (
-                      <span className={`ml-1.5 font-medium ${d > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <span className={cn('ml-1.5 font-medium', d > 0 ? 'text-ok-text' : 'text-bad-text')}>
                         ({d > 0 ? '+' : '−'}
                         {formatMoney(Math.abs(d))})
                       </span>
@@ -204,54 +224,62 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
         </div>
       )}
 
-      {/* Collections breakdown */}
       {report.collections.length > 0 && (
         <div>
-          <p className="text-sm font-semibold text-gray-900 mb-2">Инкассации</p>
-          <div className="space-y-1">
+          <p className="mb-2 text-sm font-semibold text-ink">Инкассации</p>
+          <div>
             {report.collections.map((c) => (
               <div
                 key={c.id}
-                className="flex items-center justify-between text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0"
+                className="flex items-center justify-between gap-3 border-b border-line py-1.5 text-xs text-ink-2 last:border-0"
               >
-                <span>
-                  {formatDateTime(c.collectedAt)}
+                <span className="min-w-0 truncate">
+                  {formatDateTime(c.collectedAt, timeZone)}
                   {c.collectedByName ? ` · ${c.collectedByName}` : ''}
                   {c.note ? ` · ${c.note}` : ''}
                 </span>
-                <span className="font-medium text-amber-600 tabular-nums">{formatMoney(c.amount)}</span>
+                <span className="flex-shrink-0 font-medium tabular-nums text-warn-text">{formatMoney(c.amount)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {s.note && <p className="text-xs text-gray-500 italic">Примечание: {s.note}</p>}
+      {s.note && <p className="text-xs text-ink-3">Примечание: {s.note}</p>}
     </div>
   );
 }
 
-function StatCard({
-  icon: Icon,
-  label,
+/** Денежное поле модалок: текст + inputMode decimal (не type=number — колесо мыши не меняет сумму). */
+function AmountInput({
+  id,
   value,
-  color,
-  valueColor,
+  onChange,
+  autoFocus,
+  ariaLabel,
+  className,
 }: {
-  icon: typeof Wallet;
-  label: string;
+  id?: string;
   value: string;
-  color: string;
-  valueColor: string;
+  onChange: (v: string) => void;
+  autoFocus?: boolean;
+  ariaLabel?: string;
+  className?: string;
 }) {
   return (
-    <div className="stat-card">
-      <div className="flex items-center gap-2 mb-1">
-        <Icon className={`w-4 h-4 ${color}`} />
-        <div className="stat-label">{label}</div>
-      </div>
-      <div className={`stat-value tabular-nums ${valueColor}`}>{value}</div>
-    </div>
+    <Input
+      id={id}
+      type="text"
+      inputMode="decimal"
+      autoComplete="off"
+      autoFocus={autoFocus}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="0"
+      aria-label={ariaLabel}
+      className={cn('text-right tabular-nums', className)}
+      rightSlot={<span className="text-xs font-medium text-ink-3">₽</span>}
+    />
   );
 }
 
@@ -268,7 +296,15 @@ export default function CashShiftPage() {
   // (backend POST /cash-shifts/*, волна Битрикс24). Просмотр статуса — всем.
   const canManage = hasPermission('cash_shifts_manage');
 
-  const [page, setPage] = useState(1);
+  // Страница истории — в URL (?page=), чтобы F5 возвращал на то же место.
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
+  const setPage = (p: number) => {
+    const next = new URLSearchParams(params);
+    if (p <= 1) next.delete('page');
+    else next.set('page', String(p));
+    setParams(next, { replace: true });
+  };
   const [reportShiftId, setReportShiftId] = useState<string | null>(null);
 
   // Modal state
@@ -323,7 +359,12 @@ export default function CashShiftPage() {
   // 155 — СЕЙФ (отдельный кошелёк тенанта): баланс + история операций.
   // Чтение гейтится сервером (cash_shifts_manage / owner-class); на старом
   // бэкенде эндпоинта нет — секция просто не рендерится (data отсутствует).
-  const { data: safeState } = useQuery({
+  const {
+    data: safeState,
+    isError: safeError,
+    refetch: refetchSafe,
+    isFetching: safeFetching,
+  } = useQuery({
     queryKey: ['cash-shift', 'safe'],
     queryFn: () => cashShiftsApi.safe().then((r) => r.data),
     enabled: canManage,
@@ -342,11 +383,8 @@ export default function CashShiftPage() {
       setNoteInput('');
       refresh();
     },
-    // Смена открывается в филиале СЕССИИ (163): «на всю сеть» её открыть
-    // нельзя было и раньше, но теперь это невозможно по построению — отказ
-    // 400 «Выберите филиал…» ушёл вместе с режимом общей сводки. Текст сервера
-    // показываем и дальше: у отказа бывают другие причины (смена уже открыта,
-    // нет права), и глухое «Не удалось открыть смену» их бы съело.
+    // Текст сервера показываем дословно: у отказа бывают разные причины (смена
+    // уже открыта, нет права), и глухое «Не удалось открыть смену» их бы съело.
     onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Не удалось открыть смену', { duration: 8000 }),
   });
 
@@ -360,7 +398,7 @@ export default function CashShiftPage() {
       setNoteInput('');
       refresh();
     },
-    onError: () => toast.error('Не удалось записать инкассацию'),
+    onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Не удалось записать инкассацию'),
   });
 
   const closeMutation = useMutation({
@@ -415,22 +453,11 @@ export default function CashShiftPage() {
   /**
    * МОЖНО ЛИ ТРОГАТЬ ЭТУ СМЕНУ — доказательство, а не предположение.
    *
-   * Кассовая смена принадлежит КОНКРЕТНОМУ автосервису (161): её Z-отчёт
-   * считает чеки и расходы только этой точки, а закрытие пишет туда же
-   * фактический нал, недостачу, перевод в сейф и сдачи по сотрудникам. Закрыть
-   * чужую смену — значит вписать свои деньги в чужой отчёт и оставить свой
-   * автосервис с незакрытой сменой.
-   *
-   * Сервер режет смены филиалом сессии строгим равенством
-   * (cash-shifts.service → pointFilterSql), НО фильтр отключается, когда у
-   * сессии филиала нет (`pointId` в токене пуст: сборка до 163 либо вход
-   * состоялся раньше, чем суперадмин завёл тенанту первый филиал). Тогда
-   * `current()` отдаёт ЛЮБУЮ открытую смену тенанта — в том числе соседнего
-   * автосервиса. Поэтому у мульти-точечного тенанта действия разрешены только
-   * при ДОКАЗАННОМ совпадении «филиал смены = филиал сессии».
-   *
-   * У одноточечного тенанта (`multiPoint` = false) всё остаётся как было:
-   * филиала нет ни у сессии, ни у смены, и доказывать нечего.
+   * Кассовая смена принадлежит КОНКРЕТНОМУ автосервису (161). Сервер режет
+   * смены филиалом сессии, НО фильтр отключается, когда у сессии филиала нет
+   * (`pointId` в токене пуст). Тогда `current()` отдаёт ЛЮБУЮ открытую смену
+   * тенанта — в том числе соседнего автосервиса. Поэтому у мульти-точечного
+   * тенанта действия разрешены только при ДОКАЗАННОМ совпадении.
    */
   const foreignShiftReason: string | null = (() => {
     if (!shift || !multiPoint) return null;
@@ -521,10 +548,120 @@ export default function CashShiftPage() {
     });
   };
 
+  const openOpenModal = () => {
+    setOpeningInput('');
+    setNoteInput('');
+    setOpenModal(true);
+  };
+  const openCollectModal = () => {
+    setCollectInput('');
+    setNoteInput('');
+    setCollectModal(true);
+  };
+  const openCloseModal = () => {
+    setClosingInput('');
+    setNoteInput('');
+    setToSafeInput('');
+    setSettleInputs({});
+    setCloseModal(true);
+  };
+
+  const canActOnShift = hasOpenShift && canManage && !foreignShiftReason;
+
+  // ─── История: колонки ──────────────────────────────────────────────────────
+  const historyColumns = useMemo<DataTableColumn<CashShift>[]>(
+    () => [
+      {
+        key: 'period',
+        header: 'Смена',
+        primary: true,
+        render: (s) => {
+          const closed = s.status === 'closed';
+          return (
+            <span className="flex items-center gap-2">
+              <span
+                className={cn(
+                  'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
+                  closed ? 'bg-surface-3 text-ink-3' : 'bg-ok-soft text-ok',
+                )}
+              >
+                {closed ? (
+                  <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Unlock className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </span>
+              <span className="tabular-nums">
+                {formatDateTime(s.openedAt, timeZone)}
+                {closed && s.closedAt ? ` — ${formatDateTime(s.closedAt, timeZone)}` : ''}
+              </span>
+            </span>
+          );
+        },
+      },
+      {
+        key: 'point',
+        header: 'Автосервис',
+        hideBelow: 'lg',
+        // Автосервис строки (161): в истории мульти-точечного тенанта
+        // соседствуют смены разных автосервисов. PointBadge сам молчит у
+        // одноточечного тенанта.
+        render: (s) => <PointBadge pointId={s.pointId} />,
+      },
+      { key: 'openedBy', header: 'Открыл', hideBelow: 'md', render: (s) => s.openedByName || '—' },
+      {
+        key: 'opening',
+        header: 'Разменная',
+        numeric: true,
+        hideBelow: 'sm',
+        render: (s) => <Money value={s.openingAmount} />,
+      },
+      {
+        key: 'diff',
+        header: 'Расхождение',
+        numeric: true,
+        render: (s) => {
+          if (s.status !== 'closed')
+            return (
+              <StatusPill tone="ok" live>
+                Открыта
+              </StatusPill>
+            );
+          if (s.difference == null) return <span className="text-ink-3">—</span>;
+          return <Money value={s.difference} signed colorize className="font-semibold" />;
+        },
+      },
+    ],
+    [timeZone],
+  );
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Кассовая смена" icon={Wallet} />
+    <div className="space-y-5">
+      <PageHeader
+        title="Кассовая смена"
+        icon={Wallet}
+        subtitle={
+          currentLoading
+            ? 'Z-отчёт, инкассация и сейф'
+            : hasOpenShift && shift
+              ? `Открыта ${formatDateTime(shift.openedAt, timeZone)}${shift.openedByName ? ` · ${shift.openedByName}` : ''}`
+              : 'Открытой смены нет'
+        }
+        // Один primary на экран: пока смены нет, «Открыть смену» живёт в карточке
+        // состояния ниже; действия открытой смены — здесь.
+        actions={
+          !currentLoading && !currentError && canActOnShift ? (
+            <>
+              <Button variant="secondary" icon={ArrowDownToLine} onClick={openCollectModal}>
+                Инкассация
+              </Button>
+              <Button icon={Lock} onClick={openCloseModal}>
+                Закрыть смену
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
 
       {/* Current shift — a fetch FAILURE must show error+retry, never fall
           through to «Открытая смена отсутствует» (which invites opening a
@@ -534,401 +671,353 @@ export default function CashShiftPage() {
         isError={currentError}
         onRetry={refetchCurrent}
         isFetching={currentFetching}
-        minHeight="min-h-[30vh]"
+        loader={
+          <div
+            className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
+            aria-busy="true"
+            aria-label="Загрузка смены"
+          >
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-24" />
+            ))}
+          </div>
+        }
+        errorTitle="Не удалось загрузить смену"
       >
         {hasOpenShift && currentReport ? (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                  <Unlock className="h-3 w-3" /> Смена открыта
+          <Card padding="none">
+            <CardHeader
+              icon={Unlock}
+              iconTone="ok"
+              title={
+                <span className="flex flex-wrap items-center gap-2">
+                  Смена открыта
+                  <PointBadge pointId={shift?.pointId} />
                 </span>
-                {/* Чей это автосервис — рядом со статусом, до всех цифр: у
-                    мульти-точечного тенанта карточка без подписи неотличима от
-                    карточки соседнего филиала (161). */}
-                <PointBadge pointId={shift?.pointId} />
-                <span className="text-sm text-gray-500">
-                  {shift?.openedByName ? `${shift.openedByName} · ` : ''}
-                  {shift ? formatDateTime(shift.openedAt, timeZone) : ''}
-                </span>
-              </div>
-              <button onClick={() => setReportShiftId(currentReport.shift.id)} className="btn-ghost btn-sm">
-                <Receipt className="w-4 h-4" /> Подробный Z-отчёт
-              </button>
-            </div>
-
-            {/* Live Z-report cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              <StatCard
-                icon={Banknote}
-                label="Нал. выручка"
-                value={formatMoney(currentReport.cashSales)}
-                color="text-green-500"
-                valueColor="text-green-600"
-              />
-              <StatCard
-                icon={CreditCard}
-                label="Карта"
-                value={formatMoney(currentReport.cardSales)}
-                color="text-blue-500"
-                valueColor="text-blue-600"
-              />
-              <StatCard
-                icon={ArrowDownToLine}
-                label="Инкассация"
-                value={formatMoney(currentReport.collectionsTotal)}
-                color="text-amber-500"
-                valueColor="text-amber-600"
-              />
-              <StatCard
-                icon={Wallet}
-                label="Расходы"
-                value={formatMoney(currentReport.cashExpenses)}
-                color="text-rose-500"
-                valueColor="text-rose-600"
-              />
-              <StatCard
-                icon={Receipt}
-                label="Чеков"
-                value={String(currentReport.checksCount)}
-                color="text-gray-500"
-                valueColor="text-gray-900"
-              />
-              <StatCard
-                icon={Unlock}
-                label="Разменная"
-                value={formatMoney(currentReport.openingAmount)}
-                color="text-gray-500"
-                valueColor="text-gray-900"
-              />
-              <StatCard
-                icon={Scale}
-                label="Расчётный остаток"
-                value={formatMoney(currentReport.expectedAmount)}
-                color="text-primary-500"
-                valueColor="text-primary-700"
-              />
-              <StatCard
-                icon={TrendingUp}
-                label="Общая выручка"
-                value={formatMoney(currentReport.totalRevenue)}
-                color="text-indigo-500"
-                valueColor="text-indigo-700"
-              />
-            </div>
-
-            {/* Actions */}
-            {foreignShiftReason ? (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">{foreignShiftReason}</p>
-            ) : canManage ? (
-              <div className="flex flex-col sm:flex-row gap-3">
-                <button
-                  onClick={() => {
-                    setCollectInput('');
-                    setNoteInput('');
-                    setCollectModal(true);
-                  }}
-                  className="btn-secondary flex-1 justify-center"
+              }
+              subtitle={
+                shift
+                  ? `${shift.openedByName ? `${shift.openedByName} · ` : ''}${formatDateTime(shift.openedAt, timeZone)}`
+                  : undefined
+              }
+              actions={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={Receipt}
+                  onClick={() => setReportShiftId(currentReport.shift.id)}
                 >
-                  <ArrowDownToLine className="w-4 h-4" /> Инкассация
-                </button>
-                <button
-                  onClick={() => {
-                    setClosingInput('');
-                    setNoteInput('');
-                    setToSafeInput('');
-                    setSettleInputs({});
-                    setCloseModal(true);
-                  }}
-                  className="btn-primary flex-1 justify-center"
-                >
-                  <Lock className="w-4 h-4" /> Закрыть смену
-                </button>
+                  Z-отчёт
+                </Button>
+              }
+            />
+            <CardBody className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                <StatCard
+                  compact
+                  icon={Banknote}
+                  label="Наличными"
+                  value={formatMoney(currentReport.cashSales)}
+                  tone="ok"
+                />
+                <StatCard compact icon={CreditCard} label="Картой" value={formatMoney(currentReport.cardSales)} />
+                <StatCard
+                  compact
+                  icon={ArrowDownToLine}
+                  label="Инкассация"
+                  value={formatMoney(currentReport.collectionsTotal)}
+                />
+                <StatCard
+                  compact
+                  icon={Wallet}
+                  label="Расходы из кассы"
+                  value={formatMoney(currentReport.cashExpenses)}
+                />
+                <StatCard compact icon={Receipt} label="Чеков" value={String(currentReport.checksCount)} />
+                <StatCard compact icon={Unlock} label="Разменная" value={formatMoney(currentReport.openingAmount)} />
+                <StatCard
+                  compact
+                  icon={TrendingUp}
+                  label="Общая выручка"
+                  value={formatMoney(currentReport.totalRevenue)}
+                />
+                <StatCard
+                  compact
+                  icon={Scale}
+                  label="Расчётный остаток"
+                  value={formatMoney(currentReport.expectedAmount)}
+                  tone="accent"
+                />
               </div>
-            ) : (
-              <p className="text-xs text-gray-400">Открытие и закрытие смены доступно директору и администратору.</p>
-            )}
-          </div>
+
+              {foreignShiftReason ? (
+                <p
+                  role="status"
+                  className="rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-sm text-warn-text"
+                >
+                  {foreignShiftReason}
+                </p>
+              ) : (
+                !canManage && (
+                  <p className="text-xs text-ink-3">Открытие и закрытие смены доступно директору и администратору.</p>
+                )
+              )}
+            </CardBody>
+          </Card>
         ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center space-y-4">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
-              <Lock className="h-6 w-6 text-gray-400" />
+          <Card padding="md" className="text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-surface-3">
+              <Lock className="h-5 w-5 text-ink-4" aria-hidden="true" />
             </div>
-            <div>
-              <p className="text-base font-semibold text-gray-900">Открытая смена отсутствует</p>
-              <p className="text-sm text-gray-500 mt-1">Откройте смену, чтобы вести Z-отчёт и инкассацию.</p>
-            </div>
-            {canManage ? (
-              <button
-                onClick={() => {
-                  setOpeningInput('');
-                  setNoteInput('');
-                  setOpenModal(true);
-                }}
-                className="btn-primary mx-auto"
-              >
-                <Unlock className="w-4 h-4" /> Открыть смену
-              </button>
-            ) : (
-              <p className="text-xs text-gray-400">Открытие смены доступно директору и администратору.</p>
+            <p className="mt-3 text-md font-semibold text-ink">Открытой смены нет</p>
+            <p className="mt-1 text-sm text-ink-3">
+              {canManage
+                ? 'Откройте смену, чтобы вести Z-отчёт и инкассацию.'
+                : 'Открытие смены доступно директору и администратору.'}
+            </p>
+            {canManage && (
+              <Button icon={Unlock} onClick={openOpenModal} className="mt-4">
+                Открыть смену
+              </Button>
             )}
-          </div>
+          </Card>
         )}
       </QueryState>
 
-      {/* 155 — СЕЙФ: отдельный кошелёк тенанта. Карточка появляется только
-          когда бэкенд отдаёт баланс (SafeState либо safeBalance в Z-отчёте);
-          гейт кнопки — как у существующих кнопок инкассации (canManage). */}
-      {safeBalance != null && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
-                <Landmark className="h-5 w-5 text-amber-600" />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">Сейф</p>
-                <p className="text-xl font-bold text-gray-900 tabular-nums">{formatMoney(safeBalance)}</p>
-              </div>
-            </div>
-            {canManage && (
-              <button
-                onClick={() => {
-                  setSafeCollectInput('');
-                  setNoteInput('');
-                  setSafeCollectModal(true);
-                }}
-                disabled={safeBalance <= 0}
-                className="btn-secondary"
-              >
-                <ArrowDownToLine className="w-4 h-4" /> Инкассация из сейфа
-              </button>
-            )}
-          </div>
-
-          {(safeState?.transactions?.length ?? 0) > 0 && (
-            <div>
-              <p className="text-sm font-semibold text-gray-900 mb-2">История операций</p>
-              <div className="divide-y divide-gray-100">
-                {safeState!.transactions.slice(0, 10).map((t: SafeTransaction) => {
-                  const isOut = t.type === 'collection' || (t.type === 'adjustment' && t.amount < 0);
-                  const label =
-                    t.type === 'deposit'
-                      ? 'Из кассы (закрытие смены)'
-                      : t.type === 'collection'
-                        ? 'Инкассация'
-                        : 'Корректировка';
-                  return (
-                    <div key={t.id} className="flex items-center justify-between gap-3 py-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {/* Пояс автосервиса, как и у остального времени на
-                              странице: без него операция сейфа, проведённая в
-                              23:40, у бухгалтера из другого региона вставала на
-                              соседние сутки. */}
-                          {formatDateTime(t.createdAt, timeZone)}
-                          {t.actorName ? ` · ${t.actorName}` : ''}
-                          {t.note ? ` · ${t.note}` : ''}
-                        </p>
-                      </div>
-                      <span
-                        className={`flex-shrink-0 text-sm font-semibold tabular-nums ${
-                          isOut ? 'text-amber-600' : 'text-green-600'
-                        }`}
-                      >
-                        {isOut ? '−' : '+'}
-                        {formatMoney(Math.abs(t.amount))}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* History */}
-      <div className="space-y-3">
-        <h2 className="text-lg font-semibold text-gray-900">История смен</h2>
-        <QueryState
-          isLoading={historyLoading}
-          isError={historyError}
-          onRetry={refetchHistory}
-          isFetching={historyFetching}
-          isEmpty={!history || history.data.length === 0}
-          empty={{ icon: Wallet, title: 'Нет смен', description: 'Закрытые смены появятся здесь' }}
-          minHeight="min-h-[30vh]"
+      {/* 155 — СЕЙФ: отдельный кошелёк тенанта. Карточка появляется, когда
+          бэкенд отдаёт баланс; при ошибке запроса — честная строка. */}
+      {canManage && safeError && safeBalance == null ? (
+        <p
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-lg border border-bad/20 bg-bad-soft px-3.5 py-3 text-sm text-bad-text"
         >
-          <>
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
-              {history?.data.map((s: CashShift) => {
-                const closed = s.status === 'closed';
-                const diff = s.difference;
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => setReportShiftId(s.id)}
-                    className="w-full flex items-center gap-4 px-4 py-3.5 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors"
+          Не удалось загрузить сейф
+          <Button variant="secondary" size="sm" onClick={() => refetchSafe()} loading={safeFetching}>
+            Повторить
+          </Button>
+        </p>
+      ) : safeBalance != null ? (
+        <Card padding="none">
+          <CardHeader
+            icon={Landmark}
+            iconTone="warn"
+            title="Сейф"
+            subtitle="Наличные вне кассового ящика"
+            actions={
+              <>
+                <Money value={safeBalance} className="text-lg font-semibold text-ink" />
+                {canManage && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={ArrowDownToLine}
+                    onClick={() => {
+                      setSafeCollectInput('');
+                      setNoteInput('');
+                      setSafeCollectModal(true);
+                    }}
+                    disabled={safeBalance <= 0}
                   >
-                    <div
-                      className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${closed ? 'bg-gray-100' : 'bg-green-50'}`}
-                    >
-                      {closed ? (
-                        <Lock className="h-5 w-5 text-gray-500" />
-                      ) : (
-                        <Unlock className="h-5 w-5 text-green-600" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-gray-900 truncate">
-                        {formatDateTime(s.openedAt, timeZone)}
-                        {closed && s.closedAt ? ` — ${formatDateTime(s.closedAt, timeZone)}` : ''}
+                    Инкассация из сейфа
+                  </Button>
+                )}
+              </>
+            }
+          />
+          {(safeState?.transactions?.length ?? 0) > 0 && (
+            <ul className="divide-y divide-line">
+              {safeState!.transactions.slice(0, 10).map((t: SafeTransaction) => {
+                const isOut = t.type === 'collection' || (t.type === 'adjustment' && t.amount < 0);
+                const label =
+                  t.type === 'deposit'
+                    ? 'Из кассы (закрытие смены)'
+                    : t.type === 'collection'
+                      ? 'Инкассация'
+                      : 'Корректировка';
+                return (
+                  <li key={t.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-ink">{label}</p>
+                      <p className="truncate text-xs tabular-nums text-ink-3">
+                        {formatDateTime(t.createdAt, timeZone)}
+                        {t.actorName ? ` · ${t.actorName}` : ''}
+                        {t.note ? ` · ${t.note}` : ''}
                       </p>
-                      <p className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
-                        {/* Автосервис строки (161): в истории мульти-точечного
-                            тенанта соседствуют смены разных автосервисов, и без
-                            подписи «недостача 3 000 ₽» читается как своя. */}
-                        <PointBadge pointId={s.pointId} />
-                        <span className="truncate">
-                          {s.openedByName || '—'} · Разменная {formatMoney(s.openingAmount)}
-                        </span>
-                      </p>
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      {!closed ? (
-                        <span className="badge badge-green">Открыта</span>
-                      ) : diff == null ? (
-                        <span className="text-xs text-gray-400">—</span>
-                      ) : (
-                        <span className={`text-sm font-semibold tabular-nums ${diffMeta(diff).color}`}>
-                          {diff > 0 ? '+' : diff < 0 ? '−' : ''}
-                          {formatMoney(Math.abs(diff))}
-                        </span>
-                      )}
-                    </div>
-                  </button>
+                    <Money
+                      value={isOut ? -Math.abs(t.amount) : Math.abs(t.amount)}
+                      signed
+                      colorize
+                      className="text-sm font-semibold"
+                    />
+                  </li>
                 );
               })}
-            </div>
+            </ul>
+          )}
+        </Card>
+      ) : null}
+
+      {/* История смен */}
+      <Card padding="none">
+        <CardHeader
+          icon={History}
+          iconTone="neutral"
+          title="История смен"
+          subtitle="Нажмите на смену, чтобы открыть её Z-отчёт"
+          divider={false}
+        />
+        <DataTable
+          bare
+          caption="История кассовых смен"
+          columns={historyColumns}
+          rows={history?.data ?? []}
+          rowKey={(s) => s.id}
+          onRowClick={(s) => setReportShiftId(s.id)}
+          rowLabel={(s) => `Z-отчёт за ${formatDateTime(s.openedAt, timeZone)}`}
+          isLoading={historyLoading}
+          isError={historyError}
+          onRetry={() => refetchHistory()}
+          isFetching={historyFetching}
+          emptyState={{ icon: Wallet, title: 'Смен пока не было', description: 'Закрытые смены появятся здесь' }}
+        />
+        {(history?.total ?? 0) > HISTORY_LIMIT && (
+          <div className="border-t border-line px-5">
             <Pagination
               page={page}
               total={history?.total ?? 0}
               limit={history?.limit ?? HISTORY_LIMIT}
               onChange={setPage}
             />
-          </>
-        </QueryState>
-      </div>
+          </div>
+        )}
+      </Card>
 
       {/* ─── Open shift modal ─── */}
-      <Modal isOpen={openModal} onClose={() => setOpenModal(false)} title="Открыть смену">
+      <Modal
+        isOpen={openModal}
+        onClose={() => setOpenModal(false)}
+        title="Открыть смену"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpenModal(false)} disabled={openMutation.isPending}>
+              Отмена
+            </Button>
+            <Button
+              icon={Unlock}
+              loading={openMutation.isPending}
+              onClick={() => {
+                const amount = parseAmount(openingInput);
+                if (Number.isNaN(amount) || amount < 0) {
+                  toast.error('Введите корректную сумму');
+                  return;
+                }
+                openMutation.mutate({ openingAmount: amount, note: noteInput.trim() || undefined });
+              }}
+            >
+              Открыть смену
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Разменная касса, ₽</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              autoFocus
-              value={openingInput}
-              onChange={(e) => setOpeningInput(e.target.value)}
-              placeholder="0"
-              className="input"
-            />
-            <p className="text-xs text-gray-400 mt-1">Наличные, которые уже лежат в кассе на момент открытия.</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
-            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
-          </div>
-          <button
-            onClick={() => {
-              const amount = parseAmount(openingInput);
-              if (Number.isNaN(amount) || amount < 0) {
-                toast.error('Введите корректную сумму');
-                return;
-              }
-              openMutation.mutate({ openingAmount: amount, note: noteInput.trim() || undefined });
-            }}
-            disabled={openMutation.isPending}
-            className="btn-primary w-full justify-center"
+          <Field
+            label="Разменная касса"
+            htmlFor="open-amount"
+            hint="Наличные, которые уже лежат в кассе на момент открытия."
           >
-            <Unlock className="w-4 h-4" /> {openMutation.isPending ? 'Открываем…' : 'Открыть смену'}
-          </button>
+            <AmountInput id="open-amount" value={openingInput} onChange={setOpeningInput} autoFocus />
+          </Field>
+          <Field label="Примечание" htmlFor="open-note" hint="Необязательно">
+            <Input id="open-note" value={noteInput} onChange={(e) => setNoteInput(e.target.value)} />
+          </Field>
         </div>
       </Modal>
 
       {/* ─── Collect modal ─── */}
-      <Modal isOpen={collectModal} onClose={() => setCollectModal(false)} title="Инкассация">
+      <Modal
+        isOpen={collectModal}
+        onClose={() => setCollectModal(false)}
+        title="Инкассация"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCollectModal(false)} disabled={collectMutation.isPending}>
+              Отмена
+            </Button>
+            <Button
+              icon={ArrowDownToLine}
+              loading={collectMutation.isPending}
+              onClick={() => {
+                if (!shift) return;
+                const amount = parseAmount(collectInput);
+                if (Number.isNaN(amount) || amount <= 0) {
+                  toast.error('Введите корректную сумму');
+                  return;
+                }
+                collectMutation.mutate({ id: shift.id, amount, note: noteInput.trim() || undefined });
+              }}
+            >
+              Записать инкассацию
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
           {currentReport && (
-            <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 flex justify-between">
-              <span>Расчётный остаток в кассе</span>
-              <span className="font-semibold text-gray-900">{formatMoney(currentReport.expectedAmount)}</span>
+            <div className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-sm">
+              <span className="text-ink-3">Расчётный остаток в кассе</span>
+              <Money value={currentReport.expectedAmount} className="font-semibold text-ink" />
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Сумма инкассации, ₽</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              autoFocus
-              value={collectInput}
-              onChange={(e) => setCollectInput(e.target.value)}
-              placeholder="0"
-              className="input"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
-            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
-          </div>
-          <button
-            onClick={() => {
-              if (!shift) return;
-              const amount = parseAmount(collectInput);
-              if (Number.isNaN(amount) || amount <= 0) {
-                toast.error('Введите корректную сумму');
-                return;
-              }
-              collectMutation.mutate({ id: shift.id, amount, note: noteInput.trim() || undefined });
-            }}
-            disabled={collectMutation.isPending}
-            className="btn-primary w-full justify-center"
-          >
-            <ArrowDownToLine className="w-4 h-4" /> {collectMutation.isPending ? 'Записываем…' : 'Записать инкассацию'}
-          </button>
+          <Field label="Сумма инкассации" htmlFor="collect-amount">
+            <AmountInput id="collect-amount" value={collectInput} onChange={setCollectInput} autoFocus />
+          </Field>
+          <Field label="Примечание" htmlFor="collect-note" hint="Необязательно">
+            <Input id="collect-note" value={noteInput} onChange={(e) => setNoteInput(e.target.value)} />
+          </Field>
         </div>
       </Modal>
 
       {/* ─── Close modal ─── */}
-      <Modal isOpen={closeModal} onClose={() => setCloseModal(false)} title="Закрыть смену">
+      <Modal
+        isOpen={closeModal}
+        onClose={() => setCloseModal(false)}
+        title="Закрыть смену"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCloseModal(false)} disabled={closeMutation.isPending}>
+              Отмена
+            </Button>
+            <Button icon={Lock} loading={closeMutation.isPending} onClick={handleCloseSubmit}>
+              Закрыть смену
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
           {currentReport && (
-            <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 flex justify-between">
-              <span>Расчётный остаток в кассе</span>
-              <span className="font-semibold text-gray-900">{formatMoney(currentReport.expectedAmount)}</span>
+            <div className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-sm">
+              <span className="text-ink-3">Расчётный остаток в кассе</span>
+              <Money value={currentReport.expectedAmount} className="font-semibold text-ink" />
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Фактический нал в кассе, ₽</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              autoFocus
-              value={closingInput}
-              onChange={(e) => setClosingInput(e.target.value)}
-              placeholder="0"
-              className="input"
-            />
-            <p className="text-xs text-gray-400 mt-1">Пересчитайте наличные в кассе и введите фактическую сумму.</p>
-          </div>
+          <Field
+            label="Фактический нал в кассе"
+            htmlFor="close-amount"
+            hint="Пересчитайте наличные в кассе и введите фактическую сумму."
+          >
+            <AmountInput id="close-amount" value={closingInput} onChange={setClosingInput} autoFocus />
+          </Field>
           {closingPreview && (
-            <div className="rounded-xl border border-gray-200 p-3 flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-700">Расхождение</span>
-              <span className={`flex items-center gap-1.5 text-sm font-bold ${closingPreview.color}`}>
-                <closingPreview.Icon className="h-4 w-4" />
+            <div className="flex items-center justify-between rounded-lg border border-line p-3" role="status">
+              <span className="text-sm font-medium text-ink-2">Расхождение</span>
+              <span
+                className={cn(
+                  'flex items-center gap-1.5 text-sm font-semibold tabular-nums',
+                  toneTextCls[closingPreview.tone],
+                )}
+              >
+                <closingPreview.Icon className="h-4 w-4" aria-hidden="true" />
                 {closingPreview.label}
               </span>
             </div>
@@ -936,25 +1025,22 @@ export default function CashShiftPage() {
 
           {/* 155 — сдача по сотрудникам: каждый принимавший сдаёт свой нал */}
           {perAcceptor.length > 0 && (
-            <div>
-              <p className="text-sm font-medium text-gray-700 mb-2">Сдача по сотрудникам</p>
+            <fieldset className="min-w-0 border-0 p-0">
+              <legend className="mb-2 text-sm font-medium text-ink-2">Сдача по сотрудникам</legend>
               <div className="space-y-2">
                 {perAcceptor.map((a) => {
                   const key = a.userId ?? '__none__';
                   return (
                     <div key={key} className="flex items-center gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm text-gray-900 truncate">{a.name || 'Не распределено'}</p>
-                        <p className="text-[11px] text-gray-400">Расчётно наличными {formatMoney(a.cashSales)}</p>
+                        <p className="truncate text-sm text-ink">{a.name || 'Не распределено'}</p>
+                        <p className="text-xs tabular-nums text-ink-3">Расчётно наличными {formatMoney(a.cashSales)}</p>
                       </div>
-                      <input
-                        type="number"
-                        inputMode="decimal"
+                      <AmountInput
                         value={settleInputs[key] ?? ''}
-                        onChange={(e) => setSettleInputs((prev) => ({ ...prev, [key]: e.target.value }))}
-                        placeholder="0"
-                        aria-label={`Сдача: ${a.name || 'Не распределено'}`}
-                        className="input w-28 text-right tabular-nums"
+                        onChange={(v) => setSettleInputs((prev) => ({ ...prev, [key]: v }))}
+                        ariaLabel={`Сдача: ${a.name || 'Не распределено'}`}
+                        className="w-32"
                       />
                     </div>
                   );
@@ -962,98 +1048,105 @@ export default function CashShiftPage() {
               </div>
               {settlementsFilled && (
                 <div className="mt-2 flex items-center justify-between text-xs">
-                  <span className="text-gray-500">Итого сдано</span>
-                  <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(settlementsSum)}</span>
+                  <span className="text-ink-3">Итого сдано</span>
+                  <Money value={settlementsSum} className="font-semibold text-ink" />
                 </div>
               )}
-              <p className="text-[11px] text-gray-400 mt-1.5">
+              <p className="mt-1.5 text-xs text-ink-3">
                 Сумма сдач должна совпасть с фактическим налом. Оставьте поля пустыми, чтобы закрыть одной общей суммой.
               </p>
-            </div>
+            </fieldset>
           )}
 
           {/* 155 — перевод части нала в сейф; остаток — размен на завтра */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Перевести в сейф, ₽</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={toSafeInput}
-              onChange={(e) => setToSafeInput(e.target.value)}
-              placeholder="0"
-              className="input"
-            />
-            {carryoverPreview != null && (
-              <p className={`text-xs mt-1 ${carryoverPreview < 0 ? 'text-red-600' : 'text-gray-500'}`}>
-                Останется на размен: {formatMoney(carryoverPreview)}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
-            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
-          </div>
-          <button
-            onClick={handleCloseSubmit}
-            disabled={closeMutation.isPending}
-            className="btn-primary w-full justify-center"
+          <Field
+            label="Перевести в сейф"
+            htmlFor="close-safe"
+            hint={
+              carryoverPreview != null
+                ? `Останется на размен: ${formatMoney(carryoverPreview)}`
+                : 'Остаток станет разменной кассой следующей смены'
+            }
+            error={
+              carryoverPreview != null && carryoverPreview < 0
+                ? 'В сейф нельзя перевести больше фактического нала'
+                : undefined
+            }
           >
-            <Lock className="w-4 h-4" /> {closeMutation.isPending ? 'Закрываем…' : 'Закрыть смену'}
-          </button>
+            <AmountInput id="close-safe" value={toSafeInput} onChange={setToSafeInput} />
+          </Field>
+
+          <Field label="Примечание" htmlFor="close-note" hint="Необязательно">
+            <Input id="close-note" value={noteInput} onChange={(e) => setNoteInput(e.target.value)} />
+          </Field>
         </div>
       </Modal>
 
       {/* ─── Safe collect modal (155 — инкассация из сейфа) ─── */}
-      <Modal isOpen={safeCollectModal} onClose={() => setSafeCollectModal(false)} title="Инкассация из сейфа">
+      <Modal
+        isOpen={safeCollectModal}
+        onClose={() => setSafeCollectModal(false)}
+        title="Инкассация из сейфа"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setSafeCollectModal(false)}
+              disabled={safeCollectMutation.isPending}
+            >
+              Отмена
+            </Button>
+            <Button
+              icon={ArrowDownToLine}
+              loading={safeCollectMutation.isPending}
+              onClick={() => {
+                const amount = parseAmount(safeCollectInput);
+                if (Number.isNaN(amount) || amount <= 0) {
+                  toast.error('Введите корректную сумму');
+                  return;
+                }
+                if (safeBalance != null && amount > safeBalance) {
+                  toast.error('Сумма больше баланса сейфа');
+                  return;
+                }
+                safeCollectMutation.mutate({ amount, note: noteInput.trim() || undefined });
+              }}
+            >
+              Записать инкассацию
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
           {safeBalance != null && (
-            <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 flex justify-between">
-              <span>Баланс сейфа</span>
-              <span className="font-semibold text-gray-900">{formatMoney(safeBalance)}</span>
+            <div className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-sm">
+              <span className="text-ink-3">Баланс сейфа</span>
+              <Money value={safeBalance} className="font-semibold text-ink" />
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Сумма инкассации, ₽</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              autoFocus
-              value={safeCollectInput}
-              onChange={(e) => setSafeCollectInput(e.target.value)}
-              placeholder="0"
-              className="input"
-            />
-            <p className="text-xs text-gray-400 mt-1">Не больше текущего баланса сейфа.</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
-            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
-          </div>
-          <button
-            onClick={() => {
-              const amount = parseAmount(safeCollectInput);
-              if (Number.isNaN(amount) || amount <= 0) {
-                toast.error('Введите корректную сумму');
-                return;
-              }
-              if (safeBalance != null && amount > safeBalance) {
-                toast.error('Сумма больше баланса сейфа');
-                return;
-              }
-              safeCollectMutation.mutate({ amount, note: noteInput.trim() || undefined });
-            }}
-            disabled={safeCollectMutation.isPending}
-            className="btn-primary w-full justify-center"
-          >
-            <ArrowDownToLine className="w-4 h-4" />{' '}
-            {safeCollectMutation.isPending ? 'Записываем…' : 'Записать инкассацию'}
-          </button>
+          <Field label="Сумма инкассации" htmlFor="safe-amount" hint="Не больше текущего баланса сейфа.">
+            <AmountInput id="safe-amount" value={safeCollectInput} onChange={setSafeCollectInput} autoFocus />
+          </Field>
+          <Field label="Примечание" htmlFor="safe-note" hint="Необязательно">
+            <Input id="safe-note" value={noteInput} onChange={(e) => setNoteInput(e.target.value)} />
+          </Field>
         </div>
       </Modal>
 
       {/* ─── Z-report modal ─── */}
-      <Modal isOpen={!!reportShiftId} onClose={() => setReportShiftId(null)} title="Z-отчёт" size="lg">
+      <Modal
+        isOpen={!!reportShiftId}
+        onClose={() => setReportShiftId(null)}
+        title="Z-отчёт"
+        size="lg"
+        footer={
+          selectedReport ? (
+            <Button variant="secondary" icon={Printer} onClick={() => window.print()} className="print:hidden">
+              Печать
+            </Button>
+          ) : undefined
+        }
+      >
         <QueryState
           isLoading={reportLoading || (!!reportShiftId && !selectedReport && !reportError)}
           isError={reportError}
@@ -1063,13 +1156,8 @@ export default function CashShiftPage() {
           errorTitle="Не удалось загрузить Z-отчёт"
         >
           {selectedReport && (
-            <div className="space-y-4">
-              <div id="z-report-print">
-                <ZReportDocument report={selectedReport} />
-              </div>
-              <button onClick={() => window.print()} className="btn-secondary w-full justify-center print:hidden">
-                <Printer className="w-4 h-4" /> Печать
-              </button>
+            <div id="z-report-print">
+              <ZReportDocument report={selectedReport} />
             </div>
           )}
         </QueryState>

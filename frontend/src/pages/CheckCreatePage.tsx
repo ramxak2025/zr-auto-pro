@@ -1,34 +1,34 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft,
   Plus,
   Trash2,
-  Loader2,
   Search,
-  FolderOpen,
-  ChevronLeft,
   Package,
   X,
   Receipt,
   CreditCard,
   Banknote,
-  Calculator,
   Minus,
-  UserIcon,
+  UserRound,
   UserCheck,
   CalendarDays,
   Gauge,
   Pencil,
   ShieldCheck,
   ChevronDown as ChevronDownIcon,
-  Warehouse as WarehouseIcon,
   LayoutTemplate,
   BookmarkPlus,
   Tag,
   Check as CheckIcon,
+  Wrench,
+  MessageSquare,
+  MapPin,
+  Loader2,
+  ScanLine,
+  UserPlus,
+  Car as CarIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
@@ -46,9 +46,11 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { usePointsQuery } from '../hooks/usePoints';
+import { useVinEnabled } from '../hooks/useVinEnabled';
 import type {
   Client,
   Car,
+  CarLookupResult,
   User,
   Service,
   Product,
@@ -64,23 +66,46 @@ import type {
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
+import { formatMoney } from '../../../shared/utils/formatters';
+import { formatVin, isValidVin, normalizeVin } from '../../../shared/utils/vin';
+import { looksLikeRussianPlate } from '../../../shared/utils/plate';
 import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
 import LastVisitBadge from '../components/LastVisitBadge';
 import Modal from '../components/Modal';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
+import ConfirmDialog from '../components/ConfirmDialog';
 import ClientSearchAutocomplete from '../components/ClientSearchAutocomplete';
 import { TemplatePickerModal, SaveTemplateModal } from '../components/CheckTemplatesModals';
+import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
+import ClientCarQuickDrawer, { type QuickDrawerMode } from '../components/checks/ClientCarQuickDrawer';
+import ServiceCombobox from '../components/checks/ServiceCombobox';
+import MoneyInput from '../components/checks/MoneyInput';
+import VinText from '../components/checks/VinText';
+import { PlateBadge } from '../components/checks/checkBadges';
+import { carVin } from '../components/checks/vinUi';
+import { Card, CardBody, CardHeader } from '../ui/Card';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Input, controlBase, controlSize } from '../ui/Input';
+import { Select } from '../ui/Select';
+import { Field } from '../ui/Field';
+import { Textarea } from '../ui/Textarea';
+import { Checkbox } from '../ui/Checkbox';
+import { RadioGroup } from '../ui/RadioGroup';
+import { Badge } from '../ui/Badge';
+import { Money } from '../ui/Money';
+import { Skeleton } from '../ui/Skeleton';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 import { newUuid } from '../utils/uuid';
 
-const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
-};
-
 /**
- * clientRequestId \u2014 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044F \u0447\u0435\u043A\u0430 (\u0431\u044D\u043A\u0435\u043D\u0434, \u043C\u0438\u0433\u0440\u0430\u0446\u0438\u044F 111:
- * \u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C \u043E\u0434\u0438\u043D \u0447\u0435\u043A \u043D\u0430 (tenant, clientRequestId)). \u0413\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u041E\u0414\u0418\u041D \u0440\u0430\u0437 \u043D\u0430
- * \u043B\u043E\u0433\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u0441\u0430\u0431\u043C\u0438\u0442 \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u0442\u0441\u044F \u043F\u0440\u0438 \u0440\u0435\u0442\u0440\u0430\u0435 \u0442\u043E\u0433\u043E \u0436\u0435 \u0441\u0430\u0431\u043C\u0438\u0442\u0430 (\u0440\u0443\u0447\u043D\u043E\u0439 \u043F\u043E\u0432\u0442\u043E\u0440
- * \u043F\u043E\u0441\u043B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438, replay \u0438\u0437 SW-\u043E\u0444\u043B\u0430\u0439\u043D-\u043E\u0447\u0435\u0440\u0435\u0434\u0438) \u2014 \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u044B\u0439 POST \u0432\u0435\u0440\u043D\u0451\u0442 \u0423\u0416\u0415
- * \u0441\u043E\u0437\u0434\u0430\u043D\u043D\u044B\u0439 \u0447\u0435\u043A \u0432\u043C\u0435\u0441\u0442\u043E \u0434\u0443\u0431\u043B\u044F. \u0411\u044D\u043A\u0435\u043D\u0434 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 hex-UUID \u0444\u043E\u0440\u043C\u0443 (\u0438\u043D\u0430\u0447\u0435 400).
+ * clientRequestId — ключ идемпотентности создания чека (бэкенд, миграция 111:
+ * максимум один чек на (tenant, clientRequestId)). Генерируется ОДИН раз на
+ * логический сабмит и повторяется при ретрае того же сабмита (ручной повтор
+ * после ошибки, replay из SW-офлайн-очереди) — повторный POST вернёт УЖЕ
+ * созданный чек вместо дубля. Бэкенд требует hex-UUID форму (иначе 400).
  */
 function generateClientRequestId(): string {
   return newUuid();
@@ -138,30 +163,28 @@ interface ProductLineForm {
   unit?: string;
 }
 
+type PaymentMethodKey = 'cash' | 'card' | 'cash_card' | 'warranty' | 'installment';
+
+/** Строка выдачи поиска клиента: клиент (+ его машина) или результат по VIN. */
+interface SearchRow {
+  key: string;
+  client: Client | null;
+  car: Car | null;
+  vinHit?: CarLookupResult;
+}
+
 /**
  * QtyInput — поле количества строки товара (120, дробные количества).
  * Зеркало QtyInput из mobile/CheckCreateScreen.
  *
- * Старый контролируемый number-input (`value={line.quantity}` + пере-парс
- * на каждом символе) физически не давал набрать дробь: «0.» парсился в 0 →
- * `|| 0` → clamp в MIN_QTY → поле мгновенно перерисовывалось как «0.001»,
- * точка съедалась — и строка на ~0 ₽ могла тихо сохраниться. Здесь черновик
- * текста живёт локально: наверх коммитим каждое валидное значение ≥ MIN_QTY
- * (0.001), а на blur нормализуем отображение («2,» → «2», пусто/0 → откат к
- * последнему валидному). Запятая = точка, глубже 3 знаков не уходит
+ * Черновик текста живёт локально: наверх коммитим каждое валидное значение
+ * ≥ MIN_QTY (0.001), а на blur нормализуем отображение («2,» → «2», пусто/0 →
+ * откат к последнему валидному). Запятая = точка, глубже 3 знаков не уходит
  * (parseQtyInput округляет — ровно NUMERIC(12,3)). Степперы ± снаружи
  * продолжают работать: пока поле не в фокусе, внешние изменения значения
  * синхронизируются в черновик.
  */
-function QtyInput({
-  value,
-  onCommit,
-  className,
-}: {
-  value: number;
-  onCommit: (n: number) => void;
-  className?: string;
-}) {
+function QtyInput({ value, onCommit, label }: { value: number; onCommit: (n: number) => void; label: string }) {
   const [text, setText] = useState(() => formatQty(value));
   const focusedRef = useRef(false);
   useEffect(() => {
@@ -172,6 +195,7 @@ function QtyInput({
       type="text"
       inputMode="decimal"
       value={text}
+      aria-label={label}
       onChange={(e) => {
         const v = e.target.value;
         setText(v);
@@ -192,308 +216,32 @@ function QtyInput({
           onCommit(n);
         }
       }}
-      className={className}
+      className={cn(controlBase, controlSize.sm, 'w-16 text-center font-medium tabular-nums shadow-none')}
     />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Product Picker Modal
-// ---------------------------------------------------------------------------
-
-interface ProductPickerModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  products: Product[];
-  onSelectProduct: (product: Product) => void;
-  /** Available warehouses to pick from. Hidden if 0 or 1 warehouse. */
-  warehouses?: Warehouse[];
-  /** Currently selected warehouse id (controlled). */
-  selectedWarehouseId?: string;
-  /** Called when the user switches warehouse. */
-  onSelectWarehouse?: (id: string) => void;
-}
-
-const WAREHOUSE_KIND_LABELS: Record<Warehouse['kind'], string> = {
-  main: 'Основной склад',
-  defect: 'Склад брака',
-  used: 'Склад Б/У',
-};
-
-function ProductPickerModal({
-  isOpen,
-  onClose,
-  products,
-  onSelectProduct,
-  warehouses,
-  selectedWarehouseId,
-  onSelectWarehouse,
-}: ProductPickerModalProps) {
-  const [search, setSearch] = useState('');
-  const [activePath, setActivePath] = useState<string[]>([]);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (isOpen) {
-      setSearch('');
-      setActivePath([]);
-      setTimeout(() => searchInputRef.current?.focus(), 100);
-    }
-  }, [isOpen]);
-
-  // Build hierarchical folder structure from path-based categories
-  const { subfolders, currentProducts } = useMemo(() => {
-    const prefix = activePath.length > 0 ? activePath.join('/') : '';
-    const subfolderMap = new Map<string, number>();
-    const prods: Product[] = [];
-
-    for (const p of products) {
-      const cat = p.category || '';
-      const catParts = cat ? cat.split('/') : [];
-
-      if (activePath.length === 0) {
-        if (!cat) {
-          prods.push(p);
-        } else {
-          const folder = catParts[0];
-          subfolderMap.set(folder, (subfolderMap.get(folder) || 0) + 1);
-        }
-      } else {
-        if (cat === prefix) {
-          prods.push(p);
-        } else if (cat.startsWith(prefix + '/')) {
-          const rest = cat.slice(prefix.length + 1);
-          const nextSegment = rest.split('/')[0];
-          subfolderMap.set(nextSegment, (subfolderMap.get(nextSegment) || 0) + 1);
-        }
-      }
-    }
-
-    const sorted = Array.from(subfolderMap.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return { subfolders: sorted, currentProducts: prods };
-  }, [products, activePath]);
-
-  // Global search across all products
-  const searchResults = useMemo(() => {
-    if (!search.trim()) return [];
-    const q = search.trim().toLowerCase();
-    return products.filter(
-      (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
-    );
-  }, [products, search]);
-
-  const handleSelect = (product: Product) => {
-    onSelectProduct(product);
-    onClose();
-  };
-
-  const goBack = () => {
-    if (activePath.length > 0) {
-      setActivePath((prev) => prev.slice(0, -1));
-    } else {
-      onClose();
-    }
-  };
-
-  if (!isOpen) return null;
-
-  const breadcrumbLabel = activePath.length > 0 ? activePath[activePath.length - 1] : 'Товары';
-
-  return createPortal(
-    <div className="fixed inset-0 z-[9999] flex flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-        <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
-          {activePath.length > 0 ? <ChevronLeft className="w-5 h-5" /> : <X className="w-5 h-5" />}
-        </button>
-        <div className="flex-1 min-w-0">
-          {activePath.length > 0 && (
-            <div className="flex items-center gap-1 text-xs text-gray-400 mb-0.5 overflow-hidden">
-              <button type="button" onClick={() => setActivePath([])} className="hover:text-primary-600 flex-shrink-0">
-                Товары
-              </button>
-              {activePath.map((seg, idx) => (
-                <span key={idx} className="flex items-center gap-1 min-w-0">
-                  <span className="flex-shrink-0">/</span>
-                  <button
-                    type="button"
-                    onClick={() => setActivePath(activePath.slice(0, idx + 1))}
-                    className={
-                      idx === activePath.length - 1
-                        ? 'text-gray-900 font-medium truncate'
-                        : 'hover:text-primary-600 truncate'
-                    }
-                  >
-                    {seg}
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <h2 className="text-lg font-semibold text-gray-900 leading-tight truncate">{breadcrumbLabel}</h2>
-        </div>
-      </div>
-
-      {/* Warehouse switcher — visible if more than 1 warehouse exists */}
-      {warehouses && warehouses.length > 1 && (
-        <div className="px-4 pt-3 pb-1 border-b border-gray-100 bg-gray-50 flex-shrink-0">
-          <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-2">
-            {warehouses.map((w) => {
-              const active = w.id === selectedWarehouseId;
-              return (
-                <button
-                  key={w.id}
-                  type="button"
-                  onClick={() => onSelectWarehouse?.(w.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
-                    active
-                      ? 'bg-primary-600 text-white shadow-sm'
-                      : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
-                  }`}
-                >
-                  <WarehouseIcon className="w-3.5 h-3.5" />
-                  {w.name || WAREHOUSE_KIND_LABELS[w.kind]}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Search */}
-      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex-shrink-0">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск товара..."
-            className="input pl-10 w-full"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        {search.trim() ? (
-          /* Search results */
-          <div className="p-4">
-            {searchResults.length === 0 ? (
-              <div className="text-center py-12 text-gray-400">
-                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">Ничего не найдено</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {searchResults.map((product) => (
-                  <ProductCard key={product.id} product={product} onSelect={handleSelect} />
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="p-4 space-y-3">
-            {/* Subfolders */}
-            {subfolders.length > 0 && (
-              <div className="space-y-2">
-                {subfolders.map((folder) => (
-                  <button
-                    key={folder.name}
-                    type="button"
-                    onClick={() => setActivePath((prev) => [...prev, folder.name])}
-                    className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-                  >
-                    <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                    <span className="flex-1 text-left font-medium text-gray-900 truncate">{folder.name}</span>
-                    <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{folder.count}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Products at current level */}
-            {currentProducts.length > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {currentProducts.map((product) => (
-                  <ProductCard key={product.id} product={product} onSelect={handleSelect} />
-                ))}
-              </div>
-            )}
-
-            {/* Empty state */}
-            {subfolders.length === 0 && currentProducts.length === 0 && (
-              <div className="text-center py-12 text-gray-400">
-                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">{activePath.length > 0 ? 'В этой папке нет товаров' : 'Нет товаров'}</p>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Product Card
-// ---------------------------------------------------------------------------
-
-interface ProductCardProps {
-  product: Product;
-  onSelect: (product: Product) => void;
-}
-
-function ProductCard({ product, onSelect }: ProductCardProps) {
-  const inStock = product.stock > 0;
+/** Подпись-ключ + значение в строке итога. */
+function SummaryRow({
+  label,
+  value,
+  strong,
+  className,
+}: {
+  label: React.ReactNode;
+  value: React.ReactNode;
+  strong?: boolean;
+  className?: string;
+}) {
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(product)}
-      className={`flex flex-col bg-white border rounded-xl overflow-hidden text-left transition-shadow hover:shadow-md ${
-        inStock ? 'border-gray-200' : 'border-red-200 opacity-60'
-      }`}
-    >
-      <div className="w-full aspect-square bg-gray-100 relative overflow-hidden">
-        {product.photo ? (
-          <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <Package className="w-10 h-10 text-gray-300" />
-          </div>
-        )}
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-          {product.isBundle && (
-            <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">КМП</span>
-          )}
-          <span
-            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-              inStock ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-            }`}
-          >
-            {inStock ? `${product.stock}` : '\u041D\u0435\u0442'}
-          </span>
-        </div>
-      </div>
-      <div className="p-2.5 flex flex-col gap-1">
-        <span className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">{product.name}</span>
-        <span className="text-sm font-bold text-primary-600">{formatCurrency(product.sellPrice)}</span>
-      </div>
-    </button>
+    <div className={cn('flex items-center justify-between gap-3', className)}>
+      <span className={cn('text-sm', strong ? 'font-semibold text-ink' : 'text-ink-3')}>{label}</span>
+      <span
+        className={cn('tabular-nums', strong ? 'text-lg font-semibold text-ink' : 'text-sm font-medium text-ink-2')}
+      >
+        {value}
+      </span>
+    </div>
   );
 }
 
@@ -507,12 +255,14 @@ export default function CheckCreatePage() {
   const isEditMode = !!editCheckId;
   const queryClient = useQueryClient();
   const { user, hasPermission } = useAuth();
+  // 171 — VIN: пока опция выключена, ни одного упоминания VIN на экране.
+  const vinEnabled = useVinEnabled();
   // Смена даты чека — ключ checks_change_datetime (сервер проверяет его же в
   // ChecksService; волна Битрикс24 — вместо строкового @Roles d/a/sa).
   const canEditDate = hasPermission('checks_change_datetime');
   // «Сменить владельца» (feature #9) — gated by clients_edit (backend
-  // POST /cars/:id/transfer-owner). Байпас superadmin/director — внутри
-  // hasPermission; admin — по матрице роли.
+  // POST /cars/:id/transfer-owner). Тот же ключ гейтит PATCH /cars/:id —
+  // «Изменить авто» из Кассы. Байпас superadmin/director — внутри hasPermission.
   const canReassignOwner = hasPermission('clients_edit');
   const canSellInstallment = hasPermission('sell_installment');
   // Рассрочка — только на НОВОМ чеке (parity с mobile: canOfferInstallment).
@@ -523,12 +273,25 @@ export default function CheckCreatePage() {
   // строки/скидка меняются, сервер пересчитает план сам; взнос — read-only.
   const canOfferInstallment = canSellInstallment && !isEditMode;
 
-  // Plate number search state
+  // Поиск клиента: госномер / телефон / имя / VIN (одна строка, сервер ищет по всему).
   const [plateSearch, setPlateSearch] = useState('');
   const [showPlateDropdown, setShowPlateDropdown] = useState(false);
+  const [activeRow, setActiveRow] = useState(0);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedCarId, setSelectedCarId] = useState('');
+  const [pickingVin, setPickingVin] = useState(false);
   const plateInputRef = useRef<HTMLInputElement>(null);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
+
+  // Быстрое создание клиента/авто из Кассы (паритет с мобильным QuickClientCreateSheet).
+  const [quickDrawer, setQuickDrawer] = useState<QuickDrawerMode | null>(null);
+  // key панели меняется на каждое открытие — форма монтируется с нужными
+  // начальными значениями (VIN/телефон из поиска) уже при первом рендере.
+  const [quickDrawerSeq, setQuickDrawerSeq] = useState(0);
+  const openQuickDrawer = (mode: QuickDrawerMode) => {
+    setQuickDrawerSeq((s) => s + 1);
+    setQuickDrawer(mode);
+  };
 
   // Ключ идемпотентности текущего логического сабмита (create-режим).
   // Живёт от первой попытки до успеха: ретрай после ошибки шлёт ТОТ ЖЕ id,
@@ -536,8 +299,7 @@ export default function CheckCreatePage() {
   const clientRequestIdRef = useRef<string | null>(null);
 
   // «Сегодня» — по календарю АВТОСЕРВИСА (157), а не браузера: дату чека в
-  // шапке кассир сверяет глазами, а ставит её сервер своими сутками. У кассира
-  // восточнее сервиса поздним вечером шапка показывала уже завтрашнее число.
+  // шапке кассир сверяет глазами, а ставит её сервер своими сутками.
   const { today: tenantToday } = useTenantCalendar();
   // Тот же день, но через ref: эффект гидратации формы правки не имеет права
   // перезапускаться в полночь — он затёр бы уже набранный заказ-наряд.
@@ -546,7 +308,6 @@ export default function CheckCreatePage() {
 
   // Form fields (no top-level master — current user is the default)
   const [date, setDate] = useState(tenantToday);
-  const [editingDate, setEditingDate] = useState(false);
   // true только после РУЧНОЙ правки даты. Если пользователь дату не трогал,
   // поле date в payload не уходит вовсе: create получает серверный now()
   // (полный timestamp, а не yyyy-MM-dd → 00:00), edit не переписывает
@@ -559,9 +320,6 @@ export default function CheckCreatePage() {
   const [isDeferred, setIsDeferred] = useState(false);
 
   // ── Метки чека (Round 12 #9) ────────────────────────────────────────────
-  // Ненавязчиво: кнопка «Метка» рядом с комментарием, поповер с чипами и
-  // инлайн-созданием. Обычный чек этот слой не встречает. Храним ОБЪЕКТЫ —
-  // выбранные чипы рендерятся без запроса справочника.
   const [selectedTags, setSelectedTags] = useState<CheckTag[]>([]);
   const [showTagPopover, setShowTagPopover] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -578,13 +336,9 @@ export default function CheckCreatePage() {
   const [installmentNextDate, setInstallmentNextDate] = useState('');
   const [installmentComment, setInstallmentComment] = useState('');
 
-  // Service lines
   const [serviceLines, setServiceLines] = useState<ServiceLineForm[]>([]);
-
-  // Product lines
   const [productLines, setProductLines] = useState<ProductLineForm[]>([]);
 
-  // Product picker modal
   const [showProductPicker, setShowProductPicker] = useState(false);
 
   // Шаблоны чеков (parity с mobile): пикер + «Сохранить как шаблон»
@@ -595,14 +349,16 @@ export default function CheckCreatePage() {
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string>('');
   const [warrantyExpanded, setWarrantyExpanded] = useState(false);
 
-  // «Сменить владельца» modal (feature #9) — reassign the selected car to
-  // another client without leaving the Касса screen.
+  // «Сменить владельца» modal (feature #9)
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignTarget, setReassignTarget] = useState<Client | null>(null);
 
-  // Round 12 #7: подтверждение «забыли клиента» — новый живой чек без
-  // выбранного клиента пробивается только после явного «Пробить» в модалке.
+  // Round 12 #7: подтверждение «забыли клиента».
   const [showRetailPrompt, setShowRetailPrompt] = useState(false);
+  // Уход со страницы с набранными строками — явное подтверждение (аудит 2.3).
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+
+  const hasLines = serviceLines.length > 0 || productLines.length > 0;
 
   // Prevent accidental page leave
   useEffect(() => {
@@ -626,21 +382,13 @@ export default function CheckCreatePage() {
   }, [serviceLines.length, productLines.length]);
 
   // 156/161 — мульти-точки: список автосервисов тенанта решает, скоупить ли
-  // пикер мастера филиалом. Общий хук = тот же слот ['points'], что у
-  // индикатора в шапке и раздела «Филиалы», — лишней сети нет.
+  // пикер мастера филиалом.
   const { data: pointsData } = usePointsQuery();
   // Пикер мастера — ЕДИНСТВЕННОЕ место, где список обязан быть по ТЕКУЩЕМУ
   // филиалу (`?scope=point`): чужой мастер в чеке уводит его зарплату и рейтинг
-  // в другой филиал. Журнал, расходы и зарплата по-прежнему читают весь тенант
-  // — им нужны имена всех сотрудников. У одноточечного тенанта параметр не
-  // ставим: ответ тот же, но ушёл бы мимо общего прогретого слота ['masters'].
+  // в другой филиал. У одноточечного тенанта параметр не ставим: ответ тот же,
+  // но ушёл бы мимо общего прогретого слота ['masters'].
   const scopeMastersToPoint = (pointsData?.points.length ?? 0) > 1;
-  // ЧЕК ВСЕГДА ПОПАДАЕТ В ФИЛИАЛ СЕССИИ (163) — проверять перед отправкой
-  // больше нечего. Раньше здесь стояло зеркало серверного отказа 400 «Выберите
-  // филиал, чтобы пробить чек»: он случался в режиме общей сводки, когда
-  // сессия не принадлежала ни одному автосервису. Режима больше нет — филиал
-  // выдаётся в токене при входе, — и вместе с ним ушли и отказ, и это
-  // предупреждение.
   const { data: masters } = useQuery<User[]>({
     queryKey: scopeMastersToPoint ? ['masters', 'point'] : ['masters'],
     queryFn: async () => {
@@ -650,8 +398,13 @@ export default function CheckCreatePage() {
     staleTime: 60_000,
   });
 
-  // Fetch clients by plate number search
-  const { data: clientsData } = useQuery<Client[]>({
+  // Поиск клиентов: сервер сам матчит имя / телефон / госномер / VIN (171).
+  const {
+    data: clientsData,
+    isLoading: clientsLoading,
+    isError: clientsError,
+    refetch: refetchClients,
+  } = useQuery<Client[]>({
     queryKey: ['clients', plateSearch],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search: plateSearch, limit: 20 });
@@ -660,8 +413,25 @@ export default function CheckCreatePage() {
     enabled: plateSearch.length >= 1,
   });
 
+  // 171 — точное совпадение по VIN: когда введённая строка — валидный VIN,
+  // спрашиваем сервер напрямую (у поиска по search подстрока может дать
+  // соседей). Запроса нет ни при выключенной опции, ни при неполном VIN.
+  const searchVin = vinEnabled ? normalizeVin(plateSearch) : '';
+  const searchIsVin = isValidVin(searchVin);
+  const { data: vinHit, isLoading: vinLoading } = useQuery<CarLookupResult | null>({
+    queryKey: ['cars', 'lookup-by-vin', searchVin],
+    queryFn: async () => (await carsApi.lookupByVin(searchVin)).data,
+    enabled: searchIsVin && !selectedClient,
+    staleTime: 30_000,
+  });
+
   // Fetch all services (cached 60s — catalog data)
-  const { data: allServices } = useQuery<Service[]>({
+  const {
+    data: allServices,
+    isLoading: servicesLoading,
+    isError: servicesError,
+    refetch: refetchServices,
+  } = useQuery<Service[]>({
     queryKey: ['services-all'],
     queryFn: async () => {
       const res = await servicesApi.getAll({ limit: 1000 });
@@ -670,10 +440,14 @@ export default function CheckCreatePage() {
     staleTime: 60_000,
   });
 
-  // Fetch all products (cached 60s — catalog data). We always pull the full
-  // catalogue here; the picker is filtered client-side by selected warehouse
-  // so flipping warehouses is instant.
-  const { data: allProducts } = useQuery<Product[]>({
+  // Fetch all products (cached 60s — catalog data). Полный каталог; пикер
+  // фильтруется по складу на клиенте, поэтому переключение складов мгновенное.
+  const {
+    data: allProducts,
+    isLoading: productsLoading,
+    isError: productsError,
+    refetch: refetchProducts,
+  } = useQuery<Product[]>({
     queryKey: ['products-all'],
     queryFn: async () => {
       const res = await productsApi.getAll({ limit: 1000 });
@@ -688,7 +462,7 @@ export default function CheckCreatePage() {
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 5 * 60_000,
   });
-  // POS «Кассовая смера + роли» (092). Mode OFF (default) → no change.
+  // POS «Кассовая смена + роли» (092). Mode OFF (default) → no change.
   // When shift-mode is ON and the current user is NOT a cashier, the server
   // forces this order to be deferred and rejects payment. We mirror that here:
   // hide the payment UI and force the deferred flag (server is source of truth).
@@ -703,9 +477,6 @@ export default function CheckCreatePage() {
   }, [cashierLocked]);
 
   // ── Конвейер (Round 14, режим «Кассир»): исполнители + место ────────────
-  // Пока включён режим кассовой смены, приёмка назначает заказу исполнителей
-  // (заказ падает на доску каждого) и место («возле задних ворот»). Вне
-  // режима блок не рендерится и payload байт-в-байт прежний.
   const conveyorMode = !!posSettings?.shiftModeEnabled;
   const canManageLocations = hasPermission('settings_manage');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
@@ -755,7 +526,6 @@ export default function CheckCreatePage() {
   }, [warehouses, pickerWarehouseId]);
 
   // Active warranties for the currently-selected client+car combo.
-  // Tap-to-expand banner — shown above the receipt body.
   const warrantyEnabled = !!(selectedClient?.id || selectedCarId);
   const { data: activeWarranties } = useQuery<WarrantyClaim[]>({
     queryKey: ['active-warranties', selectedClient?.id, selectedCarId],
@@ -770,8 +540,8 @@ export default function CheckCreatePage() {
     staleTime: 30_000,
   });
 
-  // Filter the catalogue by chosen warehouse for the picker. We also keep
-  // products without a warehouseId (legacy) visible only in the main warehouse.
+  // Filter the catalogue by chosen warehouse for the picker. Legacy products
+  // without warehouseId stay visible only in the main warehouse.
   const pickerProducts = useMemo<Product[]>(() => {
     const list = allProducts ?? [];
     if (!pickerWarehouseId) return list;
@@ -780,7 +550,13 @@ export default function CheckCreatePage() {
   }, [allProducts, warehouses, pickerWarehouseId]);
 
   // Load existing check for edit mode
-  const { data: existingCheck } = useQuery({
+  const {
+    data: existingCheck,
+    isLoading: existingLoading,
+    isError: existingError,
+    isFetching: existingFetching,
+    refetch: refetchExisting,
+  } = useQuery({
     queryKey: ['check', editCheckId],
     queryFn: async () => {
       const res = await checksApi.getById(editCheckId!);
@@ -799,22 +575,21 @@ export default function CheckCreatePage() {
       setSelectedClient(existingCheck.client);
       setSelectedCarId(existingCheck.carId || '');
       const car = existingCheck.client.cars?.find((c: Car) => c.id === existingCheck.carId);
-      if (car) setPlateSearch(car.plateNumber);
+      if (car) setPlateSearch(car.plateNumber || existingCheck.client.fullName);
+      else setPlateSearch(existingCheck.client.fullName);
     }
     setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : tenantTodayRef.current);
     setMileage(existingCheck.mileage ? String(existingCheck.mileage) : '');
     setPaymentMethod(existingCheck.paymentMethod || 'cash');
-    // «Сплит»: восстановить РЕАЛЬНУЮ разбивку нал/карта. Без этого cashAmount
-    // оставался 0, и сабмит молча переписывал разбивку в 0 нал / всё картой —
-    // порча «Движения денег». Авто-sync эффект трогает суммы только для
-    // 'cash'/'card', так что гидрированные значения не затираются.
+    // «Сплит»: восстановить РЕАЛЬНУЮ разбивку нал/карта. Авто-sync эффект
+    // трогает суммы только для 'cash'/'card', так что гидрированные значения
+    // не затираются.
     if (existingCheck.paymentMethod === 'cash_card') {
       setCashAmount(existingCheck.cashAmount ?? 0);
       setCardAmount(existingCheck.cardAmount ?? 0);
     }
     // Рассрочка (Round 13 #9): гидрируем реальный первый взнос из строки чека —
-    // read-only плашка показывает правду, а payload шлёт ПРЕЖНИЕ ноги (сервер
-    // при правке клиентские ноги всё равно игнорирует и берёт свои из чека).
+    // read-only плашка показывает правду.
     if (existingCheck.paymentMethod === 'installment') {
       setInstallmentCash(existingCheck.cashAmount ?? 0);
       setInstallmentCard(existingCheck.cardAmount ?? 0);
@@ -858,9 +633,6 @@ export default function CheckCreatePage() {
   }, [existingCheck, editLoaded, user?.id]);
 
   // ── Метки чека (Round 12 #9): справочник + инлайн-создание ──────────────
-  // Справочник грузится ТОЛЬКО когда открыт поповер — обычный чек лишних
-  // запросов не делает. 409 на создании (метка уже есть) — не ошибка: сервер
-  // возвращает существующую в body.tag, просто выбираем её.
   const { data: allTags } = useQuery({
     queryKey: ['check-tags'],
     queryFn: async () => (await checksApi.tags.list()).data,
@@ -911,9 +683,7 @@ export default function CheckCreatePage() {
       if (isQueuedOffline(res)) {
         // SW-офлайн: сервер чек ещё НЕ создал. clientRequestIdRef НЕ сбрасываем —
         // replay из очереди и любой ручной повтор уходят с ТЕМ ЖЕ ключом
-        // идемпотентности, дубль невозможен. Никакой навигации на detail:
-        // res.data.id не существует (раньше уезжали на /checks/undefined
-        // с тостом «успешно создан»).
+        // идемпотентности, дубль невозможен. Никакой навигации на detail.
         toast('Нет сети — чек поставлен в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
         navigate('/checks');
         return;
@@ -941,8 +711,6 @@ export default function CheckCreatePage() {
     mutationFn: (data: any) => checksApi.update(editCheckId!, data),
     onSuccess: (res: any) => {
       if (isQueuedOffline(res)) {
-        // SW-офлайн: правка ещё не дошла до сервера — честный тост без
-        // «Чек обновлён» и без инвалидаций (сервер ничего нового не отдаст).
         toast('Нет сети — изменения поставлены в очередь и отправятся автоматически', { icon: '📡', duration: 5000 });
         navigate(`/checks/${editCheckId}`);
         return;
@@ -965,25 +733,17 @@ export default function CheckCreatePage() {
   });
 
   // «Сменить владельца» (feature #9): reassign the currently-selected car AND
-  // its full history (checks + derived debts / bonuses / installments) to
-  // another client via transferOwner, then re-point this (unsaved) check's
-  // client to the new owner in local state. Car id is stable across reassign,
-  // so selectedCarId is preserved. We refetch the target client to get its full
-  // record (including the freshly-attached car) for the selected-client display.
-  // Backend guards a duplicate plate under the target client and answers 400 —
-  // surfaced as-is. We invalidate BOTH the old and new owner so the car +
-  // history disappear from the old owner and appear under the new one.
+  // its full history to another client via transferOwner, then re-point this
+  // (unsaved) check's client to the new owner in local state.
   const reassignMutation = useMutation({
     mutationFn: async (target: Client) => {
       const prevOwnerId = selectedClient?.id;
       const res = await carsApi.transferOwner(selectedCarId, { clientId: target.id });
-      // Fresh target record — has the newly-attached car in its cars[].
       const fresh = await clientsApi.getById(target.id);
       return { freshOwner: fresh.data as Client, prevOwnerId, movedChecks: res.data?.movedChecks ?? 0 };
     },
     onSuccess: ({ freshOwner, prevOwnerId, movedChecks }) => {
       setSelectedClient(freshOwner);
-      // selectedCarId stays the same — the car now lives under freshOwner.
       if (prevOwnerId) queryClient.invalidateQueries({ queryKey: ['clients', prevOwnerId] });
       queryClient.invalidateQueries({ queryKey: ['clients', freshOwner.id] });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
@@ -1016,30 +776,26 @@ export default function CheckCreatePage() {
   };
 
   // Computed totals
-  const serviceTotal = useMemo(() => {
-    return serviceLines.reduce((sum, line) => sum + line.price * line.quantity, 0);
-  }, [serviceLines]);
-
-  const productTotal = useMemo(() => {
-    return productLines.reduce((sum, line) => sum + line.sellPrice * line.quantity, 0);
-  }, [productLines]);
-
+  const serviceTotal = useMemo(
+    () => serviceLines.reduce((sum, line) => sum + line.price * line.quantity, 0),
+    [serviceLines],
+  );
+  const productTotal = useMemo(
+    () => productLines.reduce((sum, line) => sum + line.sellPrice * line.quantity, 0),
+    [productLines],
+  );
   const totalRevenue = useMemo(() => {
     const discountedProducts = Math.max(productTotal - discount, 0);
     return serviceTotal + discountedProducts;
   }, [serviceTotal, productTotal, discount]);
 
   // Round 13 #1: применённая часть скидки (семантика «только на товары» —
-  // решение владельца, НЕ меняем). Ввод клампится к сумме товаров, но discount
-  // может превысить её после гидрации в edit-режиме или удаления товара —
-  // тогда показываем предупреждение и честную цифру в итоге.
+  // решение владельца, НЕ меняем).
   const appliedDiscount = Math.min(discount, productTotal);
 
   // Change calculation for cash payment
   const changeAmount = useMemo(() => {
-    if (paymentMethod === 'cash') {
-      return Math.max(cashGiven - totalRevenue, 0);
-    }
+    if (paymentMethod === 'cash') return Math.max(cashGiven - totalRevenue, 0);
     return 0;
   }, [cashGiven, totalRevenue, paymentMethod]);
 
@@ -1054,37 +810,127 @@ export default function CheckCreatePage() {
     }
   }, [paymentMethod, totalRevenue]);
 
-  // Flatten cars from found clients for plate-based dropdown
-  const plateResults = useMemo(() => {
-    if (!clientsData) return [];
-    const results: { client: Client; car: Car }[] = [];
+  // ── Строки выдачи поиска ───────────────────────────────────────────────
+  // Клиент с машинами → строка на каждую машину (совпавшие по номеру —
+  // первыми); клиент без машин → одна строка (чек без авто). Сверху — точное
+  // совпадение по VIN (171).
+  const searchRows = useMemo<SearchRow[]>(() => {
+    const rows: SearchRow[] = [];
+    if (vinHit) rows.push({ key: `vin-${vinHit.id}`, client: null, car: null, vinHit });
+    if (!clientsData) return rows;
+    const q = plateSearch.replace(/\s+/g, '').toLowerCase();
+    const matched: SearchRow[] = [];
+    const rest: SearchRow[] = [];
     for (const client of clientsData) {
-      if (client.cars) {
+      if (client.cars && client.cars.length > 0) {
         for (const car of client.cars) {
-          if (plateSearch && car.plateNumber.toLowerCase().includes(plateSearch.toLowerCase())) {
-            results.push({ client, car });
-          }
+          if (vinHit && car.id === vinHit.id) continue;
+          const row = { key: `${client.id}-${car.id}`, client, car };
+          const plate = (car.plateNumber || '').replace(/\s+/g, '').toLowerCase();
+          if (q && plate && plate.includes(q)) matched.push(row);
+          else rest.push(row);
         }
+      } else {
+        rest.push({ key: `${client.id}-nocar`, client, car: null });
       }
     }
-    if (results.length === 0) {
-      for (const client of clientsData) {
-        if (client.cars) {
-          for (const car of client.cars) {
-            results.push({ client, car });
-          }
-        }
-      }
-    }
-    return results;
-  }, [clientsData, plateSearch]);
+    return [...rows, ...matched, ...rest];
+  }, [clientsData, plateSearch, vinHit]);
 
-  // Client/Car selection via plate number
-  const handleSelectPlateResult = (client: Client, car: Car) => {
+  useEffect(() => {
+    setActiveRow(0);
+  }, [plateSearch, searchRows.length]);
+
+  // Закрытие выдачи по клику вне.
+  useEffect(() => {
+    if (!showPlateDropdown) return;
+    const onDown = (e: PointerEvent) => {
+      if (!searchWrapRef.current?.contains(e.target as Node)) setShowPlateDropdown(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [showPlateDropdown]);
+
+  // Client/Car selection via search
+  const handleSelectPlateResult = (client: Client, car: Car | null) => {
     setSelectedClient(client);
-    setSelectedCarId(car.id);
-    setPlateSearch(car.plateNumber);
+    setSelectedCarId(car?.id ?? '');
+    setPlateSearch(car?.plateNumber || client.fullName);
     setShowPlateDropdown(false);
+  };
+
+  // 171 — выбор результата по VIN: lookup отдаёт компактного клиента, а
+  // карточке нужен полный (с cars[]) — дотягиваем как при смене владельца.
+  const handleSelectVinHit = async (hit: CarLookupResult) => {
+    if (!hit.clientId) {
+      toast.error('У этого автомобиля нет владельца — привяжите его к клиенту в разделе «Автомобили»');
+      return;
+    }
+    setPickingVin(true);
+    try {
+      const fresh = (await clientsApi.getById(hit.clientId)).data as Client;
+      handleSelectPlateResult(fresh, fresh.cars?.find((c) => c.id === hit.id) ?? null);
+      if (!fresh.cars?.some((c) => c.id === hit.id)) setSelectedCarId(hit.id);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Не удалось открыть клиента');
+    } finally {
+      setPickingVin(false);
+    }
+  };
+
+  const selectRow = (row: SearchRow) => {
+    if (row.vinHit) void handleSelectVinHit(row.vinHit);
+    else if (row.client) handleSelectPlateResult(row.client, row.car);
+  };
+
+  const clearClient = () => {
+    setPlateSearch('');
+    setSelectedClient(null);
+    setSelectedCarId('');
+    plateInputRef.current?.focus();
+  };
+
+  // «Создать клиента» из пустой выдачи: что набрали — то и подставляем.
+  const openCreateClientFromSearch = () => {
+    const raw = plateSearch.trim();
+    const digits = raw.replace(/\D/g, '');
+    const mode: QuickDrawerMode = { kind: 'new-client' };
+    if (searchIsVin) mode.initialVin = searchVin;
+    else if (digits.length >= 10 && /^[\d\s()+-]+$/.test(raw)) mode.initialPhone = raw;
+    else if (raw && looksLikeRussianPlate(raw)) mode.initialPlate = raw;
+    setShowPlateDropdown(false);
+    openQuickDrawer(mode);
+  };
+
+  const handleQuickDone = (client: Client, carId: string | null) => {
+    setQuickDrawer(null);
+    const car = client.cars?.find((c) => c.id === carId) ?? null;
+    setSelectedClient(client);
+    setSelectedCarId(car?.id ?? carId ?? '');
+    setPlateSearch(car?.plateNumber || client.fullName);
+    setShowPlateDropdown(false);
+  };
+
+  const onSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (!showPlateDropdown || selectedClient) return;
+    const total = searchRows.length + (plateSearch.trim() ? 1 : 0); // + «Создать клиента»
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveRow((a) => Math.min(a + 1, Math.max(total - 1, 0)));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveRow((a) => Math.max(a - 1, 0));
+    } else if (e.key === 'Enter') {
+      if (activeRow < searchRows.length && searchRows[activeRow]) {
+        e.preventDefault();
+        selectRow(searchRows[activeRow]);
+      } else if (plateSearch.trim() && !clientsLoading) {
+        e.preventDefault();
+        openCreateClientFromSearch();
+      }
+    } else if (e.key === 'Escape') {
+      setShowPlateDropdown(false);
+    }
   };
 
   // Service line handlers — default masterId = current user
@@ -1139,14 +985,13 @@ export default function CheckCreatePage() {
           }
           return updated;
         });
-        toast.success(`Комплект "${product.name}" добавлен`);
+        toast.success(`Комплект «${product.name}» добавлен`);
         return;
       }
 
       setProductLines((prev) => {
         // 120: русские метки единиц ('шт'…) + legacy-коды ('pcs') — сравниваем
-        // через unitLabel. Дробный шаг 0.5 — только у МЕРНЫХ единиц (м/кг/л);
-        // уп/компл/шт дискретны и шагают по 1 (паритет с мобилкой).
+        // через unitLabel. Дробный шаг 0.5 — только у МЕРНЫХ единиц (м/кг/л).
         const step = METERED_UNITS.has(unitLabel(product.unit)) ? 0.5 : 1;
         const existing = prev.findIndex((l) => l.productId === product.id);
         if (existing !== -1) {
@@ -1169,12 +1014,7 @@ export default function CheckCreatePage() {
   );
 
   const updateProductLine = (index: number, field: keyof ProductLineForm, value: any) => {
-    setProductLines((prev) =>
-      prev.map((line, i) => {
-        if (i !== index) return line;
-        return { ...line, [field]: value };
-      }),
-    );
+    setProductLines((prev) => prev.map((line, i) => (i === index ? { ...line, [field]: value } : line)));
   };
 
   const removeProductLine = (index: number) => {
@@ -1182,9 +1022,7 @@ export default function CheckCreatePage() {
   };
 
   // ── Шаблоны чеков ─────────────────────────────────────────────────────
-  // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate):
-  // услуги получают мастером текущего пользователя, товары подтягивают
-  // unit из каталога (шаг количества на web зависит от единицы измерения).
+  // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate).
   const applyTemplate = (template: CheckTemplate) => {
     setServiceLines(
       template.services.map((s) => ({
@@ -1212,8 +1050,7 @@ export default function CheckCreatePage() {
     toast.success(`Шаблон «${template.name}» применён`);
   };
 
-  // В шаблон уходят только строки с catalog-id (как на mobile): произвольная
-  // строка без привязки к справочнику в шаблоне бесполезна.
+  // В шаблон уходят только строки с catalog-id (как на mobile).
   const templateServices = useMemo(
     () =>
       serviceLines
@@ -1238,11 +1075,8 @@ export default function CheckCreatePage() {
 
   // Submit
   // doSubmit — фактическое проведение чека. handleSubmit (ниже) может
-  // перехватить сабмит наджимом «забыли клиента» (Round 12 #7); «Пробить»
-  // из модалки зовёт doSubmit напрямую.
+  // перехватить сабмит наджимом «забыли клиента» (Round 12 #7).
   const doSubmit = () => {
-    // Client and car are optional (retail buyer mode)
-
     const services: CheckServiceLine[] = serviceLines.map((l) => ({
       serviceId: l.serviceId || undefined,
       masterId: l.masterId || undefined,
@@ -1269,31 +1103,19 @@ export default function CheckCreatePage() {
     } else if (paymentMethod === 'card') {
       finalCard = totalRevenue;
     } else if (paymentMethod === 'cash_card') {
-      // Кламп к «К оплате» (parity с mobile): атрибут max у input не блокирует
-      // ручной ввод/вставку — без клампа «наличными 100 000» при чеке 30 000
-      // дал бы ноги > оборота, и разбивка «Движения денег» превышала бы оборот.
+      // Кламп к «К оплате» (parity с mobile).
       finalCash = Math.min(cashAmount, totalRevenue);
       finalCard = Math.max(totalRevenue - finalCash, 0);
     } else if (paymentMethod === 'installment') {
       // Первый взнос (down payment) — наличными + картой; остаток уйдёт в план.
-      // Кламп: взнос не может превышать сумму чека — иначе ноги чека разойдутся
-      // с down_payment плана (сервер клампит план, ноги должны совпадать).
       finalCash = Math.min(installmentCash, totalRevenue);
       finalCard = Math.min(installmentCard, Math.max(totalRevenue - finalCash, 0));
     }
 
     const isInstallment = paymentMethod === 'installment';
 
-    // Дата: шлём ТОЛЬКО когда пользователь её менял (dateTouched).
-    // - create без правки → сервер ставит now() В МОМЕНТ ПРОБИТИЯ — полный
-    //   timestamp вместо yyyy-MM-dd → 00:00 (время в журнале, внутрисуточная
-    //   сортировка), и никакого времени открытия формы;
-    // - edit без правки → сервер не трогает оригинальный timestamp чека;
-    // - правка → полный ISO: выбранный день + текущее время (create) либо
-    //   время оригинального чека (edit) — день меняется, порядок внутри дня жив.
+    // Дата: шлём ТОЛЬКО когда пользователь её менял (dateTouched) и имеет право.
     let dateIso: string | undefined;
-    // canEditDate — зеркало серверного checks_change_datetime: без права дата
-    // не отправляется НИКОГДА (сервер её всё равно молча заменил бы своей).
     if (dateTouched && canEditDate && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
       const [y, m, d] = date.split('-').map(Number);
       const timeSource = isEditMode && existingCheck?.date ? new Date(existingCheck.date) : new Date();
@@ -1318,27 +1140,21 @@ export default function CheckCreatePage() {
       mileage: mileage ? Number(mileage) : undefined,
       services,
       products,
-      // Скидка действует только на товары — всё сверх их суммы и фронт, и бэк
-      // молча игнорируют, но полная сумма печаталась в чеке и журнале
-      // (несходящаяся арифметика). Кламп выравнивает сохранённое с применённым.
+      // Скидка действует только на товары — кламп выравнивает сохранённое с применённым.
       discount: Math.min(discount, productTotal),
       paymentMethod,
       cashAmount: finalCash,
       cardAmount: finalCard,
       comment: comment || undefined,
-      // Метки (Round 12 #9). Create: поле уходит только при непустом выборе
-      // (обычный чек — payload байт-в-байт прежний). Edit: ВСЕГДА — снятие
-      // последней метки должно перезаписать связки пустым набором.
+      // Метки (Round 12 #9). Create: поле уходит только при непустом выборе.
+      // Edit: ВСЕГДА — снятие последней метки должно перезаписать связки пустым набором.
       ...(isEditMode
         ? { tagIds: selectedTags.map((t) => t.id) }
         : selectedTags.length > 0
           ? { tagIds: selectedTags.map((t) => t.id) }
           : {}),
       // Round 14 (конвейер): исполнители и место уходят ТОЛЬКО при включённом
-      // режиме кассовой смены. Create: assigneeIds — при явном выборе (иначе
-      // сервер выводит дефолт из строк услуг + мастера). Edit: всегда — пустой
-      // набор снимает исполнителей, ''→null снимает место. Вне режима payload
-      // байт-в-байт прежний.
+      // режиме кассовой смены. Вне режима payload байт-в-байт прежний.
       ...(conveyorMode
         ? {
             ...(isEditMode || assigneeIds.length > 0 ? { assigneeIds } : {}),
@@ -1359,8 +1175,7 @@ export default function CheckCreatePage() {
       updateMutation.mutate(payload);
     } else {
       // Один id на логический сабмит: генерируется до первого POST и
-      // переиспользуется при ретрае (в т.ч. при replay из SW-офлайн-очереди) —
-      // бэкенд дедуплицирует по (tenant, clientRequestId), дубль не возникнет.
+      // переиспользуется при ретрае (в т.ч. при replay из SW-офлайн-очереди).
       if (!clientRequestIdRef.current) {
         clientRequestIdRef.current = generateClientRequestId();
       }
@@ -1368,16 +1183,14 @@ export default function CheckCreatePage() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-
     // Round 12 #7: новый ЖИВОЙ чек без клиента (не правка, не отложенный) —
     // мягкое подтверждение перед пробитием, чтобы кассир не забыл привязку.
     if (!isEditMode && !isDeferred && !selectedClient) {
       setShowRetailPrompt(true);
       return;
     }
-
     doSubmit();
   };
 
@@ -1385,836 +1198,606 @@ export default function CheckCreatePage() {
 
   // Дата в шапке чека. Пока её не трогали руками и это НЕ правка — показываем
   // «сегодня» на момент рендера, а не значение, зафиксированное при
-  // монтировании формы: вкладка кассы может провисеть открытой до полуночи, а
-  // реальную дату всё равно ставит сервер в момент пробития.
+  // монтировании формы.
   const displayDate = dateTouched || isEditMode ? date : tenantToday;
 
-  return (
-    <div className="max-w-3xl mx-auto pb-8">
-      {/* Header */}
-      <div className="page-header mb-4">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад" title="Назад">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <div className="flex items-center gap-2">
-            <Receipt className="w-5 h-5 text-primary-600" />
-            <h1 className="page-title">{isEditMode ? 'Редактировать чек' : 'Новый чек'}</h1>
-          </div>
-        </div>
-        {/* Шаблоны чеков — быстрое заполнение формы (parity с mobile) */}
-        <button
-          type="button"
-          onClick={() => setShowTemplatesPicker(true)}
-          className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:text-primary-600 hover:border-primary-200 hover:bg-primary-50 transition-colors flex-shrink-0"
-          title="Заполнить чек из шаблона"
+  const requestLeave = () => {
+    if (hasLines) setLeaveConfirmOpen(true);
+    else navigate(-1);
+  };
+
+  const submitting = createMutation.isPending || updateMutation.isPending;
+  const selectedCar = selectedClient?.cars?.find((c) => c.id === selectedCarId) ?? null;
+  const selectedVin = vinEnabled ? carVin(selectedCar) : null;
+  const clientsList = clientsData ?? [];
+  const dropdownOpen = showPlateDropdown && plateSearch.trim().length > 0 && !selectedClient;
+  const showCreateRow =
+    dropdownOpen && !clientsLoading && !clientsError && (searchIsVin ? !vinLoading && !vinHit : true);
+  const createRowIndex = searchRows.length;
+
+  const paymentOptions = useMemo(() => {
+    const opts: { value: PaymentMethodKey; label: string }[] = [
+      { value: 'cash', label: 'Наличные' },
+      { value: 'card', label: 'Карта' },
+      { value: 'cash_card', label: 'Смешанная' },
+      { value: 'warranty', label: 'Гарантия' },
+    ];
+    if (canOfferInstallment) opts.push({ value: 'installment', label: 'Рассрочка' });
+    return opts;
+  }, [canOfferInstallment]);
+
+  const pageTitle = isEditMode ? (existingCheck ? `Правка чека №${existingCheck.number}` : 'Правка чека') : 'Касса';
+
+  // Режим правки: до прихода чека — скелет, при 404/500 — ошибка с «Повторить»,
+  // а не пустая форма (аудит 2.3: строки, добавленные во время загрузки,
+  // затирались гидрацией).
+  if (isEditMode && (existingLoading || existingError || !existingCheck)) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Правка чека" backTo={`/checks/${editCheckId}`} />
+        <QueryState
+          isLoading={existingLoading}
+          isError={existingError || !existingCheck}
+          onRetry={() => refetchExisting()}
+          isFetching={existingFetching}
+          errorTitle="Не удалось загрузить чек"
+          loader={
+            <div
+              className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_400px]"
+              aria-busy="true"
+              aria-label="Загрузка чека"
+            >
+              <div className="space-y-5">
+                <Skeleton className="h-40" />
+                <Skeleton className="h-56" />
+              </div>
+              <Skeleton className="h-72" />
+            </div>
+          }
         >
-          <LayoutTemplate className="w-4 h-4" />
-          <span className="hidden sm:inline">Шаблоны</span>
-        </button>
+          <></>
+        </QueryState>
       </div>
+    );
+  }
 
-      <form onSubmit={handleSubmit}>
-        {/* ===== Receipt-style container ===== */}
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-          {/* Receipt header with editable date */}
-          <div className="bg-gray-900 text-white px-5 py-4">
-            <div className="text-center">
-              <h2 className="text-lg font-bold tracking-wider">
-                {'\u0417\u0410\u041A\u0410\u0417-\u041D\u0410\u0420\u042F\u0414'}
-              </h2>
-              <div className="flex items-center justify-center gap-2 mt-1">
-                {editingDate ? (
-                  <input
-                    type="date"
-                    value={displayDate}
-                    onChange={(e) => {
-                      setDate(e.target.value);
-                      setDateTouched(true);
-                    }}
-                    onBlur={() => setEditingDate(false)}
-                    autoFocus
-                    className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary-400"
-                  />
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title={pageTitle}
+        icon={Receipt}
+        backTo={requestLeave}
+        subtitle={`Заказ-наряд от ${format(new Date(displayDate + 'T00:00:00'), 'd MMMM yyyy', { locale: ruLocale })}${
+          isDeferred && !cashierLocked ? ' · черновик' : ''
+        }`}
+        actions={
+          <Button variant="secondary" icon={LayoutTemplate} onClick={() => setShowTemplatesPicker(true)}>
+            Шаблоны
+          </Button>
+        }
+      />
+
+      <form
+        onSubmit={handleSubmit}
+        className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start"
+      >
+        {/* ═══════════ Левая колонка: клиент, строки, детали ═══════════ */}
+        <div className="min-w-0 space-y-5">
+          {/* ── Клиент и автомобиль ── */}
+          <Card padding="none">
+            <CardHeader
+              icon={UserRound}
+              title="Клиент и автомобиль"
+              subtitle={selectedClient ? undefined : 'Без клиента чек проводится как розничный'}
+              dense
+              divider={false}
+              actions={
+                selectedClient ? (
+                  <IconButton label="Сбросить клиента" icon={X} size="sm" onClick={clearClient} />
                 ) : (
-                  <>
-                    <CalendarDays className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="text-gray-400 text-xs">
-                      {format(new Date(displayDate + 'T00:00:00'), 'dd.MM.yyyy')}
-                    </span>
-                    {canEditDate && (
-                      <button
-                        type="button"
-                        onClick={() => setEditingDate(true)}
-                        className="p-0.5 rounded hover:bg-gray-700 transition-colors"
-                        aria-label="Изменить дату"
-                        title="Изменить дату"
-                      >
-                        <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-300" />
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Search by plate number */}
-          <div className="px-5 pt-5 pb-3 border-b border-dashed border-gray-300">
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">
-              {'\u041F\u043E\u0438\u0441\u043A \u043F\u043E \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440\u0443'}
-            </label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                ref={plateInputRef}
-                type="text"
-                value={plateSearch}
-                onChange={(e) => {
-                  const val = e.target.value.toUpperCase();
-                  setPlateSearch(val);
-                  setShowPlateDropdown(true);
-                  if (!val) {
-                    setSelectedClient(null);
-                    setSelectedCarId('');
-                  }
-                }}
-                onFocus={() => setShowPlateDropdown(true)}
-                placeholder="A123BC77"
-                className="input pl-10 text-lg font-mono tracking-widest uppercase"
-                autoComplete="off"
-              />
-              {plateSearch && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPlateSearch('');
-                    setSelectedClient(null);
-                    setSelectedCarId('');
-                  }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Plate search dropdown */}
-            {showPlateDropdown && plateSearch && !selectedClient && plateResults.length > 0 && (
-              <div className="mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                {plateResults.map(({ client, car }) => (
-                  <button
-                    key={car.id}
-                    type="button"
-                    onClick={() => handleSelectPlateResult(client, car)}
-                    className="w-full text-left px-4 py-2.5 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={UserPlus}
+                    onClick={() => openQuickDrawer({ kind: 'new-client' })}
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded">
-                        {car.plateNumber}
-                      </span>
-                      <span className="text-sm text-gray-500">{car.makeModel}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {client.fullName} {'\u2022'} {formatPhone(client.phone)}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Retail buyer default when no client selected */}
-            {!selectedClient && !plateSearch && (
-              <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                <div className="flex items-center gap-2">
-                  <UserIcon className="h-4 w-4 text-blue-500" />
-                  <span className="text-sm font-medium text-blue-700">
-                    {
-                      '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'
+                    Новый клиент
+                  </Button>
+                )
+              }
+            />
+            <CardBody className="space-y-3 pt-0">
+              {!selectedClient && (
+                <div ref={searchWrapRef} className="relative">
+                  <Input
+                    ref={plateInputRef}
+                    type="text"
+                    role="combobox"
+                    aria-expanded={dropdownOpen}
+                    aria-controls="client-search-list"
+                    aria-autocomplete="list"
+                    aria-activedescendant={
+                      dropdownOpen
+                        ? activeRow < searchRows.length
+                          ? `client-opt-${searchRows[activeRow]?.key}`
+                          : showCreateRow
+                            ? 'client-opt-create'
+                            : undefined
+                        : undefined
                     }
-                  </span>
-                </div>
-                <p className="text-xs text-blue-500 mt-1">
-                  {
-                    '\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440 \u0447\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u043A\u043B\u0438\u0435\u043D\u0442\u0430'
-                  }
-                </p>
-              </div>
-            )}
+                    aria-label="Поиск клиента"
+                    value={plateSearch}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setPlateSearch(val);
+                      setShowPlateDropdown(true);
+                      if (!val) {
+                        setSelectedClient(null);
+                        setSelectedCarId('');
+                      }
+                    }}
+                    onFocus={() => setShowPlateDropdown(true)}
+                    onKeyDown={onSearchKeyDown}
+                    placeholder={vinEnabled ? 'Госномер, телефон, имя или VIN…' : 'Госномер, телефон или имя…'}
+                    autoComplete="off"
+                    spellCheck={false}
+                    leftIcon={Search}
+                    className="h-11 text-base"
+                    rightSlot={
+                      plateSearch ? (
+                        <IconButton
+                          label="Очистить поиск"
+                          icon={X}
+                          size="sm"
+                          onClick={clearClient}
+                          className="h-7 w-7"
+                        />
+                      ) : undefined
+                    }
+                  />
 
-            {/* Selected client/car info */}
-            {selectedClient && (
-              <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">{selectedClient.fullName}</div>
-                    <div className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</div>
+                  {dropdownOpen && (
+                    <ul
+                      id="client-search-list"
+                      role="listbox"
+                      aria-label="Найденные клиенты"
+                      className="absolute left-0 right-0 top-full z-40 mt-1 max-h-80 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-pop motion-safe:animate-pop-in"
+                    >
+                      {searchIsVin && vinLoading && (
+                        <li className="flex items-center gap-2 px-3 py-2 text-xs text-ink-3" role="presentation">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" aria-hidden="true" />
+                          Ищем автомобиль по VIN…
+                        </li>
+                      )}
+                      {clientsLoading && searchRows.length === 0 ? (
+                        <li
+                          className="flex items-center justify-center gap-2 py-4 text-sm text-ink-3"
+                          role="presentation"
+                        >
+                          <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden="true" />
+                          Поиск…
+                        </li>
+                      ) : clientsError ? (
+                        <li
+                          className="flex items-center justify-between gap-3 px-3 py-3 text-sm text-bad-text"
+                          role="presentation"
+                        >
+                          Не удалось выполнить поиск
+                          <Button variant="secondary" size="sm" onClick={() => refetchClients()}>
+                            Повторить
+                          </Button>
+                        </li>
+                      ) : (
+                        <>
+                          {searchRows.map((row, i) => {
+                            const active = i === activeRow;
+                            const hit = row.vinHit;
+                            const name = hit ? hit.client?.fullName || 'Без владельца' : row.client?.fullName;
+                            const phone = hit ? hit.client?.phone : row.client?.phone;
+                            const plate = hit ? hit.plateNumber : row.car?.plateNumber;
+                            const makeModel = hit ? hit.makeModel : row.car?.makeModel;
+                            const rowVin = vinEnabled ? (hit ? hit.vin : carVin(row.car)) : null;
+                            return (
+                              // Мышь: клик выбирает; клавиатура ведётся из поля (aria-activedescendant).
+                              // eslint-disable-next-line jsx-a11y/click-events-have-key-events
+                              <li
+                                key={row.key}
+                                id={`client-opt-${row.key}`}
+                                role="option"
+                                aria-selected={active}
+                                onMouseEnter={() => setActiveRow(i)}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => selectRow(row)}
+                                className={cn(
+                                  'flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 transition-colors',
+                                  active ? 'bg-surface-3' : 'hover:bg-surface-3',
+                                )}
+                              >
+                                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+                                  {hit ? (
+                                    <ScanLine className="h-4 w-4" aria-hidden="true" />
+                                  ) : row.car ? (
+                                    <CarIcon className="h-4 w-4" aria-hidden="true" />
+                                  ) : (
+                                    <UserRound className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex min-w-0 items-center gap-2">
+                                    <span className="truncate text-sm font-medium text-ink">{name}</span>
+                                    {hit && (
+                                      <Badge tone="accent" size="sm">
+                                        Найдено по VIN
+                                      </Badge>
+                                    )}
+                                  </span>
+                                  <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-3">
+                                    {phone && <span>{formatPhone(phone)}</span>}
+                                    {plate && <PlateBadge plate={plate} />}
+                                    {makeModel && <span className="truncate">{makeModel}</span>}
+                                    {!row.car && !hit && <span>без автомобиля</span>}
+                                    {rowVin && <span className="font-mono">{formatVin(rowVin)}</span>}
+                                  </span>
+                                </span>
+                                {pickingVin && hit && (
+                                  <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden="true" />
+                                )}
+                              </li>
+                            );
+                          })}
+                          {searchRows.length === 0 && !clientsLoading && (
+                            <li className="px-3 py-2 text-center text-sm text-ink-3" role="presentation">
+                              {searchIsVin && !vinLoading ? 'Автомобиль с таким VIN не найден' : 'Ничего не найдено'}
+                            </li>
+                          )}
+                          {showCreateRow && (
+                            // eslint-disable-next-line jsx-a11y/click-events-have-key-events
+                            <li
+                              id="client-opt-create"
+                              role="option"
+                              aria-selected={activeRow === createRowIndex}
+                              onMouseEnter={() => setActiveRow(createRowIndex)}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={openCreateClientFromSearch}
+                              className={cn(
+                                'mt-1 flex cursor-pointer items-center gap-3 rounded-lg border-t border-line px-3 py-2.5 text-sm font-medium text-accent-text transition-colors',
+                                activeRow === createRowIndex ? 'bg-accent-soft' : 'hover:bg-accent-soft',
+                              )}
+                            >
+                              <UserPlus className="h-4 w-4" aria-hidden="true" />
+                              {searchIsVin ? 'Создать клиента с этим VIN' : 'Создать нового клиента'}
+                            </li>
+                          )}
+                        </>
+                      )}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {!selectedClient && !plateSearch && (
+                <p className="text-xs text-ink-3">
+                  Начните вводить госномер, телефон или имя — подставим клиента и его автомобиль
+                  {clientsList.length > 0 ? '' : ''}.
+                </p>
+              )}
+
+              {selectedClient && (
+                <div className="rounded-lg border border-line bg-surface-2 p-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-ink">{selectedClient.fullName}</p>
+                      {selectedClient.phone && (
+                        <p className="mt-0.5 text-sm text-ink-3">{formatPhone(selectedClient.phone)}</p>
+                      )}
+                      <div className="mt-2">
+                        <LastVisitBadge clientId={selectedClient.id} carId={selectedCarId || undefined} />
+                      </div>
+                    </div>
+                    <div className="min-w-0 sm:w-64 sm:flex-shrink-0">
+                      {selectedClient.cars && selectedClient.cars.length > 1 ? (
+                        <Field label="Автомобиль" htmlFor="check-car">
+                          <Select
+                            id="check-car"
+                            value={selectedCarId}
+                            onChange={(e) => setSelectedCarId(e.target.value)}
+                            options={selectedClient.cars.map((car) => ({
+                              value: car.id,
+                              label: `${car.plateNumber || 'Без номера'} — ${car.makeModel}`,
+                            }))}
+                          />
+                        </Field>
+                      ) : (
+                        <p className="text-xs font-medium text-ink-3">Автомобиль</p>
+                      )}
+                      {selectedCar ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          {selectedCar.plateNumber ? (
+                            <PlateBadge plate={selectedCar.plateNumber} size="md" />
+                          ) : (
+                            <Badge>Без номера</Badge>
+                          )}
+                          <span className="truncate text-sm text-ink-2">{selectedCar.makeModel}</span>
+                        </div>
+                      ) : (
+                        <p className="mt-1.5 text-sm text-ink-3">Не указан</p>
+                      )}
+                      {selectedVin && (
+                        <div className="mt-1.5">
+                          <VinText vin={selectedVin} copy size="sm" />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right">
-                    {selectedClient.cars?.find((c) => c.id === selectedCarId) && (
-                      <>
-                        <div className="font-mono font-bold text-sm">
-                          {selectedClient.cars.find((c) => c.id === selectedCarId)?.plateNumber}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {selectedClient.cars.find((c) => c.id === selectedCarId)?.makeModel}
-                        </div>
-                      </>
+                  <div className="mt-3 flex flex-wrap items-center gap-1 border-t border-line pt-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Plus}
+                      onClick={() => openQuickDrawer({ kind: 'add-car', client: selectedClient })}
+                    >
+                      Добавить авто
+                    </Button>
+                    {selectedCar && canReassignOwner && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={Pencil}
+                        onClick={() => openQuickDrawer({ kind: 'edit-car', client: selectedClient, car: selectedCar })}
+                      >
+                        Изменить авто
+                      </Button>
+                    )}
+                    {canReassignOwner && selectedCarId && (
+                      <Button variant="ghost" size="sm" icon={UserCheck} onClick={openReassignModal}>
+                        Сменить владельца
+                      </Button>
                     )}
                   </div>
                 </div>
-                {selectedClient.cars && selectedClient.cars.length > 1 && (
-                  <div className="mt-2">
-                    <select
-                      value={selectedCarId}
-                      onChange={(e) => setSelectedCarId(e.target.value)}
-                      className="input text-sm"
-                    >
-                      {selectedClient.cars.map((car) => (
-                        <option key={car.id} value={car.id}>
-                          {car.plateNumber} {'\u2014'} {car.makeModel}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {/* \u00ab\u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430\u00bb \u2014 reassign the selected car to another
-                    client without leaving \u041a\u0430\u0441\u0441\u0430 (feature #9). */}
-                {canReassignOwner && selectedCarId && (
+              )}
+
+              {/* Действующие гарантии клиента/авто */}
+              {warrantyEnabled && activeWarranties && activeWarranties.length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-warn/30 bg-warn-soft">
                   <button
                     type="button"
-                    onClick={openReassignModal}
-                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-primary-600 hover:text-primary-700 transition-colors"
+                    onClick={() => setWarrantyExpanded((v) => !v)}
+                    aria-expanded={warrantyExpanded}
+                    className={cn('flex w-full items-center gap-2 px-3 py-2.5 text-left', focusRing)}
                   >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    \u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430
+                    <ShieldCheck className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
+                    <span className="flex-1 text-sm font-semibold text-warn-text">
+                      Действующая гарантия — {activeWarranties.length}
+                    </span>
+                    <ChevronDownIcon
+                      className={cn(
+                        'h-4 w-4 text-warn transition-transform duration-150',
+                        warrantyExpanded && 'rotate-180',
+                      )}
+                      aria-hidden="true"
+                    />
                   </button>
-                )}
-                <LastVisitBadge clientId={selectedClient.id} carId={selectedCarId || undefined} />
-              </div>
-            )}
-
-            {/* Active warranties banner — shown when client/car has unclaimed warranties */}
-            {warrantyEnabled && activeWarranties && activeWarranties.length > 0 && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setWarrantyExpanded((v) => !v)}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-amber-100/50 transition-colors"
-                >
-                  <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                  <span className="text-sm font-semibold text-amber-900 flex-1 text-left">
-                    Действующая гарантия — {activeWarranties.length}
-                  </span>
-                  <ChevronDownIcon
-                    className={`w-4 h-4 text-amber-700 transition-transform ${warrantyExpanded ? 'rotate-180' : ''}`}
-                  />
-                </button>
-                {warrantyExpanded && (
-                  <div className="border-t border-amber-200 divide-y divide-amber-100">
-                    {activeWarranties.map((w) => (
-                      <div key={w.id} className="px-3 py-2 flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-                                w.kind === 'product' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
-                              }`}
-                            >
-                              {w.kind === 'product' ? 'Товар' : 'Услуга'}
-                            </span>
-                            <p className="text-xs font-medium text-gray-900 truncate">{w.itemName || '—'}</p>
+                  {warrantyExpanded && (
+                    <ul className="divide-y divide-warn/20 border-t border-warn/30">
+                      {activeWarranties.map((w) => (
+                        <li key={w.id} className="flex items-center justify-between gap-2 px-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <Badge tone={w.kind === 'product' ? 'accent' : 'info'} size="sm">
+                                {w.kind === 'product' ? 'Товар' : 'Услуга'}
+                              </Badge>
+                              <p className="truncate text-xs font-medium text-ink">{w.itemName || '—'}</p>
+                            </div>
+                            <p className="mt-0.5 text-2xs text-warn-text">
+                              до {format(new Date(w.expiresAt), 'd MMM yyyy', { locale: ruLocale })}
+                            </p>
                           </div>
-                          <p className="text-[11px] text-amber-700 mt-0.5">
-                            до {format(new Date(w.expiresAt), 'd MMM yyyy', { locale: ruLocale })}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Mileage */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
-                <Gauge className="h-5 w-5 text-orange-500" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={mileage}
-                    onChange={(e) => setMileage(e.target.value)}
-                    placeholder="0"
-                    className="w-full text-sm h-9 px-2.5 pr-10 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
-                    км
-                  </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-              </div>
-            </div>
-          </div>
+              )}
+            </CardBody>
+          </Card>
 
-          {/* ===== SERVICES SECTION ===== */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                {'\u0423\u0441\u043B\u0443\u0433\u0438'}
-              </h3>
-              <button
-                type="button"
-                onClick={addServiceLine}
-                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C'}
-              </button>
-            </div>
-
-            {serviceLines.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-3 italic">
-                {'\u041D\u0435\u0442 \u0443\u0441\u043B\u0443\u0433'}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {serviceLines.map((line, index) => (
-                  <div key={index} className="bg-gray-50 rounded-xl p-3 space-y-2">
-                    {/* Row 1: Service select + delete */}
-                    <div className="flex gap-2">
-                      <select
-                        value={line.serviceId}
-                        onChange={(e) => updateServiceLine(index, 'serviceId', e.target.value)}
-                        className="input text-sm flex-1 min-w-0"
-                      >
-                        <option value="">{'\u0423\u0441\u043B\u0443\u0433\u0430...'}</option>
-                        {allServices?.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name} {'\u2014'} {formatCurrency(s.defaultPrice)}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
+          {/* ── Услуги ── */}
+          <Card padding="none">
+            <CardHeader
+              icon={Wrench}
+              title="Услуги"
+              dense
+              actions={
+                <>
+                  {serviceLines.length > 0 && <Money value={serviceTotal} className="text-sm font-semibold text-ink" />}
+                  <Button variant="secondary" size="sm" icon={Plus} onClick={addServiceLine} disabled={servicesLoading}>
+                    Добавить
+                  </Button>
+                </>
+              }
+            />
+            <CardBody className="space-y-2" padding="sm">
+              {servicesError && (
+                <p
+                  role="alert"
+                  className="flex items-center justify-between gap-3 rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad-text"
+                >
+                  Не удалось загрузить справочник услуг
+                  <Button variant="secondary" size="sm" onClick={() => refetchServices()}>
+                    Повторить
+                  </Button>
+                </p>
+              )}
+              {serviceLines.length === 0 ? (
+                <p className="py-4 text-center text-sm text-ink-3">Услуг нет — добавьте первую</p>
+              ) : (
+                serviceLines.map((line, index) => (
+                  <div
+                    key={index}
+                    className="grid grid-cols-1 gap-2 rounded-lg border border-line bg-surface-2/60 p-2.5 sm:grid-cols-[minmax(0,1fr)_11rem_8.5rem_auto] sm:items-center"
+                  >
+                    <ServiceCombobox
+                      services={allServices ?? []}
+                      value={line.serviceId}
+                      fallbackName={line.name}
+                      onChange={(id) => updateServiceLine(index, 'serviceId', id)}
+                      placeholder={servicesLoading ? 'Загружаем услуги…' : 'Найти услугу…'}
+                    />
+                    <Select
+                      aria-label="Мастер"
+                      placeholder="Мастер…"
+                      value={line.masterId}
+                      onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
+                      options={(masters ?? []).map((m) => ({ value: m.id, label: m.fullName }))}
+                    />
+                    <MoneyInput
+                      aria-label="Цена услуги"
+                      value={line.price}
+                      onCommit={(n) => updateServiceLine(index, 'price', n)}
+                      placeholder="0"
+                    />
+                    <div className="flex items-center justify-between gap-2 sm:justify-end">
+                      {line.quantity !== 1 && (
+                        <span className="text-xs tabular-nums text-ink-3">
+                          × {formatQty(line.quantity)} = {formatMoney(line.price * line.quantity)}
+                        </span>
+                      )}
+                      <IconButton
+                        label={`Удалить услугу${line.name ? ` «${line.name}»` : ''}`}
+                        icon={Trash2}
+                        size="sm"
+                        variant="danger"
                         onClick={() => removeServiceLine(index)}
-                        className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50 flex-shrink-0"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {/* Row 2: Master selector (per service) */}
-                    <div className="flex items-center gap-2">
-                      <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                      <select
-                        value={line.masterId}
-                        onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
-                        className="input text-xs py-1.5 flex-1 min-w-0"
-                      >
-                        <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440...'}</option>
-                        {masters?.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.fullName}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Row 3: Price */}
-                    <div className="relative">
-                      <input
-                        type="number"
-                        value={line.price}
-                        onChange={(e) => updateServiceLine(index, 'price', Number(e.target.value))}
-                        className="input text-base sm:text-sm text-right pr-8"
-                        placeholder={'\u0426\u0435\u043D\u0430'}
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
-                        {'\u20BD'}
-                      </span>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </CardBody>
+          </Card>
 
-            {serviceLines.length > 0 && (
-              <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
-                {'\u0418\u0442\u043E\u0433\u043E: '}
-                {formatCurrency(serviceTotal)}
-              </div>
-            )}
-          </div>
-
-          {/* ===== PRODUCTS SECTION ===== */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                {'\u0422\u043E\u0432\u0430\u0440\u044B'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowProductPicker(true)}
-                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C'}
-              </button>
-            </div>
-
-            {productLines.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-3 italic">
-                {'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {productLines.map((line, index) => (
-                  <div key={index} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{line.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {formatCurrency(line.sellPrice)} / {unitLabel(line.unit)}
-                      </div>
+          {/* ── Товары ── */}
+          <Card padding="none">
+            <CardHeader
+              icon={Package}
+              title="Товары"
+              dense
+              actions={
+                <>
+                  {productLines.length > 0 && <Money value={productTotal} className="text-sm font-semibold text-ink" />}
+                  <Button variant="secondary" size="sm" icon={Plus} onClick={() => setShowProductPicker(true)}>
+                    Добавить
+                  </Button>
+                </>
+              }
+            />
+            <CardBody className="space-y-2" padding="sm">
+              {productLines.length === 0 ? (
+                <p className="py-4 text-center text-sm text-ink-3">Товаров нет — выберите со склада</p>
+              ) : (
+                productLines.map((line, index) => (
+                  <div
+                    key={index}
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/60 px-3 py-2 sm:flex-nowrap"
+                  >
+                    <div className="min-w-0 flex-1 basis-40">
+                      <p className="truncate text-sm font-medium text-ink">{line.name}</p>
+                      <p className="text-xs tabular-nums text-ink-3">
+                        {formatMoney(line.sellPrice)} / {unitLabel(line.unit)}
+                      </p>
                     </div>
-                    {/* 120: дробный ввод количества разрешён ВСЕГДА (0.5 м
-                        шланга), степперы ±1 остаются рядом. */}
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        type="button"
+                    {/* 120: дробный ввод количества разрешён ВСЕГДА (0.5 м шланга), степперы ±1 рядом. */}
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <IconButton
+                        label="Уменьшить количество"
+                        icon={Minus}
+                        size="sm"
+                        variant="secondary"
+                        disabled={line.quantity <= 1}
                         onClick={() => {
-                          if (line.quantity > 1) {
-                            updateProductLine(index, 'quantity', roundQty(line.quantity - 1));
-                          }
+                          if (line.quantity > 1) updateProductLine(index, 'quantity', roundQty(line.quantity - 1));
                         }}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                      </button>
+                      />
                       <QtyInput
                         value={line.quantity}
                         onCommit={(n) => updateProductLine(index, 'quantity', n)}
-                        className="w-16 text-center text-sm font-medium rounded border border-gray-200 py-1 px-1"
+                        label={`Количество: ${line.name}`}
                       />
-                      <button
-                        type="button"
+                      <IconButton
+                        label="Увеличить количество"
+                        icon={Plus}
+                        size="sm"
+                        variant="secondary"
                         onClick={() => updateProductLine(index, 'quantity', roundQty(line.quantity + 1))}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
+                      />
                     </div>
-                    <span className="text-sm font-semibold text-gray-700 flex-shrink-0 whitespace-nowrap">
-                      {formatCurrency(line.sellPrice * line.quantity)}
-                    </span>
-                    <button
-                      type="button"
+                    <Money
+                      value={line.sellPrice * line.quantity}
+                      className="w-24 flex-shrink-0 text-right text-sm font-semibold text-ink"
+                    />
+                    <IconButton
+                      label={`Удалить товар «${line.name}»`}
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
                       onClick={() => removeProductLine(index)}
-                      className="p-1 text-red-400 hover:text-red-600 flex-shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {productLines.length > 0 && (
-              <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
-                {'\u0418\u0442\u043E\u0433\u043E: '}
-                {formatCurrency(productTotal)}
-              </div>
-            )}
-          </div>
-
-          {/* ===== RECEIPT SUMMARY ===== */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300 bg-gray-50">
-            <div className="space-y-1.5 font-mono text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500">
-                  {'\u0423\u0441\u043B\u0443\u0433\u0438'} ({serviceLines.length})
-                </span>
-                <span>{formatCurrency(serviceTotal)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">
-                  {'\u0422\u043E\u0432\u0430\u0440\u044B'} ({productLines.length})
-                </span>
-                <span>{formatCurrency(productTotal)}</span>
-              </div>
-              {discount > 0 && (
-                <div className="flex justify-between text-red-500">
-                  <span>
-                    {'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B'}
-                  </span>
-                  {/* Round 13 #1: \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u043C \u041F\u0420\u0418\u041C\u0415\u041D\u0401\u041D\u041D\u0423\u042E \u0441\u043A\u0438\u0434\u043A\u0443 (\u2264 \u0441\u0443\u043C\u043C\u044B
-                      \u0442\u043E\u0432\u0430\u0440\u043E\u0432), \u0447\u0442\u043E\u0431\u044B \u0441\u0442\u0440\u043E\u043A\u0438 \u0441\u0445\u043E\u0434\u0438\u043B\u0438\u0441\u044C \u0441 \u0418\u0422\u041E\u0413\u041E \u2014 parity mobile. */}
-                  <span>-{formatCurrency(appliedDiscount)}</span>
-                </div>
-              )}
-              <div className="border-t border-gray-300 pt-1.5 mt-1.5">
-                <div className="flex justify-between text-lg font-bold text-gray-900">
-                  <span>{'\u0418\u0422\u041E\u0413\u041E'}</span>
-                  <span>{formatCurrency(totalRevenue)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Discount input */}
-            <div className="mt-3 flex items-center gap-2">
-              <label className="text-xs text-gray-500 whitespace-nowrap">
-                {'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B:'}
-              </label>
-              <input
-                type="number"
-                value={discount || ''}
-                min={0}
-                max={productTotal}
-                // Кламп к сумме товаров: скидка больше товаров молча
-                // игнорируется расчётом, но печаталась бы полной — арифметика
-                // клиентского чека не сходилась бы. Дублируется в сабмите
-                // (товары могли удалить после ввода скидки).
-                onChange={(e) => setDiscount(Math.min(Math.max(Number(e.target.value) || 0, 0), productTotal))}
-                className="input text-sm w-28 text-right"
-                placeholder="0"
-              />
-              <span className="text-xs text-gray-400">{'\u20BD'}</span>
-            </div>
-            {/* Round 13 #1: \u0441\u043A\u0438\u0434\u043A\u0430 \u0431\u043E\u043B\u044C\u0448\u0435 \u0441\u0443\u043C\u043C\u044B \u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043C\u043E\u043B\u0447\u0430 \u0440\u0435\u0437\u0430\u043B\u0430\u0441\u044C \u0440\u0430\u0441\u0447\u0451\u0442\u043E\u043C
-                (\u0441\u0435\u043C\u0430\u043D\u0442\u0438\u043A\u0430 \u00AB\u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B\u00BB \u043D\u0435\u0438\u0437\u043C\u0435\u043D\u043D\u0430) \u2014 \u043F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0430\u0435\u043C \u044F\u0432\u043D\u043E. */}
-            {discount > 0 && appliedDiscount < discount && (
-              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-                {productTotal <= 0
-                  ? '\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0435 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u0430: \u0432 \u0447\u0435\u043A\u0435 \u043D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432 (\u0441\u043A\u0438\u0434\u043A\u0430 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B)'
-                  : `\u0421\u043A\u0438\u0434\u043A\u0430 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u0430 \u0447\u0430\u0441\u0442\u0438\u0447\u043D\u043E: ${formatCurrency(appliedDiscount)} \u0438\u0437 ${formatCurrency(discount)} (\u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043D\u0430 ${formatCurrency(productTotal)})`}
-              </p>
-            )}
-          </div>
-
-          {/* ===== PAYMENT SECTION ===== */}
-          {cashierLocked ? (
-            <div className="px-5 py-4 border-b border-dashed border-gray-300">
-              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 flex items-start gap-3">
-                <Banknote className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-amber-800">
-                    \u0420\u0435\u0436\u0438\u043C \u043A\u0430\u0441\u0441\u043E\u0432\u043E\u0439
-                    \u0441\u043C\u0435\u043D\u044B
-                  </p>
-                  <p className="text-xs text-amber-700 mt-0.5">
-                    \u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0440\u043E\u0432\u043E\u0434\u0438\u0442
-                    \u043A\u0430\u0441\u0441\u0438\u0440. \u0417\u0430\u043A\u0430\u0437-\u043D\u0430\u0440\u044F\u0434
-                    \u0431\u0443\u0434\u0435\u0442 \u0441\u043E\u0437\u0434\u0430\u043D \u043A\u0430\u043A
-                    \u043E\u0442\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0439 \u2014
-                    \u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u0430\u043A\u0440\u043E\u0435\u0442
-                    \u0441\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A \u0441 \u043F\u0440\u0430\u0432\u043E\u043C
-                    \u00AB\u041F\u0440\u0438\u0451\u043C \u043E\u043F\u043B\u0430\u0442\u044B\u00BB.
-                  </p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="px-5 py-4 border-b border-dashed border-gray-300">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                {'\u041E\u043F\u043B\u0430\u0442\u0430'}
-              </h3>
-
-              {/* Правка чека-рассрочки (Round 13 #9): способ оплаты менять
-                  нельзя в обе стороны (сервер вернёт 400) — селектор прячем,
-                  ниже read-only плашка. Parity mobile. */}
-              {!(isEditMode && paymentMethod === 'installment') && (
-                <div className={`grid ${canOfferInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('cash')}
-                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                      paymentMethod === 'cash'
-                        ? 'border-green-500 bg-green-50 text-green-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <Banknote className="w-5 h-5" />
-                    <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('card')}
-                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                      paymentMethod === 'card'
-                        ? 'border-blue-500 bg-blue-50 text-blue-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <CreditCard className="w-5 h-5" />
-                    <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('cash_card')}
-                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                      paymentMethod === 'cash_card'
-                        ? 'border-purple-500 bg-purple-50 text-purple-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <Calculator className="w-5 h-5" />
-                    <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('warranty')}
-                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                      paymentMethod === 'warranty'
-                        ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <Receipt className="w-5 h-5" />
-                    <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
-                  </button>
-                  {canOfferInstallment && (
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMethod('installment')}
-                      className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                        paymentMethod === 'installment'
-                          ? 'border-violet-500 bg-violet-50 text-violet-700'
-                          : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                      }`}
-                    >
-                      <CalendarDays className="w-5 h-5" />
-                      <span className="text-[10px] font-semibold">
-                        {'\u0420\u0430\u0441\u0441\u0440\u043e\u0447\u043a\u0430'}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {paymentMethod === 'cash' && (
-                <div className="bg-green-50 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-gray-700">
-                      {'\u041A\u043B\u0438\u0435\u043D\u0442 \u0434\u0430\u043B:'}
-                    </label>
-                    <input
-                      type="number"
-                      value={cashGiven || ''}
-                      onChange={(e) => setCashGiven(Number(e.target.value))}
-                      className="input w-36 text-right text-lg font-bold"
-                      placeholder="0"
                     />
                   </div>
-                  {cashGiven > 0 && (
-                    <div className="flex items-center justify-between border-t border-green-200 pt-2">
-                      <span className="text-sm font-medium text-gray-700">{'\u0421\u0434\u0430\u0447\u0430:'}</span>
-                      <span className={`text-xl font-bold ${changeAmount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                        {formatCurrency(changeAmount)}
-                      </span>
-                    </div>
-                  )}
-                </div>
+                ))
               )}
+            </CardBody>
+          </Card>
 
-              {paymentMethod === 'cash_card' && (
-                <div className="bg-purple-50 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Banknote className="w-4 h-4 text-green-600" />
-                      <label className="text-sm font-medium text-gray-700">
-                        {'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435:'}
-                      </label>
-                    </div>
-                    <input
-                      type="number"
-                      value={cashAmount || ''}
-                      onChange={(e) => setCashAmount(Number(e.target.value))}
-                      className="input w-36 text-right text-lg font-bold"
-                      placeholder="0"
-                      max={totalRevenue}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-purple-200 pt-2">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-blue-600" />
-                      <label className="text-sm font-medium text-gray-700">{'\u041A\u0430\u0440\u0442\u0430:'}</label>
-                    </div>
-                    <span className="text-lg font-bold text-blue-600">
-                      {formatCurrency(Math.max(totalRevenue - cashAmount, 0))}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Правка чека-рассрочки (Round 13 #9): первый взнос и график НЕ
-                  редактируются здесь (сервер клиентские ноги игнорирует, берёт
-                  прежние из чека) — read-only плашка с честным взносом и
-                  формулой пересчёта. Платежи — в разделе «Рассрочка». */}
-              {paymentMethod === 'installment' && isEditMode && (
-                <div className="bg-violet-50 rounded-xl p-4 space-y-2">
-                  <div className="flex items-start gap-2">
-                    <CalendarDays className="w-4 h-4 flex-shrink-0 mt-0.5 text-violet-600" />
-                    <p className="text-sm font-medium text-violet-800">
-                      {'Заказ-наряд оформлен в рассрочку. Платежи и график — в разделе «Рассрочка».'}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">{'Первый взнос:'}</span>
-                    <span className="font-bold text-gray-900">{formatCurrency(installmentCash + installmentCard)}</span>
-                  </div>
-                  <p className="text-xs text-violet-700">
-                    {'Долг пересчитается автоматически: новый итог − уже внесённые платежи.'}
-                  </p>
-                </div>
-              )}
-
-              {paymentMethod === 'installment' && !isEditMode && (
-                <div className="bg-violet-50 rounded-xl p-4 space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-violet-700">{'Первый взнос'}</p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Banknote className="w-4 h-4 text-green-600" />
-                      <label className="text-sm font-medium text-gray-700">{'Наличными:'}</label>
-                    </div>
-                    <input
-                      type="number"
-                      value={installmentCash || ''}
-                      onChange={(e) => setInstallmentCash(Number(e.target.value))}
-                      className="input w-36 text-right text-lg font-bold"
-                      placeholder="0"
-                      max={totalRevenue}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-blue-600" />
-                      <label className="text-sm font-medium text-gray-700">{'Картой:'}</label>
-                    </div>
-                    <input
-                      type="number"
-                      value={installmentCard || ''}
-                      onChange={(e) => setInstallmentCard(Number(e.target.value))}
-                      className="input w-36 text-right text-lg font-bold"
-                      placeholder="0"
-                      max={totalRevenue}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-violet-200 pt-2">
-                    <span className="text-sm font-medium text-gray-700">{'Остаток в рассрочку:'}</span>
-                    <span className="text-lg font-bold text-violet-700">
-                      {formatCurrency(Math.max(totalRevenue - installmentCash - installmentCard, 0))}
-                    </span>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">{'Дата следующего платежа'}</label>
-                    <input
-                      type="date"
-                      value={installmentNextDate}
-                      onChange={(e) => setInstallmentNextDate(e.target.value)}
-                      className="input"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">{'Комментарий'}</label>
-                    <input
-                      type="text"
-                      value={installmentComment}
-                      onChange={(e) => setInstallmentComment(e.target.value)}
-                      className="input"
-                      placeholder={'Условия рассрочки (необязательно)'}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {paymentMethod !== 'installment' && (
-                <label
-                  className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
-                    isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isDeferred}
-                    onChange={(e) => setIsDeferred(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-                  />
-                  <div>
-                    <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>
-                      Отложить чек
-                    </span>
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.
-                    </p>
-                  </div>
-                </label>
-              )}
-            </div>
-          )}
-
-          {/* ===== КОНВЕЙЕР (Round 14): исполнители + место ===== */}
+          {/* ── Конвейер (Round 14): исполнители + место ── */}
           {conveyorMode && (
-            <div className="px-5 py-4 border-b border-dashed border-gray-300">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Исполнители и место</h3>
-
-              {/* Мультивыбор исполнителей — заказ падает на доску каждого */}
-              {(masters ?? []).length === 0 ? (
-                <p className="text-xs text-gray-400">Нет сотрудников для назначения</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
-                  {(masters ?? []).map((m) => {
-                    const active = assigneeIds.includes(m.id);
-                    return (
-                      <label
-                        key={m.id}
-                        className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                          active ? 'border-primary-300 bg-primary-50' : 'border-gray-200 bg-white hover:bg-gray-50'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={active}
+            <Card padding="none">
+              <CardHeader
+                icon={MapPin}
+                title="Исполнители и место"
+                subtitle="Заказ появится на доске каждого выбранного исполнителя"
+                dense
+              />
+              <CardBody className="space-y-4" padding="sm">
+                {(masters ?? []).length === 0 ? (
+                  <p className="text-sm text-ink-3">Нет сотрудников для назначения</p>
+                ) : (
+                  <fieldset className="min-w-0 border-0 p-0">
+                    <legend className="mb-2 text-sm font-medium text-ink-2">Исполнители</legend>
+                    <div className="grid max-h-48 grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
+                      {(masters ?? []).map((m) => (
+                        <Checkbox
+                          key={m.id}
+                          label={m.fullName}
+                          checked={assigneeIds.includes(m.id)}
                           onChange={() => toggleAssignee(m.id)}
-                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="rounded-lg border border-line px-3 py-2"
                         />
-                        <span
-                          className={`text-sm truncate ${active ? 'font-semibold text-primary-700' : 'text-gray-700'}`}
-                        >
-                          {m.fullName}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-              <p className="text-[10px] text-gray-400 mt-1.5">
-                Заказ появится на доске каждого выбранного исполнителя. Без выбора — исполнители из строк услуг.
-              </p>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-xs text-ink-3">Без выбора — исполнители из строк услуг.</p>
+                  </fieldset>
+                )}
 
-              {/* Место («возле задних ворот», «Бокс 2») */}
-              <div className="mt-3">
-                <label className="block text-xs text-gray-500 mb-1">Место</label>
-                <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="input text-sm">
-                  <option value="">Без места</option>
-                  {activeLocations.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                  {/* Выбранное, но архивное место (edit-гидрация) — не терять */}
-                  {locationId && !activeLocations.some((l) => l.id === locationId) && (
-                    <option value={locationId}>
-                      {(locations ?? []).find((l) => l.id === locationId)?.name ?? 'Выбранное место'}
-                    </option>
-                  )}
-                </select>
+                <Field label="Место" htmlFor="check-location" hint="Например, «Бокс 2» или «возле задних ворот»">
+                  <Select id="check-location" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                    <option value="">Без места</option>
+                    {activeLocations.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name}
+                      </option>
+                    ))}
+                    {/* Выбранное, но архивное место (edit-гидрация) — не терять */}
+                    {locationId && !activeLocations.some((l) => l.id === locationId) && (
+                      <option value={locationId}>
+                        {(locations ?? []).find((l) => l.id === locationId)?.name ?? 'Выбранное место'}
+                      </option>
+                    )}
+                  </Select>
+                </Field>
                 {canManageLocations && (
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <input
+                  <div className="flex items-center gap-2">
+                    <Input
                       value={newLocationName}
                       onChange={(e) => setNewLocationName(e.target.value)}
                       onKeyDown={(e) => {
@@ -2224,210 +1807,467 @@ export default function CheckCreatePage() {
                         }
                       }}
                       maxLength={100}
-                      placeholder="Новое место — например, «возле задних ворот»"
-                      className="input flex-1 !py-1.5 text-xs"
+                      size="sm"
+                      aria-label="Новое место"
+                      placeholder="Новое место…"
                     />
-                    {newLocationName.trim() && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleCreateLocation}
+                      disabled={!newLocationName.trim()}
+                      loading={creatingLocation}
+                    >
+                      Добавить
+                    </Button>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
+
+          {/* ── Комментарий и метки ── */}
+          <Card padding="none">
+            <CardHeader icon={MessageSquare} title="Комментарий" dense divider={false} />
+            <CardBody className="space-y-3 pt-0" padding="sm">
+              <Textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={2}
+                aria-label="Комментарий к чеку"
+                placeholder="Что важно помнить об этом заказе…"
+              />
+
+              {/* Метки (Round 12 #9): чипы выбранных + «Метка» → поповер. Цвет метки задаёт владелец. */}
+              <div className="relative flex flex-wrap items-center gap-1.5">
+                {selectedTags.map((tag) => {
+                  const accent = tag.color || '#64748b';
+                  return (
+                    <span
+                      key={tag.id}
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium"
+                      style={{ borderColor: accent, color: accent, backgroundColor: `${accent}14` }}
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: accent }}
+                        aria-hidden="true"
+                      />
+                      {tag.name}
                       <button
                         type="button"
-                        onClick={handleCreateLocation}
-                        disabled={creatingLocation}
-                        className="rounded-lg bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                        onClick={() => toggleTag(tag)}
+                        className={cn(
+                          '-mr-1 flex h-5 w-5 items-center justify-center rounded opacity-70 hover:opacity-100',
+                          focusRing,
+                        )}
+                        aria-label={`Убрать метку ${tag.name}`}
                       >
-                        {creatingLocation ? '...' : 'Добавить'}
+                        <X className="h-3 w-3" aria-hidden="true" />
                       </button>
+                    </span>
+                  );
+                })}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={Tag}
+                  aria-expanded={showTagPopover}
+                  onClick={() => setShowTagPopover((v) => !v)}
+                  className="border border-dashed border-line-strong"
+                >
+                  Метка
+                </Button>
+
+                {showTagPopover && (
+                  <>
+                    <button
+                      type="button"
+                      aria-label="Закрыть выбор меток"
+                      className="fixed inset-0 z-30 cursor-default"
+                      onClick={() => setShowTagPopover(false)}
+                    />
+                    {/* Escape закрывает поповер из любого его контрола (chips, поле). */}
+                    {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+                    <div
+                      role="dialog"
+                      aria-label="Метки чека"
+                      className="absolute left-0 top-full z-40 mt-2 w-72 rounded-xl border border-line bg-surface p-3 shadow-pop motion-safe:animate-pop-in"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') setShowTagPopover(false);
+                      }}
+                    >
+                      {(allTags ?? []).length === 0 && (
+                        <p className="mb-2 text-xs text-ink-3">
+                          Меток пока нет. Создайте первую — в отчётах появится прибыль по ней.
+                        </p>
+                      )}
+                      {(allTags ?? []).length > 0 && (
+                        <div className="mb-2 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                          {(allTags ?? []).map((tag) => {
+                            const accent = tag.color || '#64748b';
+                            const active = selectedTags.some((t) => t.id === tag.id);
+                            return (
+                              <button
+                                key={tag.id}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => toggleTag(tag)}
+                                className={cn(
+                                  'inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors',
+                                  focusRing,
+                                  active ? '' : 'border-line bg-surface-2 text-ink-2 hover:bg-surface-3',
+                                )}
+                                style={
+                                  active
+                                    ? { borderColor: accent, color: accent, backgroundColor: `${accent}14` }
+                                    : undefined
+                                }
+                              >
+                                <span
+                                  className="h-1.5 w-1.5 rounded-full"
+                                  style={{ backgroundColor: accent, opacity: active ? 1 : 0.55 }}
+                                  aria-hidden="true"
+                                />
+                                {tag.name}
+                                {active && <CheckIcon className="h-3 w-3" aria-hidden="true" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          value={newTagName}
+                          onChange={(e) => setNewTagName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleCreateTag();
+                            }
+                          }}
+                          maxLength={30}
+                          size="sm"
+                          aria-label="Новая метка"
+                          placeholder="Новая метка…"
+                        />
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={handleCreateTag}
+                          disabled={!newTagName.trim()}
+                          loading={creatingTag}
+                        >
+                          Создать
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* ═══════════ Правая колонка: параметры, итог, оплата, пробить ═══════════ */}
+        <div className="min-w-0 space-y-5 xl:sticky xl:top-0 xl:max-h-[calc(100dvh-3rem)] xl:overflow-y-auto xl:pb-1 xl:pr-0.5">
+          {/* ── Дата и пробег ── */}
+          <Card padding="sm">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Дата чека" htmlFor="check-date">
+                {canEditDate ? (
+                  <Input
+                    id="check-date"
+                    type="date"
+                    value={displayDate}
+                    onChange={(e) => {
+                      setDate(e.target.value);
+                      setDateTouched(true);
+                    }}
+                  />
+                ) : (
+                  <p id="check-date" className="flex h-9 items-center gap-2 text-sm tabular-nums text-ink">
+                    <CalendarDays className="h-4 w-4 text-ink-4" aria-hidden="true" />
+                    {format(new Date(displayDate + 'T00:00:00'), 'dd.MM.yyyy')}
+                  </p>
+                )}
+              </Field>
+              <Field label="Пробег" htmlFor="check-mileage">
+                <MoneyInput
+                  id="check-mileage"
+                  integer
+                  suffix="км"
+                  placeholder="0"
+                  value={Number(mileage) || 0}
+                  onCommit={(n) => setMileage(n > 0 ? String(n) : '')}
+                  leftIcon={Gauge}
+                />
+              </Field>
+            </div>
+          </Card>
+
+          {/* ── Итог ── */}
+          <Card padding="none">
+            <CardHeader
+              title="Итог"
+              dense
+              divider={false}
+              actions={isDeferred && !cashierLocked ? <Badge tone="warn">Черновик</Badge> : undefined}
+            />
+            <CardBody className="space-y-2.5 pt-0" padding="sm">
+              <SummaryRow label={`Услуги (${serviceLines.length})`} value={formatMoney(serviceTotal)} />
+              <SummaryRow label={`Товары (${productLines.length})`} value={formatMoney(productTotal)} />
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="check-discount" className="text-sm text-ink-3">
+                  Скидка на товары
+                </label>
+                <MoneyInput
+                  id="check-discount"
+                  size="sm"
+                  value={discount}
+                  max={productTotal}
+                  disabled={productTotal <= 0 && discount <= 0}
+                  onCommit={(n) => setDiscount(Math.min(Math.max(n, 0), productTotal))}
+                  className="w-32"
+                />
+              </div>
+              {/* Round 13 #1: скидка больше суммы товаров молча резалась расчётом — предупреждаем явно. */}
+              {discount > 0 && appliedDiscount < discount && (
+                <p
+                  role="status"
+                  className="rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-xs text-warn-text"
+                >
+                  {productTotal <= 0
+                    ? 'Скидка не применена: в чеке нет товаров (скидка действует только на товары)'
+                    : `Скидка применена частично: ${formatMoney(appliedDiscount)} из ${formatMoney(discount)} (товаров на ${formatMoney(productTotal)})`}
+                </p>
+              )}
+              <SummaryRow
+                label="Итого"
+                value={formatMoney(totalRevenue)}
+                strong
+                className="border-t border-line pt-2.5"
+              />
+            </CardBody>
+          </Card>
+
+          {/* ── Оплата ── */}
+          {cashierLocked ? (
+            <Card padding="sm">
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-warn-soft text-warn">
+                  <Banknote className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-ink">Режим кассовой смены</p>
+                  <p className="mt-0.5 text-xs text-ink-3">
+                    Оплату проводит кассир. Заказ-наряд будет создан как отложенный — оплату закроет сотрудник с правом
+                    «Приём оплаты».
+                  </p>
+                </div>
+              </div>
+            </Card>
+          ) : (
+            <Card padding="none">
+              <CardHeader title="Оплата" dense divider={false} />
+              <CardBody className="space-y-4 pt-0" padding="sm">
+                {/* Правка чека-рассрочки (Round 13 #9): способ оплаты менять нельзя (сервер вернёт 400). */}
+                {!(isEditMode && paymentMethod === 'installment') && (
+                  <RadioGroup<PaymentMethodKey>
+                    aria-label="Способ оплаты"
+                    orientation="horizontal"
+                    value={paymentMethod as PaymentMethodKey}
+                    onChange={setPaymentMethod}
+                    options={paymentOptions}
+                  />
+                )}
+
+                {paymentMethod === 'cash' && (
+                  <div className="space-y-3 rounded-lg bg-surface-2 p-3">
+                    <Field
+                      label="Получено от клиента"
+                      htmlFor="check-cash-given"
+                      hint="Необязательно — для подсчёта сдачи"
+                    >
+                      <MoneyInput id="check-cash-given" value={cashGiven} onCommit={setCashGiven} />
+                    </Field>
+                    {cashGiven > 0 && (
+                      <div className="flex items-center justify-between border-t border-line pt-2">
+                        <span className="text-sm font-medium text-ink-2">Сдача</span>
+                        <Money
+                          value={changeAmount}
+                          className={cn('text-lg font-semibold', changeAmount > 0 ? 'text-ok-text' : 'text-ink')}
+                        />
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
-            </div>
-          )}
 
-          {/* Comment */}
-          <div className="px-5 py-4 border-b border-gray-200">
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              rows={2}
-              placeholder={
-                '\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u0447\u0435\u043A\u0443...'
-              }
-              className="input text-sm w-full"
-            />
-
-            {/* \u041C\u0435\u0442\u043A\u0438 (Round 12 #9) \u2014 \u043D\u0435\u043D\u0430\u0432\u044F\u0437\u0447\u0438\u0432\u0430\u044F \u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u0434 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0435\u043C:
-                \u0447\u0438\u043F\u044B \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0445 \u043C\u0435\u0442\u043E\u043A + ghost-\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u041C\u0435\u0442\u043A\u0430\u00BB \u2192 \u043F\u043E\u043F\u043E\u0432\u0435\u0440 \u0441 \u0447\u0438\u043F\u0430\u043C\u0438
-                \u0438 \u0438\u043D\u043B\u0430\u0439\u043D-\u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435\u043C. \u041E\u0431\u044B\u0447\u043D\u044B\u0439 \u0447\u0435\u043A \u043D\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043D\u0438 \u043E\u0434\u043D\u043E\u0433\u043E \u043A\u043B\u0438\u043A\u0430. */}
-            <div className="relative mt-2.5 flex flex-wrap items-center gap-1.5">
-              {selectedTags.map((tag) => {
-                const accent = tag.color || '#64748b';
-                return (
-                  <span
-                    key={tag.id}
-                    className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold"
-                    style={{ borderColor: accent, color: accent, backgroundColor: `${accent}14` }}
-                  >
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
-                    {tag.name}
-                    <button
-                      type="button"
-                      onClick={() => toggleTag(tag)}
-                      className="-mr-0.5 opacity-60 hover:opacity-100"
-                      aria-label={`\u0423\u0431\u0440\u0430\u0442\u044C \u043C\u0435\u0442\u043A\u0443 ${tag.name}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() => setShowTagPopover((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-gray-300 px-2.5 py-0.5 text-xs font-medium text-gray-400 transition-colors hover:border-primary-300 hover:text-primary-600"
-              >
-                <Tag className="h-3 w-3" />
-                \u041C\u0435\u0442\u043A\u0430
-              </button>
-
-              {showTagPopover && (
-                <>
-                  {/* \u041A\u043B\u0438\u043A \u043C\u0438\u043C\u043E \u043F\u043E\u043F\u043E\u0432\u0435\u0440\u0430 \u2014 \u0437\u0430\u043A\u0440\u044B\u0442\u044C */}
-                  <div className="fixed inset-0 z-30" onClick={() => setShowTagPopover(false)} />
-                  <div className="absolute left-0 top-full z-40 mt-2 w-72 rounded-xl border border-gray-200 bg-white p-3 shadow-lg">
-                    {(allTags ?? []).length === 0 && (
-                      <p className="mb-2 text-xs text-gray-500">
-                        \u041C\u0435\u0442\u043E\u043A \u043F\u043E\u043A\u0430 \u043D\u0435\u0442.
-                        \u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0435\u0440\u0432\u0443\u044E \u2014
-                        \u0432 \u043E\u0442\u0447\u0451\u0442\u0430\u0445
-                        \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438\u0431\u044B\u043B\u044C
-                        \u043F\u043E \u043D\u0435\u0439.
-                      </p>
-                    )}
-                    {(allTags ?? []).length > 0 && (
-                      <div className="mb-2 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
-                        {(allTags ?? []).map((tag) => {
-                          const accent = tag.color || '#64748b';
-                          const active = selectedTags.some((t) => t.id === tag.id);
-                          return (
-                            <button
-                              key={tag.id}
-                              type="button"
-                              onClick={() => toggleTag(tag)}
-                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                                active ? 'font-semibold' : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
-                              }`}
-                              style={
-                                active
-                                  ? { borderColor: accent, color: accent, backgroundColor: `${accent}14` }
-                                  : undefined
-                              }
-                            >
-                              <span
-                                className="h-1.5 w-1.5 rounded-full"
-                                style={{ backgroundColor: accent, opacity: active ? 1 : 0.55 }}
-                              />
-                              {tag.name}
-                              {active && <CheckIcon className="h-3 w-3" />}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        value={newTagName}
-                        onChange={(e) => setNewTagName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleCreateTag();
-                          }
-                        }}
-                        maxLength={30}
-                        placeholder="\u041D\u043E\u0432\u0430\u044F \u043C\u0435\u0442\u043A\u0430"
-                        className="input flex-1 !py-1.5 text-xs"
+                {paymentMethod === 'cash_card' && (
+                  <div className="space-y-3 rounded-lg bg-surface-2 p-3">
+                    <Field label="Наличными" htmlFor="check-cash-part">
+                      <MoneyInput id="check-cash-part" value={cashAmount} onCommit={setCashAmount} max={totalRevenue} />
+                    </Field>
+                    <div className="flex items-center justify-between border-t border-line pt-2">
+                      <span className="flex items-center gap-2 text-sm font-medium text-ink-2">
+                        <CreditCard className="h-4 w-4 text-ink-4" aria-hidden="true" />
+                        Картой
+                      </span>
+                      <Money
+                        value={Math.max(totalRevenue - cashAmount, 0)}
+                        className="text-lg font-semibold text-ink"
                       />
-                      {newTagName.trim() && (
-                        <button
-                          type="button"
-                          onClick={handleCreateTag}
-                          disabled={creatingTag}
-                          className="rounded-lg bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
-                        >
-                          {creatingTag ? '...' : '\u0421\u043E\u0437\u0434\u0430\u0442\u044C'}
-                        </button>
-                      )}
                     </div>
                   </div>
+                )}
+
+                {/* Правка чека-рассрочки: взнос и график здесь не редактируются. */}
+                {paymentMethod === 'installment' && isEditMode && (
+                  <div className="space-y-2 rounded-lg border border-info/30 bg-info-soft p-3">
+                    <p className="flex items-start gap-2 text-sm font-medium text-info-text">
+                      <CalendarDays className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                      Заказ-наряд оформлен в рассрочку. Платежи и график — в разделе «Рассрочка».
+                    </p>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-ink-2">Первый взнос</span>
+                      <Money value={installmentCash + installmentCard} className="font-semibold text-ink" />
+                    </div>
+                    <p className="text-xs text-info-text">
+                      Долг пересчитается автоматически: новый итог − уже внесённые платежи.
+                    </p>
+                  </div>
+                )}
+
+                {paymentMethod === 'installment' && !isEditMode && (
+                  <div className="space-y-3 rounded-lg bg-surface-2 p-3">
+                    <p className="text-sm font-medium text-ink">Первый взнос</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Наличными" htmlFor="inst-cash">
+                        <MoneyInput
+                          id="inst-cash"
+                          value={installmentCash}
+                          onCommit={setInstallmentCash}
+                          max={totalRevenue}
+                        />
+                      </Field>
+                      <Field label="Картой" htmlFor="inst-card">
+                        <MoneyInput
+                          id="inst-card"
+                          value={installmentCard}
+                          onCommit={setInstallmentCard}
+                          max={totalRevenue}
+                        />
+                      </Field>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-line pt-2">
+                      <span className="text-sm font-medium text-ink-2">Остаток в рассрочку</span>
+                      <Money
+                        value={Math.max(totalRevenue - installmentCash - installmentCard, 0)}
+                        className="text-lg font-semibold text-info-text"
+                      />
+                    </div>
+                    <Field label="Дата следующего платежа" htmlFor="inst-date">
+                      <Input
+                        id="inst-date"
+                        type="date"
+                        value={installmentNextDate}
+                        onChange={(e) => setInstallmentNextDate(e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Комментарий" htmlFor="inst-comment" hint="Условия рассрочки, необязательно">
+                      <Input
+                        id="inst-comment"
+                        value={installmentComment}
+                        onChange={(e) => setInstallmentComment(e.target.value)}
+                      />
+                    </Field>
+                  </div>
+                )}
+
+                {paymentMethod !== 'installment' && (
+                  <Checkbox
+                    label="Отложить чек"
+                    description="Сохранить как черновик и продолжить позже. Смену нельзя закрыть с отложенными чеками."
+                    checked={isDeferred}
+                    onChange={(e) => setIsDeferred(e.target.checked)}
+                    className={cn(
+                      'w-full rounded-lg border px-3 py-2.5',
+                      isDeferred ? 'border-warn/40 bg-warn-soft' : 'border-line',
+                    )}
+                  />
+                )}
+              </CardBody>
+            </Card>
+          )}
+
+          {/* ── Пробить ── липнет к низу правой колонки на десктопе: главная
+              кнопка видна и на 1280×800, пока оплата прокручивается под ней. */}
+          <div className="space-y-2 xl:sticky xl:bottom-0 xl:bg-canvas xl:pb-1 xl:pt-3">
+            <Button
+              type="submit"
+              size="lg"
+              fullWidth
+              icon={Receipt}
+              loading={submitting}
+              disabled={!isDeferred && itemCount === 0}
+            >
+              {isEditMode ? (
+                isDeferred ? (
+                  'Сохранить чек'
+                ) : (
+                  <>
+                    Сохранить — <Money value={totalRevenue} />
+                  </>
+                )
+              ) : isDeferred ? (
+                'Отложить чек'
+              ) : (
+                <>
+                  Пробить чек — <Money value={totalRevenue} />
                 </>
               )}
-            </div>
-          </div>
-
-          {/* Submit button */}
-          <div className="px-5 py-4 bg-gray-50">
-            <button
-              type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending || (!isDeferred && itemCount === 0)}
-              className={`w-full py-3.5 text-base font-bold rounded-xl disabled:opacity-50 transition-colors ${
-                isDeferred ? 'bg-red-600 hover:bg-red-700 text-white' : 'btn-primary'
-              }`}
-            >
-              {createMutation.isPending || updateMutation.isPending ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  {isEditMode ? 'Сохранение...' : 'Создание...'}
-                </span>
-              ) : isEditMode ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Receipt className="w-5 h-5" />
-                  {isDeferred ? 'Сохранить чек' : `Сохранить — ${formatCurrency(totalRevenue)}`}
-                </span>
-              ) : isDeferred ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Receipt className="w-5 h-5" />
-                  Отложить чек
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-2">
-                  <Receipt className="w-5 h-5" />
-                  Пробить чек — {formatCurrency(totalRevenue)}
-                </span>
-              )}
-            </button>
-            {/* \u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0441\u043E\u0441\u0442\u0430\u0432 \u0447\u0435\u043A\u0430 \u043A\u0430\u043A \u0448\u0430\u0431\u043B\u043E\u043D (\u0442\u043E\u043B\u044C\u043A\u043E \u0441\u0442\u0440\u043E\u043A\u0438 \u0441\u043E \u0441\u0432\u044F\u0437\u044C\u044E \u0441 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u043E\u043C) */}
-            {canSaveTemplate && (
-              <button
-                type="button"
-                onClick={() => setShowSaveTemplate(true)}
-                className="w-full mt-2 flex items-center justify-center gap-1.5 py-2 text-xs font-medium text-gray-400 hover:text-primary-600 transition-colors"
-              >
-                <BookmarkPlus className="w-3.5 h-3.5" />
-                {
-                  '\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043A\u0430\u043A \u0448\u0430\u0431\u043B\u043E\u043D'
-                }
-              </button>
+            </Button>
+            {!isDeferred && itemCount === 0 && (
+              <p className="text-center text-xs text-ink-3">Добавьте хотя бы одну услугу или товар</p>
             )}
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              className="w-full mt-2 btn-ghost py-2.5 text-sm text-gray-500"
-            >
-              {'\u041E\u0442\u043C\u0435\u043D\u0430'}
-            </button>
+            <div className="flex items-center justify-between gap-2">
+              {canSaveTemplate ? (
+                <Button variant="ghost" size="sm" icon={BookmarkPlus} onClick={() => setShowSaveTemplate(true)}>
+                  Сохранить как шаблон
+                </Button>
+              ) : (
+                <span />
+              )}
+              <Button variant="ghost" size="sm" onClick={requestLeave}>
+                Отмена
+              </Button>
+            </div>
           </div>
         </div>
       </form>
 
-      {/* Product Picker Modal */}
-      <ProductPickerModal
-        isOpen={showProductPicker}
+      {/* Пикер товаров — боковая панель (Escape, возврат фокуса, поиск, папки) */}
+      <ProductPickerDrawer
+        open={showProductPicker}
         onClose={() => setShowProductPicker(false)}
         products={pickerProducts}
+        isLoading={productsLoading}
+        isError={productsError && !allProducts}
+        onRetry={() => refetchProducts()}
         onSelectProduct={handleProductSelected}
         warehouses={warehouses}
         selectedWarehouseId={pickerWarehouseId}
         onSelectWarehouse={setPickerWarehouseId}
+      />
+
+      {/* Быстрое создание клиента / авто */}
+      <ClientCarQuickDrawer
+        key={quickDrawerSeq}
+        open={!!quickDrawer}
+        mode={quickDrawer}
+        vinEnabled={vinEnabled}
+        onClose={() => setQuickDrawer(null)}
+        onDone={handleQuickDone}
       />
 
       {/* Шаблоны чеков: выбор + управление и «Сохранить как шаблон» */}
@@ -2443,56 +2283,44 @@ export default function CheckCreatePage() {
         products={templateProducts}
       />
 
-      {/* «Сменить владельца» modal (feature #9) — reassign the selected car */}
-      <Modal isOpen={reassignOpen} onClose={closeReassignModal} title="Сменить владельца">
+      {/* «Сменить владельца» (feature #9) */}
+      <Modal
+        isOpen={reassignOpen}
+        onClose={closeReassignModal}
+        title="Сменить владельца"
+        description="Авто и вся его история (чеки, долги, бонусы) перейдут новому владельцу. Текущий несохранённый чек будет переоформлен на него."
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeReassignModal} disabled={reassignMutation.isPending}>
+              Отмена
+            </Button>
+            <Button onClick={confirmReassign} disabled={!reassignTarget} loading={reassignMutation.isPending}>
+              Сменить владельца
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
-          {(() => {
-            const car = selectedClient?.cars?.find((c) => c.id === selectedCarId);
-            return car ? (
-              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
-                <span className="font-mono font-bold text-sm bg-white border border-gray-200 px-2 py-1 rounded">
-                  {car.plateNumber}
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{car.makeModel}</p>
-                  {selectedClient && <p className="text-xs text-gray-500">Владелец: {selectedClient.fullName}</p>}
-                </div>
+          {selectedCar && (
+            <div className="flex items-center gap-3 rounded-lg border border-line bg-surface-2 p-3">
+              {selectedCar.plateNumber ? (
+                <PlateBadge plate={selectedCar.plateNumber} size="md" />
+              ) : (
+                <Badge>Без номера</Badge>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-ink">{selectedCar.makeModel}</p>
+                {selectedClient && <p className="text-xs text-ink-3">Владелец: {selectedClient.fullName}</p>}
               </div>
-            ) : null;
-          })()}
-
-          <div>
-            <label className="label">Новый владелец</label>
+            </div>
+          )}
+          <Field label="Новый владелец">
             <ClientSearchAutocomplete
               selectedClient={reassignTarget}
               onSelect={setReassignTarget}
               excludeClientId={selectedClient?.id}
             />
-          </div>
-
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-            <p className="text-xs text-amber-800 flex items-start gap-1.5">
-              <UserCheck className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-              <span>
-                Авто и вся его история (чеки, долги, бонусы) будут перенесены новому владельцу. Текущий (несохранённый)
-                чек будет переоформлен на нового владельца.
-              </span>
-            </p>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeReassignModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button
-              type="button"
-              onClick={confirmReassign}
-              disabled={!reassignTarget || reassignMutation.isPending}
-              className="btn-primary disabled:opacity-50"
-            >
-              {reassignMutation.isPending ? 'Переносим…' : 'Сменить владельца'}
-            </button>
-          </div>
+          </Field>
         </div>
       </Modal>
 
@@ -2501,26 +2329,37 @@ export default function CheckCreatePage() {
         isOpen={showRetailPrompt}
         onClose={() => setShowRetailPrompt(false)}
         title="Возможно, вы забыли добавить клиента"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">Чек будет проведён как розничный, без привязки к клиенту.</p>
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={() => setShowRetailPrompt(false)} className="btn-secondary">
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowRetailPrompt(false)}>
               Вернуться
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={() => {
                 setShowRetailPrompt(false);
                 doSubmit();
               }}
-              className="btn-primary"
             >
-              Пробить
-            </button>
-          </div>
-        </div>
+              Пробить как розничный
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-ink-2">
+          Чек будет проведён как розничный, без привязки к клиенту — история визитов и гарантия не сохранятся.
+        </p>
       </Modal>
+
+      <ConfirmDialog
+        isOpen={leaveConfirmOpen}
+        onClose={() => setLeaveConfirmOpen(false)}
+        onConfirm={() => navigate(-1)}
+        title="Уйти без сохранения?"
+        message="В чеке уже есть строки. Если уйти сейчас, они пропадут."
+        confirmText="Уйти"
+        variant="danger"
+      />
     </div>
   );
 }
