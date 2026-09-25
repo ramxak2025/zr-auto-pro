@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { REPORT_CATALOG } from '../../../shared/reports/catalog';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence, MotionConfig } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
@@ -153,7 +154,17 @@ const navGroups: NavGroup[] = [
         label: 'Отчёты',
         path: '/reports',
         icon: BarChart3,
-        permission: 'financial_reports',
+        // Конструктор отчётов (2026-09-25): раздел доступен по ЛЮБОМУ из прав
+        // отчётов — завскладом открывает «По товарам» без финансовых прав;
+        // какие именно отчёты видны, решает сервер (GET /reports/builder/catalog).
+        anyPermission: [
+          'financial_reports',
+          'salary_view',
+          'suppliers_access',
+          'clients_view',
+          'warehouse_access',
+          'bookings_access',
+        ],
         featureKey: 'reports_view',
       },
     ],
@@ -277,6 +288,7 @@ const subRouteTitles: Record<string, string> = {
   edit: 'Редактирование',
   retail: 'Розница',
   import: 'Импорт',
+  financial: 'Финансовый отчёт',
 };
 
 /** Подпись детальной страницы по разделу (`/clients/:id` → «Клиент»). */
@@ -286,6 +298,7 @@ const detailTitles: Record<string, string> = {
   suppliers: 'Поставщик',
   employees: 'Сотрудник',
   'purchase-orders': 'Заказ',
+  reports: 'Отчёт',
 };
 
 function getPageTitle(pathname: string): string[] {
@@ -296,7 +309,10 @@ function getPageTitle(pathname: string): string[] {
   titles.push(routeTitles[segments[0]] ?? segments[0].charAt(0).toUpperCase() + segments[0].slice(1));
   if (segments.length > 1) {
     const last = segments[segments.length - 1];
-    titles.push(subRouteTitles[last] ?? detailTitles[segments[0]] ?? 'Детали');
+    // /reports/<id> — название отчёта из общего каталога («Отчёты › По мастерам»).
+    const reportTitle =
+      segments[0] === 'reports' && segments.length === 2 ? REPORT_CATALOG.find((r) => r.id === last)?.title : undefined;
+    titles.push(reportTitle ?? subRouteTitles[last] ?? detailTitles[segments[0]] ?? 'Детали');
   }
   return titles;
 }
