@@ -1,99 +1,79 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams, type To } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
-  Search,
-  Pin,
-  ShieldCheck,
-  Plus,
-  Pencil,
-  Trash2,
-  X,
-  ArrowLeft,
-  Paperclip,
-  Check,
-  Users as UsersIcon,
-  FolderPlus,
-  Folder,
-  Eye,
-  EyeOff,
-  Loader2,
-  ImagePlus,
   ChevronRight,
   FileText,
+  Folder,
+  FolderPlus,
   GraduationCap,
-  ThumbsUp,
-  ThumbsDown,
-  AlertCircle,
-  CalendarClock,
-  RefreshCw,
   Home,
-  Blocks,
+  Pin,
+  Plus,
+  Search,
+  ShieldCheck,
+  Wrench,
 } from 'lucide-react';
-import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { knowledgeApi, uploadsApi } from '../api/services';
-import type {
-  KnowledgeArticle,
-  KnowledgeArticleType,
-  KnowledgeAttachment,
-  KnowledgeBlock,
-  KnowledgeCategory,
-  KnowledgeCourse,
-} from '../types';
-
-import { formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
-import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
+import { knowledgeApi } from '../api/services';
+import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeCategory, KnowledgeCourse } from '../types';
+import { formatDateShort } from '../../../shared/utils/formatters';
+import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
-import MarkdownView from '../components/MarkdownView';
-import ArticleBlocksReader from '../components/knowledge/ArticleBlocks';
-import BlockEditor from '../components/knowledge/BlockEditor';
-import LearningCenter from './knowledge/LearningCenter';
+import QueryState from '../components/QueryState';
+import SearchInput from '../components/SearchInput';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { SkeletonCard } from '../ui/Skeleton';
+import { Tabs, TabPanel, type TabItem } from '../ui/Tabs';
+import { Toolbar } from '../ui/Toolbar';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
+import ArticleReader from '../components/knowledge/ArticleReader';
+import ArticleEditorModal from '../components/knowledge/ArticleEditorModal';
+import FolderManagerModal from '../components/knowledge/FolderManagerModal';
+import { KEY } from '../components/knowledge/keys';
+import { ArticleTypeBadge, CoverPlaceholder, InlineError, SectionHeading, TileLink } from '../components/knowledge/ui';
+import { pluralRu } from '../components/knowledge/utils';
+import LearningCenter, { CourseEditorModal } from './knowledge/LearningCenter';
+import TroubleshootingReference from './knowledge/TroubleshootingReference';
 
 // ───────────────────────────────────────────────────────────────────────
-//  Query keys (shared convention: ['knowledge', <resource>, ...args])
+//  База знаний. Состояние — в URL (F5, «Назад», пересылка ссылки):
+//    ?tab=knowledge|regulations|learning|troubleshooting
+//    &folder=<id>      — открытая папка (статьи/регламенты)
+//    &article=<id>     — читалка статьи (поверх любой вкладки)
+//    &course=<id>&lesson=<id> — учебный центр
+//    &issue=<id>       — карточка неисправности
+//    &q=<текст>        — глобальный поиск (≥ 2 символов)
 // ───────────────────────────────────────────────────────────────────────
-const KEY = {
-  categories: ['knowledge', 'categories'] as const,
-  articlesByType: (type: KnowledgeArticleType) => ['knowledge', 'articles', { type }] as const,
-  article: (id: string) => ['knowledge', 'article', id] as const,
-  search: (q: string) => ['knowledge', 'search', q] as const,
-  acks: (id: string) => ['knowledge', 'acks', id] as const,
-  pendingCount: ['knowledge', 'regulations', 'pending-count'] as const,
-};
 
-function formatBytes(bytes?: number): string {
-  if (!bytes || bytes <= 0) return '';
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${Math.round(kb)} КБ`;
-  return `${(kb / 1024).toFixed(1)} МБ`;
-}
-
-/** Russian plural for «просмотр / просмотра / просмотров». */
-function pluralizeViews(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'просмотр';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'просмотра';
-  return 'просмотров';
-}
-
-/** Pull a human message out of an axios-style error (NestJS validation may return string[]). */
-function errMessage(err: unknown, fallback: string): string {
-  const m = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
-  if (Array.isArray(m)) return m.filter(Boolean).join(', ') || fallback;
-  return m || fallback;
-}
-
-type View = { mode: 'browse' } | { mode: 'reader'; id: string };
-/** The three KB pillars. «База знаний» / «Регламенты» are folder-browsed article sets. */
-type Section = 'knowledge' | 'regulations' | 'learning';
+type Section = 'knowledge' | 'regulations' | 'learning' | 'troubleshooting';
+const SECTIONS: Section[] = ['knowledge', 'regulations', 'learning', 'troubleshooting'];
 
 const SECTION_TYPE: Record<'knowledge' | 'regulations', KnowledgeArticleType> = {
   knowledge: 'article',
   regulations: 'regulation',
 };
+
+const TAB_ITEMS: TabItem<Section>[] = [
+  { key: 'knowledge', label: 'База знаний', icon: BookOpen },
+  { key: 'regulations', label: 'Регламенты', icon: ShieldCheck },
+  { key: 'learning', label: 'Учебный центр', icon: GraduationCap },
+  { key: 'troubleshooting', label: 'Диагностика', icon: Wrench },
+];
+
+type ParamPatch = Record<string, string | null | undefined>;
+
+function applyPatch(base: URLSearchParams, patch: ParamPatch): URLSearchParams {
+  const next = new URLSearchParams(base);
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null || v === undefined || v === '') next.delete(k);
+    else next.set(k, v);
+  }
+  return next;
+}
 
 export default function KnowledgeBasePage() {
   const { hasPermission } = useAuth();
@@ -102,32 +82,41 @@ export default function KnowledgeBasePage() {
   // Битрикс24). Чтение открыто всем сотрудникам.
   const isManager = hasPermission('knowledge_manage');
 
-  const [section, setSection] = useState<Section>('knowledge');
-  const [view, setView] = useState<View>({ mode: 'browse' });
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [folderId, setFolderId] = useState<string | null>(null);
-  const [learningCourseId, setLearningCourseId] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const rawTab = params.get('tab');
+  const section: Section = SECTIONS.includes(rawTab as Section) ? (rawTab as Section) : 'knowledge';
+  const folderId = params.get('folder');
+  const articleId = params.get('article');
+  const courseId = params.get('course');
+  const lessonId = params.get('lesson');
+  const issueId = params.get('issue');
+  const search = (params.get('q') ?? '').trim();
 
-  // Debounce the search input → query param.
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onSearchChange = (value: string) => {
-    setSearchInput(value);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setSearch(value.trim()), 300);
-  };
-  const clearSearch = () => {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    setSearchInput('');
-    setSearch('');
-  };
+  const patch = useCallback(
+    (changes: ParamPatch, opts?: { replace?: boolean }) => {
+      setParams((prev) => applyPatch(prev, changes), { replace: opts?.replace });
+    },
+    [setParams],
+  );
+  const hrefFor = useCallback(
+    (changes: ParamPatch): To => {
+      const s = applyPatch(params, changes).toString();
+      return { search: s ? `?${s}` : '' };
+    },
+    [params],
+  );
 
   const isArticleSection = section === 'knowledge' || section === 'regulations';
   const sectionType: KnowledgeArticleType | null = isArticleSection ? SECTION_TYPE[section] : null;
   const searchActive = search.length >= 2;
 
   // ── Data ────────────────────────────────────────────────────────────
-  const { data: categories = [] } = useQuery({
+  const {
+    data: categories = [],
+    isError: categoriesError,
+    refetch: refetchCategories,
+    isFetching: categoriesFetching,
+  } = useQuery({
     queryKey: KEY.categories,
     queryFn: async () => (await knowledgeApi.listCategories()).data,
     staleTime: 5 * 60 * 1000,
@@ -140,13 +129,19 @@ export default function KnowledgeBasePage() {
     isLoading: articlesLoading,
     isError: articlesError,
     refetch: refetchArticles,
+    isFetching: articlesFetching,
   } = useQuery({
     queryKey: sectionType ? KEY.articlesByType(sectionType) : ['knowledge', 'articles', 'none'],
     queryFn: async () => (await knowledgeApi.listArticles({ type: sectionType! })).data,
     enabled: sectionType !== null,
   });
 
-  const { data: searchResults, isFetching: searchFetching } = useQuery({
+  const {
+    data: searchResults,
+    isFetching: searchFetching,
+    isError: searchError,
+    refetch: refetchSearch,
+  } = useQuery({
     queryKey: KEY.search(search),
     queryFn: async () => (await knowledgeApi.search(search)).data,
     enabled: searchActive,
@@ -181,8 +176,8 @@ export default function KnowledgeBasePage() {
 
   // If the open folder was deleted (children orphan to root), fall back to root.
   useEffect(() => {
-    if (folderId && categories.length > 0 && !categoryById.has(folderId)) setFolderId(null);
-  }, [folderId, categories.length, categoryById]);
+    if (folderId && categories.length > 0 && !categoryById.has(folderId)) patch({ folder: null }, { replace: true });
+  }, [folderId, categories.length, categoryById, patch]);
 
   const subfolders = childrenByParent.get(folderId) ?? [];
   const folderArticles = useMemo(
@@ -197,6 +192,8 @@ export default function KnowledgeBasePage() {
   // ── Modal state ─────────────────────────────────────────────────────
   const [editorArticle, setEditorArticle] = useState<KnowledgeArticle | 'new' | null>(null);
   const [folderManager, setFolderManager] = useState<{ presetParent: string | null } | null>(null);
+  const [courseEditorOpen, setCourseEditorOpen] = useState(false);
+  const [issueEditorOpen, setIssueEditorOpen] = useState(false);
 
   const invalidateLists = () => {
     if (sectionType) queryClient.invalidateQueries({ queryKey: KEY.articlesByType(sectionType) });
@@ -204,251 +201,299 @@ export default function KnowledgeBasePage() {
     queryClient.invalidateQueries({ queryKey: ['knowledge', 'search'] });
   };
 
-  const goToSection = (next: Section) => {
-    setSection(next);
-    setFolderId(null);
-  };
+  const goToSection = (next: Section) =>
+    patch({ tab: next === 'knowledge' ? null : next, folder: null, course: null, lesson: null, issue: null });
 
   // ── Reader (full-page) ──────────────────────────────────────────────
-  if (view.mode === 'reader') {
+  if (articleId) {
     return (
       <ArticleReader
-        articleId={view.id}
+        articleId={articleId}
         isManager={isManager}
-        onBack={() => setView({ mode: 'browse' })}
+        onBack={() => patch({ article: null })}
         onEdit={(article) => setEditorArticle(article)}
         editorArticle={editorArticle}
         categories={categories}
         onCloseEditor={() => setEditorArticle(null)}
         onAfterMutation={invalidateLists}
-        onDeleted={() => setView({ mode: 'browse' })}
+        onDeleted={() => patch({ article: null })}
       />
     );
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50">
-            <BookOpen className="h-5 w-5 text-primary-600" />
-          </div>
-          <div>
-            <h1 className="page-title">База знаний</h1>
-            <p className="text-sm text-gray-500">Регламенты, учебный центр и справочные материалы</p>
-          </div>
-        </div>
-        {isManager && isArticleSection && !searchActive && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setFolderManager({ presetParent: folderId })}
-              className="btn-secondary btn-sm"
-              title="Папки"
-            >
-              <FolderPlus className="h-4 w-4" />
-              <span className="hidden sm:inline">Папки</span>
-            </button>
-            <button onClick={() => setEditorArticle('new')} className="btn-primary btn-sm">
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">{section === 'regulations' ? 'Новый регламент' : 'Новая статья'}</span>
-            </button>
-          </div>
-        )}
-      </div>
+  // ── Заголовок: «Назад» для вложенных экранов, действия — по вкладке ──
+  const inLesson = section === 'learning' && !!courseId && !!lessonId;
+  const inCourse = section === 'learning' && !!courseId && !lessonId;
+  const inIssue = section === 'troubleshooting' && !!issueId;
+  const backTo = inLesson
+    ? () => patch({ lesson: null })
+    : inCourse
+      ? () => patch({ course: null })
+      : inIssue
+        ? () => patch({ issue: null })
+        : undefined;
+  const subtitle = inLesson
+    ? 'Учебный центр · урок'
+    : inCourse
+      ? 'Учебный центр · курс'
+      : inIssue
+        ? 'Диагностика · неисправность'
+        : 'Регламенты, учебный центр и справочные материалы';
 
-      {/* Smart global search */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          type="search"
-          value={searchInput}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Поиск по статьям, регламентам, папкам и курсам…"
-          className="input pl-10 pr-10"
-        />
-        {searchInput && (
-          <button
-            onClick={clearSearch}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-            aria-label="Очистить"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+  let actions: React.ReactNode;
+  if (isManager && !searchActive) {
+    if (isArticleSection) {
+      actions = (
+        <>
+          <Button variant="secondary" icon={FolderPlus} onClick={() => setFolderManager({ presetParent: folderId })}>
+            Папки
+          </Button>
+          <Button icon={Plus} onClick={() => setEditorArticle('new')}>
+            {section === 'regulations' ? 'Новый регламент' : 'Новая статья'}
+          </Button>
+        </>
+      );
+    } else if (section === 'learning' && !courseId) {
+      actions = (
+        <Button icon={Plus} onClick={() => setCourseEditorOpen(true)}>
+          Новый курс
+        </Button>
+      );
+    } else if (section === 'troubleshooting' && !issueId) {
+      actions = (
+        <Button icon={Plus} onClick={() => setIssueEditorOpen(true)}>
+          Новая запись
+        </Button>
+      );
+    }
+  }
+
+  const rootLabel = section === 'regulations' ? 'Регламенты' : 'Все папки';
+  const isRoot = !folderId;
+
+  return (
+    <div className="space-y-5">
+      <PageHeader title="База знаний" icon={GraduationCap} subtitle={subtitle} backTo={backTo} actions={actions} />
+
+      {/* Глобальный поиск — по статьям, регламентам, папкам и курсам сразу */}
+      {!backTo && (
+        <Toolbar>
+          <SearchInput
+            value={search}
+            onChange={(v) => patch({ q: v.trim() || null }, { replace: true })}
+            placeholder="Поиск по статьям, регламентам, папкам и курсам…"
+            aria-label="Поиск по базе знаний"
+            className="w-full lg:w-[28rem]"
+          />
+        </Toolbar>
+      )}
 
       {searchActive ? (
         <SearchResultsPanel
           results={searchResults}
           loading={searchFetching && !searchResults}
+          isError={searchError && !searchResults}
+          onRetry={() => refetchSearch()}
+          isFetching={searchFetching}
           query={search}
-          onOpenArticle={(id) => setView({ mode: 'reader', id })}
-          onOpenCategory={(id) => {
-            clearSearch();
-            goToSection('knowledge');
-            setFolderId(id);
-          }}
-          onOpenCourse={(id) => {
-            clearSearch();
-            setLearningCourseId(id);
-            setSection('learning');
-          }}
+          articleHref={(id) => hrefFor({ article: id })}
+          categoryHref={(id) => hrefFor({ q: null, tab: null, folder: id })}
+          courseHref={(id) => hrefFor({ q: null, tab: 'learning', course: id })}
         />
       ) : (
         <>
-          {/* Section tabs */}
-          <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
-            <SectionTab
-              label="База знаний"
-              icon={BookOpen}
-              active={section === 'knowledge'}
-              onClick={() => goToSection('knowledge')}
-            />
-            <SectionTab
-              label="Регламенты"
-              icon={ShieldCheck}
-              active={section === 'regulations'}
-              onClick={() => goToSection('regulations')}
-            />
-            <SectionTab
-              label="Учебный центр"
-              icon={GraduationCap}
-              active={section === 'learning'}
-              onClick={() => goToSection('learning')}
-            />
-          </div>
-
-          {section === 'learning' && (
-            <LearningCenter
-              key={learningCourseId ?? 'grid'}
-              isManager={isManager}
-              categories={categories}
-              initialCourseId={learningCourseId ?? undefined}
+          {!backTo && (
+            <Tabs<Section>
+              items={TAB_ITEMS}
+              value={section}
+              onChange={goToSection}
+              aria-label="Разделы базы знаний"
+              idPrefix="kb"
             />
           )}
 
+          <TabPanel idPrefix="kb" tabKey="learning" active={section === 'learning'}>
+            <LearningCenter
+              isManager={isManager}
+              categories={categories}
+              onCreateCourse={() => setCourseEditorOpen(true)}
+              nav={{
+                courseId,
+                lessonId,
+                courseHref: (id) => hrefFor({ course: id, lesson: null }),
+                lessonHref: (cId, lId) => hrefFor({ course: cId, lesson: lId }),
+                onBackToCourses: () => patch({ course: null, lesson: null }),
+              }}
+            />
+          </TabPanel>
+
+          <TabPanel idPrefix="kb" tabKey="troubleshooting" active={section === 'troubleshooting'}>
+            <TroubleshootingReference
+              isManager={isManager}
+              createOpen={issueEditorOpen}
+              onCloseCreate={() => setIssueEditorOpen(false)}
+              nav={{
+                issueId,
+                issueHref: (id) => hrefFor({ issue: id }),
+                onBackToList: () => patch({ issue: null }),
+              }}
+            />
+          </TabPanel>
+
           {isArticleSection && (
-            <div className="space-y-5">
-              {/* Breadcrumbs */}
-              <nav className="flex flex-wrap items-center gap-1 text-sm">
-                <button
-                  onClick={() => setFolderId(null)}
-                  className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 transition-colors ${
-                    folderId === null ? 'font-semibold text-gray-900' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Home className="h-3.5 w-3.5" />
-                  {section === 'regulations' ? 'Регламенты' : 'Все папки'}
-                </button>
-                {breadcrumb.map((c) => (
-                  <span key={c.id} className="flex items-center gap-1">
-                    <ChevronRight className="h-3.5 w-3.5 text-gray-300" />
-                    <button
-                      onClick={() => setFolderId(c.id)}
-                      className={`rounded-lg px-2 py-1 transition-colors ${
-                        c.id === folderId ? 'font-semibold text-gray-900' : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {c.name}
-                    </button>
-                  </span>
-                ))}
-              </nav>
+            <TabPanel idPrefix="kb" tabKey={section} active>
+              <div className="space-y-6">
+                {/* Крошки папок */}
+                <nav aria-label="Папки" className="flex flex-wrap items-center gap-1 text-sm">
+                  <Link
+                    to={hrefFor({ folder: null })}
+                    aria-current={isRoot ? 'page' : undefined}
+                    className={cn(
+                      'inline-flex h-8 items-center gap-1.5 rounded-md px-2 transition-colors',
+                      focusRing,
+                      isRoot ? 'font-semibold text-ink' : 'text-ink-3 hover:bg-surface-3 hover:text-ink',
+                    )}
+                  >
+                    <Home className="h-3.5 w-3.5" aria-hidden="true" />
+                    {rootLabel}
+                  </Link>
+                  {breadcrumb.map((c) => {
+                    const current = c.id === folderId;
+                    return (
+                      <span key={c.id} className="flex items-center gap-1">
+                        <ChevronRight className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+                        <Link
+                          to={hrefFor({ folder: c.id })}
+                          aria-current={current ? 'page' : undefined}
+                          className={cn(
+                            'inline-flex h-8 items-center rounded-md px-2 transition-colors',
+                            focusRing,
+                            current ? 'font-semibold text-ink' : 'text-ink-3 hover:bg-surface-3 hover:text-ink',
+                          )}
+                        >
+                          {c.name}
+                        </Link>
+                      </span>
+                    );
+                  })}
+                </nav>
 
-              {articlesLoading ? (
-                <div className="flex justify-center py-16">
-                  <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-                </div>
-              ) : articlesError ? (
-                <EmptyState
-                  icon={AlertCircle}
-                  title="Не удалось загрузить"
-                  description="Проверьте соединение и попробуйте снова."
-                  action={{ label: 'Повторить', onClick: () => refetchArticles() }}
-                />
-              ) : subfolders.length === 0 && folderArticles.length === 0 ? (
-                <EmptyState
-                  icon={section === 'regulations' ? ShieldCheck : BookOpen}
-                  title="Здесь пока пусто"
-                  description={
-                    isManager ? 'Создайте папку или добавьте первый материал.' : 'В этом разделе пока нет материалов.'
-                  }
-                  action={
-                    isManager
-                      ? {
-                          label: section === 'regulations' ? 'Новый регламент' : 'Новая статья',
-                          onClick: () => setEditorArticle('new'),
-                        }
-                      : undefined
-                  }
-                />
-              ) : (
-                <>
-                  {/* Subfolders */}
-                  {(subfolders.length > 0 || isManager) && (
-                    <section>
-                      <div className="mb-2.5 flex items-center justify-between">
-                        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-                          <Folder className="h-4 w-4" /> Папки
-                        </h2>
-                        {isManager && (
-                          <button
-                            onClick={() => setFolderManager({ presetParent: folderId })}
-                            className="btn-ghost btn-sm text-primary-600"
-                          >
-                            <FolderPlus className="h-4 w-4" /> Новая папка
-                          </button>
+                {categoriesError && (
+                  <InlineError
+                    message="Не удалось загрузить папки"
+                    onRetry={() => refetchCategories()}
+                    loading={categoriesFetching}
+                  />
+                )}
+
+                {articlesLoading ? (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <SkeletonCard key={i} lines={1} />
+                    ))}
+                  </div>
+                ) : articlesError ? (
+                  <QueryState
+                    isLoading={false}
+                    isError
+                    onRetry={refetchArticles}
+                    isFetching={articlesFetching}
+                    errorTitle="Не удалось загрузить материалы"
+                  >
+                    {null}
+                  </QueryState>
+                ) : subfolders.length === 0 && folderArticles.length === 0 ? (
+                  <EmptyState
+                    icon={section === 'regulations' ? ShieldCheck : BookOpen}
+                    title="Здесь пока пусто"
+                    description={
+                      isManager ? 'Создайте папку или добавьте первый материал.' : 'В этом разделе пока нет материалов.'
+                    }
+                    action={
+                      isManager
+                        ? {
+                            label: section === 'regulations' ? 'Новый регламент' : 'Новая статья',
+                            onClick: () => setEditorArticle('new'),
+                          }
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <>
+                    {/* Subfolders */}
+                    {(subfolders.length > 0 || isManager) && (
+                      <section aria-labelledby="kb-folders">
+                        <SectionHeading
+                          icon={Folder}
+                          title="Папки"
+                          count={subfolders.length || undefined}
+                          actions={
+                            isManager ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                icon={FolderPlus}
+                                onClick={() => setFolderManager({ presetParent: folderId })}
+                              >
+                                Новая папка
+                              </Button>
+                            ) : undefined
+                          }
+                        />
+                        {subfolders.length > 0 ? (
+                          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {subfolders.map((cat) => (
+                              <li key={cat.id}>
+                                <FolderTile
+                                  category={cat}
+                                  articleCount={countDirectArticles(cat.id)}
+                                  subfolderCount={(childrenByParent.get(cat.id) ?? []).length}
+                                  to={hrefFor({ folder: cat.id })}
+                                />
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-sm text-ink-3">Подпапок нет</p>
                         )}
-                      </div>
-                      {subfolders.length > 0 ? (
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {subfolders.map((cat) => (
-                            <FolderTile
-                              key={cat.id}
-                              category={cat}
-                              articleCount={countDirectArticles(cat.id)}
-                              subfolderCount={(childrenByParent.get(cat.id) ?? []).length}
-                              onOpen={() => setFolderId(cat.id)}
-                            />
+                      </section>
+                    )}
+
+                    {/* Pinned articles */}
+                    {pinned.length > 0 && (
+                      <section aria-labelledby="kb-pinned">
+                        <SectionHeading icon={Pin} title="Закреплённые" count={pinned.length} />
+                        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {pinned.map((a) => (
+                            <li key={a.id}>
+                              <ArticleCard article={a} to={hrefFor({ article: a.id })} />
+                            </li>
                           ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-gray-400">Подпапок нет</p>
-                      )}
-                    </section>
-                  )}
+                        </ul>
+                      </section>
+                    )}
 
-                  {/* Pinned articles */}
-                  {pinned.length > 0 && (
-                    <section>
-                      <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-                        <Pin className="h-4 w-4" /> Закреплённые
-                      </h2>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {pinned.map((a) => (
-                          <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* Articles in this folder */}
-                  {rest.length > 0 && (
-                    <section>
-                      <h2 className="mb-2.5 text-sm font-semibold text-gray-500">
-                        {section === 'regulations' ? 'Регламенты' : 'Материалы'}
-                      </h2>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {rest.map((a) => (
-                          <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-                </>
-              )}
-            </div>
+                    {/* Articles in this folder */}
+                    {rest.length > 0 && (
+                      <section aria-labelledby="kb-articles">
+                        <SectionHeading
+                          icon={FileText}
+                          title={section === 'regulations' ? 'Регламенты' : 'Материалы'}
+                          count={rest.length}
+                        />
+                        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {rest.map((a) => (
+                            <li key={a.id}>
+                              <ArticleCard article={a} to={hrefFor({ article: a.id })} />
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+                  </>
+                )}
+              </div>
+            </TabPanel>
           )}
 
           {/* Author modal */}
@@ -475,36 +520,19 @@ export default function KnowledgeBasePage() {
               onClose={() => setFolderManager(null)}
             />
           )}
+
+          {/* Новый курс — кнопка в шапке, модалка здесь */}
+          {isManager && courseEditorOpen && (
+            <CourseEditorModal
+              course={null}
+              categories={categories}
+              onClose={() => setCourseEditorOpen(false)}
+              onSaved={() => setCourseEditorOpen(false)}
+            />
+          )}
         </>
       )}
     </div>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  Section tab
-// ───────────────────────────────────────────────────────────────────────
-function SectionTab({
-  label,
-  icon: Icon,
-  active,
-  onClick,
-}: {
-  label: string;
-  icon: typeof FileText;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-medium transition-colors ${
-        active ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-      }`}
-    >
-      <Icon className="h-4 w-4" />
-      <span className="hidden sm:inline">{label}</span>
-    </button>
   );
 }
 
@@ -515,60 +543,67 @@ function FolderTile({
   category,
   articleCount,
   subfolderCount,
-  onOpen,
+  to,
 }: {
   category: KnowledgeCategory;
   articleCount: number;
   subfolderCount: number;
-  onOpen: () => void;
+  to: To;
 }) {
   const parts: string[] = [];
-  if (subfolderCount > 0) parts.push(`${subfolderCount} подпапк${subfolderCount === 1 ? 'а' : 'и'}`);
-  if (articleCount > 0) parts.push(`${articleCount} матер.`);
+  if (subfolderCount > 0)
+    parts.push(`${subfolderCount} ${pluralRu(subfolderCount, 'подпапка', 'подпапки', 'подпапок')}`);
+  if (articleCount > 0) parts.push(`${articleCount} ${pluralRu(articleCount, 'материал', 'материала', 'материалов')}`);
   return (
-    <button onClick={onOpen} className="card-interactive flex items-center gap-3 p-4 text-left">
-      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-        <Folder className="h-5 w-5" />
+    <TileLink to={to} className="flex items-center gap-3 p-3.5">
+      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-2">
+        <Folder className="h-5 w-5" aria-hidden="true" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-gray-900">{category.name}</span>
-        <span className="block text-xs text-gray-400">{parts.length > 0 ? parts.join(' · ') : 'Пусто'}</span>
+        <span className="block truncate text-sm font-semibold text-ink group-hover:text-accent-text">
+          {category.name}
+        </span>
+        <span className="block text-xs tabular-nums text-ink-3">{parts.length > 0 ? parts.join(' · ') : 'Пусто'}</span>
       </span>
-      <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-    </button>
+      <ChevronRight
+        className="h-4 w-4 flex-shrink-0 text-ink-4 transition-transform duration-150 group-hover:translate-x-0.5"
+        aria-hidden="true"
+      />
+    </TileLink>
   );
 }
 
 // ───────────────────────────────────────────────────────────────────────
-//  Article card (browse)
+//  Article card (browse / search)
 // ───────────────────────────────────────────────────────────────────────
-function ArticleCard({ article, onOpen }: { article: KnowledgeArticle; onOpen: () => void }) {
+function ArticleCard({ article, to }: { article: KnowledgeArticle; to: To }) {
   const isRegulation = article.type === 'regulation';
   return (
-    <button onClick={onOpen} className="card-interactive flex flex-col overflow-hidden text-left">
+    <TileLink to={to} className="flex h-full flex-col overflow-hidden">
       {article.coverImage && (
         <img src={article.coverImage} alt="" className="h-28 w-full object-cover" loading="lazy" />
       )}
       <div className="flex flex-1 flex-col p-4">
-        <div className="mb-1.5 flex items-center gap-2">
-          {isRegulation ? (
-            <span className="badge-warning gap-1">
-              <ShieldCheck className="h-3 w-3" /> Регламент
-            </span>
-          ) : (
-            <span className="badge-blue gap-1">
-              <FileText className="h-3 w-3" /> Статья
-            </span>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <ArticleTypeBadge regulation={isRegulation} size="sm" />
+          {isRegulation && article.mandatory && (
+            <Badge tone="bad" size="sm">
+              Обязательно
+            </Badge>
           )}
-          {!article.published && <span className="badge-gray">Черновик</span>}
+          {!article.published && <Badge size="sm">Черновик</Badge>}
         </div>
-        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{article.title}</h3>
-        {article.excerpt && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{article.excerpt}</p>}
-        {article.categoryName && (
-          <p className="mt-auto pt-2 text-xs font-medium text-gray-400">{article.categoryName}</p>
-        )}
+        <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-ink group-hover:text-accent-text">
+          {article.title}
+        </h3>
+        {article.excerpt && <p className="mt-1 line-clamp-2 text-xs leading-4 text-ink-3">{article.excerpt}</p>}
+        <p className="mt-auto flex items-center gap-2 pt-3 text-xs text-ink-3">
+          {article.categoryName && <span className="truncate font-medium">{article.categoryName}</span>}
+          {article.categoryName && <span aria-hidden="true">·</span>}
+          <span className="whitespace-nowrap tabular-nums">{formatDateShort(article.updatedAt)}</span>
+        </p>
       </div>
-    </button>
+    </TileLink>
   );
 }
 
@@ -578,25 +613,41 @@ function ArticleCard({ article, onOpen }: { article: KnowledgeArticle; onOpen: (
 function SearchResultsPanel({
   results,
   loading,
+  isError,
+  onRetry,
+  isFetching,
   query,
-  onOpenArticle,
-  onOpenCategory,
-  onOpenCourse,
+  articleHref,
+  categoryHref,
+  courseHref,
 }: {
   results:
     | { query: string; articles: KnowledgeArticle[]; categories: KnowledgeCategory[]; courses: KnowledgeCourse[] }
     | undefined;
   loading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  isFetching: boolean;
   query: string;
-  onOpenArticle: (id: string) => void;
-  onOpenCategory: (id: string) => void;
-  onOpenCourse: (id: string) => void;
+  articleHref: (id: string) => To;
+  categoryHref: (id: string) => To;
+  courseHref: (id: string) => To;
 }) {
   if (loading) {
     return (
-      <div className="flex justify-center py-16">
-        <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <SkeletonCard key={i} lines={2} />
+        ))}
       </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryState isLoading={false} isError onRetry={onRetry} isFetching={isFetching} errorTitle="Поиск не удался">
+        {null}
+      </QueryState>
     );
   }
 
@@ -616,1112 +667,73 @@ function SearchResultsPanel({
   }
 
   return (
-    <div className="space-y-6">
-      <p className="text-sm text-gray-500">
-        Результаты по запросу «<span className="font-medium text-gray-700">{query}</span>»
+    <div className="space-y-6" aria-live="polite">
+      <p className="text-sm text-ink-3">
+        Найдено <span className="font-medium tabular-nums text-ink">{total}</span> по запросу «
+        <span className="font-medium text-ink">{query}</span>»
       </p>
 
       {categories.length > 0 && (
-        <section>
-          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-            <Folder className="h-4 w-4" /> Папки ({categories.length})
-          </h2>
-          <div className="grid gap-2 sm:grid-cols-2">
+        <section aria-label="Папки">
+          <SectionHeading icon={Folder} title="Папки" count={categories.length} />
+          <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {categories.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => onOpenCategory(c.id)}
-                className="card-interactive flex items-center gap-3 p-3 text-left"
-              >
-                <Folder className="h-4 w-4 flex-shrink-0 text-amber-500" />
-                <span className="flex-1 truncate text-sm font-medium text-gray-800">{c.name}</span>
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-              </button>
+              <li key={c.id}>
+                <TileLink to={categoryHref(c.id)} className="flex items-center gap-3 p-3">
+                  <Folder className="h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink group-hover:text-accent-text">
+                    {c.name}
+                  </span>
+                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                </TileLink>
+              </li>
             ))}
-          </div>
+          </ul>
         </section>
       )}
 
       {articles.length > 0 && (
-        <section>
-          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-            <FileText className="h-4 w-4" /> Статьи и регламенты ({articles.length})
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2">
+        <section aria-label="Статьи и регламенты">
+          <SectionHeading icon={FileText} title="Статьи и регламенты" count={articles.length} />
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {articles.map((a) => (
-              <ArticleCard key={a.id} article={a} onOpen={() => onOpenArticle(a.id)} />
+              <li key={a.id}>
+                <ArticleCard article={a} to={articleHref(a.id)} />
+              </li>
             ))}
-          </div>
+          </ul>
         </section>
       )}
 
       {courses.length > 0 && (
-        <section>
-          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-            <GraduationCap className="h-4 w-4" /> Курсы ({courses.length})
-          </h2>
-          <div className="grid gap-2 sm:grid-cols-2">
+        <section aria-label="Курсы">
+          <SectionHeading icon={GraduationCap} title="Курсы" count={courses.length} />
+          <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {courses.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => onOpenCourse(c.id)}
-                className="card-interactive flex items-center gap-3 p-3 text-left"
-              >
-                <GraduationCap className="h-4 w-4 flex-shrink-0 text-primary-500" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-gray-800">{c.title}</span>
-                  {typeof c.progressPercent === 'number' && (
-                    <span className="block text-xs text-gray-400">Прогресс {c.progressPercent}%</span>
+              <li key={c.id}>
+                <TileLink to={courseHref(c.id)} className="flex items-center gap-3 p-3">
+                  {c.coverImage ? (
+                    <img src={c.coverImage} alt="" className="h-9 w-9 flex-shrink-0 rounded-md object-cover" />
+                  ) : (
+                    <CoverPlaceholder icon={GraduationCap} className="h-9 w-9 flex-shrink-0 rounded-md" />
                   )}
-                </span>
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-              </button>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink group-hover:text-accent-text">
+                      {c.title}
+                    </span>
+                    {typeof c.progressPercent === 'number' && (
+                      <span className="block text-xs tabular-nums text-ink-3">
+                        Прогресс {Math.round(c.progressPercent)}%
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                </TileLink>
+              </li>
             ))}
-          </div>
+          </ul>
         </section>
       )}
     </div>
   );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  Reader
-// ───────────────────────────────────────────────────────────────────────
-function ArticleReader({
-  articleId,
-  isManager,
-  onBack,
-  onEdit,
-  editorArticle,
-  categories,
-  onCloseEditor,
-  onAfterMutation,
-  onDeleted,
-}: {
-  articleId: string;
-  isManager: boolean;
-  onBack: () => void;
-  onEdit: (a: KnowledgeArticle) => void;
-  editorArticle: KnowledgeArticle | 'new' | null;
-  categories: KnowledgeCategory[];
-  onCloseEditor: () => void;
-  onAfterMutation: () => void;
-  onDeleted: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [acksOpen, setAcksOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const {
-    data: article,
-    isLoading,
-    isError,
-    refetch,
-  } = useQuery({
-    queryKey: KEY.article(articleId),
-    queryFn: async () => (await knowledgeApi.getArticle(articleId)).data,
-  });
-
-  const ackMutation = useMutation({
-    mutationFn: () => knowledgeApi.acknowledge(articleId),
-    onSuccess: (res) => {
-      // Optimistically update the cached article so the green ✓ appears instantly.
-      // The response carries the version that was acknowledged — sync it so a
-      // later in-place version bump is detected correctly.
-      queryClient.setQueryData<KnowledgeArticle>(KEY.article(articleId), (prev) =>
-        prev
-          ? {
-              ...prev,
-              acknowledged: !!res.data.acknowledgedAt,
-              version: res.data.version ?? prev.version,
-            }
-          : prev,
-      );
-      queryClient.invalidateQueries({ queryKey: KEY.acks(articleId) });
-      queryClient.invalidateQueries({ queryKey: KEY.pendingCount });
-      toast.success('Отмечено: ознакомлен');
-    },
-    onError: () => toast.error('Не удалось отметить'),
-  });
-
-  const feedbackMutation = useMutation({
-    mutationFn: (helpful: boolean) => knowledgeApi.articleFeedback(articleId, helpful),
-    onSuccess: (res) => {
-      queryClient.setQueryData<KnowledgeArticle>(KEY.article(articleId), (prev) =>
-        prev
-          ? {
-              ...prev,
-              helpfulCount: res.data.helpfulCount,
-              notHelpfulCount: res.data.notHelpfulCount,
-              myFeedback: res.data.myFeedback,
-            }
-          : prev,
-      );
-    },
-    onError: () => toast.error('Не удалось отправить оценку'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => knowledgeApi.deleteArticle(articleId),
-    onSuccess: () => {
-      toast.success('Статья удалена');
-      onAfterMutation();
-      onDeleted();
-    },
-    onError: () => toast.error('Не удалось удалить'),
-  });
-
-  if (isError && !article) {
-    return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> Назад
-        </button>
-        <div className="flex flex-col items-center justify-center py-16 text-center" role="alert">
-          <span className="mb-4 rounded-full bg-red-50 p-3">
-            <AlertCircle className="h-8 w-8 text-red-500" aria-hidden="true" />
-          </span>
-          <h3 className="mb-1 text-lg font-medium text-gray-900">Не удалось загрузить статью</h3>
-          <p className="mb-4 max-w-sm text-sm text-gray-500">Проверьте соединение и попробуйте снова.</p>
-          <button onClick={() => refetch()} className="btn-secondary press-soft">
-            Повторить
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (isLoading || !article) {
-    return (
-      <div className="space-y-6">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> Назад
-        </button>
-        <div className="flex justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-        </div>
-      </div>
-    );
-  }
-
-  const isRegulation = article.type === 'regulation';
-  const hasBlocks = !!article.blocks && article.blocks.length > 0;
-
-  return (
-    // pb-24 on mobile keeps the regulation «Ознакомлен» button (and feedback
-    // buttons) clear of the floating bottom tab bar; md:pb-0 restores desktop.
-    <div className="space-y-6 pb-24 md:pb-0">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
-          <ArrowLeft className="h-4 w-4" /> Назад
-        </button>
-        {isManager && (
-          <div className="flex items-center gap-2">
-            {isRegulation && (
-              <button onClick={() => setAcksOpen(true)} className="btn-secondary btn-sm">
-                <UsersIcon className="h-4 w-4" />
-                <span className="hidden sm:inline">Кто ознакомился</span>
-              </button>
-            )}
-            <button onClick={() => onEdit(article)} className="btn-secondary btn-sm">
-              <Pencil className="h-4 w-4" />
-              <span className="hidden sm:inline">Изменить</span>
-            </button>
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="btn-ghost btn-sm text-red-600"
-              aria-label="Удалить статью"
-              title="Удалить статью"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-      </div>
-
-      <article className="card overflow-hidden">
-        {article.coverImage && <img src={article.coverImage} alt="" className="max-h-64 w-full object-cover" />}
-        <div className="p-6 sm:p-8">
-          {/* Meta */}
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            {isRegulation ? (
-              <span className="badge-warning gap-1">
-                <ShieldCheck className="h-3 w-3" /> Регламент
-              </span>
-            ) : (
-              <span className="badge-blue gap-1">
-                <FileText className="h-3 w-3" /> Статья
-              </span>
-            )}
-            {article.categoryName && <span className="badge-gray">{article.categoryName}</span>}
-            {article.carMake && <span className="badge-blue">{article.carMake}</span>}
-            {isRegulation && article.mandatory && (
-              <span className="badge-red gap-1">
-                <AlertCircle className="h-3 w-3" /> Обязательно
-              </span>
-            )}
-            {isRegulation && article.dueDate && (
-              <span className="badge-warning gap-1">
-                <CalendarClock className="h-3 w-3" /> Срок: {formatDateShort(article.dueDate)}
-              </span>
-            )}
-            {typeof article.version === 'number' && article.version > 1 && (
-              <span className="badge-gray">Версия {article.version}</span>
-            )}
-            {!article.published && <span className="badge-gray">Черновик</span>}
-          </div>
-
-          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">{article.title}</h1>
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
-            <span>Обновлено {formatDateTime(article.updatedAt)}</span>
-            {typeof article.viewCount === 'number' && (
-              <span className="inline-flex items-center gap-1">
-                <Eye className="h-3.5 w-3.5" /> {article.viewCount} {pluralizeViews(article.viewCount)}
-              </span>
-            )}
-          </p>
-
-          {/* Regulation acknowledgment banner — version-aware re-ack */}
-          {isRegulation && (
-            <div className="mt-5">
-              {article.acknowledged ? (
-                <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
-                  <Check className="h-5 w-5" /> Вы ознакомлены с этой версией регламента
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {typeof article.version === 'number' && article.version > 1 && (
-                    <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-                      <RefreshCw className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                      <span>Регламент обновлён до версии {article.version} — ознакомьтесь заново.</span>
-                    </div>
-                  )}
-                  <button onClick={() => ackMutation.mutate()} disabled={ackMutation.isPending} className="btn-primary">
-                    {ackMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Check className="h-4 w-4" />
-                    )}
-                    Ознакомлен
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Body — block content (079) takes priority; markdown is the fallback */}
-          <div className="mt-6">
-            {hasBlocks ? (
-              <ArticleBlocksReader blocks={article.blocks!} />
-            ) : article.body ? (
-              <MarkdownView>{article.body}</MarkdownView>
-            ) : (
-              <p className="text-sm italic text-gray-400">Содержимое не заполнено.</p>
-            )}
-          </div>
-
-          {/* Attachments */}
-          {article.attachments && article.attachments.length > 0 && (
-            <div className="mt-8 border-t border-gray-100 pt-5">
-              <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-gray-700">
-                <Paperclip className="h-4 w-4" /> Вложения
-              </h3>
-              <div className="space-y-2">
-                {article.attachments.map((att, i) => (
-                  <a
-                    key={`${att.url}-${i}`}
-                    href={att.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2.5 text-sm transition-colors hover:bg-gray-50"
-                  >
-                    <Paperclip className="h-4 w-4 flex-shrink-0 text-gray-400" />
-                    <span className="flex-1 truncate text-gray-800">{att.name}</span>
-                    {att.size ? <span className="text-xs text-gray-400">{formatBytes(att.size)}</span> : null}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Helpfulness feedback */}
-          <div className="mt-8 border-t border-gray-100 pt-5">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-sm font-medium text-gray-600">Статья была полезной?</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => feedbackMutation.mutate(true)}
-                  disabled={feedbackMutation.isPending}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                    article.myFeedback === true
-                      ? 'border-green-300 bg-green-50 text-green-700'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <ThumbsUp className="h-4 w-4" />
-                  {typeof article.helpfulCount === 'number' ? article.helpfulCount : 0}
-                </button>
-                <button
-                  onClick={() => feedbackMutation.mutate(false)}
-                  disabled={feedbackMutation.isPending}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-                    article.myFeedback === false
-                      ? 'border-red-300 bg-red-50 text-red-700'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <ThumbsDown className="h-4 w-4" />
-                  {typeof article.notHelpfulCount === 'number' ? article.notHelpfulCount : 0}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </article>
-
-      {/* Acks panel */}
-      {isManager && acksOpen && <AcksModal articleId={articleId} onClose={() => setAcksOpen(false)} />}
-
-      {/* Editor modal (from reader) */}
-      {isManager && editorArticle && (
-        <ArticleEditorModal
-          article={editorArticle === 'new' ? null : editorArticle}
-          categories={categories}
-          defaultType={article.type}
-          defaultCategoryId={article.categoryId ?? null}
-          onClose={onCloseEditor}
-          onSaved={() => {
-            onCloseEditor();
-            onAfterMutation();
-            queryClient.invalidateQueries({ queryKey: KEY.article(articleId) });
-          }}
-        />
-      )}
-
-      <ConfirmDialog
-        isOpen={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        onConfirm={() => deleteMutation.mutate()}
-        title="Удалить статью?"
-        message="Статья будет удалена без возможности восстановления."
-        confirmText="Удалить"
-        variant="danger"
-      />
-    </div>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  «Кто ознакомился» — acknowledgment panel (manager)
-// ───────────────────────────────────────────────────────────────────────
-function AcksModal({ articleId, onClose }: { articleId: string; onClose: () => void }) {
-  const { data, isLoading } = useQuery({
-    queryKey: KEY.acks(articleId),
-    queryFn: async () => (await knowledgeApi.listAcks(articleId)).data,
-  });
-
-  return (
-    <Modal isOpen onClose={onClose} title="Кто ознакомился" size="md">
-      {isLoading || !data ? (
-        <div className="flex justify-center py-10">
-          <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-        </div>
-      ) : (
-        <div className="space-y-5">
-          {/* Progress */}
-          <div>
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-sm font-medium text-gray-700">
-                {data.acknowledgedCount} из {data.totalAudience} ознакомлены
-              </span>
-              <span className="text-sm font-semibold text-green-600">
-                {data.totalAudience > 0 ? Math.round((data.acknowledgedCount / data.totalAudience) * 100) : 0}%
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className="h-full rounded-full bg-green-500 transition-all"
-                style={{
-                  width: `${data.totalAudience > 0 ? (data.acknowledgedCount / data.totalAudience) * 100 : 0}%`,
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Acknowledged list */}
-          <div>
-            <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
-              <Check className="h-3.5 w-3.5 text-green-500" /> Ознакомлены ({data.acknowledged.length})
-            </h4>
-            {data.acknowledged.length === 0 ? (
-              <p className="text-sm text-gray-400">Пока никто не ознакомился.</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {data.acknowledged.map((a) => (
-                  <li key={a.userId} className="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
-                    <span className="text-sm font-medium text-gray-800">{a.userName}</span>
-                    <span className="text-xs text-gray-500">{formatDateTime(a.acknowledgedAt)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {/* Pending list */}
-          {data.pending.length > 0 && (
-            <div>
-              <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
-                <X className="h-3.5 w-3.5 text-gray-300" /> Ожидают ({data.pending.length})
-              </h4>
-              <ul className="space-y-1.5">
-                {data.pending.map((p) => (
-                  <li key={p.userId} className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                    {p.userName}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  Article editor (create / edit) — manager only
-//  Two content modes share one save: rich BLOCKS (079) and markdown BODY.
-//  We send both; the reader prefers non-empty blocks and falls back to body.
-// ───────────────────────────────────────────────────────────────────────
-function ArticleEditorModal({
-  article,
-  categories,
-  defaultType,
-  defaultCategoryId,
-  onClose,
-  onSaved,
-}: {
-  article: KnowledgeArticle | null;
-  categories: KnowledgeCategory[];
-  defaultType: KnowledgeArticleType;
-  defaultCategoryId: string | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const isEdit = !!article;
-  const [title, setTitle] = useState(article?.title ?? '');
-  const [body, setBody] = useState(article?.body ?? '');
-  const [blocks, setBlocks] = useState<KnowledgeBlock[]>(article?.blocks ?? []);
-  const [contentMode, setContentMode] = useState<'blocks' | 'markdown'>(
-    article?.blocks && article.blocks.length > 0 ? 'blocks' : 'markdown',
-  );
-  const [type, setType] = useState<KnowledgeArticleType>(article?.type ?? defaultType);
-  const [categoryId, setCategoryId] = useState<string>(article?.categoryId ?? defaultCategoryId ?? '');
-  const [coverImage, setCoverImage] = useState<string | null>(article?.coverImage ?? null);
-  const [attachments, setAttachments] = useState<KnowledgeAttachment[]>(article?.attachments ?? []);
-  const [pinned, setPinned] = useState(article?.pinned ?? false);
-  const [published, setPublished] = useState(article?.published ?? true);
-  const [mandatory, setMandatory] = useState(article?.mandatory ?? false);
-  const [dueDate, setDueDate] = useState(article?.dueDate ? article.dueDate.slice(0, 10) : '');
-  const [carMake, setCarMake] = useState(article?.carMake ?? '');
-  const [bumpVersion, setBumpVersion] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
-  const [uploadingCover, setUploadingCover] = useState(false);
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
-
-  const coverInputRef = useRef<HTMLInputElement>(null);
-  const attachInputRef = useRef<HTMLInputElement>(null);
-
-  // Categories flattened with indentation so subfolders are pickable.
-  const categoryOptions = useMemo(() => flattenCategories(categories), [categories]);
-
-  const saveMutation = useMutation({
-    mutationFn: () => {
-      // Drop empty blocks so a half-filled block never trips server validation;
-      // send [] to clear blocks (→ reader falls back to the markdown body).
-      const cleanBlocks = sanitizeBlocks(blocks);
-      const payload = {
-        title: title.trim(),
-        body,
-        blocks: cleanBlocks,
-        type,
-        categoryId: categoryId || null,
-        coverImage: coverImage || null,
-        attachments,
-        pinned,
-        published,
-        carMake: carMake.trim() || null,
-        // Regulation-only fields; harmless for plain articles.
-        mandatory: type === 'regulation' ? mandatory : false,
-        dueDate: type === 'regulation' && dueDate ? dueDate : null,
-        ...(isEdit && type === 'regulation' && bumpVersion ? { bumpVersion: true } : {}),
-      };
-      return isEdit ? knowledgeApi.updateArticle(article!.id, payload) : knowledgeApi.createArticle(payload);
-    },
-    onSuccess: () => {
-      toast.success(isEdit ? 'Статья обновлена' : 'Статья создана');
-      onSaved();
-    },
-    onError: (err) => toast.error(errMessage(err, 'Не удалось сохранить')),
-  });
-
-  const handleCoverUpload = async (file: File) => {
-    setUploadingCover(true);
-    try {
-      const res = await uploadsApi.upload(file);
-      setCoverImage(res.data.url);
-    } catch {
-      toast.error('Не удалось загрузить обложку');
-    } finally {
-      setUploadingCover(false);
-    }
-  };
-
-  const handleAttachmentUpload = async (file: File) => {
-    setUploadingAttachment(true);
-    try {
-      const res = await uploadsApi.upload(file);
-      setAttachments((prev) => [
-        ...prev,
-        { url: res.data.url, name: res.data.originalname || file.name, size: res.data.size },
-      ]);
-    } catch {
-      toast.error('Не удалось загрузить вложение');
-    } finally {
-      setUploadingAttachment(false);
-    }
-  };
-
-  const canSave = title.trim().length > 0 && !saveMutation.isPending;
-
-  return (
-    <Modal isOpen onClose={onClose} title={isEdit ? 'Редактирование' : 'Новый материал'} size="xl">
-      <div className="space-y-4">
-        {/* Title */}
-        <div>
-          <label className="label">Заголовок</label>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Например: Регламент приёмки автомобиля"
-            className="input"
-            autoFocus
-          />
-        </div>
-
-        {/* Type + category */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label">Тип</label>
-            <div className="flex rounded-lg border border-gray-200 p-1">
-              <button
-                type="button"
-                onClick={() => setType('article')}
-                className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
-                  type === 'article' ? 'bg-primary-600 text-white' : 'text-gray-600'
-                }`}
-              >
-                Статья
-              </button>
-              <button
-                type="button"
-                onClick={() => setType('regulation')}
-                className={`flex-1 rounded-md py-1.5 text-sm font-medium transition-colors ${
-                  type === 'regulation' ? 'bg-primary-600 text-white' : 'text-gray-600'
-                }`}
-              >
-                Регламент
-              </button>
-            </div>
-          </div>
-          <div>
-            <label className="label">Папка</label>
-            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
-              <option value="">Без папки</option>
-              {categoryOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {`${'  '.repeat(c.depth)}${c.name}`}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Content — blocks (rich) OR markdown */}
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <label className="label mb-0">Содержание</label>
-            <div className="flex rounded-lg border border-gray-200 p-0.5">
-              <button
-                type="button"
-                onClick={() => setContentMode('blocks')}
-                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${
-                  contentMode === 'blocks' ? 'bg-primary-600 text-white' : 'text-gray-500'
-                }`}
-              >
-                <Blocks className="h-3.5 w-3.5" /> Блоки
-              </button>
-              <button
-                type="button"
-                onClick={() => setContentMode('markdown')}
-                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${
-                  contentMode === 'markdown' ? 'bg-primary-600 text-white' : 'text-gray-500'
-                }`}
-              >
-                <FileText className="h-3.5 w-3.5" /> Markdown
-              </button>
-            </div>
-          </div>
-
-          {contentMode === 'blocks' ? (
-            <>
-              <BlockEditor blocks={blocks} onChange={setBlocks} />
-              <p className="mt-2 text-xs text-gray-400">
-                Блоки рендерятся в этом порядке. Если блоков нет — показывается Markdown-содержание.
-              </p>
-            </>
-          ) : (
-            <div>
-              <div className="mb-1.5 flex items-center justify-end">
-                <button type="button" onClick={() => setShowPreview((v) => !v)} className="btn-ghost btn-sm">
-                  {showPreview ? (
-                    <>
-                      <EyeOff className="h-3.5 w-3.5" /> Скрыть превью
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="h-3.5 w-3.5" /> Превью
-                    </>
-                  )}
-                </button>
-              </div>
-              <div className={showPreview ? 'grid gap-3 lg:grid-cols-2' : ''}>
-                <textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  placeholder="# Заголовок&#10;&#10;Поддерживается **markdown**: списки, таблицы, ссылки, цитаты…"
-                  rows={14}
-                  className="input resize-y font-mono text-[13px] leading-relaxed"
-                />
-                {showPreview && (
-                  <div className="max-h-[22rem] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-4">
-                    {body.trim() ? (
-                      <MarkdownView>{body}</MarkdownView>
-                    ) : (
-                      <p className="text-sm italic text-gray-400">Превью появится здесь…</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Cover image */}
-        <div>
-          <label className="label">Обложка</label>
-          {coverImage ? (
-            <div className="relative inline-block">
-              <img src={coverImage} alt="" className="h-28 rounded-lg object-cover" />
-              <button
-                type="button"
-                onClick={() => setCoverImage(null)}
-                className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white text-gray-500 shadow ring-1 ring-gray-200 hover:text-red-600"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => coverInputRef.current?.click()}
-              disabled={uploadingCover}
-              className="btn-secondary btn-sm"
-            >
-              {uploadingCover ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-              Загрузить обложку
-            </button>
-          )}
-          <input
-            ref={coverInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleCoverUpload(f);
-              e.target.value = '';
-            }}
-          />
-        </div>
-
-        {/* Attachments */}
-        <div>
-          <label className="label">Вложения</label>
-          {attachments.length > 0 && (
-            <div className="mb-2 space-y-2">
-              {attachments.map((att, i) => (
-                <div
-                  key={`${att.url}-${i}`}
-                  className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                >
-                  <Paperclip className="h-4 w-4 flex-shrink-0 text-gray-400" />
-                  <span className="flex-1 truncate text-gray-800">{att.name}</span>
-                  {att.size ? <span className="text-xs text-gray-400">{formatBytes(att.size)}</span> : null}
-                  <button
-                    type="button"
-                    onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
-                    className="text-gray-400 hover:text-red-600"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => attachInputRef.current?.click()}
-            disabled={uploadingAttachment}
-            className="btn-secondary btn-sm"
-          >
-            {uploadingAttachment ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-            Добавить файл
-          </button>
-          <input
-            ref={attachInputRef}
-            type="file"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleAttachmentUpload(f);
-              e.target.value = '';
-            }}
-          />
-        </div>
-
-        {/* Car make (contextual KB) */}
-        <div>
-          <label className="label">Марка авто (необязательно)</label>
-          <input
-            value={carMake}
-            onChange={(e) => setCarMake(e.target.value)}
-            placeholder="Например: Lada — оставьте пустым для всех марок"
-            className="input"
-          />
-        </div>
-
-        {/* Regulation-specific options */}
-        {type === 'regulation' && (
-          <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/40 p-4">
-            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700">
-              <input
-                type="checkbox"
-                checked={mandatory}
-                onChange={(e) => setMandatory(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <AlertCircle className="h-4 w-4 text-amber-500" /> Обязательно для ознакомления
-            </label>
-            <div>
-              <label className="label">Срок ознакомления</label>
-              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="input" />
-            </div>
-            {isEdit && (
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={bumpVersion}
-                  onChange={(e) => setBumpVersion(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <RefreshCw className="h-4 w-4 text-gray-400" /> Поднять версию — потребовать повторное ознакомление
-              </label>
-            )}
-          </div>
-        )}
-
-        {/* Toggles */}
-        <div className="flex flex-wrap gap-4 border-t border-gray-100 pt-4">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={pinned}
-              onChange={(e) => setPinned(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            <Pin className="h-4 w-4 text-gray-400" /> Закрепить
-          </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={published}
-              onChange={(e) => setPublished(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-            />
-            {published ? <Eye className="h-4 w-4 text-gray-400" /> : <EyeOff className="h-4 w-4 text-gray-400" />}
-            Опубликовано
-          </label>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
-          <button onClick={onClose} className="btn-secondary">
-            Отмена
-          </button>
-          <button onClick={() => saveMutation.mutate()} disabled={!canSave} className="btn-primary">
-            {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {isEdit ? 'Сохранить' : 'Создать'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  Folder manager — create subfolders, rename, move (parentId), delete.
-//  Surfaces the server's 400 cycle-rejection as a friendly message.
-// ───────────────────────────────────────────────────────────────────────
-function FolderManagerModal({
-  presetParent,
-  categories,
-  childrenByParent,
-  onClose,
-}: {
-  presetParent: string | null;
-  categories: KnowledgeCategory[];
-  childrenByParent: Map<string | null, KnowledgeCategory[]>;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [newName, setNewName] = useState('');
-  const [newParent, setNewParent] = useState<string>(presetParent ?? '');
-  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const options = useMemo(() => flattenCategories(categories), [categories]);
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: KEY.categories });
-
-  const createMutation = useMutation({
-    mutationFn: (vars: { name: string; parentId: string | null }) =>
-      knowledgeApi.createCategory({ name: vars.name, parentId: vars.parentId }),
-    onSuccess: () => {
-      invalidate();
-      setNewName('');
-    },
-    onError: (err) => toast.error(errMessage(err, 'Не удалось создать папку')),
-  });
-
-  const renameMutation = useMutation({
-    mutationFn: (vars: { id: string; name: string }) => knowledgeApi.updateCategory(vars.id, { name: vars.name }),
-    onSuccess: () => {
-      invalidate();
-      setEditing(null);
-    },
-    onError: (err) => toast.error(errMessage(err, 'Не удалось переименовать')),
-  });
-
-  const moveMutation = useMutation({
-    mutationFn: (vars: { id: string; parentId: string | null }) =>
-      knowledgeApi.updateCategory(vars.id, { parentId: vars.parentId }),
-    onSuccess: () => invalidate(),
-    onError: (err) => toast.error(errMessage(err, 'Нельзя переместить папку внутрь самой себя или своей подпапки')),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => knowledgeApi.deleteCategory(id),
-    onSuccess: () => {
-      invalidate();
-      queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
-      setConfirmDeleteId(null);
-    },
-    onError: (err) => toast.error(errMessage(err, 'Не удалось удалить папку')),
-  });
-
-  // Descendant set for a category — invalid move targets (would create a cycle).
-  const descendantsOf = (id: string): Set<string> => {
-    const out = new Set<string>();
-    const stack = [...(childrenByParent.get(id) ?? [])];
-    while (stack.length) {
-      const c = stack.pop()!;
-      if (out.has(c.id)) continue;
-      out.add(c.id);
-      stack.push(...(childrenByParent.get(c.id) ?? []));
-    }
-    return out;
-  };
-
-  return (
-    <>
-      <Modal isOpen onClose={onClose} title="Папки базы знаний" size="lg">
-        <div className="space-y-4">
-          {/* Create */}
-          <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
-            <label className="label">Новая папка</label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newName.trim())
-                    createMutation.mutate({ name: newName.trim(), parentId: newParent || null });
-                }}
-                placeholder="Название папки"
-                className="input flex-1"
-              />
-              <select value={newParent} onChange={(e) => setNewParent(e.target.value)} className="input sm:w-52">
-                <option value="">В корне</option>
-                {options.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {`${'  '.repeat(c.depth)}${c.name}`}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() =>
-                  newName.trim() && createMutation.mutate({ name: newName.trim(), parentId: newParent || null })
-                }
-                disabled={!newName.trim() || createMutation.isPending}
-                className="btn-primary"
-              >
-                <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Добавить</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Tree list */}
-          <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
-            {options.length === 0 ? (
-              <p className="px-3 py-4 text-center text-sm text-gray-400">Папок пока нет</p>
-            ) : (
-              options.map((cat) => {
-                const forbidden = descendantsOf(cat.id);
-                return (
-                  <div key={cat.id} className="flex items-center gap-2 px-3 py-2.5">
-                    <span style={{ width: cat.depth * 16 }} className="flex-shrink-0" />
-                    <Folder className="h-4 w-4 flex-shrink-0 text-amber-500" />
-                    {editing?.id === cat.id ? (
-                      <>
-                        <input
-                          value={editing.name}
-                          onChange={(e) => setEditing({ id: cat.id, name: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && editing.name.trim())
-                              renameMutation.mutate({ id: cat.id, name: editing.name.trim() });
-                          }}
-                          className="input flex-1 py-1.5"
-                          autoFocus
-                        />
-                        <button
-                          onClick={() =>
-                            editing.name.trim() && renameMutation.mutate({ id: cat.id, name: editing.name.trim() })
-                          }
-                          className="text-green-600 hover:text-green-700"
-                        >
-                          <Check className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => setEditing(null)} className="text-gray-400 hover:text-gray-600">
-                          <X className="h-4 w-4" />
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <span className="flex-1 truncate text-sm text-gray-800">{cat.name}</span>
-                        {/* Move under another folder */}
-                        <select
-                          value={cat.parentId ?? ''}
-                          onChange={(e) => moveMutation.mutate({ id: cat.id, parentId: e.target.value || null })}
-                          title="Переместить в…"
-                          className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:border-primary-500 focus:outline-none"
-                        >
-                          <option value="">Корень</option>
-                          {options
-                            .filter((o) => o.id !== cat.id && !forbidden.has(o.id))
-                            .map((o) => (
-                              <option key={o.id} value={o.id}>
-                                {`${'  '.repeat(o.depth)}${o.name}`}
-                              </option>
-                            ))}
-                        </select>
-                        <button
-                          onClick={() => setEditing({ id: cat.id, name: cat.name })}
-                          className="text-gray-400 hover:text-primary-600"
-                          title="Переименовать"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setConfirmDeleteId(cat.id)}
-                          className="text-gray-400 hover:text-red-600"
-                          title="Удалить"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-          <p className="text-xs text-gray-400">
-            Удаление папки не удаляет материалы и подпапки — они перемещаются в корень.
-          </p>
-        </div>
-      </Modal>
-
-      <ConfirmDialog
-        isOpen={!!confirmDeleteId}
-        onClose={() => setConfirmDeleteId(null)}
-        onConfirm={() => confirmDeleteId && deleteMutation.mutate(confirmDeleteId)}
-        title="Удалить папку?"
-        message="Материалы и вложенные папки сохранятся и переместятся в корень базы знаний."
-        confirmText="Удалить"
-        variant="danger"
-      />
-    </>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────
-//  Helpers
-// ───────────────────────────────────────────────────────────────────────
-
-/** Flatten the category tree depth-first, carrying a depth for indentation. */
-function flattenCategories(categories: KnowledgeCategory[]): (KnowledgeCategory & { depth: number })[] {
-  const childrenByParent = new Map<string | null, KnowledgeCategory[]>();
-  for (const c of categories) {
-    const p = c.parentId ?? null;
-    if (!childrenByParent.has(p)) childrenByParent.set(p, []);
-    childrenByParent.get(p)!.push(c);
-  }
-  for (const list of childrenByParent.values())
-    list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
-
-  const out: (KnowledgeCategory & { depth: number })[] = [];
-  const seen = new Set<string>();
-  const walk = (parent: string | null, depth: number) => {
-    for (const c of childrenByParent.get(parent) ?? []) {
-      if (seen.has(c.id)) continue; // guard against any malformed cyclic data
-      seen.add(c.id);
-      out.push({ ...c, depth });
-      walk(c.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  // Any orphans whose parent isn't in the set (shouldn't happen) — append at root.
-  for (const c of categories) if (!seen.has(c.id)) out.push({ ...c, depth: 0 });
-  return out;
-}
-
-/** Drop empty/whitespace-only blocks so partial blocks never fail validation. */
-function sanitizeBlocks(blocks: KnowledgeBlock[]): KnowledgeBlock[] {
-  return blocks.filter((b) => {
-    if (b.type === 'text' || b.type === 'heading') return b.text.trim().length > 0;
-    if (b.type === 'image') return b.url.trim().length > 0;
-    if (b.type === 'video') return b.url.trim().length > 0;
-    return false;
-  });
 }

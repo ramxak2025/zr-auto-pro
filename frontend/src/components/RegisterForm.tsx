@@ -1,8 +1,15 @@
-import { ReactNode, useState } from 'react';
-import { Loader2, CheckCircle2 } from 'lucide-react';
+import { ReactNode, useId, useState } from 'react';
+import { CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { registrationApi } from '../api/services';
 import { formatPhone, isValidPhone } from '../../../shared/validation/phone';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { Field } from '../ui/Field';
+import { Input } from '../ui/Input';
+import { Textarea } from '../ui/Textarea';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 
 interface FieldErrors {
   company?: string;
@@ -69,6 +76,7 @@ function generateRequestSecret(): string {
 }
 
 export default function RegisterForm({ footerSecondary, successActions, onSubmittedChange }: RegisterFormProps) {
+  const uid = useId();
   const [companyName, setCompanyName] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('');
@@ -126,12 +134,12 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
 
   if (submitted) {
     return (
-      <div className="flex flex-col items-center py-4 text-center">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-green-50">
-          <CheckCircle2 className="h-8 w-8 text-green-600" />
-        </div>
-        <h3 className="mb-2 text-base font-semibold text-gray-900">Заявка отправлена</h3>
-        <p className="mb-6 max-w-xs text-sm text-gray-500">
+      <div className="flex flex-col items-center py-4 text-center" role="status">
+        <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-ok-soft">
+          <CheckCircle2 className="h-7 w-7 text-ok" aria-hidden="true" />
+        </span>
+        <h3 className="text-md font-semibold text-ink">Заявка отправлена</h3>
+        <p className="mb-6 mt-1 max-w-xs text-sm text-ink-3">
           Менеджер свяжется с вами, подключит вашу организацию и передаст доступы для входа.
         </p>
         {successActions}
@@ -140,60 +148,52 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <p className="text-sm text-gray-500">
+    <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+      <p className="text-sm leading-relaxed text-ink-3">
         Autexa предоставляется автосервисам — юридическим лицам и ИП. Оставьте заявку: менеджер свяжется, подключит вашу
         организацию и передаст доступы. Это не самостоятельная регистрация — доступ выдаёт менеджер.
       </p>
 
-      {/* Company — обязательное, бизнес-поле */}
-      <div>
-        <label className="label">
-          Название организации (автосервиса) <span className="text-red-600">*</span>
-        </label>
-        <input
-          type="text"
-          required
-          className={`input ${errors.company ? 'input-error' : ''}`}
+      <Field label="Название организации (автосервиса)" htmlFor={`${uid}-company`} required error={errors.company}>
+        <Input
+          id={`${uid}-company`}
+          name="organization"
+          autoComplete="organization"
           value={companyName}
           onChange={(e) => {
             setCompanyName(e.target.value);
             setErrors((p) => ({ ...p, company: undefined }));
           }}
           placeholder="ООО «Автосервис на Ленина» / ИП Иванов"
-        />
-        {errors.company && <p className="mt-1 text-xs text-red-600">{errors.company}</p>}
-      </div>
-
-      {/* Owner */}
-      <div>
-        <label className="label">
-          Имя владельца / руководителя <span className="text-red-600">*</span>
-        </label>
-        <input
-          type="text"
+          invalid={!!errors.company}
           required
-          className={`input ${errors.owner ? 'input-error' : ''}`}
+        />
+      </Field>
+
+      <Field label="Имя владельца / руководителя" htmlFor={`${uid}-owner`} required error={errors.owner}>
+        <Input
+          id={`${uid}-owner`}
+          name="name"
+          autoComplete="name"
           value={ownerName}
           onChange={(e) => {
             setOwnerName(e.target.value);
             setErrors((p) => ({ ...p, owner: undefined }));
           }}
           placeholder="Иванов Иван Иванович"
+          invalid={!!errors.owner}
+          required
         />
-        {errors.owner && <p className="mt-1 text-xs text-red-600">{errors.owner}</p>}
-      </div>
+      </Field>
 
-      {/* Phone — контакт для связи менеджера */}
-      <div>
-        <label className="label">
-          Телефон для связи <span className="text-red-600">*</span>
-        </label>
-        <input
+      <Field label="Телефон для связи" htmlFor={`${uid}-phone`} required error={errors.phone}>
+        <Input
+          id={`${uid}-phone`}
+          name="tel"
           type="tel"
           inputMode="numeric"
           autoComplete="tel"
-          className={`input tabular-nums ${errors.phone ? 'input-error' : ''}`}
+          className="tabular-nums"
           value={phone}
           onChange={(e) => {
             const digits = e.target.value.replace(/\D/g, '');
@@ -201,71 +201,68 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
             setErrors((p) => ({ ...p, phone: undefined }));
           }}
           placeholder="+7 (___) ___-__-__"
+          invalid={!!errors.phone}
+          required
         />
-        {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
-      </div>
+      </Field>
 
-      {/* Comment (optional) */}
-      <div>
-        <label className="label">Комментарий (необязательно)</label>
-        <textarea
-          className="input"
+      <Field
+        label="Комментарий"
+        htmlFor={`${uid}-comment`}
+        hint="Необязательно: город, количество мастеров, пожелания."
+      >
+        <Textarea
+          id={`${uid}-comment`}
           rows={2}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder="Город, количество мастеров, пожелания…"
+          placeholder="Например: Казань, 4 поста, нужен склад"
+        />
+      </Field>
+
+      {/* Согласия (152-ФЗ): обязательное на обработку ПДн + добровольное на рассылку */}
+      <div className="space-y-2.5 pt-1">
+        <Checkbox
+          required
+          checked={consent}
+          onChange={(e) => setConsent(e.target.checked)}
+          label={
+            <span className="text-xs leading-relaxed text-ink-3">
+              Я согласен на обработку персональных данных в соответствии с{' '}
+              <a
+                href="/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  'rounded font-medium text-accent-text underline underline-offset-2 hover:text-accent',
+                  focusRing,
+                )}
+              >
+                политикой конфиденциальности
+              </a>
+              <span className="ml-0.5 text-bad" aria-hidden="true">
+                *
+              </span>
+            </span>
+          }
+        />
+        <Checkbox
+          checked={marketingConsent}
+          onChange={(e) => setMarketingConsent(e.target.checked)}
+          label={
+            <span className="text-xs leading-relaxed text-ink-3">
+              Согласен получать информационные сообщения (необязательно)
+            </span>
+          }
         />
       </div>
 
-      {/* Consent (152-ФЗ) — обязательное согласие на обработку ПДн + добровольное на рассылку */}
-      <div className="space-y-2.5 pt-1">
-        <label className="flex cursor-pointer items-start gap-2.5">
-          <input
-            type="checkbox"
-            required
-            checked={consent}
-            onChange={(e) => setConsent(e.target.checked)}
-            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-          />
-          <span className="text-xs leading-relaxed text-gray-500">
-            Я согласен на обработку персональных данных в соответствии с{' '}
-            <a
-              href="/privacy"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-medium text-primary-600 underline decoration-primary-300 underline-offset-2 hover:text-primary-700"
-            >
-              политикой конфиденциальности
-            </a>
-            <span className="text-red-600"> *</span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2.5">
-          <input
-            type="checkbox"
-            checked={marketingConsent}
-            onChange={(e) => setMarketingConsent(e.target.checked)}
-            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-          />
-          <span className="text-xs leading-relaxed text-gray-500">
-            Согласен получать информационные сообщения (необязательно)
-          </span>
-        </label>
-      </div>
-
       {/* Actions */}
-      <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
+      <div className="flex items-center justify-end gap-2 border-t border-line pt-4">
         {footerSecondary}
-        <button type="submit" disabled={submitting || !consent} className="btn-primary">
-          {submitting ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Отправка…
-            </>
-          ) : (
-            'Отправить заявку'
-          )}
-        </button>
+        <Button type="submit" disabled={!consent} loading={submitting}>
+          Отправить заявку
+        </Button>
       </div>
     </form>
   );

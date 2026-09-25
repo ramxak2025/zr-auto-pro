@@ -1,33 +1,23 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
-import { ru } from 'date-fns/locale';
-import { Wallet, Gift, Loader2, Info } from 'lucide-react';
+import { Gift, Info, Wallet } from 'lucide-react';
 
 import { adminApi } from '../api/services';
 import type { SubscriptionRevenue } from '../types';
-
-function formatRub(value: number | undefined | null): string {
-  return `${Math.round(value ?? 0).toLocaleString('ru-RU')} ₽`;
-}
-
-/** 'YYYY-MM' → 'июн' (short month label under a bar). */
-function shortMonth(month: string): string {
-  const [y, m] = month.split('-').map(Number);
-  if (!y || !m) return month;
-  return format(new Date(y, m - 1, 1), 'LLL', { locale: ru });
-}
-
-/** 'YYYY-MM' → 'июнь 2026' (tooltip). */
-function longMonth(month: string): string {
-  const [y, m] = month.split('-').map(Number);
-  if (!y || !m) return month;
-  return format(new Date(y, m - 1, 1), 'LLLL yyyy', { locale: ru });
-}
+import { formatMoney } from '../../../shared/utils/formatters';
+import { Card, CardHeader } from '../ui/Card';
+import { Skeleton } from '../ui/Skeleton';
+import { Tooltip } from '../ui/Tooltip';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
+import { ErrorRow, MiniStat, compactRub, longMonth, shortMonth } from './admin/adminUi';
+import { pluralRu } from './knowledge/utils';
 
 const CALC_HINT =
-  'Фактически собранные ПЛАТНЫЕ продления (реестр subscription_payments) по месяцам. ' +
+  'Фактически собранные платные продления (реестр subscription_payments) по месяцам. ' +
   'Бесплатные продления в выручку не входят — они показаны отдельным счётчиком.';
+
+const PLOT_H = 160;
 
 /**
  * 122 — «Платная выручка по подпискам» для суперадмин-дашборда. Живые деньги от
@@ -38,7 +28,7 @@ const CALC_HINT =
  */
 export default function SubscriptionRevenuePanel() {
   const months = 12;
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['admin-subscription-revenue', months],
     queryFn: () => adminApi.getSubscriptionRevenue(months),
     select: (res) => res.data as SubscriptionRevenue,
@@ -52,136 +42,175 @@ export default function SubscriptionRevenuePanel() {
   const hasAnyRevenue = monthly.some((m) => m.paidRevenue > 0);
 
   return (
-    <section className="mb-8">
-      {/* Section heading */}
-      <div className="mb-3 flex items-center gap-2.5">
-        <div className="rounded-lg bg-emerald-50 p-2">
-          <Wallet className="h-4 w-4 text-emerald-600" />
-        </div>
-        <div>
-          <h2 className="text-lg font-semibold leading-tight text-gray-900">Платная выручка по подпискам</h2>
-          <p className="text-xs text-gray-500">
-            Живые деньги от продлений. Бесплатные продления не считаются выручкой.
-          </p>
-        </div>
-      </div>
+    <Card padding="none">
+      <CardHeader
+        icon={Wallet}
+        iconTone="ok"
+        title="Платная выручка по подпискам"
+        subtitle="Живые деньги от продлений; бесплатные продления выручкой не считаются"
+        actions={
+          <Tooltip content={CALC_HINT} side="left">
+            <button
+              type="button"
+              className={cn(
+                'inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-ink-3 hover:text-ink',
+                focusRing,
+              )}
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              как считается
+            </button>
+          </Tooltip>
+        }
+      />
 
-      {/* Summary cards */}
-      <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {/* This month collected — hero */}
-        <div className="relative overflow-hidden rounded-xl border border-emerald-500 bg-gradient-to-br from-emerald-500 to-emerald-600 p-5 shadow-sm">
-          <p className="text-xs font-medium text-emerald-50">Собрано в этом месяце</p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-white">{formatRub(data?.paidRevenueThisMonth)}</p>
-          <p className="mt-1 text-[11px] tabular-nums text-emerald-50/90">
-            {data?.paidExtensionsThisMonth ?? 0} платных продлений
-          </p>
-          <Wallet className="pointer-events-none absolute -bottom-3 -right-3 h-20 w-20 text-white/10" />
-        </div>
-
-        {/* Total collected */}
-        <div className="card card-body">
-          <p className="stat-label">Собрано всего</p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-gray-900">{formatRub(data?.paidRevenueTotal)}</p>
-          <p className="mt-1 text-[11px] tabular-nums text-gray-400">
-            {data?.paidExtensionsTotal ?? 0} платных за всё время
-          </p>
-        </div>
-
-        {/* Paid extensions this month */}
-        <div className="card card-body">
-          <p className="stat-label">Платных продлений</p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-gray-900">{data?.paidExtensionsThisMonth ?? 0}</p>
-          <p className="mt-1 text-[11px] text-gray-400">в этом месяце</p>
-        </div>
-
-        {/* Free extensions — de-emphasized, explicitly "not revenue" */}
-        <div className="card card-body bg-gray-50/70">
-          <div className="flex items-center gap-1.5">
-            <Gift className="h-3.5 w-3.5 text-gray-400" />
-            <p className="stat-label">Бесплатных продлений</p>
+      {isLoading ? (
+        <div className="space-y-5 px-5 py-5" aria-busy="true">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i}>
+                <Skeleton variant="text" className="w-28" />
+                <Skeleton className="mt-2 h-6 w-24" />
+              </div>
+            ))}
           </div>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-gray-500">{data?.freeExtensionsThisMonth ?? 0}</p>
-          <p className="mt-1 text-[11px] text-gray-400">в этом месяце · не выручка</p>
+          <Skeleton className="h-[160px] w-full" />
         </div>
-      </div>
-
-      {/* Monthly paid-revenue bar chart */}
-      <div className="card">
-        <div className="flex items-start justify-between gap-3 px-5 pb-1 pt-5">
-          <div>
-            <h3 className="text-base font-semibold leading-tight text-gray-900">Помесячно</h3>
-            <p className="text-xs text-gray-500">Платная выручка за последний год</p>
+      ) : isError ? (
+        <div className="px-5 py-5">
+          <ErrorRow
+            message="Не удалось загрузить выручку по подпискам"
+            onRetry={() => refetch()}
+            loading={isFetching}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Сводка: одна семантика — платное зелёное, бесплатное приглушено */}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-4 px-5 py-5 lg:grid-cols-4">
+            <MiniStat
+              label="Собрано в этом месяце"
+              value={formatMoney(data?.paidRevenueThisMonth ?? 0)}
+              tone={(data?.paidRevenueThisMonth ?? 0) > 0 ? 'ok' : 'neutral'}
+              hint={`${data?.paidExtensionsThisMonth ?? 0} ${pluralRu(
+                data?.paidExtensionsThisMonth ?? 0,
+                'платное продление',
+                'платных продления',
+                'платных продлений',
+              )}`}
+            />
+            <MiniStat
+              label="Собрано всего"
+              value={formatMoney(data?.paidRevenueTotal ?? 0)}
+              hint={`${data?.paidExtensionsTotal ?? 0} платных за всё время`}
+            />
+            <MiniStat label="Платных продлений" value={data?.paidExtensionsThisMonth ?? 0} hint="в этом месяце" />
+            <MiniStat
+              label={
+                <span className="inline-flex items-center gap-1">
+                  <Gift className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" /> Бесплатных продлений
+                </span>
+              }
+              value={<span className="text-ink-3">{data?.freeExtensionsThisMonth ?? 0}</span>}
+              hint="в этом месяце · не выручка"
+            />
           </div>
-          <span className="flex cursor-help items-center gap-1 text-xs text-gray-400" title={CALC_HINT}>
-            <Info className="h-3.5 w-3.5" />
-            как считается
-          </span>
-        </div>
 
-        <div className="px-4 pb-5 pt-4">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
-            </div>
-          ) : isError ? (
-            <div className="py-14 text-center">
-              <p className="text-sm text-gray-500">Не удалось загрузить выручку по подпискам.</p>
-              <button type="button" onClick={() => refetch()} className="btn-secondary btn-sm mt-3">
-                Повторить
-              </button>
-            </div>
-          ) : monthly.length === 0 || !hasAnyRevenue ? (
-            <div className="py-16 text-center text-sm text-gray-400">Пока нет платных продлений за период.</div>
-          ) : (
-            <div className="flex items-end gap-1 sm:gap-2">
-              {monthly.map((m, idx) => {
-                const pct = (m.paidRevenue / maxRevenue) * 100;
-                const isHover = hoverIdx === idx;
-                return (
+          {/* Помесячный график */}
+          <div className="border-t border-line px-4 pb-5 pt-4">
+            <p className="mb-3 px-1 text-xs text-ink-3">Помесячно, платная выручка за последний год</p>
+            {monthly.length === 0 || !hasAnyRevenue ? (
+              <p className="py-12 text-center text-sm text-ink-3">Пока нет платных продлений за период.</p>
+            ) : (
+              <div>
+                <div className="flex gap-2">
+                  {/* Ось Y */}
                   <div
-                    key={m.month}
-                    className="group relative flex flex-1 flex-col items-center"
-                    onMouseEnter={() => setHoverIdx(idx)}
-                    onMouseLeave={() => setHoverIdx(null)}
+                    className="relative w-14 flex-shrink-0 text-right text-2xs tabular-nums text-ink-3"
+                    style={{ height: PLOT_H }}
+                    aria-hidden="true"
                   >
-                    {/* Tooltip */}
-                    {isHover && (
-                      <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-gray-900 px-3 py-2 text-left shadow-lg">
-                        <p className="text-[10px] font-medium uppercase capitalize tracking-wide text-gray-400">
-                          {longMonth(m.month)}
-                        </p>
-                        <p className="text-sm font-bold tabular-nums text-emerald-300">{formatRub(m.paidRevenue)}</p>
-                        <p className="mt-0.5 text-[10px] tabular-nums text-gray-300">
-                          Платных: {m.paidCount} · бесплатных: {m.freeCount}
-                        </p>
-                      </div>
-                    )}
+                    {[1, 0.5, 0].map((pct) => (
+                      <span
+                        key={pct}
+                        className="absolute right-0 -translate-y-1/2 pr-1"
+                        style={{ top: `${(1 - pct) * 100}%` }}
+                      >
+                        {pct === 0 ? '0' : compactRub(maxRevenue * pct)}
+                      </span>
+                    ))}
+                  </div>
 
-                    {/* Bar column with a faint track */}
-                    <div className="relative flex h-[160px] w-full items-end justify-center">
-                      <div className="absolute inset-x-1 inset-y-0 rounded-md bg-gray-50" />
+                  {/* Столбцы */}
+                  <div className="relative min-w-0 flex-1" style={{ height: PLOT_H }}>
+                    {[1, 0.5, 0].map((pct) => (
                       <div
-                        className={`relative w-full max-w-[26px] rounded-md bg-gradient-to-t transition-all duration-300 ${
-                          isHover ? 'from-emerald-600 to-emerald-500' : 'from-emerald-500 to-emerald-400'
-                        }`}
-                        style={{ height: `${m.paidRevenue > 0 ? Math.max(pct, 4) : 0}%` }}
+                        key={pct}
+                        className="pointer-events-none absolute inset-x-0 border-t border-line"
+                        style={{ top: `${(1 - pct) * 100}%` }}
+                        aria-hidden="true"
                       />
-                    </div>
-
+                    ))}
+                    <ul className="absolute inset-0 flex items-end gap-1 sm:gap-2" aria-label="Выручка по месяцам">
+                      {monthly.map((m, idx) => {
+                        const pct = (m.paidRevenue / maxRevenue) * 100;
+                        const isHover = hoverIdx === idx;
+                        return (
+                          <li key={m.month} className="relative flex h-full flex-1 items-end justify-center">
+                            <button
+                              type="button"
+                              aria-label={`${longMonth(m.month)}: ${formatMoney(m.paidRevenue)}, платных ${m.paidCount}, бесплатных ${m.freeCount}`}
+                              onMouseEnter={() => setHoverIdx(idx)}
+                              onMouseLeave={() => setHoverIdx(null)}
+                              onFocus={() => setHoverIdx(idx)}
+                              onBlur={() => setHoverIdx(null)}
+                              className={cn('flex h-full w-full max-w-[32px] items-end rounded', focusRing)}
+                            >
+                              <span
+                                className={cn(
+                                  'block w-full rounded-t-[3px] transition-colors duration-150',
+                                  isHover ? 'bg-accent-hover' : 'bg-accent',
+                                )}
+                                style={{ height: `${m.paidRevenue > 0 ? Math.max(pct, 2) : 0}%` }}
+                              />
+                            </button>
+                            {isHover && (
+                              <div
+                                role="tooltip"
+                                className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-ink px-2.5 py-1.5 text-left text-xs text-white shadow-pop"
+                              >
+                                <p className="capitalize text-white/70">{longMonth(m.month)}</p>
+                                <p className="font-semibold tabular-nums">{formatMoney(m.paidRevenue)}</p>
+                                <p className="tabular-nums text-white/70">
+                                  Платных: {m.paidCount} · бесплатных: {m.freeCount}
+                                </p>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+                {/* Подписи месяцев — той же сеткой, что столбцы */}
+                <div className="ml-16 mt-1.5 flex gap-1 sm:gap-2" aria-hidden="true">
+                  {monthly.map((m, idx) => (
                     <span
-                      className={`mt-1.5 text-[10px] capitalize ${
-                        isHover ? 'font-medium text-gray-700' : 'text-gray-400'
-                      }`}
+                      key={m.month}
+                      className={cn(
+                        'flex-1 text-center text-2xs capitalize',
+                        hoverIdx === idx ? 'font-medium text-ink' : 'text-ink-3',
+                      )}
                     >
                       {shortMonth(m.month)}
                     </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }

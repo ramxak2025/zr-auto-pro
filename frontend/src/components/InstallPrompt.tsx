@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
-import { X, Share, Plus, Download, Smartphone, ChevronDown } from 'lucide-react';
+import { X, Share, Plus, Download, Smartphone, ChevronDown, WifiOff } from 'lucide-react';
+import { Badge } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { cn } from '../ui/cn';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -79,8 +83,18 @@ export default function InstallPrompt() {
       setVisible(false);
       setClosing(false);
       localStorage.setItem(DISMISS_KEY, Date.now().toString());
-    }, 300);
+    }, 200);
   }, []);
+
+  // Escape закрывает шторку — как любой диалог.
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismiss();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [visible, dismiss]);
 
   const handleAndroidInstall = useCallback(async () => {
     if (!deferredPrompt) return;
@@ -98,34 +112,34 @@ export default function InstallPrompt() {
   return (
     <>
       {/* Backdrop */}
-      <div
-        className={`fixed inset-0 z-[9998] bg-black/40 backdrop-blur-sm transition-opacity duration-300 ${
-          closing ? 'opacity-0' : 'opacity-100'
-        }`}
+      <button
+        type="button"
+        aria-label="Закрыть"
+        className={cn(
+          'fixed inset-0 z-[9998] cursor-default bg-ink/40 transition-opacity duration-200',
+          closing ? 'opacity-0' : 'opacity-100',
+        )}
         onClick={dismiss}
       />
 
       {/* Bottom sheet */}
       <div
-        className={`fixed inset-x-0 bottom-0 z-[9999] transition-transform duration-300 ease-out ${
-          closing ? 'translate-y-full' : 'translate-y-0'
-        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="install-prompt-title"
+        className={cn(
+          'fixed inset-x-0 bottom-0 z-[9999] transition-transform duration-200 ease-out',
+          closing ? 'translate-y-full' : 'translate-y-0',
+        )}
       >
         <div className="mx-auto max-w-lg">
-          <div className="rounded-t-3xl bg-white shadow-2xl pb-[env(safe-area-inset-bottom)]">
+          <div className="rounded-t-2xl bg-surface pb-[env(safe-area-inset-bottom)] shadow-pop">
             {/* Drag handle */}
-            <div className="flex justify-center pt-3 pb-1">
-              <div className="h-1 w-10 rounded-full bg-gray-300" />
+            <div className="flex justify-center pb-1 pt-3" aria-hidden="true">
+              <div className="h-1 w-10 rounded-full bg-line-strong" />
             </div>
 
-            {/* Close button */}
-            <button
-              onClick={dismiss}
-              className="absolute top-4 right-4 flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
-              aria-label="Закрыть"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <IconButton label="Закрыть" icon={X} onClick={dismiss} className="absolute right-3 top-3" />
 
             <div className="px-6 pb-6 pt-2">
               {platform === 'ios' ? (
@@ -141,49 +155,60 @@ export default function InstallPrompt() {
   );
 }
 
+/* ─── Общая шапка шторки ─── */
+function SheetHeader({ subtitle }: { subtitle: string }) {
+  return (
+    <div className="flex items-center gap-4">
+      <span className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl bg-accent-soft">
+        <img src="/icon-96.png" alt="" className="h-10 w-10 rounded-lg" />
+      </span>
+      <div className="min-w-0">
+        <h3 id="install-prompt-title" className="text-md font-semibold text-ink">
+          Установить Autexa
+        </h3>
+        <p className="text-sm text-ink-3">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function BenefitPills({ store }: { store: string }) {
+  return (
+    <ul className="flex flex-wrap gap-1.5" aria-label="Преимущества">
+      <li>
+        <Badge tone="accent" icon={Smartphone}>
+          Как приложение
+        </Badge>
+      </li>
+      <li>
+        <Badge tone="ok" icon={WifiOff}>
+          Работает офлайн
+        </Badge>
+      </li>
+      <li>
+        <Badge icon={Plus}>Без {store}</Badge>
+      </li>
+    </ul>
+  );
+}
+
 /* ─── iOS Instructions ─── */
 function IOSContent() {
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/25">
-          <img src="/icon-96.png" alt="Autexa" className="h-11 w-11 rounded-xl" />
-        </div>
-        <div>
-          <h3 className="text-lg font-bold text-gray-900">Установить Autexa</h3>
-          <p className="text-sm text-gray-500">Быстрый доступ с главного экрана</p>
-        </div>
-      </div>
+      <SheetHeader subtitle="Быстрый доступ с главного экрана" />
+      <BenefitPills store="App Store" />
 
-      {/* Benefit pills */}
-      <div className="flex flex-wrap gap-2">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700">
-          <Smartphone className="h-3.5 w-3.5" /> Как приложение
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
-          <Download className="h-3.5 w-3.5" /> Работает офлайн
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700">
-          <Plus className="h-3.5 w-3.5" /> Без App Store
-        </span>
-      </div>
-
-      {/* Steps */}
-      <div className="space-y-0">
+      <ol className="space-y-0">
         <Step
           number={1}
-          icon={
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
-              <Share className="h-5 w-5 text-primary-600" />
-            </div>
-          }
+          icon={<Share className="h-[18px] w-[18px]" aria-hidden="true" />}
           title="Нажмите «Поделиться»"
           description={
             <span>
               Нажмите иконку{' '}
-              <span className="inline-flex items-center gap-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-primary-600">
-                <Share className="h-3 w-3" /> Поделиться
+              <span className="inline-flex items-center gap-0.5 rounded bg-surface-3 px-1.5 py-0.5 text-xs font-medium text-accent-text">
+                <Share className="h-3 w-3" aria-hidden="true" /> Поделиться
               </span>{' '}
               внизу экрана
             </span>
@@ -192,37 +217,28 @@ function IOSContent() {
         />
         <Step
           number={2}
-          icon={
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
-              <ChevronDown className="h-5 w-5 text-primary-600" />
-            </div>
-          }
+          icon={<ChevronDown className="h-[18px] w-[18px]" aria-hidden="true" />}
           title="Пролистайте вниз"
           description="Найдите пункт в появившемся меню"
           isLast={false}
         />
         <Step
           number={3}
-          icon={
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
-              <Plus className="h-5 w-5 text-primary-600" />
-            </div>
-          }
+          icon={<Plus className="h-[18px] w-[18px]" aria-hidden="true" />}
           title="«На экран Домой»"
           description={
             <span>
               Нажмите{' '}
-              <span className="inline-flex items-center gap-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-700">
-                <Plus className="h-3 w-3" /> На экран «Домой»
+              <span className="inline-flex items-center gap-0.5 rounded bg-surface-3 px-1.5 py-0.5 text-xs font-medium text-ink-2">
+                <Plus className="h-3 w-3" aria-hidden="true" /> На экран «Домой»
               </span>
             </span>
           }
           isLast
         />
-      </div>
+      </ol>
 
-      {/* Footer note */}
-      <p className="text-center text-xs text-gray-400">Приложение бесплатно и не занимает место</p>
+      <p className="text-center text-xs text-ink-3">Приложение бесплатно и не занимает место</p>
     </div>
   );
 }
@@ -231,54 +247,25 @@ function IOSContent() {
 function AndroidContent({ onInstall, hasPrompt }: { onInstall: () => void; hasPrompt: boolean }) {
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 shadow-lg shadow-primary-500/25">
-          <img src="/icon-96.png" alt="Autexa" className="h-11 w-11 rounded-xl" />
-        </div>
-        <div>
-          <h3 className="text-lg font-bold text-gray-900">Установить Autexa</h3>
-          <p className="text-sm text-gray-500">Добавьте на главный экран</p>
-        </div>
-      </div>
-
-      {/* Benefit pills */}
-      <div className="flex flex-wrap gap-2">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700">
-          <Smartphone className="h-3.5 w-3.5" /> Как приложение
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
-          <Download className="h-3.5 w-3.5" /> Работает офлайн
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700">
-          <Plus className="h-3.5 w-3.5" /> Без Google Play
-        </span>
-      </div>
+      <SheetHeader subtitle="Добавьте на главный экран" />
+      <BenefitPills store="Google Play" />
 
       {hasPrompt ? (
         /* Native install button via beforeinstallprompt */
-        <button
-          onClick={onInstall}
-          className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-primary-600/30 transition-all duration-200 active:scale-[0.98] hover:shadow-xl hover:shadow-primary-600/40"
-        >
-          <Download className="h-5 w-5" />
+        <Button size="lg" fullWidth icon={Download} onClick={onInstall}>
           Установить приложение
-        </button>
+        </Button>
       ) : (
         /* Manual instructions fallback */
-        <div className="space-y-0">
+        <ol className="space-y-0">
           <Step
             number={1}
-            icon={
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
-                <MoreIcon />
-              </div>
-            }
+            icon={<MoreIcon className="h-[18px] w-[18px]" />}
             title="Откройте меню Chrome"
             description={
               <span>
                 Нажмите{' '}
-                <span className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-700">
+                <span className="inline-flex items-center rounded bg-surface-3 px-1.5 py-0.5 text-xs font-medium text-ink-2">
                   ⋮
                 </span>{' '}
                 в правом верхнем углу
@@ -288,20 +275,15 @@ function AndroidContent({ onInstall, hasPrompt }: { onInstall: () => void; hasPr
           />
           <Step
             number={2}
-            icon={
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
-                <Plus className="h-5 w-5 text-primary-600" />
-              </div>
-            }
+            icon={<Plus className="h-[18px] w-[18px]" aria-hidden="true" />}
             title="«Добавить на главный экран»"
             description="Или «Установить приложение»"
             isLast
           />
-        </div>
+        </ol>
       )}
 
-      {/* Footer note */}
-      <p className="text-center text-xs text-gray-400">Приложение бесплатно и не занимает место</p>
+      <p className="text-center text-xs text-ink-3">Приложение бесплатно и не занимает место</p>
     </div>
   );
 }
@@ -321,30 +303,32 @@ function Step({
   isLast: boolean;
 }) {
   return (
-    <div className="flex gap-3">
+    <li className="flex gap-3">
       {/* Left: number line */}
       <div className="flex flex-col items-center">
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-600 text-xs font-bold text-white shadow-sm">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-xs font-semibold tabular-nums text-white">
           {number}
-        </div>
-        {!isLast && <div className="w-px flex-1 bg-gray-200 my-1" />}
+        </span>
+        {!isLast && <span className="my-1 w-px flex-1 bg-line" aria-hidden="true" />}
       </div>
       {/* Right: content */}
-      <div className={`flex items-start gap-3 ${isLast ? 'pb-0' : 'pb-4'}`}>
-        {icon}
+      <div className={cn('flex items-start gap-3', isLast ? 'pb-0' : 'pb-4')}>
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          {icon}
+        </span>
         <div className="pt-0.5">
-          <p className="text-sm font-semibold text-gray-900">{title}</p>
-          <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+          <p className="text-sm font-semibold text-ink">{title}</p>
+          <p className="mt-0.5 text-xs text-ink-3">{description}</p>
         </div>
       </div>
-    </div>
+    </li>
   );
 }
 
 /* ─── Three-dot menu icon ─── */
-function MoreIcon() {
+function MoreIcon({ className }: { className?: string }) {
   return (
-    <svg className="h-5 w-5 text-primary-600" viewBox="0 0 24 24" fill="currentColor">
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <circle cx="12" cy="5" r="2" />
       <circle cx="12" cy="12" r="2" />
       <circle cx="12" cy="19" r="2" />

@@ -2,6 +2,9 @@ import { Component, lazy, Suspense } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 
 import type { MarkdownViewProps } from './MarkdownViewRich';
+import { cn } from '../ui/cn';
+import { Skeleton as UiSkeleton } from '../ui/Skeleton';
+import { articleType } from './knowledge/articleTypography';
 
 const MarkdownViewRich = lazy(() => import('./MarkdownViewRich'));
 
@@ -25,8 +28,8 @@ const MarkdownViewRich = lazy(() => import('./MarkdownViewRich'));
 /** Читаемый фолбэк: markdown как обычный текст, переносы сохранены. */
 function PlainText({ children, className = '' }: MarkdownViewProps) {
   return (
-    <div className={`text-[15px] leading-relaxed text-gray-800 ${className}`}>
-      <div className="whitespace-pre-wrap break-words">{children}</div>
+    <div className={cn(articleType.body, className)}>
+      <div className="whitespace-pre-wrap">{children}</div>
     </div>
   );
 }
@@ -34,10 +37,11 @@ function PlainText({ children, className = '' }: MarkdownViewProps) {
 /** Скелет на время загрузки чанка — без мигания сырым markdown'ом. */
 function Skeleton({ className = '' }: { className?: string }) {
   return (
-    <div className={`animate-pulse space-y-2.5 ${className}`} aria-hidden>
-      <div className="h-4 w-3/4 rounded bg-gray-200" />
-      <div className="h-4 w-full rounded bg-gray-200" />
-      <div className="h-4 w-5/6 rounded bg-gray-200" />
+    <div className={cn('max-w-[70ch] space-y-3', className)} aria-hidden="true">
+      <UiSkeleton variant="text" className="h-4 w-3/4" />
+      <UiSkeleton variant="text" className="h-4 w-full" />
+      <UiSkeleton variant="text" className="h-4 w-5/6" />
+      <UiSkeleton variant="text" className="h-4 w-2/3" />
     </div>
   );
 }
@@ -67,12 +71,14 @@ class MarkdownBoundary extends Component<BoundaryProps, { failed: boolean }> {
   }
 }
 
-export default function MarkdownView({ children, className = '' }: MarkdownViewProps) {
+export default function MarkdownView({ children, className = '', headingBase }: MarkdownViewProps) {
   const plain = <PlainText className={className}>{children}</PlainText>;
   return (
     <MarkdownBoundary fallback={plain}>
       <Suspense fallback={<Skeleton className={className} />}>
-        <MarkdownViewRich className={className}>{children}</MarkdownViewRich>
+        <MarkdownViewRich className={className} headingBase={headingBase}>
+          {children}
+        </MarkdownViewRich>
       </Suspense>
     </MarkdownBoundary>
   );

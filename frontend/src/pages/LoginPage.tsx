@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
+import { Coins, Eye, EyeOff, Lock, Package, Phone, Receipt } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import type { LoginStepResult } from '../contexts/AuthContext';
@@ -12,9 +12,23 @@ import {
   resolveSelectPointFailure,
   SELECT_TOKEN_EXPIRED,
 } from '../../../shared/utils/loginPointSelection';
+import { Button } from '../ui/Button';
+import { Card } from '../ui/Card';
+import { Field } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 
 /** Ожидающий выбор филиала — второй шаг входа (163). */
 type PendingPointSelection = Extract<LoginStepResult, { status: 'point-required' }>;
+
+// Что видит владелец слева от формы: не маркетинг, а карта того, куда он входит.
+const PRODUCT_POINTS = [
+  { icon: Receipt, title: 'Касса и заказ-наряды', text: 'Чек за минуту, отложенные работы, история по каждому авто.' },
+  { icon: Package, title: 'Склад и закупки', text: 'Остатки, движения и заказы поставщикам — без тетрадей.' },
+  { icon: Coins, title: 'Зарплата и отчёты', text: 'Проценты мастеров считаются сами; прибыль видна каждый день.' },
+];
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -75,6 +89,7 @@ export default function LoginPage() {
     }
     if (!password.trim()) {
       setPasswordError('Введите пароль');
+      passwordRef.current?.focus();
       return;
     }
 
@@ -161,158 +176,173 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-white">
-      {/* Main content */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
-        {/* ШАГ 2 (163): пароль принят, но сессии ещё нет — сначала филиал.
-            Форма при этом не размонтируется «в никуда»: телефон и пароль
-            остаются в состоянии страницы, чтобы кнопка «Назад» вернула их
-            заполненными, а повторный запрос списка филиалов (доступ сняли
-            между шагами) прошёл без набора пароля заново. */}
-        {pendingPoints ? (
-          <LoginPointSelect
-            points={pendingPoints.points}
-            defaultPointId={pendingPoints.defaultPointId}
-            submittingPointId={submittingPointId}
-            onSelect={handleSelectPoint}
-            onBack={backToCredentials}
-          />
-        ) : (
-          <div className="w-full max-w-sm">
-            {/* Logo */}
-            <div className="flex justify-center mb-3">
-              <img src="/logo.png" alt="Autexa" className="h-16 w-auto object-contain" />
-            </div>
+    <div className="min-h-[100dvh] bg-canvas lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+      {/* Левая панель — та же тёмная «рельса», что и боковая навигация внутри:
+          вход выглядит как первый экран того же инструмента, а не как лендинг. */}
+      <aside
+        className="hidden flex-col justify-between bg-rail px-12 py-10 text-rail-text lg:flex"
+        aria-label="О продукте"
+      >
+        <a
+          href="https://autexa.pw"
+          className={cn(
+            'inline-flex w-fit items-center gap-2.5 rounded-lg',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-rail',
+          )}
+        >
+          <img src="/logo-icon.png" alt="" width={36} height={36} className="h-9 w-9 rounded-lg object-contain" />
+          <span className="text-lg font-bold tracking-tight text-white">Autexa</span>
+        </a>
 
-            {/* Subtitle */}
-            <p className="text-center text-sm text-gray-500 mb-10 tracking-wide">Система управления сервисом</p>
+        <div className="max-w-md">
+          <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-rail-muted">
+            Система управления автосервисом
+          </p>
+          <h2 className="mt-3 text-3xl font-semibold leading-[1.15] tracking-[-0.015em] text-white">
+            Касса, склад и зарплата — в одном окне
+          </h2>
+          <ul className="mt-8 space-y-5">
+            {PRODUCT_POINTS.map((p) => {
+              const Icon = p.icon;
+              return (
+                <li key={p.title} className="flex items-start gap-3.5">
+                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-white/10 text-white">
+                    <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+                  </span>
+                  <span>
+                    <span className="block text-sm font-semibold text-white">{p.title}</span>
+                    <span className="mt-0.5 block text-sm leading-relaxed text-rail-text">{p.text}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
 
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Phone */}
-              <div>
-                <label
-                  htmlFor="phone"
-                  className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2"
-                >
-                  Телефон
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <Phone className="h-[18px] w-[18px] text-gray-400" />
-                  </div>
-                  <input
-                    id="phone"
-                    type="tel"
-                    inputMode="numeric"
-                    autoComplete="tel"
-                    placeholder="+7 (___) ___-__-__"
-                    value={phone}
-                    onChange={handlePhoneChange}
-                    className={`w-full pl-11 pr-4 py-3.5 text-[15px] bg-gray-50 border rounded-xl text-gray-900 placeholder-gray-400 transition-all focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 ${
-                      phoneError ? 'border-red-400 bg-red-50/50' : 'border-gray-200'
-                    }`}
-                  />
-                </div>
-                {phoneError && <p className="mt-1.5 text-xs text-red-600">{phoneError}</p>}
-              </div>
+        <p className="text-xs text-rail-muted">© 2026 Autexa · Autexa v2.1</p>
+      </aside>
 
-              {/* Password */}
-              <div>
-                <label
-                  htmlFor="password"
-                  className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2"
-                >
-                  Пароль
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <Lock className="h-[18px] w-[18px] text-gray-400" />
-                  </div>
-                  <input
-                    id="password"
-                    ref={passwordRef}
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    placeholder="Введите пароль"
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      setPasswordError('');
-                    }}
-                    className={`w-full pl-11 pr-12 py-3.5 text-[15px] bg-gray-50 border rounded-xl text-gray-900 placeholder-gray-400 transition-all focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 ${
-                      passwordError ? 'border-red-400 bg-red-50/50' : 'border-gray-200'
-                    }`}
-                  />
+      {/* Правая часть — форма на холсте */}
+      <main className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-8 sm:px-6">
+        <div className="w-full max-w-[400px]">
+          {/* Логотип показываем над карточкой там, где нет левой панели */}
+          <div className="mb-6 flex justify-center lg:hidden">
+            <img src="/logo.png" alt="Autexa" className="h-10 w-auto object-contain" />
+          </div>
+
+          <Card padding="none" className="px-6 py-7 sm:px-8 sm:py-8">
+            {/* ШАГ 2 (163): пароль принят, но сессии ещё нет — сначала филиал.
+                Форма при этом не размонтируется «в никуда»: телефон и пароль
+                остаются в состоянии страницы, чтобы кнопка «Назад» вернула их
+                заполненными, а повторный запрос списка филиалов (доступ сняли
+                между шагами) прошёл без набора пароля заново. */}
+            {pendingPoints ? (
+              <LoginPointSelect
+                points={pendingPoints.points}
+                defaultPointId={pendingPoints.defaultPointId}
+                submittingPointId={submittingPointId}
+                onSelect={handleSelectPoint}
+                onBack={backToCredentials}
+              />
+            ) : (
+              <>
+                <h1 className="text-title text-ink">Вход</h1>
+                <p className="mt-1 text-sm text-ink-3">Телефон и пароль сотрудника автосервиса</p>
+
+                <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+                  <Field label="Телефон" htmlFor="phone" error={phoneError || undefined}>
+                    <Input
+                      id="phone"
+                      name="phone"
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      placeholder="+7 (___) ___-__-__"
+                      value={phone}
+                      onChange={handlePhoneChange}
+                      leftIcon={Phone}
+                      invalid={!!phoneError}
+                      aria-describedby={phoneError ? 'phone-error' : undefined}
+                      className="h-11 text-base tabular-nums"
+                    />
+                  </Field>
+
+                  <Field label="Пароль" htmlFor="password" error={passwordError || undefined}>
+                    <Input
+                      id="password"
+                      name="password"
+                      ref={passwordRef}
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      placeholder="Введите пароль"
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        setPasswordError('');
+                      }}
+                      leftIcon={Lock}
+                      invalid={!!passwordError}
+                      aria-describedby={passwordError ? 'password-error' : undefined}
+                      className="h-11 pr-12 text-base"
+                      rightSlot={
+                        <IconButton
+                          label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                          icon={showPassword ? EyeOff : Eye}
+                          size="sm"
+                          onClick={() => setShowPassword((v) => !v)}
+                          aria-pressed={showPassword}
+                          className="pointer-events-auto"
+                        />
+                      }
+                    />
+                  </Field>
+
+                  <Button type="submit" size="lg" fullWidth loading={submitting} className="mt-2">
+                    Войти
+                  </Button>
+                </form>
+
+                {/* Заявка на подключение — B2B, вторичное действие */}
+                <p className="mt-6 text-center text-sm text-ink-3">
+                  Подключить автосервис?{' '}
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
-                    className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                    onClick={() => setRegisterOpen(true)}
+                    className={cn('rounded font-medium text-accent-text hover:underline', focusRing)}
                   >
-                    {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
+                    Оставить заявку
                   </button>
-                </div>
-                {passwordError && <p className="mt-1.5 text-xs text-red-600">{passwordError}</p>}
-              </div>
+                </p>
+              </>
+            )}
+          </Card>
 
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full py-3.5 bg-primary-600 hover:bg-primary-700 active:bg-primary-800 text-white text-[15px] font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md flex items-center justify-center gap-2"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Вход...</span>
-                  </>
-                ) : (
-                  <span>Войти</span>
-                )}
-              </button>
-            </form>
-
-            {/* B2B request-access entry point — secondary, unobtrusive */}
-            <div className="mt-6 text-center">
-              <span className="text-sm text-gray-500">Подключить автосервис? </span>
-              <button
-                type="button"
-                onClick={() => setRegisterOpen(true)}
-                className="text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700"
-              >
-                Оставить заявку
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+          <footer className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-ink-3">
+            <a
+              href="https://autexa.pw/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn('rounded hover:text-ink', focusRing)}
+            >
+              Политика конфиденциальности
+            </a>
+            <span className="text-ink-4" aria-hidden="true">
+              ·
+            </span>
+            <a
+              href="https://autexa.pw/terms"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn('rounded hover:text-ink', focusRing)}
+            >
+              Условия использования
+            </a>
+            <span className="w-full text-center text-ink-4 lg:hidden">Autexa v2.1 © 2026</span>
+          </footer>
+        </div>
+      </main>
 
       <RegisterModal isOpen={registerOpen} onClose={() => setRegisterOpen(false)} />
-
-      {/* Copyright footer */}
-      <div className="pb-8 pt-4 space-y-2">
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-gray-500">
-          <a
-            href="https://autexa.pw/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-gray-600 transition-colors"
-          >
-            Политика конфиденциальности
-          </a>
-          <span className="text-gray-300">·</span>
-          <a
-            href="https://autexa.pw/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-gray-600 transition-colors"
-          >
-            Условия использования
-          </a>
-        </div>
-        <p className="text-center text-xs text-gray-400">Autexa v2.1 &copy; 2026</p>
-      </div>
     </div>
   );
 }
