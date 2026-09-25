@@ -82,7 +82,11 @@ const PurchaseOrdersPage = lazyWithRetry(() => import('./pages/PurchaseOrdersPag
 const PurchaseOrderEditPage = lazyWithRetry(() => import('./pages/PurchaseOrderEditPage'));
 const PurchaseOrderDetailPage = lazyWithRetry(() => import('./pages/PurchaseOrderDetailPage'));
 const SalaryPage = lazyWithRetry(() => import('./pages/SalaryPage'));
-const ReportsPage = lazyWithRetry(() => import('./pages/ReportsPage'));
+// Раздел «Отчёты» (спека docs/specs/2026-09-25-REPORTS.md): хаб → конструктор
+// отчётов по /reports/:reportId; прежний финансовый отчёт живёт на /reports/financial.
+const ReportsHubPage = lazyWithRetry(() => import('./pages/reports/ReportsHubPage'));
+const FinancialReportPage = lazyWithRetry(() => import('./pages/reports/FinancialReportPage'));
+const ReportRunPage = lazyWithRetry(() => import('./pages/reports/ReportRunPage'));
 const CashFlowPage = lazyWithRetry(() => import('./pages/CashFlowPage'));
 const CashShiftPage = lazyWithRetry(() => import('./pages/CashShiftPage'));
 const InstallmentsPage = lazyWithRetry(() => import('./pages/InstallmentsPage'));
@@ -315,7 +319,9 @@ export default function App() {
                     />
                     <Route path="/purchase-orders/:id" element={gated('suppliers_view', <PurchaseOrderDetailPage />)} />
                     <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
-                    <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
+                    <Route path="/reports" element={gated('reports_view', <ReportsHubPage />)} />
+                    <Route path="/reports/financial" element={gated('reports_view', <FinancialReportPage />)} />
+                    <Route path="/reports/:reportId" element={gated('reports_view', <ReportRunPage />)} />
                     <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
                     <Route path="/cash-shift" element={<CashShiftPage />} />
                     <Route path="/installments" element={<InstallmentsPage />} />

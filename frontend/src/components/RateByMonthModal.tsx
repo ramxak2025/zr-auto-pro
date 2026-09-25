@@ -13,11 +13,16 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Loader2, CalendarClock } from 'lucide-react';
+import { CalendarClock } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { usersApi } from '../api/services';
 import Modal from './Modal';
+import { ErrorRow } from './dashboard/shared';
+import { Button } from '../ui/Button';
+import { Field } from '../ui/Field';
+import { Input } from '../ui/Input';
+import { SkeletonText } from '../ui/Skeleton';
 import type { UserRateHistoryEntry } from '../types';
 
 function labelMonth(my: string): string {
@@ -65,11 +70,12 @@ export default function RateByMonthModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, currentSalaryPercent, currentProductPercent, fixedMonth]);
 
-  const { data: history } = useQuery({
+  const historyQuery = useQuery({
     queryKey: ['user-rate-history', userId],
     queryFn: async () => (await usersApi.getRateHistory(userId)).data as UserRateHistoryEntry[],
     enabled: isOpen,
   });
+  const history = historyQuery.data ?? [];
 
   const mutation = useMutation({
     mutationFn: (data: { month: string; salaryPercent: number; productSalaryPercent: number }) =>
@@ -127,76 +133,78 @@ export default function RateByMonthModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={fixedMonth ? `Процент за ${labelMonth(month)} — ${userName}` : `Ставка по месяцам — ${userName}`}
+      title={fixedMonth ? `Процент за ${labelMonth(month)}` : 'Ставка по месяцам'}
+      description={userName}
       size="md"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Отмена
+          </Button>
+          <Button type="submit" form="rate-by-month-form" loading={mutation.isPending}>
+            Сохранить ставку
+          </Button>
+        </>
+      }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form id="rate-by-month-form" onSubmit={handleSubmit} className="space-y-4">
         {fixedMonth ? null : (
-          <div>
-            <label className="label">Месяц</label>
-            <input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} required />
-          </div>
+          <Field label="Месяц" htmlFor="rate-month" required>
+            <Input id="rate-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} required />
+          </Field>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">% от услуг</label>
-            <input
-              type="number"
-              className="input"
+          <Field label="% от услуг" htmlFor="rate-services">
+            <Input
+              id="rate-services"
+              inputMode="decimal"
               value={svc}
               onChange={(e) => setSvc(e.target.value)}
-              min={0}
-              max={100}
-              step={1}
+              rightSlot={<span className="text-sm">%</span>}
             />
-          </div>
-          <div>
-            <label className="label">% от товаров</label>
-            <input
-              type="number"
-              className="input"
+          </Field>
+          <Field label="% от товаров" htmlFor="rate-products">
+            <Input
+              id="rate-products"
+              inputMode="decimal"
               value={prod}
               onChange={(e) => setProd(e.target.value)}
-              min={0}
-              max={100}
-              step={1}
+              rightSlot={<span className="text-sm">%</span>}
             />
-          </div>
+          </Field>
         </div>
 
-        <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5">
-          <CalendarClock className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-          <p className="text-xs text-amber-800">{warning}</p>
-        </div>
-
-        <div className="flex justify-end gap-3 pt-2">
-          <button type="button" onClick={onClose} className="btn-secondary">
-            Отмена
-          </button>
-          <button type="submit" disabled={mutation.isPending} className="btn-primary">
-            {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            Сохранить ставку
-          </button>
+        <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-xs leading-snug text-warn-text">
+          <CalendarClock className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+          <p>{warning}</p>
         </div>
       </form>
 
       {/* ── История ставок ─────────────────────────────────────────────── */}
-      <div className="mt-6 border-t border-gray-200 pt-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">История ставок</p>
-        {(history ?? []).length === 0 ? (
-          <p className="text-xs text-gray-400">
+      <div className="mt-6 border-t border-line pt-4">
+        <h3 className="mb-2 text-xs font-semibold text-ink-3">История ставок</h3>
+        {historyQuery.isLoading ? (
+          <SkeletonText lines={2} />
+        ) : historyQuery.isError ? (
+          <ErrorRow
+            message="Не удалось загрузить историю ставок"
+            onRetry={() => historyQuery.refetch()}
+            loading={historyQuery.isFetching}
+          />
+        ) : history.length === 0 ? (
+          <p className="text-xs text-ink-3">
             Ставка ещё не менялась — действует текущая ({currentSalaryPercent}% / {currentProductPercent}%)
           </p>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {(history ?? []).map((h) => (
-              <li key={h.id} className="py-2 flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-gray-900 capitalize">{labelMonth(h.month)}</span>
-                <span className="text-xs text-gray-500">
+          <ul className="divide-y divide-line">
+            {history.map((h) => (
+              <li key={h.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="text-sm font-medium capitalize text-ink">{labelMonth(h.month)}</span>
+                <span className="text-xs tabular-nums text-ink-2">
                   {h.salaryPercent ?? '—'}% услуги · {h.productSalaryPercent ?? '—'}% товары
                 </span>
                 {h.creatorName ? (
-                  <span className="text-xs text-gray-400 truncate max-w-[10rem]">{h.creatorName}</span>
+                  <span className="max-w-[10rem] truncate text-xs text-ink-3">{h.creatorName}</span>
                 ) : null}
               </li>
             ))}
