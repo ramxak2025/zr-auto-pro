@@ -269,7 +269,7 @@ export default function MorePage() {
   });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="mx-auto w-full max-w-3xl space-y-5">
       <h1 className="page-title">Ещё</h1>
 
       {/* Профиль */}

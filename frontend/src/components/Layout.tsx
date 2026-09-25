@@ -571,9 +571,9 @@ const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps)
                 to={tab.path}
                 replace
                 aria-current={active ? 'page' : undefined}
-                className={cn('-mt-6 flex flex-col items-center rounded-2xl', focusRing)}
+                className={cn('-mt-6 flex flex-col items-center rounded-xl', focusRing)}
               >
-                <span className="flex h-12 w-20 items-center justify-center rounded-2xl bg-accent text-white shadow-pop transition-transform active:scale-95">
+                <span className="flex h-12 w-20 items-center justify-center rounded-xl bg-accent text-white shadow-pop transition-transform active:scale-95">
                   <Icon className="h-6 w-6" strokeWidth={2.2} aria-hidden="true" />
                 </span>
                 <span className="mt-1 text-2xs font-bold text-accent-text">{tab.label}</span>
@@ -656,8 +656,16 @@ export default function Layout() {
   const isBypass = user?.role === 'superadmin';
 
   const isFeatureLocked = useMemo(() => {
+    // Источник правды — серверный набор ключей текущего тарифа (`sub.features`),
+    // тот же, что в FeatureGate. Поиск плана по имени в `sub.plans` — только
+    // запасной путь для старого ответа: у демо-тарифа плана в списке нет, и все
+    // пункты с featureKey получали замок, хотя страницы открывались.
     const currentPlan = sub?.plans?.find((p) => p.name === sub?.planName);
-    const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan.features : [];
+    const planFeatures: string[] = Array.isArray(sub?.features)
+      ? sub.features
+      : Array.isArray(currentPlan?.features)
+        ? currentPlan.features
+        : [];
     return (featureKey?: string) => {
       if (!featureKey || isBypass || !sub) return false;
       return !planFeatures.includes(featureKey);

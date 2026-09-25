@@ -38,8 +38,7 @@ import EmptyState from '../components/EmptyState';
 import { WorkStatusBadge, WorkStatusPicker, resolveColumn } from '../components/WorkStatusPicker';
 import { CheckStatusBadge, PaymentBadge, PlateBadge } from '../components/checks/checkBadges';
 import MoneyInput from '../components/checks/MoneyInput';
-import VinText from '../components/checks/VinText';
-import { carVin } from '../components/checks/vinUi';
+import { VinText, carVin } from '../components/vin';
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -193,14 +192,16 @@ export default function CheckDetailPage() {
     [boardColumns],
   );
 
-  // 171 — VIN: проекция чека несёт только {id, plateNumber, makeModel}, поэтому
-  // при включённой опции подтягиваем карточку авто (тот же слот ['cars', id],
-  // что инвалидируют формы авто). При выключенной опции запроса нет вовсе.
+  // 171 — VIN: backend отдаёт `vin` в проекции car у GET /checks/:id; отдельная
+  // карточка авто (тот же слот ['cars', id], что инвалидируют формы авто) нужна
+  // только пока поле в проекции отсутствует (старый backend без `vin` в car).
+  // При выключенной опции запроса нет вовсе.
   const carId = check?.carId || check?.car?.id || '';
+  const carHasVinField = !!check?.car && 'vin' in check.car;
   const { data: carDetail } = useQuery<CarType>({
     queryKey: ['cars', carId],
     queryFn: async () => (await carsApi.getById(carId)).data,
-    enabled: vinEnabled && !!carId,
+    enabled: vinEnabled && !!carId && !!check && !carHasVinField,
     staleTime: 60_000,
   });
   const vin = vinEnabled ? (carVin(check?.car) ?? carVin(carDetail)) : null;
@@ -512,7 +513,7 @@ export default function CheckDetailPage() {
                   <p className="truncate text-sm font-semibold text-ink">{check.car.makeModel || '—'}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     {check.car.plateNumber && <PlateBadge plate={check.car.plateNumber} />}
-                    {vin && <VinText vin={vin} size="sm" />}
+                    {vin && <VinText vin={vin} withLabel size="sm" />}
                   </div>
                 </>
               ) : (

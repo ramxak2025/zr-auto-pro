@@ -81,9 +81,9 @@ import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
 import ClientCarQuickDrawer, { type QuickDrawerMode } from '../components/checks/ClientCarQuickDrawer';
 import ServiceCombobox from '../components/checks/ServiceCombobox';
 import MoneyInput from '../components/checks/MoneyInput';
-import VinText from '../components/checks/VinText';
+import { VinText, carVin } from '../components/vin';
 import { PlateBadge } from '../components/checks/checkBadges';
-import { carVin } from '../components/checks/vinUi';
+
 import { Card, CardBody, CardHeader } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -1524,7 +1524,7 @@ export default function CheckCreatePage() {
                       )}
                       {selectedVin && (
                         <div className="mt-1.5">
-                          <VinText vin={selectedVin} copy size="sm" />
+                          <VinText vin={selectedVin} withLabel copy size="sm" />
                         </div>
                       )}
                     </div>

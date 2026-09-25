@@ -89,13 +89,25 @@ export default function ReportRunPage() {
     enabled: filterKind !== null,
     staleTime: 5 * 60_000,
   });
+  // Сущностный фильтр не показываем, когда выбирать не из чего: справочник вернул
+  // ≤ 1 опции (сотруднику с охватом «только своя зарплата» сервер отдаёт в
+  // filters/employees только его самого). Вместе с фильтром прячем чипы и подписи
+  // фильтра в экспорте, а `ids` из ссылки не применяем — скрытый фильтр не должен
+  // молча резать отчёт.
+  const filterHidden = !!filterKind && !!filterQuery.data && filterQuery.data.options.length <= 1;
+  const effectiveIds = filterHidden ? [] : ids;
 
-  const idsKey = ids.join(',');
+  const idsKey = effectiveIds.join(',');
   const report = useQuery<ReportResult>({
     queryKey: ['report-builder', def?.id ?? null, period.from, period.to, idsKey, groupBy ?? ''],
     queryFn: async () => {
       if (!def) throw new Error('Отчёт не найден');
-      const res = await reportBuilderApi.run(def.id, { dateFrom: period.from, dateTo: period.to, ids, groupBy });
+      const res = await reportBuilderApi.run(def.id, {
+        dateFrom: period.from,
+        dateTo: period.to,
+        ids: effectiveIds,
+        groupBy,
+      });
       return res.data;
     },
     enabled: def !== null && !periodInvalid,
@@ -112,8 +124,12 @@ export default function ReportRunPage() {
     setExporting(kind);
     try {
       const ctx = { companyName: user?.tenant?.name, timeZone };
-      if (kind === 'excel') await exportReportToExcel(report.data, ctx);
-      else await exportReportToPdf(report.data, ctx);
+      // Фильтр скрыт (выбирать не из чего) — его подписи в шапке файла не нужны.
+      const result: ReportResult = filterHidden
+        ? { ...report.data, filters: { ...report.data.filters, entityLabels: [] } }
+        : report.data;
+      if (kind === 'excel') await exportReportToExcel(result, ctx);
+      else await exportReportToPdf(result, ctx);
     } catch (err) {
       console.error(err);
       toast.error(kind === 'excel' ? 'Не удалось сформировать Excel' : 'Не удалось сформировать PDF');
@@ -198,7 +214,7 @@ export default function ReportRunPage() {
       >
         <MonthPager from={period.from} to={period.to} todayKey={today} onChange={(from, to) => update({ from, to })} />
         <DatePeriodPicker dateFrom={period.from} dateTo={period.to} onChange={(from, to) => update({ from, to })} />
-        {def.entityFilter && (
+        {def.entityFilter && !filterHidden && (
           <EntityFilter
             label={def.entityFilter.label}
             options={filterQuery.data?.options}
@@ -220,7 +236,15 @@ export default function ReportRunPage() {
         )}
       </Toolbar>
 
-      {def.entityFilter && (
+      {def.entityFilter && filterQuery.isError && !filterQuery.data && (
+        <ErrorRow
+          message={`Не удалось загрузить список «${def.entityFilter.label}» — фильтр недоступен, отчёт показан без него.`}
+          onRetry={() => filterQuery.refetch()}
+          loading={filterQuery.isFetching}
+        />
+      )}
+
+      {def.entityFilter && !filterHidden && (
         <SelectedChips
           label={def.entityFilter.label}
           options={filterQuery.data?.options}

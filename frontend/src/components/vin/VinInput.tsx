@@ -1,8 +1,10 @@
 /**
  * VinInput — поле VIN-кода автомобиля для веба (171, 2026-09-25).
  *
- * Рендерится ТОЛЬКО при включённой опции тенанта (`useVinEnabled()`): родитель
- * сам не монтирует поле, когда опция выключена, — формы остаются прежними.
+ * Единственная реализация для Кассы (быстрое создание клиента/авто), карточки
+ * клиента и списка «Автомобили». Рендерится ТОЛЬКО при включённой опции
+ * тенанта (`useVinEnabled()`): родитель сам не монтирует поле, когда опция
+ * выключена, — формы остаются прежними.
  *
  * Что делает само:
  *   • нормализует ввод на лету: верхний регистр, кириллические двойники →
@@ -17,15 +19,19 @@
  *     «Марка и модель» пусто → подставляет `makeModel` молча (`onMakeModel`);
  *     заполнено — чип «По VIN: Kia Rio · Заменить». Подпись-источник под
  *     полем: «Определено по VIN» / «Марка по справочнику, модель допишите».
- *     Результаты кэшируются по VIN на время сессии (расшифровка неизменна);
+ *     Сбой сети → подпись + кнопка «Повторить». Результаты кэшируются по VIN
+ *     на время сессии (расшифровка неизменна);
  *   • `error` — текст ошибки сервера (409 VIN_DUPLICATE с именем клиента),
- *     `errorAction` — ссылка/кнопка рядом с ним («Открыть карточку клиента»).
+ *     `errorAction` — ссылка/кнопка рядом с ним («Открыть карточку клиента»);
+ *   • `label` — обернуть в `Field` с подписью (когда родитель не делает этого сам).
  *
  * Зеркало mobile/src/components/VinInput.tsx — поведение и тексты общие.
  */
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { vinApi } from '../../api/services';
+import { Button } from '../../ui/Button';
+import { Field } from '../../ui/Field';
 import { Input, type ControlSize } from '../../ui/Input';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
@@ -69,6 +75,8 @@ export interface VinInputProps {
   error?: ReactNode | null;
   /** Действие рядом с ошибкой (ссылка «Открыть карточку клиента»). */
   errorAction?: ReactNode;
+  /** Подпись поля: компонент сам оборачивается в `Field`. Без неё — только контрол. */
+  label?: ReactNode;
   disabled?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
@@ -96,6 +104,7 @@ export default function VinInput({
   decode = true,
   error,
   errorAction,
+  label,
   disabled = false,
   autoFocus = false,
   placeholder = 'XTA 219010 K0123456',
@@ -134,6 +143,8 @@ export default function VinInput({
   const [decoding, setDecoding] = useState(false);
   const [decoded, setDecoded] = useState<VinDecodeResult | null>(null);
   const [decodeFailed, setDecodeFailed] = useState(false);
+  // «Повторить» после сбоя сети: перезапускает эффект расшифровки для того же VIN.
+  const [retryTick, setRetryTick] = useState(0);
   const decodedVinRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -157,6 +168,7 @@ export default function VinInput({
     const apply = (res: VinDecodeResult) => {
       decodedVinRef.current = value;
       setDecoded(res);
+      setDecodeFailed(false);
       onDecodedRef.current?.(res);
       if (shouldAutofillMakeModel(makeModelRef.current, res) && res.makeModel) {
         onMakeModelRef.current?.(res.makeModel);
@@ -169,9 +181,9 @@ export default function VinInput({
       return;
     }
 
-    const timer = setTimeout(async () => {
+    setDecodeFailed(false);
+    const timer = window.setTimeout(async () => {
       setDecoding(true);
-      setDecodeFailed(false);
       try {
         const res = (await vinApi.decode(value)).data;
         if (cancelled) return;
@@ -186,9 +198,9 @@ export default function VinInput({
     }, 400);
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
     };
-  }, [value, decode]);
+  }, [value, decode, retryTick]);
 
   // ── Что показать под полем ───────────────────────────────────────────────
   const valid = isValidVin(value);
@@ -208,6 +220,8 @@ export default function VinInput({
   } else if (partial)
     caption = { text: `Ещё ${VIN_LENGTH - value.length} симв. — латиница и цифры без I, O, Q`, tone: 'info' };
 
+  const showRetry = !error && decodeFailed && !decoding;
+
   // Слот справа ВСЕГДА присутствует (пусть и пустой): ui/Input оборачивает
   // поле в <div> только при наличии rightSlot, и появление счётчика после
   // первого символа перемонтировало бы <input> — с потерей фокуса.
@@ -226,8 +240,8 @@ export default function VinInput({
   ) : null;
   const rightSlot = <span className="flex min-w-[2.25rem] items-center justify-end">{indicator}</span>;
 
-  return (
-    <div className={cn('min-w-0', className)}>
+  const control = (
+    <>
       <Input
         id={inputId}
         name={name}
@@ -258,10 +272,22 @@ export default function VinInput({
           id={captionId}
           role={caption.tone === 'error' ? 'alert' : undefined}
           aria-live={caption.tone === 'error' ? undefined : 'polite'}
-          className={cn('mt-1.5 flex flex-wrap items-center gap-x-2 text-xs', captionTone[caption.tone])}
+          className={cn('mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs', captionTone[caption.tone])}
         >
           <span>{caption.text}</span>
           {caption.tone === 'error' && errorAction}
+          {showRetry && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              icon={RefreshCw}
+              className="-my-1 h-6 px-1.5"
+              onClick={() => setRetryTick((t) => t + 1)}
+            >
+              Повторить
+            </Button>
+          )}
         </p>
       )}
 
@@ -281,6 +307,15 @@ export default function VinInput({
           <span className="flex-shrink-0 font-semibold">· Заменить</span>
         </button>
       )}
-    </div>
+    </>
   );
+
+  if (label) {
+    return (
+      <Field label={label} htmlFor={inputId} className={className}>
+        {control}
+      </Field>
+    );
+  }
+  return <div className={cn('min-w-0', className)}>{control}</div>;
 }

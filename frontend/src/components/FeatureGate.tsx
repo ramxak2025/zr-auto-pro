@@ -8,6 +8,7 @@ import { UserRole } from '../types';
 import type { SubscriptionInfo, Plan } from '../types';
 import { featureLabel } from '../../../shared/constants/features';
 import { getWhatsAppChatUrl } from '../config/contacts';
+import { Button } from '../ui/Button';
 
 interface FeatureGateProps {
   featureKey: string;
@@ -93,112 +94,99 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
       .map((key) => featureLabel(key));
 
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
-        <div className="flex items-center justify-center w-20 h-20 rounded-2xl bg-primary-50 mb-5">
-          <Lock className="w-9 h-9 text-primary-500" />
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent-soft">
+          <Lock className="h-7 w-7 text-accent" aria-hidden="true" />
         </div>
 
-        <h2 className="text-2xl font-bold text-gray-900 text-center">{title}</h2>
-        <p className="text-sm text-gray-500 text-center max-w-md leading-relaxed mt-2 mb-5">{description}</p>
+        <h2 className="text-center text-title text-ink">{title}</h2>
+        <p className="mb-5 mt-2 max-w-md text-center text-sm leading-relaxed text-ink-3">{description}</p>
 
-        {/* Plan offer card */}
-        <div className="relative w-full max-w-md rounded-2xl border border-primary-100 bg-gradient-to-b from-primary-50/60 to-white p-5 mb-5 shadow-sm">
-          <div className="flex items-center gap-2 text-primary-600 mb-1">
-            <Sparkles className="w-4 h-4" />
-            <span className="text-xs font-semibold uppercase tracking-wide">Доступно на тарифе</span>
+        {/* Карточка тарифа, который открывает раздел */}
+        <div className="mb-5 w-full max-w-md rounded-xl border border-line bg-surface p-5 shadow-card">
+          <div className="mb-1 flex items-center gap-2 text-accent-text">
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            <span className="text-xs font-semibold">Доступно на тарифе</span>
           </div>
 
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-xl font-bold text-gray-900 truncate">«{unlockingPlan.name}»</span>
-            <span className="whitespace-nowrap text-lg font-bold text-primary-600">
+            <span className="truncate text-lg font-semibold text-ink">«{unlockingPlan.name}»</span>
+            <span className="whitespace-nowrap text-lg font-semibold tabular-nums text-ink">
               {unlockingPlan.monthlyPrice.toLocaleString('ru-RU')}{' '}
-              <span className="text-sm font-medium text-gray-500">₽/мес</span>
+              <span className="text-sm font-medium text-ink-3">₽/мес</span>
             </span>
           </div>
 
-          {unlockingPlan.description && <p className="text-sm text-gray-500 mt-1.5">{unlockingPlan.description}</p>}
+          {unlockingPlan.description && <p className="mt-1.5 text-sm text-ink-3">{unlockingPlan.description}</p>}
 
-          <div className="mt-4 pt-4 border-t border-primary-100/70">
-            <p className="text-xs font-semibold text-gray-500 mb-2.5">Что входит в тариф:</p>
-            <div className="grid grid-cols-1 gap-1.5">
+          <div className="mt-4 border-t border-line pt-4">
+            <p className="mb-2.5 text-xs font-semibold text-ink-3">Что входит в тариф:</p>
+            <ul className="grid grid-cols-1 gap-1.5">
               {highlights.map((label, i) => (
-                <div key={i} className="flex items-center gap-2.5">
-                  <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
-                  <span className="text-sm text-gray-700">{label}</span>
-                </div>
+                <li key={i} className="flex items-center gap-2.5">
+                  <CheckCircle className="h-4 w-4 flex-shrink-0 text-ok" aria-hidden="true" />
+                  <span className="text-sm text-ink-2">{label}</span>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         </div>
 
-        {/* Primary CTA → in-app tariff page */}
-        <button
-          onClick={() => navigate('/tariff')}
-          className="flex items-center justify-center gap-2 w-full max-w-md bg-primary-600 hover:bg-primary-700 text-white font-bold py-3.5 rounded-xl transition-colors shadow-sm"
-        >
-          <ArrowUpCircle className="w-5 h-5" />
+        {/* Главное действие → страница тарифов */}
+        <Button size="lg" fullWidth icon={ArrowUpCircle} className="max-w-md" onClick={() => navigate('/tariff')}>
           Перейти к тарифам
-        </button>
+        </Button>
 
-        {/* Secondary fallback → WhatsApp */}
-        <button
+        {/* Запасной путь → поддержка в WhatsApp */}
+        <Button
+          variant="secondary"
+          size="lg"
+          fullWidth
+          icon={MessageCircle}
+          className="mt-3 max-w-md"
           onClick={() => openWhatsApp(unlockingPlan.name)}
-          className="flex items-center justify-center gap-2 w-full max-w-md mt-3 bg-white border border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors"
         >
-          <MessageCircle className="w-4 h-4" />
           Написать в поддержку
-        </button>
+        </Button>
 
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-1.5 mt-3 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
+        <Button variant="ghost" size="sm" icon={ArrowLeft} className="mt-3" onClick={() => navigate(-1)}>
           Вернуться назад
-        </button>
+        </Button>
       </div>
     );
   }
 
   // ─── Fallback: no plan offers this key → generic copy ──────────────────────
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
-      {/* Lock icon */}
-      <div className="flex items-center justify-center w-20 h-20 rounded-full bg-gray-100 mb-5">
-        <Lock className="w-9 h-9 text-gray-400" />
+    <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-surface-3">
+        <Lock className="h-7 w-7 text-ink-3" aria-hidden="true" />
       </div>
 
-      <h2 className="text-2xl font-bold text-gray-900 text-center">{title}</h2>
-      <span className="text-sm font-semibold text-red-500 mt-2 mb-2">Недоступно в вашем тарифе</span>
-      <p className="text-sm text-gray-500 text-center max-w-md leading-relaxed mb-5">{description}</p>
+      <h2 className="text-center text-title text-ink">{title}</h2>
+      <span className="mb-2 mt-2 text-sm font-semibold text-bad-text">Недоступно в вашем тарифе</span>
+      <p className="mb-5 max-w-md text-center text-sm leading-relaxed text-ink-3">{description}</p>
 
-      {/* Benefits card */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 w-full max-w-md mb-5">
-        <p className="text-sm font-bold text-gray-800 mb-3">Что вы получите:</p>
-        {benefits.map((b, i) => (
-          <div key={i} className="flex items-center gap-2.5 py-1.5">
-            <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
-            <span className="text-sm text-gray-700">{b}</span>
-          </div>
-        ))}
+      {/* Что даёт раздел */}
+      <div className="mb-5 w-full max-w-md rounded-xl border border-line bg-surface p-5 shadow-card">
+        <p className="mb-3 text-sm font-semibold text-ink">Что вы получите:</p>
+        <ul>
+          {benefits.map((b, i) => (
+            <li key={i} className="flex items-center gap-2.5 py-1.5">
+              <CheckCircle className="h-5 w-5 flex-shrink-0 text-ok" aria-hidden="true" />
+              <span className="text-sm text-ink-2">{b}</span>
+            </li>
+          ))}
+        </ul>
       </div>
 
-      {/* CTA button */}
-      <button
-        onClick={() => openWhatsApp()}
-        className="flex items-center justify-center gap-2 w-full max-w-md bg-primary-600 hover:bg-primary-700 text-white font-bold py-3.5 rounded-xl transition-colors"
-      >
-        <ArrowUpCircle className="w-5 h-5" />
+      <Button size="lg" fullWidth icon={ArrowUpCircle} className="max-w-md" onClick={() => openWhatsApp()}>
         Улучшить тариф
-      </button>
+      </Button>
 
-      <button
-        onClick={() => navigate(-1)}
-        className="flex items-center gap-1.5 mt-3 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" />
+      <Button variant="ghost" size="sm" icon={ArrowLeft} className="mt-3" onClick={() => navigate(-1)}>
         Вернуться назад
-      </button>
+      </Button>
     </div>
   );
 }

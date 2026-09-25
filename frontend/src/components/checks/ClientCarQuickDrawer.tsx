@@ -10,8 +10,7 @@ import { Field } from '../../ui/Field';
 import { Input } from '../../ui/Input';
 import { Checkbox } from '../../ui/Checkbox';
 import PhoneInput from '../PhoneInput';
-import VinInput from './VinInput';
-import { vinDuplicateError } from './vinUi';
+import { VinInput, vinDuplicateError } from '../vin';
 import { formatPhone, isValidPhone } from '../../../../shared/validation/phone';
 import { apiErrorMessage, apiErrorStatus, otherPointPhoneConflictMessage } from '../../../../shared/utils/apiError';
 import {
@@ -458,6 +457,7 @@ export default function ClientCarQuickDrawer({ open, onClose, mode, vinEnabled, 
           </Field>
           {vinEnabled && (
             <VinInput
+              label="VIN"
               id={`${uid}-vin`}
               value={vin}
               onChange={(v) => {

@@ -40,7 +40,7 @@ export default function PageHeader({
   const onBack = typeof backTo === 'function' ? backTo : backTo ? () => navigate(backTo) : undefined;
 
   return (
-    <div className={cn('page-header flex-col sm:flex-row sm:items-center', className)}>
+    <div className={cn('page-header flex-col items-stretch sm:flex-row sm:items-center', className)}>
       <div className="flex min-w-0 items-center gap-3">
         {onBack && (
           <IconButton label="Назад" icon={ArrowLeft} variant="ghost" onClick={onBack} className="-ml-2 flex-shrink-0" />
@@ -52,10 +52,10 @@ export default function PageHeader({
         )}
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="page-title truncate">{title}</h1>
+            <h1 className="page-title break-words sm:truncate">{title}</h1>
             {meta && <div className="flex flex-shrink-0 items-center gap-1.5">{meta}</div>}
           </div>
-          {subtitle && <p className="mt-0.5 truncate text-sm text-ink-3">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 break-words text-sm text-ink-3 sm:truncate">{subtitle}</p>}
         </div>
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2 sm:flex-shrink-0 sm:justify-end">{actions}</div>}

@@ -275,7 +275,7 @@ export default function PurchaseOrderDetailPage() {
 
   if (isLoading || isError) {
     return (
-      <div className="mx-auto max-w-3xl space-y-5">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
         <QueryState
           isLoading={isLoading}
@@ -298,7 +298,7 @@ export default function PurchaseOrderDetailPage() {
 
   if (!po) {
     return (
-      <div className="mx-auto max-w-3xl space-y-5">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
         <Card>
           <EmptyState
@@ -477,7 +477,7 @@ export default function PurchaseOrderDetailPage() {
     : [];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="mx-auto w-full max-w-3xl space-y-5">
       <PageHeader
         title={po.supplierName || 'Без поставщика'}
         icon={ShoppingCart}

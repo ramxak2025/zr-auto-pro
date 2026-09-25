@@ -58,7 +58,7 @@ export function SegmentedControl<V extends string = string>({
       role="radiogroup"
       aria-label={ariaLabel}
       className={cn(
-        'inline-flex max-w-full items-center rounded-lg bg-surface-3 p-0.5',
+        'no-scrollbar inline-flex max-w-full items-center overflow-x-auto rounded-lg bg-surface-3 p-0.5',
         fullWidth && 'flex w-full',
         className,
       )}
@@ -83,7 +83,9 @@ export function SegmentedControl<V extends string = string>({
             onKeyDown={onKeyDown}
             className={cn(
               'inline-flex flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-[background-color,color,box-shadow] duration-150',
-              focusRing,
+              // Кольцо фокуса внутри сегмента: контейнер прокручивается по горизонтали на узких
+              // экранах (overflow-x), и внешнее кольцо со смещением он бы обрезал.
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60',
               size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
               fullWidth && 'flex-1',
               checked ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink',

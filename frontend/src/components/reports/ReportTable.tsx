@@ -8,7 +8,7 @@ import { Money } from '../../ui/Money';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { cellNumber, formatReportValue, isNumericType, pluralRows } from './reportFormat';
-import { headerWidth, minWidthClass } from './tableWidths';
+import { headerWidth, minWidthClass, numericHeaderClass } from './tableWidths';
 
 interface ReportTableProps {
   columns: ReportColumn[];
@@ -107,10 +107,11 @@ export default function ReportTable({
                 return formatReportValue(value, col.type, { timeZone, signed: col.signed });
               })()
             : undefined;
-        // Минимальная ширина по заголовку: «Себестоимость товаров» не превращается
-        // в «Себ…», а широкая таблица уходит в горизонтальный скролл контейнера
-        // (первая колонка закреплена). См. tableWidths.ts.
-        const width = numeric ? headerWidth(col.title) : first ? 200 : undefined;
+        // Числовые колонки: предпочтительная ширина под заголовок в одну строку,
+        // при нехватке места заголовок переносится, минимум — по длинному слову;
+        // только когда минимумы не помещаются, таблица уходит в горизонтальный
+        // скролл контейнера (первая колонка закреплена). См. tableWidths.ts.
+        const width = numeric ? headerWidth(col.title) : first ? 176 : undefined;
         return {
           key: col.key,
           width,
@@ -135,7 +136,10 @@ export default function ReportTable({
             first && stickyFirst && 'sticky left-0 z-[1] bg-surface',
             first && 'max-w-[14rem] truncate sm:max-w-[20rem]',
           ),
-          headerClassName: cn(first && stickyFirst && 'left-0 z-20', width !== undefined && minWidthClass(width)),
+          headerClassName: cn(
+            first && stickyFirst && 'left-0 z-20',
+            numeric ? numericHeaderClass(col.title) : width !== undefined && minWidthClass(width),
+          ),
         };
       }),
     [columns, totals, timeZone, isLoading, allLinked, stickyFirst],

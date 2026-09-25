@@ -349,7 +349,7 @@ export function DataTable<T>({
                         col.numeric && 'flex-row-reverse',
                       )}
                     >
-                      <span className="truncate">{col.header}</span>
+                      <span className="overflow-hidden text-ellipsis">{col.header}</span>
                       <SortIcon
                         className={cn(
                           'h-3.5 w-3.5 flex-shrink-0',

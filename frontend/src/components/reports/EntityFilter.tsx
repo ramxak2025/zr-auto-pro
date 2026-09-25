@@ -76,12 +76,16 @@ export default function EntityFilter({
     return all.filter((o) => o.label.toLowerCase().includes(q) || (o.sublabel ?? '').toLowerCase().includes(q));
   }, [all, query]);
 
+  // Справочник не загрузился — не выдаём пустой список за «все»: на кнопке
+  // «не загружен», рядом с тулбаром страница показывает ошибку с «Повторить».
   const summary =
-    selected.length === 0
-      ? 'все'
-      : selected.length === 1
-        ? (all.find((o) => o.id === selected[0])?.label ?? '1')
-        : `${selected.length} из ${all.length}`;
+    isError && all.length === 0
+      ? 'не загружен'
+      : selected.length === 0
+        ? 'все'
+        : selected.length === 1
+          ? (all.find((o) => o.id === selected[0])?.label ?? '1')
+          : `${selected.length} из ${all.length}`;
 
   const toggle = (optionId: string) => {
     const next = new Set(selectedSet);

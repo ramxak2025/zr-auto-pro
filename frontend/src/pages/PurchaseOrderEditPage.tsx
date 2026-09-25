@@ -237,7 +237,7 @@ export default function PurchaseOrderEditPage() {
 
   if (isEdit && (loadingExisting || existingError)) {
     return (
-      <div className="mx-auto max-w-3xl space-y-5">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <PageHeader title={title} icon={ShoppingCart} backTo="/purchase-orders" />
         <QueryState
           isLoading={loadingExisting}
@@ -328,7 +328,7 @@ export default function PurchaseOrderEditPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
+    <div className="mx-auto w-full max-w-3xl space-y-5">
       <PageHeader
         title={title}
         icon={ShoppingCart}

@@ -35,10 +35,10 @@ export default function PointIndicator() {
 
   return (
     <span
-      className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700"
+      className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-sm font-medium text-ink-2"
       title={`Вы работаете здесь: ${currentPoint.name} — ${kind.toLowerCase()}`}
     >
-      <Icon className="h-4 w-4 flex-shrink-0 text-gray-400" />
+      <Icon className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
       <span className="truncate">{currentPoint.name}</span>
     </span>
   );

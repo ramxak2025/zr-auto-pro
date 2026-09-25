@@ -19,8 +19,7 @@ import { Input } from '../../ui/Input';
 import { Textarea } from '../../ui/Textarea';
 import { focusRing } from '../../ui/tokens';
 import { cn } from '../../ui/cn';
-import VinInput from './VinInput';
-import type { VinDuplicateInfo } from './vinUi';
+import { VinInput, type VinDuplicateInfo } from '../vin';
 
 export interface CarFormValues {
   plateNumber: string;

@@ -30,6 +30,11 @@ export const controlSize: Record<ControlSize, string> = {
 /**
  * Текстовое поле. Высота 36 px (sm — 32), радиус 8, фокус — синяя рамка + кольцо
  * 25 %. На мобильных глобальный CSS поднимает шрифт до 16 px против авто-зума iOS.
+ *
+ * Обёртка `<div class="relative">` появляется только при иконке/слоте, чтобы не
+ * ломать раскладку 200+ полей (`flex-1`, `w-full` в flex-строках). Переключаемый
+ * слот (кнопка очистки, счётчик) передавайте как `cond ? <X/> : null` — `null`
+ * держит обёртку на месте, и React не перемонтирует `<input>` с потерей фокуса.
  */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { size = 'md', leftIcon: LeftIcon, rightSlot, invalid = false, className, ...rest },
@@ -50,7 +55,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       {...rest}
     />
   );
-  if (!LeftIcon && !rightSlot) return input;
+  // `rightSlot === null/false` — слот сейчас пуст, но каркас стабилен (см. описание выше).
+  if (!LeftIcon && rightSlot === undefined) return input;
   return (
     <div className="relative">
       {LeftIcon && (

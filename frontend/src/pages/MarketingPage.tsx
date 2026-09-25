@@ -76,7 +76,7 @@ export default function MarketingPage() {
   // Masters get the restricted leaderboard only — no page chrome, no tabs.
   if (isMaster) {
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto w-full max-w-3xl">
         <ReputationView isMaster onGoToSettings={() => undefined} />
       </div>
     );
