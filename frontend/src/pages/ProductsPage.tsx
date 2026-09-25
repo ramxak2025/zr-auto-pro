@@ -1,96 +1,90 @@
-import { useState, useMemo, useRef, useEffect, useCallback, memo, FormEvent } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Reorder, useDragControls } from 'framer-motion';
+import { Reorder } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
   Plus,
-  Pencil,
-  Trash2,
-  Loader2,
   Package,
   PackageMinus,
   ClipboardCheck,
   AlertTriangle,
-  ImagePlus,
-  X,
-  Search,
-  ChevronLeft,
-  FolderOpen,
-  Check as CheckIcon,
-  Move,
+  ChevronDown,
+  ChevronRight,
   FolderPlus,
   Warehouse,
   Download,
   Upload,
-  GripVertical,
-  ArrowLeftRight,
   Recycle,
   Percent,
   ListChecks,
   CheckSquare,
   Square,
+  Trash2,
+  Move,
+  Layers,
+  Banknote,
+  TrendingDown,
+  CalendarDays,
 } from 'lucide-react';
-import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
-import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
+import * as XLSX from 'xlsx';
+import { productsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
+import type { Product, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
 import type { UpdateProductRequest } from '../../../shared/api/types';
 
 import { useAuth } from '../contexts/AuthContext';
-import Modal from '../components/Modal';
+import {
+  Button,
+  Card,
+  ConfirmDialog,
+  DropdownMenu,
+  EmptyState,
+  Field,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  QueryState,
+  SearchInput,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  StatCard,
+  Toolbar,
+  cn,
+  focusRing,
+} from '../ui';
+import type { MenuEntry } from '../ui';
 import TrashModal from '../components/TrashModal';
-import ConfirmDialog from '../components/ConfirmDialog';
-import VirtualProductGrid from '../components/VirtualProductGrid';
-import VirtualList from '../components/VirtualList';
 import BulkPriceAdjustModal from '../components/BulkPriceAdjustModal';
-import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
-import { formatMoney } from '../../../shared/utils/formatters';
-import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, unitLabel } from '../utils/units';
-import * as XLSX from 'xlsx';
+import ProductTable from '../components/warehouse/ProductTable';
+import PhotoLightbox from '../components/warehouse/PhotoLightbox';
+import InlineError from '../components/warehouse/InlineError';
+import ProductFormModal, { type ProductFormData } from '../components/warehouse/ProductFormModal';
+import { WriteoffModal, TransferModal, InventoryModal } from '../components/warehouse/StockOperationModals';
+import ProductDetailModal from '../components/warehouse/ProductDetailModal';
+import { FolderTileReorderItem, type FolderInfo } from '../components/warehouse/FolderTile';
+import { GlobalInventoryForm, GlobalWriteoffForm } from '../components/warehouse/GlobalStockForms';
+import {
+  DeleteFolderDialog,
+  MoveToFolderModal,
+  BulkDeleteModal,
+  ImportPreviewModal,
+  type DeleteFolderTarget,
+  type ImportRow,
+} from '../components/warehouse/WarehouseDialogs';
+import { countLabel, isWithin24h, toNumberOrZero } from '../components/warehouse/format';
+import { useUrlParams } from '../components/warehouse/useUrlParams';
+import { DEFAULT_UNIT } from '../utils/units';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Return the image URL as-is (client-side compression handles size) */
-function thumbUrl(url?: string): string | undefined {
-  return url || undefined;
-}
-
-// 120 (дробные количества): значения единиц храним русскими метками
-// ('шт','м','кг','л','уп','компл'); legacy-коды ('pcs','m','l','kg')
-// разруливает unitLabel из utils/units. UNIT_OPTIONS оставлен в прежней
-// форме {value,label} — value теперь совпадает с label.
-const UNIT_OPTIONS = UNIT_PRESETS.map((u) => ({ value: u, label: u }));
-
-// Unified folder icons — all use the same clean icon style
-const CATEGORY_ICONS: Record<string, string> = {};
-
-// ---------------------------------------------------------------------------
-// Product Form Modal
-// ---------------------------------------------------------------------------
-
 /**
- * Число из пользовательского ввода: пробелы-разряды убираются, запятая — такой
- * же десятичный разделитель, что и точка (русская локаль и в форме, и в Excel).
- * Пустое/непарсящееся → 0. Правило одно на всю страницу: форма товара + импорт
- * из XLSX/CSV.
- */
-function toNum(s: string): number {
-  return (
-    parseFloat(
-      String(s ?? '')
-        .replace(/\s/g, '')
-        .replace(',', '.'),
-    ) || 0
-  );
-}
-
-/**
- * Текст ошибки от сервера для тоста. Тот же разбор, что уже используется на
- * этой странице (`err?.response?.data?.message`), плюс МАССИВ: class-validator
- * шлёт список нарушений массивом, и без этой ветки пользователь видел бы
- * `[object Object]` вместо причины отказа.
+ * Текст ошибки от сервера для тоста. Тот же разбор, что раньше на этой странице
+ * (`err?.response?.data?.message`), плюс МАССИВ: class-validator шлёт список
+ * нарушений массивом, и без этой ветки пользователь видел бы `[object Object]`.
  */
 function serverMessage(err: any, fallback: string): string {
   const msg = err?.response?.data?.message;
@@ -99,1493 +93,20 @@ function serverMessage(err: any, fallback: string): string {
   return fallback;
 }
 
-interface ProductFormData {
-  name: string;
-  category: string;
-  photo?: string;
-  costPrice: number;
-  sellPrice: number;
-  stock: number;
-  minStock: number;
-  unit: string;
-  /** Round 12 #6: EAN-13/QR/свой код. У существующего товара '' очищает. */
-  barcode?: string;
-  isBundle: boolean;
-  bundleItems: BundleItem[];
-  warrantyDays: number | null;
-  warehouseId?: string;
-}
-
-interface ProductFormModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  product?: Product | null;
-  onSubmit: (data: ProductFormData) => void;
-  isLoading: boolean;
-  categories: string[];
-  allProducts: Product[];
-  defaultCategory?: string;
-  /** Warehouse the create form should default to (currently active picker). */
-  defaultWarehouseId?: string;
-  /** Owner-class or warehouse_manage. Gates the cost-price input (defensive —
-   *  non-managers never reach this modal since add/edit buttons are hidden). */
-  canManage?: boolean;
-}
-
-function ProductFormModal({
-  isOpen,
-  onClose,
-  product,
-  onSubmit,
-  isLoading,
-  categories,
-  allProducts,
-  defaultCategory,
-  defaultWarehouseId,
-  canManage = true,
-}: ProductFormModalProps) {
-  const [name, setName] = useState(product?.name || '');
-  const [category, setCategory] = useState(product?.category || defaultCategory || '');
-  const [photo, setPhoto] = useState(product?.photo || '');
-  const [uploading, setUploading] = useState(false);
-  const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
-  const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
-  const [stock, setStock] = useState(product?.stock?.toString() || '0');
-  const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
-  // 120: legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение,
-  // сохранение перезапишет legacy-код русской меткой.
-  const [unit, setUnit] = useState(unitLabel(product?.unit) || DEFAULT_UNIT);
-  const [isBundle, setIsBundle] = useState(product?.isBundle || false);
-  const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
-  const [bundleSearch, setBundleSearch] = useState('');
-  const [warrantyDays, setWarrantyDays] = useState(product?.warrantyDays != null ? String(product.warrantyDays) : '');
-  // Round 12 #6: штрихкод — обычный текстовый input. USB-сканер печатает код
-  // как клавиатура, поэтому отдельная камера-кнопка на вебе не нужна.
-  const [barcode, setBarcode] = useState(product?.barcode || '');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const bundleSearchResults = useMemo(() => {
-    if (!bundleSearch.trim()) return [];
-    const q = bundleSearch.toLowerCase();
-    return allProducts
-      .filter(
-        (p) => !p.isBundle && p.name.toLowerCase().includes(q) && !bundleItems.some((bi) => bi.productId === p.id),
-      )
-      .slice(0, 8);
-  }, [bundleSearch, allProducts, bundleItems]);
-
-  function addBundleItem(p: Product) {
-    setBundleItems((prev) => [...prev, { productId: p.id, name: p.name, quantity: 1 }]);
-    setBundleSearch('');
-  }
-
-  function removeBundleItem(productId: string) {
-    setBundleItems((prev) => prev.filter((bi) => bi.productId !== productId));
-  }
-
-  function updateBundleItemQty(productId: string, qty: number) {
-    setBundleItems((prev) =>
-      prev.map((bi) => (bi.productId === productId ? { ...bi, quantity: Math.max(1, qty) } : bi)),
-    );
-  }
-
-  async function handlePhotoUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Максимальный размер файла: 5 МБ');
-      return;
-    }
-    setUploading(true);
-    try {
-      const res = await uploadsApi.upload(file);
-      setPhoto(res.data.url);
-      toast.success('Фото загружено');
-    } catch {
-      toast.error('Не удалось загрузить фото');
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) {
-      toast.error('Введите название товара');
-      return;
-    }
-    if (isBundle && bundleItems.length === 0) {
-      toast.error('Добавьте товары в комплект');
-      return;
-    }
-    const trimmedWd = warrantyDays.trim();
-    onSubmit({
-      name: name.trim(),
-      category: category.trim(),
-      photo: photo || undefined,
-      costPrice: toNum(costPrice),
-      sellPrice: toNum(sellPrice),
-      stock: toNum(stock),
-      minStock: toNum(minStock),
-      unit,
-      isBundle,
-      bundleItems: isBundle ? bundleItems : [],
-      // '' у существующего товара ОЧИЩАЕТ штрихкод (PATCH сетит поле только
-      // когда оно пришло); у нового пустое поле просто не отправляем.
-      barcode: product ? barcode.trim() : barcode.trim() || undefined,
-      warrantyDays: trimmedWd === '' ? null : Math.max(0, Math.floor(Number(trimmedWd))),
-      // For new products, fall back to the currently selected warehouse from
-      // the page. Edits keep the product's own warehouseId untouched here.
-      warehouseId: product?.warehouseId || defaultWarehouseId || undefined,
-    });
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title={product ? 'Редактировать товар' : 'Новый товар'} size="lg">
-      <form onSubmit={handleSubmit} className="space-y-4 max-h-[75vh] overflow-y-auto">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фото товара</label>
-          <div className="flex items-center gap-4">
-            {photo ? (
-              <div className="relative">
-                <img
-                  src={photo}
-                  alt="Фото товара"
-                  className="h-20 w-20 rounded-xl object-cover border border-gray-200"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPhoto('')}
-                  className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white hover:bg-red-600"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-                className="flex h-20 w-20 flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 text-gray-400 transition-colors hover:border-primary-400 hover:text-primary-500"
-              >
-                {uploading ? (
-                  <Loader2 className="h-6 w-6 animate-spin" />
-                ) : (
-                  <>
-                    <ImagePlus className="h-6 w-6" />
-                    <span className="text-[10px] mt-1">Загрузить</span>
-                  </>
-                )}
-              </button>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handlePhotoUpload(file);
-                e.target.value = '';
-              }}
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Название <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Название товара"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Категория</label>
-          <input
-            type="text"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="Категория"
-            list="product-categories"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-          <datalist id="product-categories">
-            {categories.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-        </div>
-
-        {/* Unit selector */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Единица измерения</label>
-          <div className="flex gap-2">
-            {UNIT_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setUnit(opt.value)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
-                  unit === opt.value
-                    ? 'bg-primary-600 text-white border-primary-600'
-                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className={canManage ? 'grid grid-cols-2 gap-4' : ''}>
-          {/* Закуп. цена — cost-price is manage-only. Hidden defensively for
-              non-managers (they can't reach this modal anyway). */}
-          {canManage && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Закуп. цена</label>
-              <input
-                type="number"
-                value={costPrice}
-                onChange={(e) => setCostPrice(e.target.value)}
-                min="0"
-                step="0.01"
-                className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              />
-            </div>
-          )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Продажная цена</label>
-            <input
-              type="number"
-              value={sellPrice}
-              onChange={(e) => setSellPrice(e.target.value)}
-              min="0"
-              step="0.01"
-              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Остаток {unit !== DEFAULT_UNIT && <span className="text-gray-400 font-normal">({unitLabel(unit)})</span>}
-            </label>
-            {/* Без min="0": товар, проданный «в минус» (оверселл разрешён
-                продуктово), хранит отрицательный остаток, и браузерная
-                валидация блокировала бы отправку всей формы — включая правку
-                цены, которую остаток вообще не касается. */}
-            <input
-              type="number"
-              value={stock}
-              onChange={(e) => setStock(e.target.value)}
-              step={unit === DEFAULT_UNIT ? '1' : '0.001'}
-              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Мин. остаток</label>
-            <input
-              type="number"
-              value={minStock}
-              onChange={(e) => setMinStock(e.target.value)}
-              min="0"
-              step={unit === DEFAULT_UNIT ? '1' : '0.001'}
-              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-            />
-          </div>
-        </div>
-
-        {/* Bundle toggle */}
-        <div className="flex items-center gap-3 pt-1">
-          <button
-            type="button"
-            onClick={() => setIsBundle((v) => !v)}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              isBundle ? 'bg-primary-600' : 'bg-gray-200'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                isBundle ? 'translate-x-6' : 'translate-x-1'
-              }`}
-            />
-          </button>
-          <span className="text-sm font-medium text-gray-700">Комплект (набор товаров)</span>
-        </div>
-
-        {/* Bundle items editor */}
-        {isBundle && (
-          <div className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/50 p-3">
-            <p className="text-xs font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
-            {bundleItems.length > 0 && (
-              <div className="space-y-2">
-                {bundleItems.map((bi) => (
-                  <div
-                    key={bi.productId}
-                    className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-gray-200"
-                  >
-                    <span className="flex-1 text-sm text-gray-900 truncate">{bi.name}</span>
-                    <input
-                      type="number"
-                      value={bi.quantity}
-                      onChange={(e) => updateBundleItemQty(bi.productId, parseInt(e.target.value) || 1)}
-                      min="1"
-                      className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-sm text-center focus:border-primary-500 focus:outline-none"
-                    />
-                    <span className="text-xs text-gray-400">
-                      {unitLabel(allProducts.find((p) => p.id === bi.productId)?.unit)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeBundleItem(bi.productId)}
-                      className="p-1 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-              <input
-                type="text"
-                value={bundleSearch}
-                onChange={(e) => setBundleSearch(e.target.value)}
-                placeholder="Поиск товара для комплекта..."
-                className="block w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none"
-              />
-            </div>
-            {bundleSearchResults.length > 0 && (
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {bundleSearchResults.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => addBundleItem(p)}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-left hover:bg-gray-50 transition-colors"
-                  >
-                    <Package className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                    <span className="flex-1 text-sm text-gray-900 truncate">{p.name}</span>
-                    <span className="text-xs text-gray-400">
-                      {p.stock} {unitLabel(p.unit)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Barcode (round 12 #6) — plain input: a USB scanner types the code
-            like a keyboard, so no dedicated scan button is needed on web. */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Штрихкод</label>
-          <input
-            type="text"
-            value={barcode}
-            onChange={(e) => setBarcode(e.target.value)}
-            placeholder="EAN-13 / QR / свой код"
-            autoComplete="off"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            Поставьте курсор в поле и считайте код USB-сканером — он напечатает его как клавиатура.
-          </p>
-        </div>
-
-        {/* Warranty days */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Срок гарантии (дней)</label>
-          <input
-            type="number"
-            value={warrantyDays}
-            onChange={(e) => setWarrantyDays(e.target.value)}
-            min="0"
-            step="1"
-            placeholder="Оставьте пустым — без гарантии"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            Дней с момента продажи. На этот товар можно будет оформить гарантийный возврат.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading || uploading}
-            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading || uploading}
-            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {product ? 'Сохранить' : 'Создать'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Writeoff Modal
-// ---------------------------------------------------------------------------
-
-interface WriteoffModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  product: Product;
-  onSubmit: (data: { quantity: number; reason: string; recordAsExpense: boolean }) => void;
-  isLoading: boolean;
-}
-
-function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: WriteoffModalProps) {
-  const [quantity, setQuantity] = useState('1');
-  const [reason, setReason] = useState('');
-  const [recordAsExpense, setRecordAsExpense] = useState(true);
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const qty = parseFloat(quantity);
-    if (!qty || qty <= 0) {
-      toast.error('Введите количество');
-      return;
-    }
-    if (qty > product.stock) {
-      toast.error('Количество превышает остаток');
-      return;
-    }
-    if (!reason.trim()) {
-      toast.error('Укажите причину списания');
-      return;
-    }
-    onSubmit({ quantity: qty, reason: reason.trim(), recordAsExpense });
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Списание товара">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <p className="text-sm text-gray-600">
-          Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />
-          Остаток: <span className="font-medium text-gray-900">{formatQty(product.stock)}</span>{' '}
-          {unitLabel(product.unit)}
-        </p>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Количество ({unitLabel(product.unit)}) *
-          </label>
-          <input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            min="0.001"
-            step="0.001"
-            max={product.stock}
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина *</label>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={3}
-            placeholder="Причина списания..."
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Учёт</label>
-          <div className="space-y-2">
-            <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 px-3 py-2.5 hover:border-primary-300">
-              <input
-                type="radio"
-                name="writeoff-mode"
-                checked={recordAsExpense}
-                onChange={() => setRecordAsExpense(true)}
-                className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900">По закупке (как расход)</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Спишет товар и создаст запись в расходах на сумму закупки. Прибыль уменьшится.
-                </p>
-              </div>
-            </label>
-            <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 px-3 py-2.5 hover:border-primary-300">
-              <input
-                type="radio"
-                name="writeoff-mode"
-                checked={!recordAsExpense}
-                onChange={() => setRecordAsExpense(false)}
-                className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900">Просто списать</p>
-                <p className="text-xs text-gray-500 mt-0.5">Уберёт остаток без проводки в расходы.</p>
-              </div>
-            </label>
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Списать
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Transfer Modal — move stock from main → defect or main → used
-// ---------------------------------------------------------------------------
-
-interface TransferModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  product: Product;
-  warehouses: WarehouseRecord[];
-  sourceWarehouseId: string;
-  onSubmit: (data: {
-    type: 'defect_transfer' | 'used_transfer';
-    targetWarehouseId: string;
-    quantity: number;
-    purchasePrice?: number;
-    reason?: string;
-  }) => void;
-  isLoading: boolean;
-}
-
-function TransferModal({
-  isOpen,
-  onClose,
-  product,
-  warehouses,
-  sourceWarehouseId,
-  onSubmit,
-  isLoading,
-}: TransferModalProps) {
-  const defectWh = warehouses.find((w) => w.kind === 'defect');
-  const usedWh = warehouses.find((w) => w.kind === 'used');
-  const [mode, setMode] = useState<'defect' | 'used'>('defect');
-  const [quantity, setQuantity] = useState('1');
-  const [reason, setReason] = useState('');
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const qty = parseFloat(quantity);
-    if (!qty || qty <= 0) {
-      toast.error('Введите количество');
-      return;
-    }
-    if (qty > product.stock) {
-      toast.error('Количество превышает остаток');
-      return;
-    }
-    const target = mode === 'defect' ? defectWh : usedWh;
-    if (!target) {
-      toast.error(mode === 'defect' ? 'Склад брака не найден' : 'Склад Б/У не найден');
-      return;
-    }
-    onSubmit({
-      type: mode === 'defect' ? 'defect_transfer' : 'used_transfer',
-      targetWarehouseId: target.id,
-      quantity: qty,
-      purchasePrice: product.costPrice,
-      reason: reason.trim() || undefined,
-    });
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Перенос на другой склад">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <p className="text-sm text-gray-600">
-          Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />
-          Остаток на основном: <span className="font-medium text-gray-900">{formatQty(product.stock)}</span>{' '}
-          {unitLabel(product.unit)}
-        </p>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Куда перенести</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setMode('defect')}
-              disabled={!defectWh}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-colors disabled:opacity-50 ${
-                mode === 'defect'
-                  ? 'border-amber-500 bg-amber-50 text-amber-700'
-                  : 'border-gray-200 bg-white text-gray-700 hover:border-amber-300'
-              }`}
-            >
-              <AlertTriangle className="w-4 h-4" />
-              Брак
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('used')}
-              disabled={!usedWh}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-colors disabled:opacity-50 ${
-                mode === 'used'
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'
-              }`}
-            >
-              <Recycle className="w-4 h-4" />
-              Б/У
-            </button>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Количество ({unitLabel(product.unit)}) *
-          </label>
-          <input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            min="0.001"
-            step="0.001"
-            max={product.stock}
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Комментарий</label>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={2}
-            placeholder="Например: дефект, не подошёл..."
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Перенести
-          </button>
-        </div>
-        {/* Currently unused: sourceWarehouseId param kept for future flexibility. */}
-        <input type="hidden" value={sourceWarehouseId} readOnly />
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Inventory Modal
-// ---------------------------------------------------------------------------
-
-interface InventoryModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  product: Product;
-  onSubmit: (data: { actualStock: number; reason: string }) => void;
-  isLoading: boolean;
-}
-
-function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: InventoryModalProps) {
-  const [actualStock, setActualStock] = useState(product.stock.toString());
-  const [reason, setReason] = useState('');
-
-  const actual = parseFloat(actualStock) || 0;
-  const diff = actual - product.stock;
-  const damageAmount = diff < 0 ? Math.abs(diff) * product.costPrice : 0;
-  const excessAmount = diff > 0 ? diff * product.costPrice : 0;
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const a = parseFloat(actualStock);
-    if (isNaN(a) || a < 0) {
-      toast.error('Введите корректный остаток');
-      return;
-    }
-    if (!reason.trim()) {
-      toast.error('Укажите причину');
-      return;
-    }
-    onSubmit({ actualStock: a, reason: reason.trim() });
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Инвентаризация">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Product info card */}
-        <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
-          <p className="text-sm font-semibold text-gray-900 mb-2">{product.name}</p>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <p className="text-lg font-bold text-gray-800">{product.stock}</p>
-              <p className="text-[10px] text-gray-400 uppercase">В системе</p>
-            </div>
-            <div>
-              <p className={`text-lg font-bold ${actual !== product.stock ? 'text-primary-600' : 'text-gray-400'}`}>
-                {actual}
-              </p>
-              <p className="text-[10px] text-gray-400 uppercase">Факт</p>
-            </div>
-            <div>
-              <p
-                className={`text-lg font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-400'}`}
-              >
-                {diff > 0 ? '+' : ''}
-                {diff !== 0 ? formatQty(diff) : '—'}
-              </p>
-              <p className="text-[10px] text-gray-400 uppercase">Разница</p>
-            </div>
-          </div>
-          {/* Cost impact for shortage/excess */}
-          {diff !== 0 && (
-            <div
-              className={`mt-3 rounded-lg p-2 text-center ${diff < 0 ? 'bg-red-50 border border-red-100' : 'bg-green-50 border border-green-100'}`}
-            >
-              <p className={`text-[10px] uppercase font-semibold ${diff < 0 ? 'text-red-500' : 'text-green-500'}`}>
-                {diff < 0 ? 'Сумма недостачи' : 'Сумма излишков'}
-              </p>
-              <p className={`text-sm font-bold ${diff < 0 ? 'text-red-700' : 'text-green-700'}`}>
-                {formatMoney(diff < 0 ? damageAmount : excessAmount)}
-              </p>
-              <p className="text-[10px] text-gray-400">
-                {Math.abs(diff).toFixed(product.unit === 'pcs' ? 0 : 2)} {unitLabel(product.unit)} x{' '}
-                {formatMoney(product.costPrice)}
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фактический остаток</label>
-          <input
-            type="number"
-            value={actualStock}
-            onChange={(e) => setActualStock(e.target.value)}
-            min="0"
-            step="any"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-3 text-base font-semibold focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина</label>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={2}
-            placeholder="Причина корректировки..."
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading || diff === 0}
-            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Провести инвентаризацию
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Product Grid Card — vertical card for 2-col grid layout
-// ---------------------------------------------------------------------------
-
-/** Format a date as dd.mm.yy */
-function formatDateShort(dateStr: string): string {
-  const d = new Date(dateStr);
-  const dd = d.getDate().toString().padStart(2, '0');
-  const mm = (d.getMonth() + 1).toString().padStart(2, '0');
-  const yy = d.getFullYear().toString().slice(-2);
-  return `${dd}.${mm}.${yy}`;
-}
-
-/** Check if a date is within the last 24 hours */
-function isWithin24h(dateStr: string): boolean {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  return diff < 24 * 60 * 60 * 1000;
-}
-
-const ProductCard = memo(function ProductCard({
-  product,
-  onClick,
-  selectMode,
-  selected,
-  onToggleSelect,
-  lastInventoryDate,
-}: {
-  product: Product;
-  onClick: () => void;
-  selectMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-  lastInventoryDate?: string;
-}) {
-  const isLow = product.stock <= product.minStock;
-  const recentlyChecked = lastInventoryDate && isWithin24h(lastInventoryDate);
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => {
-        if (selectMode && onToggleSelect) onToggleSelect();
-        else onClick();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          if (selectMode && onToggleSelect) onToggleSelect();
-          else onClick();
-        }
-      }}
-      className={`relative rounded-2xl overflow-hidden shadow-sm border transition-all active:scale-[0.97] cursor-pointer ${
-        selected
-          ? 'border-primary-500 ring-2 ring-primary-500/20'
-          : recentlyChecked
-            ? 'border-green-200 ring-1 ring-green-100'
-            : 'border-gray-100'
-      }`}
-      style={recentlyChecked ? { backgroundColor: '#f0fdf4' } : { backgroundColor: '#ffffff' }}
-    >
-      {/* Select checkbox overlay */}
-      {selectMode && (
-        <div className="absolute top-2 left-2 z-10">
-          <div
-            className={`flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors ${
-              selected ? 'border-primary-600 bg-primary-600' : 'border-white bg-white/80 shadow-sm'
-            }`}
-          >
-            {selected && <CheckIcon className="h-3 w-3 text-white" />}
-          </div>
-        </div>
-      )}
-
-      {/* Recently checked badge */}
-      {recentlyChecked && (
-        <div className="absolute top-2 right-2 z-10">
-          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
-            <CheckIcon className="h-2.5 w-2.5" />
-          </div>
-        </div>
-      )}
-
-      {/* Image area — use thumbnail for fast grid loading */}
-      <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
-        {product.photo ? (
-          <img
-            src={thumbUrl(product.photo) || product.photo}
-            alt=""
-            className="w-full h-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <Package className="h-10 w-10 text-gray-200" />
-        )}
-      </div>
-
-      {/* Info */}
-      <div className="p-2.5">
-        <div className="flex items-start gap-1">
-          <p className="text-[13px] font-medium text-gray-900 leading-tight line-clamp-2 min-h-[2.5em] flex-1">
-            {product.name}
-          </p>
-          {product.isBundle && (
-            <span className="flex-shrink-0 text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full mt-0.5">
-              КМП
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 mt-1.5">
-          <span className={`text-[11px] ${isLow ? 'text-red-500 font-semibold' : 'text-gray-400'}`}>
-            {product.stock} {unitLabel(product.unit)}
-          </span>
-          {isLow && <AlertTriangle className="h-3 w-3 text-red-500" />}
-        </div>
-        <p className="text-sm font-bold text-gray-900 mt-1">{formatMoney(product.sellPrice)}</p>
-        {/* Inventory check date */}
-        {lastInventoryDate && !recentlyChecked && (
-          <p className="text-[10px] text-gray-400 mt-0.5">Проверено: {formatDateShort(lastInventoryDate)}</p>
-        )}
-        {recentlyChecked && <p className="text-[10px] text-green-600 font-medium mt-0.5">Проверено сегодня</p>}
-      </div>
-    </div>
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Folder Tile — grid tile for category folders
-// ---------------------------------------------------------------------------
-
-function FolderTile({
-  name,
-  count,
-  hasLow,
-  onClick,
-  onDelete,
-  canManage,
-  recentlyChecked,
-  lastCheckDate,
-  dragHandleProps,
-  selectMode,
-  selected,
-  onToggleSelect,
-}: {
-  name: string;
-  count: number;
-  hasLow: boolean;
-  onClick: () => void;
-  onDelete?: () => void;
-  canManage?: boolean;
-  recentlyChecked?: boolean;
-  lastCheckDate?: string;
-  /** Pointer-down handler that activates the drag — provided by Reorder.Item parent. */
-  dragHandleProps?: { onPointerDown: (e: React.PointerEvent) => void };
-  /** Multi-select mode — show a checkbox instead of the drag handle; tap selects. */
-  selectMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  return (
-    <div
-      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all ${
-        selected
-          ? 'border-primary-500 bg-primary-50/50'
-          : recentlyChecked
-            ? 'border-green-200 bg-green-50/50'
-            : 'border-gray-100 bg-white hover:border-gray-200'
-      }`}
-    >
-      {/* Select checkbox — replaces the drag handle while multi-select is active */}
-      {selectMode && onToggleSelect ? (
-        <div
-          className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
-            selected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
-          }`}
-        >
-          {selected && <CheckIcon className="h-3 w-3 text-white" />}
-        </div>
-      ) : null}
-
-      {/* Drag handle — long-press / press-and-drag to reorder */}
-      {!selectMode && canManage && dragHandleProps && (
-        <button
-          type="button"
-          aria-label="Перетащите чтобы переставить"
-          className="flex-shrink-0 cursor-grab active:cursor-grabbing touch-none p-1 rounded text-gray-300 hover:text-gray-500 hover:bg-gray-50 transition-colors"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            dragHandleProps.onPointerDown(e);
-          }}
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-      )}
-
-      {/* Main area — clickable to navigate, or to toggle selection in select mode */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => {
-          if (selectMode && onToggleSelect) onToggleSelect();
-          else onClick();
-        }}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter') return;
-          if (selectMode && onToggleSelect) onToggleSelect();
-          else onClick();
-        }}
-        className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer active:opacity-70"
-      >
-        <div
-          className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}
-        >
-          <FolderOpen className={`h-4.5 w-4.5 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-xs text-gray-400">{count} шт</span>
-            {lastCheckDate && !recentlyChecked && (
-              <span className="text-[10px] text-gray-400">проверка {formatDateShort(lastCheckDate)}</span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {recentlyChecked && (
-            <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full">
-              <CheckIcon className="h-2.5 w-2.5" />
-            </div>
-          )}
-          {hasLow && <AlertTriangle className="h-4 w-4 text-orange-500" />}
-          <ChevronLeft className="h-4 w-4 text-gray-300 rotate-180" />
-        </div>
-      </div>
-
-      {/* Delete button — hidden in select mode (bulk delete handles it) */}
-      {!selectMode && canManage && onDelete && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="p-2 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
-          title="Удалить папку"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// Reorder.Item wrapper — wires the folder tile into framer-motion's
-// gesture-driven list. dragListener={false} disables the default whole-row
-// drag (which would conflict with the tap-to-open behaviour) and instead
-// hands control to a manually-triggered useDragControls() bound to the
-// grip handle inside FolderTile. Long-press / press-and-drag on the grip
-// starts the drag; release commits via Reorder.Group's onReorder.
-function FolderTileReorderItem({
-  folder,
-  checkInfo,
-  canManage,
-  onClick,
-  onDelete,
-  selectMode,
-  selected,
-  onToggleSelect,
-}: {
-  folder: { name: string; count: number; hasLow: boolean; catId: string; fullPath: string };
-  checkInfo?: { recentlyChecked: boolean; lastCheckDate?: string };
-  canManage?: boolean;
-  onClick: () => void;
-  onDelete: () => void;
-  selectMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  const dragControls = useDragControls();
-  return (
-    <Reorder.Item
-      value={folder}
-      dragListener={false}
-      dragControls={dragControls}
-      // Disable layout animations on the wrapper itself so the folder
-      // tile's own border/transition styles aren't fought.
-    >
-      <FolderTile
-        name={folder.name}
-        count={folder.count}
-        hasLow={folder.hasLow}
-        onClick={onClick}
-        onDelete={onDelete}
-        canManage={canManage}
-        recentlyChecked={checkInfo?.recentlyChecked}
-        lastCheckDate={checkInfo?.lastCheckDate}
-        dragHandleProps={{ onPointerDown: (e) => dragControls.start(e) }}
-        selectMode={selectMode}
-        selected={selected}
-        onToggleSelect={onToggleSelect}
-      />
-    </Reorder.Item>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Product Detail Modal — edit, delete, writeoff, inventory accessible here
-// ---------------------------------------------------------------------------
-
-const MOVEMENT_LABELS: Record<string, { label: string; color: string }> = {
-  income: { label: 'Приход', color: 'text-green-600 bg-green-50' },
-  expense: { label: 'Расход', color: 'text-blue-600 bg-blue-50' },
-  writeoff: { label: 'Списание', color: 'text-orange-600 bg-orange-50' },
-  inventory: { label: 'Инвентаризация', color: 'text-purple-600 bg-purple-50' },
-  defect_transfer: { label: 'В брак', color: 'text-amber-600 bg-amber-50' },
-  used_transfer: { label: 'В Б/У', color: 'text-blue-600 bg-blue-50' },
-  point_transfer: { label: 'В другой филиал', color: 'text-indigo-600 bg-indigo-50' },
-  defect_return_to_supplier: { label: 'Поставщику', color: 'text-red-700 bg-red-50' },
-  customer_return: { label: 'Возврат клиента', color: 'text-teal-700 bg-teal-50' },
+const WAREHOUSE_ICON: Record<WarehouseRecord['kind'], typeof Package> = {
+  main: Package,
+  defect: AlertTriangle,
+  used: Recycle,
 };
 
-function ProductDetailModal({
-  product,
-  onClose,
-  onEdit,
-  onWriteoff,
-  onInventory,
-  onDelete,
-  onTransfer,
-  canTransfer,
-  canManage,
-}: {
-  product: Product;
-  onClose: () => void;
-  onEdit: () => void;
-  onWriteoff: () => void;
-  onInventory: () => void;
-  onDelete: () => void;
-  onTransfer?: () => void;
-  canTransfer?: boolean;
-  /** Owner-class or warehouse_manage. Gates cost-price + all manage actions. */
-  canManage?: boolean;
-}) {
-  // Non-managers can only ever see the Info tab (cost + price history leak
-  // costPrice, so those tabs are hidden entirely for them).
-  const [tab, setTab] = useState<'info' | 'movements' | 'prices'>('info');
-  const isLow = product.stock <= product.minStock;
-  const uLabel = unitLabel(product.unit);
-
-  const { data: movements, isLoading: movLoading } = useQuery({
-    queryKey: ['product-movements', product.id],
-    queryFn: async () => {
-      const res = await productsApi.getProductMovements(product.id);
-      return res.data;
-    },
-    enabled: tab === 'movements',
-    staleTime: 30_000,
-  });
-
-  const { data: priceHistory, isLoading: priceLoading } = useQuery({
-    queryKey: ['product-prices', product.id],
-    queryFn: async () => {
-      const res = await productsApi.getProductPriceHistory(product.id);
-      return res.data;
-    },
-    enabled: tab === 'prices',
-    staleTime: 30_000,
-  });
-
-  const fmtDate = (d: string) => {
-    const dt = new Date(d);
-    return (
-      dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
-      ' ' +
-      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    );
-  };
-
-  return (
-    <Modal isOpen onClose={onClose} title={product.name} size="lg">
-      <div className="space-y-4">
-        {/* Tabs — the Prices tab exposes costPrice history, so hide it entirely
-            for users who cannot manage the warehouse. */}
-        <div className="flex border-b border-gray-100">
-          {[
-            { key: 'info' as const, label: 'Информация' },
-            { key: 'movements' as const, label: 'Движение' },
-            ...(canManage ? [{ key: 'prices' as const, label: 'Цены' }] : []),
-          ].map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={`flex-1 py-2.5 text-xs font-semibold text-center relative transition-colors ${tab === t.key ? 'text-primary-600' : 'text-gray-400'}`}
-            >
-              {t.label}
-              {tab === t.key && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab: Info */}
-        {tab === 'info' && (
-          <div className="space-y-5">
-            <div className="flex items-start gap-4">
-              <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
-                {product.photo ? (
-                  <img
-                    src={product.photo}
-                    alt={product.name}
-                    className="w-full h-full object-cover rounded-xl"
-                    loading="lazy"
-                  />
-                ) : (
-                  <Package className="h-8 w-8 text-gray-300" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0 space-y-1.5">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {product.category && (
-                    <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">
-                      {product.category}
-                    </span>
-                  )}
-                  {product.isBundle && (
-                    <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
-                      Комплект
-                    </span>
-                  )}
-                </div>
-                <p className="text-base font-bold text-gray-900">{product.name}</p>
-              </div>
-            </div>
-
-            {product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
-              <div className="rounded-xl border border-primary-200 bg-primary-50/50 p-3 space-y-2">
-                <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
-                {product.bundleItems.map((bi, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-sm">
-                    <Package className="h-3.5 w-3.5 text-primary-400 flex-shrink-0" />
-                    <span className="flex-1 text-gray-900 truncate">{bi.name}</span>
-                    <span className="text-gray-500 font-medium">
-                      {bi.quantity} {unitLabel('pcs')}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* Закуп. цена — cost price is manage-only (backend zeroes it for
-                  users without warehouse_manage; never render "0 ₽" as real). */}
-              {canManage && (
-                <div className="rounded-xl bg-gray-50 p-3">
-                  <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
-                  <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
-                </div>
-              )}
-              <div className="rounded-xl bg-gray-50 p-3">
-                <p className="text-[11px] text-gray-400 mb-0.5">Продажная цена</p>
-                <p className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
-              </div>
-              <div className={`rounded-xl p-3 ${isLow ? 'bg-red-50' : 'bg-gray-50'}`}>
-                <p className="text-[11px] text-gray-400 mb-0.5">Остаток</p>
-                <p className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
-                  {product.stock} {uLabel} {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
-                </p>
-              </div>
-              <div className="rounded-xl bg-gray-50 p-3">
-                <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
-                <p className="text-sm font-bold text-gray-900">
-                  {product.minStock} {uLabel}
-                </p>
-              </div>
-            </div>
-
-            {/* Manage actions — edit / transfer / writeoff / inventory / delete.
-                Hidden entirely for users who cannot manage the warehouse. */}
-            {canManage && (
-              <div className="space-y-2 pt-2 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={onEdit}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  <Pencil className="h-4 w-4 text-primary-500" />
-                  Редактировать
-                </button>
-                {canTransfer && onTransfer && (
-                  <button
-                    type="button"
-                    onClick={onTransfer}
-                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                  >
-                    <ArrowLeftRight className="h-4 w-4 text-amber-500" />
-                    Перенос в брак / Б/У
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={onWriteoff}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  <PackageMinus className="h-4 w-4 text-orange-500" />
-                  Списание
-                </button>
-                <button
-                  type="button"
-                  onClick={onInventory}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  <ClipboardCheck className="h-4 w-4 text-blue-500" />
-                  Инвентаризация
-                </button>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Удалить товар
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tab: Movement history */}
-        {tab === 'movements' && (
-          <div className="space-y-2">
-            {movLoading ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
-              </div>
-            ) : !movements || movements.length === 0 ? (
-              <div className="text-center py-8 text-sm text-gray-400">Нет движений по товару</div>
-            ) : (
-              <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
-                {movements.map((m: any) => {
-                  const info = MOVEMENT_LABELS[m.type] || { label: m.type, color: 'text-gray-600 bg-gray-50' };
-                  const diff = m.stockAfter - m.stockBefore;
-                  return (
-                    <div key={m.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl bg-gray-50">
-                      <div
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 mt-0.5 ${info.color}`}
-                      >
-                        {info.label}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-sm font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-600'}`}
-                          >
-                            {diff > 0 ? '+' : ''}
-                            {diff} {uLabel}
-                          </span>
-                          <span className="text-xs text-gray-400">
-                            {m.stockBefore} → {m.stockAfter}
-                          </span>
-                        </div>
-                        {m.reason && <p className="text-xs text-gray-500 mt-0.5 truncate">{m.reason}</p>}
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-gray-400">{fmtDate(m.createdAt)}</span>
-                          {m.user && <span className="text-[10px] text-gray-400">• {m.user.fullName}</span>}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tab: Price history */}
-        {tab === 'prices' && (
-          <div className="space-y-2">
-            {/* Current prices */}
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              <div className="rounded-xl bg-gray-50 p-3 text-center">
-                <p className="text-[10px] text-gray-400 mb-0.5">Закупочная</p>
-                <p className="text-base font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
-              </div>
-              <div className="rounded-xl bg-primary-50 p-3 text-center">
-                <p className="text-[10px] text-gray-400 mb-0.5">Продажная</p>
-                <p className="text-base font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
-              </div>
-            </div>
-
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">История изменений</p>
-
-            {priceLoading ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
-              </div>
-            ) : !priceHistory || priceHistory.length === 0 ? (
-              <div className="text-center py-8 text-sm text-gray-400">Цены не менялись</div>
-            ) : (
-              <div className="space-y-1.5 max-h-[350px] overflow-y-auto">
-                {priceHistory.map((p: any) => {
-                  const costChanged = p.costPriceBefore !== p.costPriceAfter;
-                  const sellChanged = p.sellPriceBefore !== p.sellPriceAfter;
-                  return (
-                    <div key={p.id} className="px-3 py-2.5 rounded-xl bg-gray-50">
-                      <div className="space-y-1">
-                        {costChanged && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="text-gray-400 w-16">Закуп.</span>
-                            <span className="text-gray-500 line-through">{formatMoney(p.costPriceBefore)}</span>
-                            <span className="text-gray-400">→</span>
-                            <span
-                              className={`font-bold ${p.costPriceAfter > p.costPriceBefore ? 'text-red-600' : 'text-green-600'}`}
-                            >
-                              {formatMoney(p.costPriceAfter)}
-                            </span>
-                          </div>
-                        )}
-                        {sellChanged && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="text-gray-400 w-16">Продаж.</span>
-                            <span className="text-gray-500 line-through">{formatMoney(p.sellPriceBefore)}</span>
-                            <span className="text-gray-400">→</span>
-                            <span
-                              className={`font-bold ${p.sellPriceAfter > p.sellPriceBefore ? 'text-green-600' : 'text-red-600'}`}
-                            >
-                              {formatMoney(p.sellPriceAfter)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] text-gray-400">{fmtDate(p.createdAt)}</span>
-                        {p.user && <span className="text-[10px] text-gray-400">• {p.user.fullName}</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
+const FOLDER_BUTTON_CLS = cn(
+  'flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-line-strong bg-transparent px-3.5 py-2.5 text-left',
+  'transition-[border-color,background-color] duration-150 hover:border-accent hover:bg-accent-soft/40',
+  focusRing,
+);
 
 // ---------------------------------------------------------------------------
-// Main Page — Grid-based warehouse catalog
+// Страница
 // ---------------------------------------------------------------------------
 
 export default function ProductsPage() {
@@ -1602,23 +123,13 @@ export default function ProductsPage() {
   // bulk-delete. Off by default even for warehouse managers.
   const canDeleteWarehouse = hasPermission('warehouse_delete');
 
-  // Сводка склада (себестоимость/продажная стоимость) — backend GET
-  // /products/warehouse-stats гейтится warehouse_manage, зеркалим его же.
-  const { data: warehouseStats } = useQuery({
-    queryKey: ['warehouse-stats'],
-    queryFn: async () => {
-      const res = await productsApi.getWarehouseStats();
-      return res.data;
-    },
-    staleTime: 60_000,
-    enabled: canManageWarehouse,
-  });
-
-  const [searchText, setSearchText] = useState('');
-  const [activePath, setActivePath] = useState<string[]>([]);
-
-  // Warehouse switcher state
-  const [activeWarehouseId, setActiveWarehouseId] = useState<string>('');
+  // ---- Состояние страницы — в URL: склад (?wh), папка (?path=a/b), поиск (?q).
+  // «Назад» браузера возвращает в предыдущую папку без pushState-ловушек.
+  const [params, setParam] = useUrlParams();
+  const searchText = params.get('q') ?? '';
+  const pathParam = params.get('path') ?? '';
+  const activePath = useMemo(() => (pathParam ? pathParam.split('/').filter(Boolean) : []), [pathParam]);
+  const whParam = params.get('wh');
 
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
@@ -1628,15 +139,13 @@ export default function ProductsPage() {
   const [writeoffTarget, setWriteoffTarget] = useState<Product | null>(null);
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
   const [transferTarget, setTransferTarget] = useState<Product | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   // Global warehouse operations
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
   const [warehouseOpsMode, setWarehouseOpsMode] = useState<'inventory' | 'writeoff' | null>(null);
-  const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>(
-    {},
-  );
 
   // Select & move state
   const [selectMode, setSelectMode] = useState(false);
@@ -1646,78 +155,59 @@ export default function ProductsPage() {
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<DeleteFolderTarget | null>(null);
 
   // Destructive bulk-delete confirm.
   //  - mode 'selection' → trash the currently-selected products + folders.
   //  - mode 'all'       → «удалить весь товар» in the CURRENT warehouse.
-  // The confirm button stays disabled until the user types «согласен».
+  // The modal itself keeps the confirm button disabled until the user types «согласен».
   const [bulkDeleteMode, setBulkDeleteMode] = useState<'selection' | 'all' | null>(null);
-  const [bulkConfirmText, setBulkConfirmText] = useState('');
 
   // Import/Export
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [importData, setImportData] = useState<any[] | null>(null);
+  const [importData, setImportData] = useState<ImportRow[] | null>(null);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ---- History-based back navigation for folders ----
-  const activePathRef = useRef(activePath);
-  activePathRef.current = activePath;
-
-  useEffect(() => {
-    window.history.pushState({ warehouseGuard: true }, '');
-
-    const handler = () => {
-      if (activePathRef.current.length > 0) {
-        const newPath = activePathRef.current.slice(0, -1);
-        activePathRef.current = newPath;
-        setActivePath(newPath);
-        setSelectMode(false);
-        setSelectedProducts(new Set());
-        setSelectedFolders(new Set());
-      }
-      window.history.pushState({ warehouseGuard: true }, '');
-    };
-
-    window.addEventListener('popstate', handler);
-    return () => window.removeEventListener('popstate', handler);
-  }, []);
-
-  const enterFolder = useCallback((folderName: string) => {
-    setActivePath((prev) => {
-      const next = [...prev, folderName];
-      activePathRef.current = next;
-      return next;
-    });
-    setSearchText('');
-    window.history.pushState({ warehouseFolder: true }, '');
-  }, []);
-
   // ---- Queries ----
 
-  // Warehouses list — drives the switcher. Default to main on first load.
-  const { data: warehouses } = useQuery<WarehouseRecord[]>({
+  // Warehouses list — drives the switcher. Default to main.
+  const warehousesQuery = useQuery<WarehouseRecord[]>({
     queryKey: ['warehouses'],
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 5 * 60_000,
   });
+  const warehouses = warehousesQuery.data;
 
-  useEffect(() => {
-    if (!activeWarehouseId && warehouses && warehouses.length > 0) {
-      const main = warehouses.find((w) => w.kind === 'main') || warehouses[0];
-      setActiveWarehouseId(main.id);
-    }
-  }, [warehouses, activeWarehouseId]);
+  const activeWarehouseId = useMemo(() => {
+    if (!warehouses || warehouses.length === 0) return '';
+    if (whParam && warehouses.some((w) => w.id === whParam)) return whParam;
+    return (warehouses.find((w) => w.kind === 'main') || warehouses[0]).id;
+  }, [warehouses, whParam]);
 
-  const activeWarehouseKind = useMemo<WarehouseRecord['kind'] | null>(() => {
-    return warehouses?.find((w) => w.id === activeWarehouseId)?.kind ?? null;
-  }, [warehouses, activeWarehouseId]);
+  const activeWarehouse = useMemo(
+    () => warehouses?.find((w) => w.id === activeWarehouseId) ?? null,
+    [warehouses, activeWarehouseId],
+  );
+  const activeWarehouseKind = activeWarehouse?.kind ?? null;
+
+  // Сводка склада (себестоимость/продажная стоимость) — backend GET
+  // /products/warehouse-stats гейтится warehouse_manage, зеркалим его же.
+  const statsQuery = useQuery({
+    queryKey: ['warehouse-stats'],
+    queryFn: async () => {
+      const res = await productsApi.getWarehouseStats();
+      return res.data;
+    },
+    staleTime: 60_000,
+    enabled: canManageWarehouse,
+  });
+  const warehouseStats = statsQuery.data;
 
   const {
     data: productsData,
-    isLoading,
     isError,
     isFetching,
+    isPlaceholderData,
     refetch,
   } = useQuery<PaginatedResponse<Product>>({
     // Тот же класс дефекта, что на телефоне: сервер сортирует по названию, и
@@ -1736,15 +226,14 @@ export default function ProductsPage() {
     placeholderData: (prev) => prev,
   });
 
-  const allProducts = productsData?.data || [];
+  const allProducts = useMemo(() => productsData?.data || [], [productsData]);
 
   // ── Автооткрытие карточки товара по router-state (round 12 #5, web-паритет).
   // CheckDetailPage делает navigate('/products', { state: { openProductId } })
   // по клику на товарную строку чека. Ждём загрузку списка активного склада;
   // товар с другого склада / не в первой 1000 дофетчиваем по id. Фильтры и
   // папки страницы не трогаем — открывается только модалка карточки. Ref-гейт
-  // потребляет state один раз (их pushState-гвард для папок не задет: сырое
-  // history-API не меняет location.state React Router'а).
+  // потребляет state один раз.
   const location = useLocation();
   const consumedOpenProductIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1781,9 +270,6 @@ export default function ProductsPage() {
   //     so don't pay for the fetch there.
   //   - `limit: 200` matches the backend, which hard-caps `/products/movements`
   //     at `LIMIT 200 ORDER BY created_at DESC` and ignores larger values.
-  //     The old `limit: 5000` was a no-op illusion that suggested a 5000-row
-  //     payload; 200 newest-first rows are enough to derive the latest
-  //     inventory date per product for the badge.
   const movementsEnabled = !searchText && allProducts.length > 0;
   const { data: inventoryMovements } = useQuery<StockMovement[]>({
     queryKey: ['inventory-movements'],
@@ -1831,6 +317,7 @@ export default function ProductsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
     },
+    onError: () => toast.error('Не удалось создать папку'),
   });
 
   const deleteCategoryMutation = useMutation({
@@ -1850,8 +337,6 @@ export default function ProductsPage() {
   // string in their `category` column). For those there's no category id to
   // hit the backend's removeCategory endpoint with, so we soft-delete every
   // product whose category equals the path or starts with `${path}/` directly.
-  // Live-only filter (deletedAt IS NULL) is implicit — soft-deleted products
-  // are filtered out of `allProducts` upstream.
   const deletePathContentsMutation = useMutation({
     mutationFn: async (path: string) => {
       const matched = allProducts.filter(
@@ -1864,7 +349,9 @@ export default function ProductsPage() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
-      toast.success(res.count > 0 ? `Папка и ${res.count} товаров удалены` : 'Папка удалена');
+      toast.success(
+        res.count > 0 ? `Папка и ${countLabel(res.count, ['товар', 'товара', 'товаров'])} удалены` : 'Папка удалена',
+      );
     },
     onError: () => toast.error('Не удалось удалить товары'),
   });
@@ -1872,9 +359,8 @@ export default function ProductsPage() {
   const reorderCategoriesMutation = useMutation({
     mutationFn: (orderedIds: string[]) => warehouseCategoriesApi.updateOrder(orderedIds),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
+    onError: () => toast.error('Не удалось сохранить порядок папок'),
   });
-
-  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ id: string; name: string; path: string } | null>(null);
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
@@ -1942,13 +428,13 @@ export default function ProductsPage() {
       for (const wc of warehouseCats) catLookup.set(wc.path, { id: wc.id, sort_order: (wc as any).sort_order || 0 });
     }
 
-    const sortedSubfolders = Array.from(subfolderSet.entries())
+    const sortedSubfolders: Array<FolderInfo & { sortOrder: number }> = Array.from(subfolderSet.entries())
       .map(([name, data]) => {
         const fullPath = prefix ? `${prefix}/${name}` : name;
         const catInfo = catLookup.get(fullPath);
         return { name, fullPath, catId: catInfo?.id || '', sortOrder: catInfo?.sort_order || 0, ...data };
       })
-      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
 
     return { subfolders: sortedSubfolders, currentProducts: prods };
   }, [allProducts, activePath, warehouseCats]);
@@ -1962,7 +448,6 @@ export default function ProductsPage() {
 
     for (const folder of subfolders) {
       const folderPrefix = prefix ? `${prefix}/${folder.name}` : folder.name;
-      // Find all products in this folder (directly or nested)
       const folderProducts = allProducts.filter((p) => {
         const cat = p.category || '';
         return cat === folderPrefix || cat.startsWith(folderPrefix + '/');
@@ -2006,7 +491,7 @@ export default function ProductsPage() {
     return allProducts.filter((p) => p.name.toLowerCase().includes(q));
   }, [searchText, allProducts]);
 
-  // ---- Multi-select / bulk-delete helpers ----
+  // ---- Навигация ----
 
   // Exit multi-select and drop every selection. Called on navigation, warehouse
   // switch, cancel, and after a successful bulk operation.
@@ -2016,10 +501,25 @@ export default function ProductsPage() {
     setSelectedFolders(new Set());
   }, []);
 
-  const closeBulkDelete = useCallback(() => {
-    setBulkDeleteMode(null);
-    setBulkConfirmText('');
-  }, []);
+  const goToPath = useCallback(
+    (segments: string[]) => {
+      setParam({ path: segments.length > 0 ? segments.join('/') : null, q: null });
+      exitSelectMode();
+    },
+    [setParam, exitSelectMode],
+  );
+
+  const enterFolder = useCallback(
+    (folderName: string) => goToPath([...activePath, folderName]),
+    [goToPath, activePath],
+  );
+
+  const switchWarehouse = (id: string) => {
+    setParam({ wh: id, path: null });
+    exitSelectMode();
+  };
+
+  // ---- Multi-select / bulk-delete helpers ----
 
   // Resolve the current selection into the { productIds, categoryIds } payload
   // for productsApi.bulkDelete, plus human-readable counts for the confirm copy.
@@ -2037,7 +537,6 @@ export default function ProductsPage() {
       if (folder.catId) {
         categoryIds.push(folder.catId);
       } else {
-        // Path-only folder: soft-delete every product under this path.
         for (const p of allProducts) {
           const cat = p.category || '';
           if (cat === folder.fullPath || cat.startsWith(folder.fullPath + '/')) productIds.add(p.id);
@@ -2048,9 +547,6 @@ export default function ProductsPage() {
     return {
       productIds: Array.from(productIds),
       categoryIds,
-      // Product count shown to the user counts explicitly-picked products plus
-      // any pulled in by a path-only folder; id-backed folders cascade on the
-      // server so their contents aren't enumerated here.
       productCount: productIds.size,
       folderCount: selectedFolders.size,
     };
@@ -2078,14 +574,13 @@ export default function ProductsPage() {
       closeForm();
     },
     // Показываем ПРИЧИНУ отказа: немой тост скрывал, какое поле не приняли.
-    // class-validator шлёт message массивом — склеиваем.
     onError: (err: any) => toast.error(serverMessage(err, 'Не удалось обновить товар')),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => productsApi.remove(id),
     onSuccess: () => {
-      toast.success('Товар удалён');
+      toast.success('Товар перемещён в корзину');
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setDeleteTarget(null);
     },
@@ -2144,10 +639,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['defect-writeoff-report'] });
       setTransferTarget(null);
     },
-    onError: (err: any) => {
-      const msg = err?.response?.data?.message || 'Не удалось перенести товар';
-      toast.error(typeof msg === 'string' ? msg : 'Не удалось перенести товар');
-    },
+    onError: (err: any) => toast.error(serverMessage(err, 'Не удалось перенести товар')),
   });
 
   const inventoryMutation = useMutation({
@@ -2169,8 +661,7 @@ export default function ProductsPage() {
     onSuccess: () => {
       toast.success('Товары перемещены');
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      setSelectedProducts(new Set());
-      setSelectMode(false);
+      exitSelectMode();
       setShowMoveModal(false);
     },
     onError: () => toast.error('Не удалось переместить товары'),
@@ -2187,19 +678,16 @@ export default function ProductsPage() {
       const p = res.data?.deletedProducts ?? 0;
       const f = res.data?.deletedCategories ?? 0;
       const parts: string[] = [];
-      if (p > 0) parts.push(`${p} ${p === 1 ? 'товар' : 'товаров'}`);
-      if (f > 0) parts.push(`${f} ${f === 1 ? 'папка' : 'папок'}`);
+      if (p > 0) parts.push(countLabel(p, ['товар', 'товара', 'товаров']));
+      if (f > 0) parts.push(countLabel(f, ['папка', 'папки', 'папок']));
       toast.success(parts.length > 0 ? `В корзину: ${parts.join(', ')}` : 'Перемещено в корзину');
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
-      closeBulkDelete();
+      setBulkDeleteMode(null);
       exitSelectMode();
     },
-    onError: (err: any) => {
-      const msg = err?.response?.data?.message;
-      toast.error(typeof msg === 'string' ? msg : 'Не удалось удалить');
-    },
+    onError: (err: any) => toast.error(serverMessage(err, 'Не удалось удалить')),
   });
 
   // ---- Handlers ----
@@ -2314,16 +802,16 @@ export default function ProductsPage() {
     }
 
     const col = (row: string[], idx: number) => (idx >= 0 && row ? String(row[idx] ?? '').trim() : '');
-    // Числа из Excel идут в русской локали («1 250,50») — их нормализует toNum.
-    const rows = rawRows
+    // Числа из Excel идут в русской локали («1 250,50») — их нормализует toNumberOrZero.
+    const rows: ImportRow[] = rawRows
       .slice(headerIdx + 1)
       .map((row) => ({
         name: col(row, colMap.name),
         category: col(row, colMap.category),
-        costPrice: colMap.costPrice >= 0 ? toNum(col(row, colMap.costPrice)) : 0,
-        sellPrice: colMap.sellPrice >= 0 ? toNum(col(row, colMap.sellPrice)) : 0,
-        stock: colMap.stock >= 0 ? toNum(col(row, colMap.stock)) : 0,
-        minStock: colMap.minStock >= 0 ? toNum(col(row, colMap.minStock)) : 0,
+        costPrice: colMap.costPrice >= 0 ? toNumberOrZero(col(row, colMap.costPrice)) : 0,
+        sellPrice: colMap.sellPrice >= 0 ? toNumberOrZero(col(row, colMap.sellPrice)) : 0,
+        stock: colMap.stock >= 0 ? toNumberOrZero(col(row, colMap.stock)) : 0,
+        minStock: colMap.minStock >= 0 ? toNumberOrZero(col(row, colMap.minStock)) : 0,
         unit: col(row, colMap.unit) || DEFAULT_UNIT,
       }))
       .filter((r) => r.name);
@@ -2334,7 +822,6 @@ export default function ProductsPage() {
     }
 
     setImportData(rows);
-    setShowImportModal(true);
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2367,8 +854,7 @@ export default function ProductsPage() {
         const reader = new FileReader();
         reader.onload = (ev) => {
           const text = (ev.target?.result as string) || '';
-          if (encoding === 'utf-8' && /\uFFFD/.test(text)) {
-            // Replacement chars = wrong encoding, retry as Windows-1251
+          if (encoding === 'utf-8' && /�/.test(text)) {
             readAs('windows-1251');
             return;
           }
@@ -2400,8 +886,7 @@ export default function ProductsPage() {
       if (result.skipped) parts.push(`${result.skipped} пропущено`);
       toast.success(`Импорт: ${parts.join(', ')}`);
       if (result.errors && result.errors.length > 0) {
-        // Show first few failing rows so user knows what went wrong
-        result.errors.forEach((e) => toast.error(e, { duration: 6000 }));
+        result.errors.forEach((err) => toast.error(err, { duration: 6000 }));
       }
       // Импорт создаёт товары И новые группы: обновляем не только список склада,
       // но и полный каталог пикера Кассы (['products-all']) с деревом папок
@@ -2410,24 +895,22 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-all'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
-      setShowImportModal(false);
       setImportData(null);
     } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || 'Ошибка импорта';
-      toast.error(typeof msg === 'string' ? msg : 'Ошибка импорта');
+      toast.error(serverMessage(err, err?.message || 'Ошибка импорта'));
     } finally {
       setImporting(false);
     }
   }
 
-  function toggleSelect(id: string) {
+  const toggleSelect = useCallback((id: string) => {
     setSelectedProducts((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
 
   function toggleSelectFolder(fullPath: string) {
     setSelectedFolders((prev) => {
@@ -2438,14 +921,15 @@ export default function ProductsPage() {
     });
   }
 
+  const isAllSelected =
+    currentProducts.length + subfolders.length > 0 &&
+    currentProducts.every((p) => selectedProducts.has(p.id)) &&
+    subfolders.every((f) => selectedFolders.has(f.fullPath));
+
   // Select every folder + product visible in the current view, or clear if all
   // are already selected (toggle behaviour for the select-all control).
   function toggleSelectAll() {
-    const allSelected =
-      currentProducts.length + subfolders.length > 0 &&
-      currentProducts.every((p) => selectedProducts.has(p.id)) &&
-      subfolders.every((f) => selectedFolders.has(f.fullPath));
-    if (allSelected) {
+    if (isAllSelected) {
       setSelectedProducts(new Set());
       setSelectedFolders(new Set());
     } else {
@@ -2454,15 +938,7 @@ export default function ProductsPage() {
     }
   }
 
-  const isAllSelected =
-    currentProducts.length + subfolders.length > 0 &&
-    currentProducts.every((p) => selectedProducts.has(p.id)) &&
-    subfolders.every((f) => selectedFolders.has(f.fullPath));
-
-  // Fire the bulk-delete once the user has typed the confirm word. Guards the
-  // word here too (button is already disabled) as belt-and-suspenders.
   function confirmBulkDelete() {
-    if (bulkConfirmText.trim().toLowerCase() !== 'согласен') return;
     if (bulkDeleteMode === 'all') {
       bulkDeleteMutation.mutate({ deleteAll: true, warehouseId: activeWarehouseId || undefined });
     } else if (bulkDeleteMode === 'selection') {
@@ -2476,392 +952,296 @@ export default function ProductsPage() {
     }
   }
 
+  function createFolder() {
+    const name = newFolderName.trim();
+    if (!name) return;
+    const folderPath = activePath.length > 0 ? `${activePath.join('/')}/${name}` : name;
+    createCategoryMutation.mutate(folderPath);
+    setShowFolderModal(false);
+    setNewFolderName('');
+    enterFolder(name);
+  }
+
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
   // ---- Navigation state ----
-  const isInFolder = activePath.length > 0;
   const showingSearch = !!searchText;
-  const showingFolderContents = isInFolder && !searchText;
-  const showingRoot = !searchText && !isInFolder;
+  const showingFolderContents = activePath.length > 0 && !searchText;
+  const showingRoot = !searchText && activePath.length === 0;
   const currentPathStr = activePath.join('/');
 
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  // Список: до прихода первого ответа — скелет; ошибка без данных (или с данными
+  // ДРУГОГО склада из placeholderData) — честная ошибка, а не чужой список под
+  // новым именем; ошибка фонового обновления при живых данных — баннер сверху.
+  const listPending = !productsData && !isError;
+  const listError = isError && (!productsData || isPlaceholderData);
+  const staleBanner = isError && !!productsData && !isPlaceholderData;
 
-  // Render product list — each row: thumbnail | name | stock | costPrice? | sellPrice
-  function renderProductList(products: Product[], isSearch?: boolean) {
-    return (
-      // Mobile: single full-width column. Desktop: multi-column grid so the
-      // warehouse fills wide monitors instead of one stretched column.
-      <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-x-3 gap-y-1">
-        {products.map((product) => {
-          const isLow = product.stock <= product.minStock;
-          const isSelected = selectedProducts.has(product.id);
-          return (
-            <div
-              key={product.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => {
-                if (!isSearch && selectMode) toggleSelect(product.id);
-                else setDetailTarget(product);
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && setDetailTarget(product)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer active:bg-gray-50 transition-all ${
-                isSelected
-                  ? 'border-primary-500 bg-primary-50/50'
-                  : 'border-gray-100 bg-white hover:border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {/* Select checkbox */}
-              {!isSearch && selectMode && (
-                <div
-                  className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
-                    isSelected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
-                  }`}
-                >
-                  {isSelected && <CheckIcon className="h-3 w-3 text-white" />}
-                </div>
-              )}
+  const moreMenu: MenuEntry[] = [
+    { key: 'export', label: 'Экспорт в CSV', icon: Download, onSelect: () => void handleExport() },
+    {
+      key: 'import',
+      label: 'Импорт из Excel / CSV',
+      description: '.xlsx, .xls, .csv',
+      icon: Upload,
+      onSelect: () => fileInputRef.current?.click(),
+    },
+    { type: 'separator', key: 'sep-1' },
+    { key: 'prices', label: 'Массовая корректировка цен', icon: Percent, onSelect: () => setBulkPriceOpen(true) },
+    { key: 'trash', label: 'Корзина склада', icon: Trash2, onSelect: () => setTrashOpen(true) },
+  ];
 
-              {/* Thumbnail — long-press opens full photo */}
-              <div
-                className="h-10 w-10 rounded-lg bg-gray-50 overflow-hidden flex-shrink-0 flex items-center justify-center"
-                onContextMenu={(e) => {
-                  if (product.photo) {
-                    e.preventDefault();
-                    setPhotoPreview(product.photo);
-                  }
-                }}
-                onTouchStart={() => {
-                  if (!product.photo) return;
-                  const timer = setTimeout(() => setPhotoPreview(product.photo!), 400);
-                  const cancel = () => clearTimeout(timer);
-                  document.addEventListener('touchend', cancel, { once: true });
-                  document.addEventListener('touchmove', cancel, { once: true });
-                }}
-              >
-                {product.photo ? (
-                  <img
-                    src={thumbUrl(product.photo) || product.photo}
-                    alt=""
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <Package className="h-5 w-5 text-gray-200" />
-                )}
-              </div>
+  const subtitle = productsData
+    ? `${countLabel(allProducts.length, ['товар', 'товара', 'товаров'])}${activeWarehouse ? ` · ${activeWarehouse.name}` : ''}`
+    : activeWarehouse?.name;
 
-              {/* Name */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
-                {product.isBundle && (
-                  <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">
-                    КМП
-                  </span>
-                )}
-              </div>
+  const listSkeleton = (
+    <div className="space-y-2" aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
+          <Skeleton className="h-9 w-9" />
+          <Skeleton variant="text" className={i % 2 ? 'w-1/3' : 'w-1/4'} />
+          <Skeleton variant="text" className="ml-auto w-14" />
+          <Skeleton variant="text" className="w-16" />
+        </div>
+      ))}
+    </div>
+  );
 
-              {/* Stock */}
-              <div className="flex-shrink-0 text-right">
-                <span className={`text-xs font-medium ${isLow ? 'text-red-500' : 'text-gray-500'}`}>
-                  {product.stock} {unitLabel(product.unit)}
-                </span>
-              </div>
-
-              {/* Cost price — visible to director, admin, superadmin */}
-              {canManageWarehouse && (
-                <div className="flex-shrink-0 w-16 text-right hidden sm:block">
-                  <span className="text-[11px] text-gray-400">{formatMoney(product.costPrice)}</span>
-                </div>
-              )}
-
-              {/* Sell price */}
-              <div className="flex-shrink-0 w-20 text-right">
-                <span className="text-sm font-bold text-gray-900">{formatMoney(product.sellPrice)}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
+  const newFolderButton = canManageWarehouse && (
+    <button type="button" onClick={() => setShowFolderModal(true)} className={FOLDER_BUTTON_CLS}>
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+        <FolderPlus className="h-[18px] w-[18px]" aria-hidden="true" />
+      </span>
+      <span className="text-sm font-medium text-ink-2">Новая папка</span>
+    </button>
+  );
 
   return (
-    <div className="space-y-4 pb-2">
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
         title="Склад"
         icon={Warehouse}
-        subtitle={`${allProducts.length} товаров`}
+        subtitle={subtitle}
         actions={
           canManageWarehouse ? (
             <>
-              <button
-                type="button"
-                onClick={handleExport}
-                aria-label="Экспорт CSV"
-                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-                title="Экспорт CSV"
-              >
-                <Download className="h-4 w-4" />
-                <span className="hidden xl:inline">Экспорт</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label="Импорт из Excel / CSV"
-                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-                title="Импорт из Excel / CSV"
-              >
-                <Upload className="h-4 w-4" />
-                <span className="hidden xl:inline">Импорт</span>
-              </button>
+              <DropdownMenu
+                aria-label="Ещё действия со складом"
+                trigger={
+                  <Button variant="secondary" iconRight={ChevronDown}>
+                    Ещё
+                  </Button>
+                }
+                items={moreMenu}
+                width={272}
+              />
+              <Button variant="secondary" icon={ClipboardCheck} onClick={() => setWarehouseOpsOpen(true)}>
+                Операции
+              </Button>
+              <Button icon={Plus} onClick={openCreate}>
+                Добавить товар
+              </Button>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept=".xlsx,.xls,.csv,.txt"
                 onChange={handleImportFile}
                 className="hidden"
+                tabIndex={-1}
+                aria-hidden="true"
               />
-              <button
-                type="button"
-                onClick={() => setBulkPriceOpen(true)}
-                aria-label="Массовая корректировка цен"
-                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-                title="Массовая корректировка цен"
-              >
-                <Percent className="h-4 w-4" />
-                <span className="hidden xl:inline">Цены</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTrashOpen(true)}
-                aria-label="Корзина"
-                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-                title="Корзина"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span className="hidden xl:inline">Корзина</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setWarehouseOpsOpen(true)}
-                aria-label="Складские операции"
-                className="flex items-center gap-2 rounded-xl bg-amber-500 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-600 active:scale-[0.97] transition-all"
-                title="Складские операции"
-              >
-                <Warehouse className="h-4 w-4" />
-                <span className="hidden xl:inline">Операции</span>
-              </button>
-              <button
-                type="button"
-                onClick={openCreate}
-                aria-label="Добавить товар"
-                className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all"
-              >
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">Добавить</span>
-              </button>
             </>
           ) : undefined
         }
       />
 
-      {/* Warehouse switcher — main / defect / used */}
-      {warehouses && warehouses.length > 1 && (
-        <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
-          {warehouses.map((w) => {
-            const active = w.id === activeWarehouseId;
-            const Icon = w.kind === 'defect' ? AlertTriangle : w.kind === 'used' ? Recycle : Package;
-            return (
-              <button
-                key={w.id}
-                type="button"
-                onClick={() => {
-                  setActiveWarehouseId(w.id);
-                  setActivePath([]);
-                  exitSelectMode();
-                }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
-                  active
-                    ? 'bg-primary-600 text-white shadow-sm'
-                    : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {w.name}
-              </button>
-            );
-          })}
+      <Toolbar>
+        {warehouses && warehouses.length > 1 && (
+          <>
+            {/* На телефоне три длинных названия складов не помещаются в сегмент-контрол — там нативный select. */}
+            <div className="w-full sm:hidden">
+              <Select
+                aria-label="Склад"
+                value={activeWarehouseId}
+                onChange={(e) => switchWarehouse(e.target.value)}
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              />
+            </div>
+            <div className="hidden sm:block">
+              <SegmentedControl<string>
+                aria-label="Склад"
+                value={activeWarehouseId}
+                onChange={switchWarehouse}
+                options={warehouses.map((w) => ({
+                  value: w.id,
+                  label: w.name,
+                  icon: WAREHOUSE_ICON[w.kind] ?? Package,
+                }))}
+              />
+            </div>
+          </>
+        )}
+        <div className="w-full sm:w-72">
+          <SearchInput
+            value={searchText}
+            onChange={(value) => setParam({ q: value }, { replace: true })}
+            placeholder="Поиск по названию…"
+            aria-label="Поиск товара"
+          />
         </div>
-      )}
+        {/* Выбор и «удалить весь товар»: warehouse_delete, не при поиске. Не в слоте `end`, а в потоке
+            с ml-auto — на 375 px блок переносится на свою строку, не отжимая поиск. */}
+        {canDeleteWarehouse && !showingSearch && (allProducts.length > 0 || subfolders.length > 0) && (
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button
+              variant={selectMode ? 'soft' : 'ghost'}
+              size="sm"
+              icon={ListChecks}
+              aria-pressed={selectMode}
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            >
+              {selectMode ? 'Отменить выбор' : 'Выбрать'}
+            </Button>
+            {selectMode && (currentProducts.length > 0 || subfolders.length > 0) && (
+              <Button variant="ghost" size="sm" icon={isAllSelected ? CheckSquare : Square} onClick={toggleSelectAll}>
+                {isAllSelected ? 'Снять всё' : 'Выбрать всё'}
+              </Button>
+            )}
+            {!selectMode && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={Trash2}
+                className="text-bad-text hover:bg-bad-soft hover:text-bad-text"
+                onClick={() => setBulkDeleteMode('all')}
+                title="Удалить весь товар с этого склада (в корзину)"
+              >
+                Удалить весь товар
+              </Button>
+            )}
+          </div>
+        )}
+      </Toolbar>
 
       {/* Warehouse stats — warehouse_manage (same key the backend enforces) */}
-      {canManageWarehouse && warehouseStats && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-          <div className="rounded-xl bg-indigo-50 p-3">
-            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Себестоимость склада</p>
-            <p className="text-base font-bold text-indigo-700 mt-0.5 tabular-nums">
-              {formatMoney(warehouseStats.totalCostValue)}
-            </p>
+      {canManageWarehouse &&
+        (statsQuery.isError ? (
+          <InlineError
+            message="Не удалось загрузить сводку склада"
+            onRetry={() => statsQuery.refetch()}
+            loading={statsQuery.isFetching}
+          />
+        ) : (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              compact
+              label="Себестоимость склада"
+              icon={Layers}
+              loading={statsQuery.isLoading}
+              value={warehouseStats ? <MoneyValue value={warehouseStats.totalCostValue} /> : '—'}
+            />
+            <StatCard
+              compact
+              label="В розничных ценах"
+              icon={Banknote}
+              loading={statsQuery.isLoading}
+              value={warehouseStats ? <MoneyValue value={warehouseStats.totalSellValue} /> : '—'}
+            />
+            <StatCard
+              compact
+              label="Расход за месяц"
+              icon={TrendingDown}
+              loading={statsQuery.isLoading}
+              value={warehouseStats ? <MoneyValue value={warehouseStats.monthProductCost} /> : '—'}
+            />
+            <StatCard
+              compact
+              label="Расход за прошлый месяц"
+              icon={CalendarDays}
+              loading={statsQuery.isLoading}
+              value={warehouseStats ? <MoneyValue value={warehouseStats.lastMonthProductCost} /> : '—'}
+            />
           </div>
-          <div className="rounded-xl bg-green-50 p-3">
-            <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">В розн. ценах</p>
-            <p className="text-base font-bold text-green-700 mt-0.5 tabular-nums">
-              {formatMoney(warehouseStats.totalSellValue)}
-            </p>
-          </div>
-          <div className="rounded-xl bg-orange-50 p-3">
-            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">Расход за месяц</p>
-            <p className="text-base font-bold text-orange-700 mt-0.5 tabular-nums">
-              {formatMoney(warehouseStats.monthProductCost)}
-            </p>
-          </div>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Расход пред. мес.</p>
-            <p className="text-base font-bold text-gray-700 mt-0.5 tabular-nums">
-              {formatMoney(warehouseStats.lastMonthProductCost)}
-            </p>
-          </div>
-        </div>
-      )}
+        ))}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          placeholder="Поиск по названию..."
-          className="block w-full rounded-xl border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
-        />
-      </div>
+      {warehousesQuery.isError && !warehouses ? (
+        <QueryState
+          isLoading={false}
+          isError
+          onRetry={() => warehousesQuery.refetch()}
+          isFetching={warehousesQuery.isFetching}
+          errorTitle="Не удалось загрузить склады"
+          minHeight="py-16"
+        >
+          <></>
+        </QueryState>
+      ) : listPending ? (
+        listSkeleton
+      ) : listError ? (
+        <QueryState
+          isLoading={false}
+          isError
+          onRetry={() => refetch()}
+          isFetching={isFetching}
+          errorTitle={
+            activeWarehouse ? `Не удалось загрузить склад «${activeWarehouse.name}»` : 'Не удалось загрузить склад'
+          }
+          minHeight="py-16"
+        >
+          <></>
+        </QueryState>
+      ) : (
+        <div className="space-y-3">
+          {staleBanner && (
+            <InlineError
+              message="Не удалось обновить список — показаны данные последней успешной загрузки"
+              onRetry={() => refetch()}
+              loading={isFetching}
+            />
+          )}
 
-      {/* Selection toolbar — multi-select + «удалить весь товар».
-          Delete is a separately-gated, off-by-default capability (warehouse_delete),
-          so the whole bar only shows for users who hold it. Hidden while searching:
-          selection operates on the folder/root tree, not flat search results. */}
-      {canDeleteWarehouse && !showingSearch && (allProducts.length > 0 || subfolders.length > 0) && (
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors flex-shrink-0 ${
-                selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              <ListChecks className="h-3.5 w-3.5" />
-              {selectMode ? 'Отмена' : 'Выбрать'}
-            </button>
-            {selectMode && (currentProducts.length > 0 || subfolders.length > 0) && (
+          {/* Крошки — настоящие кнопки, папка живёт в URL */}
+          {showingFolderContents && (
+            <nav aria-label="Папки склада" className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
               <button
                 type="button"
-                onClick={toggleSelectAll}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors flex-shrink-0"
+                onClick={() => goToPath([])}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-sm font-medium text-accent-text hover:underline',
+                  focusRing,
+                )}
               >
-                {isAllSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                {isAllSelected ? 'Снять всё' : 'Выбрать всё'}
+                <Warehouse className="h-4 w-4" aria-hidden="true" />
+                {activeWarehouse?.name ?? 'Склад'}
               </button>
-            )}
-            {selectMode && selectionCount > 0 && (
-              <span className="text-xs text-gray-400 truncate">Выбрано: {selectionCount}</span>
-            )}
-          </div>
-          {!selectMode && (
-            <button
-              type="button"
-              onClick={() => {
-                setBulkConfirmText('');
-                setBulkDeleteMode('all');
-              }}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
-              title="Удалить весь товар с этого склада (в корзину)"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Удалить весь товар</span>
-              <span className="sm:hidden">Очистить</span>
-            </button>
-          )}
-        </div>
-      )}
-
-      <QueryState
-        isLoading={isLoading}
-        isError={isError && allProducts.length === 0}
-        onRetry={() => refetch()}
-        isFetching={isFetching}
-        minHeight="py-20"
-      >
-        <>
-          {/* Breadcrumb + select toggle when inside a folder */}
-          {showingFolderContents && (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1 text-sm min-w-0 overflow-hidden">
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setActivePath([]);
-                    activePathRef.current = [];
-                    exitSelectMode();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      setActivePath([]);
-                      activePathRef.current = [];
-                      exitSelectMode();
-                    }
-                  }}
-                  className="text-primary-600 hover:text-primary-700 font-medium flex-shrink-0 cursor-pointer flex items-center gap-0.5"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                  Все
-                </div>
-                {activePath.map((segment, idx) => (
-                  <span key={idx} className="flex items-center gap-1 min-w-0">
-                    <span className="text-gray-300 flex-shrink-0">/</span>
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        const newPath = activePath.slice(0, idx + 1);
-                        setActivePath(newPath);
-                        activePathRef.current = newPath;
-                        exitSelectMode();
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const newPath = activePath.slice(0, idx + 1);
-                          setActivePath(newPath);
-                          activePathRef.current = newPath;
-                          exitSelectMode();
-                        }
-                      }}
-                      className={`truncate cursor-pointer ${
-                        idx === activePath.length - 1
-                          ? 'font-semibold text-gray-900'
-                          : 'text-primary-600 hover:text-primary-700 font-medium'
-                      }`}
+              {activePath.map((segment, idx) => (
+                <span key={`${segment}-${idx}`} className="flex min-w-0 items-center gap-1">
+                  <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                  {idx === activePath.length - 1 ? (
+                    <span className="truncate font-semibold text-ink" aria-current="page">
+                      {segment}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => goToPath(activePath.slice(0, idx + 1))}
+                      className={cn('truncate rounded-sm font-medium text-accent-text hover:underline', focusRing)}
                     >
                       {segment}
-                    </div>
-                  </span>
-                ))}
-              </div>
-            </div>
+                    </button>
+                  )}
+                </span>
+              ))}
+            </nav>
           )}
 
-          {/* ── Category folders list ── */}
+          {/* ── Папки ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="space-y-1.5">
               {/* Reorder.Group lets users grab a folder by its drag-handle and reorder.
-                  Works on both pointer (mouse) and touch — long-press the grip dots,
-                  drag, drop. We sync the resulting order to the backend via
-                  reorderCategoriesMutation, but only fire when the order really
-                  changed to avoid extra writes. */}
+                  We sync the resulting order to the backend via reorderCategoriesMutation,
+                  but only fire when the order really changed to avoid extra writes. */}
               <Reorder.Group
                 axis="y"
                 values={subfolders}
@@ -2878,6 +1258,7 @@ export default function ProductsPage() {
                   reorderCategoriesMutation.mutate(next.map((f: { catId: string }) => f.catId).filter(Boolean));
                 }}
                 className="space-y-1.5"
+                aria-label="Папки"
               >
                 {subfolders.map((folder) => (
                   <FolderTileReorderItem
@@ -2885,7 +1266,7 @@ export default function ProductsPage() {
                     folder={folder}
                     checkInfo={folderCheckInfo.get(folder.name)}
                     canManage={canManageWarehouse}
-                    onClick={() => enterFolder(folder.name)}
+                    onOpen={() => enterFolder(folder.name)}
                     onDelete={() =>
                       setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })
                     }
@@ -2895,101 +1276,108 @@ export default function ProductsPage() {
                   />
                 ))}
               </Reorder.Group>
-              {canManageWarehouse && (
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setShowFolderModal(true)}
-                  onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-                  className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl border-2 border-dashed border-gray-200 active:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
-                    <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
-                  </div>
-                  <p className="text-sm font-medium text-gray-500">Новая папка</p>
-                </div>
-              )}
+              {newFolderButton}
             </div>
           )}
 
           {/* New folder button when no subfolders exist */}
-          {canManageWarehouse && (showingRoot || showingFolderContents) && subfolders.length === 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setShowFolderModal(true)}
-              onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-              className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl border-2 border-dashed border-gray-200 active:bg-gray-50 transition-colors cursor-pointer"
-            >
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
-                <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
-              </div>
-              <p className="text-sm font-medium text-gray-500">Новая папка</p>
-            </div>
+          {(showingRoot || showingFolderContents) && subfolders.length === 0 && newFolderButton}
+
+          {/* ── Товары ── */}
+          {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
+            <ProductTable
+              products={currentProducts}
+              onOpen={setDetailTarget}
+              showCost={canManageWarehouse}
+              selectMode={selectMode}
+              selectedIds={selectedProducts}
+              onToggleSelect={toggleSelect}
+              onPreviewPhoto={setPhotoPreview}
+              caption={showingFolderContents ? `Товары в папке ${currentPathStr}` : 'Товары без папки'}
+            />
           )}
 
-          {/* ── Products grid ── */}
-          {(showingRoot || showingFolderContents) && currentProducts.length > 0 && renderProductList(currentProducts)}
-
-          {/* Empty state */}
+          {/* Пустые состояния */}
           {showingFolderContents && subfolders.length === 0 && currentProducts.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-              <Package className="h-12 w-12 mb-3 text-gray-400" />
-              <p className="text-sm">В этой папке пока нет товаров</p>
-            </div>
+            <Card>
+              <EmptyState
+                compact
+                icon={Package}
+                title="В этой папке пока нет товаров"
+                description={canManageWarehouse ? 'Нажмите «Добавить товар» — он попадёт в эту папку' : undefined}
+              />
+            </Card>
+          )}
+          {showingRoot && subfolders.length === 0 && currentProducts.length === 0 && (
+            <Card>
+              <EmptyState
+                icon={Warehouse}
+                title="Склад пуст"
+                description={
+                  canManageWarehouse
+                    ? 'Добавьте первый товар или импортируйте каталог из Excel через меню «Ещё»'
+                    : 'Товары появятся, когда их добавит администратор'
+                }
+              />
+            </Card>
           )}
 
-          {/* Search results */}
+          {/* Результаты поиска */}
           {showingSearch &&
             (searchResults.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-                <Package className="h-12 w-12 mb-3 text-gray-400" />
-                <p className="text-sm">Товары не найдены</p>
-              </div>
+              <Card>
+                <EmptyState
+                  compact
+                  icon={Package}
+                  title="Товары не найдены"
+                  description={`По запросу «${searchText}» ничего нет${activeWarehouse ? ` на складе «${activeWarehouse.name}»` : ''}`}
+                />
+              </Card>
             ) : (
-              renderProductList(searchResults, true)
+              <>
+                <p className="text-sm text-ink-3">
+                  Найдено {countLabel(searchResults.length, ['товар', 'товара', 'товаров'])}
+                </p>
+                <ProductTable
+                  products={searchResults}
+                  onOpen={setDetailTarget}
+                  showCost={canManageWarehouse}
+                  showFolder
+                  onPreviewPhoto={setPhotoPreview}
+                  caption={`Результаты поиска «${searchText}»`}
+                />
+              </>
             ))}
-        </>
-      </QueryState>
+        </div>
+      )}
 
-      {/* Floating action bar — visible whenever anything (products or folders)
-          is selected. «Переместить» applies to products only; «Удалить» opens
-          the type-to-confirm modal and covers both products and folders. */}
+      {/* Панель выбранного — липкая у нижнего края области прокрутки. «Переместить»
+          применяется к товарам; «Удалить» открывает подтверждение словом и
+          покрывает и товары, и папки. */}
       {selectMode && selectionCount > 0 && (
-        <div className="sticky bottom-20 md:bottom-0 z-10 -mx-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 rounded-xl shadow-lg">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-gray-600 flex-shrink-0">
-              Выбрано: {selectionCount}
-              {selectedFolders.size > 0 && (
-                <span className="text-gray-400">
-                  {' '}
-                  ({selectedProducts.size} тов., {selectedFolders.size} пап.)
-                </span>
-              )}
-            </span>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {selectedProducts.size > 0 && selectedFolders.size === 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowMoveModal(true)}
-                  className="flex items-center gap-1.5 rounded-xl bg-primary-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
-                >
-                  <Move className="h-4 w-4" />
-                  Переместить
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setBulkConfirmText('');
-                  setBulkDeleteMode('selection');
-                }}
-                className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
-              >
-                <Trash2 className="h-4 w-4" />
-                Удалить ({selectionCount})
-              </button>
-            </div>
+        <div
+          role="region"
+          aria-label="Действия с выбранным"
+          className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface/95 px-4 py-3 shadow-pop backdrop-blur"
+        >
+          <span className="text-sm text-ink-2">
+            Выбрано: <span className="font-semibold tabular-nums text-ink">{selectionCount}</span>
+            {selectedFolders.size > 0 && (
+              <span className="text-ink-3">
+                {' '}
+                ({selectedProducts.size} тов., {selectedFolders.size} пап.)
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            {selectedProducts.size > 0 && selectedFolders.size === 0 && (
+              <Button variant="secondary" icon={Move} onClick={() => setShowMoveModal(true)}>
+                Переместить
+              </Button>
+            )}
+            <Button variant="danger" icon={Trash2} onClick={() => setBulkDeleteMode('selection')}>
+              Удалить ({selectionCount})
+            </Button>
           </div>
         </div>
       )}
@@ -3092,208 +1480,83 @@ export default function ProductsPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title="Удалить товар"
-        message={`Переместить "${deleteTarget?.name}" в корзину? Товар можно будет восстановить.`}
+        message={`Переместить «${deleteTarget?.name ?? ''}» в корзину? Товар можно будет восстановить.`}
         confirmText="В корзину"
         variant="danger"
       />
 
-      {/* Delete folder modal — two-action chooser:
-          (1) keep products, move them to root
-          (2) delete the folder AND send its products to trash (recoverable). */}
-      {deleteFolderTarget && (
-        <Modal isOpen onClose={() => setDeleteFolderTarget(null)} title="Удалить папку" size="sm">
-          <div className="space-y-3">
-            <p className="text-sm text-gray-600">
-              Что сделать с папкой <span className="font-semibold text-gray-900">«{deleteFolderTarget.name}»</span>?
-            </p>
+      <DeleteFolderDialog
+        target={deleteFolderTarget}
+        onClose={() => setDeleteFolderTarget(null)}
+        onDeleteOnly={(target) => {
+          deleteCategoryMutation.mutate({ id: target.id });
+          setDeleteFolderTarget(null);
+        }}
+        onDeleteWithContents={(target) => {
+          if (target.id) deleteCategoryMutation.mutate({ id: target.id, deleteContents: true });
+          else if (target.path) deletePathContentsMutation.mutate(target.path);
+          setDeleteFolderTarget(null);
+        }}
+      />
 
-            {/* Option 1 — keep products, drop the folder. Backend supports this
-                only for folders that have a real warehouse_categories row;
-                "path-only" folders (inferred from product.category) are
-                non-deletable on their own and need the path-soft-delete fallback below. */}
-            {deleteFolderTarget.id ? (
-              <button
-                type="button"
-                onClick={() => {
-                  deleteCategoryMutation.mutate({ id: deleteFolderTarget.id });
-                  setDeleteFolderTarget(null);
-                }}
-                className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left"
-              >
-                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 flex-shrink-0">
-                  <FolderOpen className="h-4 w-4" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">Удалить только папку</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Товары внутри переедут в корень склада</p>
-                </div>
-              </button>
-            ) : null}
-
-            {/* Option 2 — soft-delete the folder's contents.
-                For id-backed folders we hit the backend's deleteContents flag.
-                For path-only folders we fan out per-product DELETE requests so
-                every product whose category sits in this path lands in the trash. */}
-            <button
-              type="button"
-              onClick={() => {
-                if (deleteFolderTarget.id) {
-                  deleteCategoryMutation.mutate({ id: deleteFolderTarget.id, deleteContents: true });
-                } else if (deleteFolderTarget.path) {
-                  deletePathContentsMutation.mutate(deleteFolderTarget.path);
-                }
-                setDeleteFolderTarget(null);
-              }}
-              className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left border-red-100 hover:border-red-200"
-            >
-              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-500 flex-shrink-0">
-                <Trash2 className="h-4 w-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">Удалить вместе с товарами</p>
-                <p className="text-xs text-gray-500 mt-0.5">Товары попадут в корзину, можно будет восстановить</p>
-              </div>
-            </button>
-
-            <button type="button" onClick={() => setDeleteFolderTarget(null)} className="btn-ghost w-full">
-              Отмена
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Move to folder modal */}
       {showMoveModal && (
-        <Modal isOpen onClose={() => setShowMoveModal(false)} title="Переместить в папку">
-          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-            {currentPathStr !== '' && (
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() =>
-                  moveMutation.mutate({
-                    productIds: Array.from(selectedProducts),
-                    category: '',
-                  })
-                }
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    moveMutation.mutate({
-                      productIds: Array.from(selectedProducts),
-                      category: '',
-                    });
-                  }
-                }}
-                className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors cursor-pointer"
-              >
-                <FolderOpen className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                <span className="text-sm font-medium text-gray-500">Без категории (корень)</span>
-              </div>
-            )}
-            {allCategoryPaths
-              .filter((path) => path !== currentPathStr)
-              .map((path) => {
-                const depth = path.split('/').length - 1;
-                return (
-                  <div
-                    key={path}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() =>
-                      moveMutation.mutate({
-                        productIds: Array.from(selectedProducts),
-                        category: path,
-                      })
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        moveMutation.mutate({
-                          productIds: Array.from(selectedProducts),
-                          category: path,
-                        });
-                      }
-                    }}
-                    className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors cursor-pointer"
-                    style={{ paddingLeft: `${16 + depth * 16}px` }}
-                  >
-                    <FolderOpen className="h-5 w-5 text-primary-500 flex-shrink-0" />
-                    <span className="text-sm font-medium text-gray-900 truncate">{path}</span>
-                  </div>
-                );
-              })}
-            <div className="border-t border-gray-100 pt-2 mt-2">
-              <div className="flex items-center gap-2 px-4">
-                <input
-                  type="text"
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="Новая папка..."
-                  className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm placeholder-gray-400 focus:border-primary-400 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (newFolderName.trim()) {
-                      const targetCategory =
-                        activePath.length > 0
-                          ? activePath.join('/') + '/' + newFolderName.trim()
-                          : newFolderName.trim();
-                      moveMutation.mutate({
-                        productIds: Array.from(selectedProducts),
-                        category: targetCategory,
-                      });
-                    }
-                  }}
-                  disabled={!newFolderName.trim()}
-                  className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40 flex-shrink-0"
-                >
-                  OK
-                </button>
-              </div>
-            </div>
-          </div>
-        </Modal>
+        <MoveToFolderModal
+          isOpen={showMoveModal}
+          onClose={() => setShowMoveModal(false)}
+          currentPathStr={currentPathStr}
+          activePath={activePath}
+          allCategoryPaths={allCategoryPaths}
+          pending={moveMutation.isPending}
+          onMove={(category) => moveMutation.mutate({ productIds: Array.from(selectedProducts), category })}
+        />
       )}
 
       {/* Warehouse operations chooser */}
-      {warehouseOpsOpen && !warehouseOpsMode && (
-        <Modal isOpen onClose={() => setWarehouseOpsOpen(false)} title="Складские операции" size="sm">
-          <div className="space-y-2">
+      <Modal
+        isOpen={warehouseOpsOpen && !warehouseOpsMode}
+        onClose={() => setWarehouseOpsOpen(false)}
+        title="Складские операции"
+        description="Массовые операции по всему складу или папке"
+        size="sm"
+      >
+        <div className="space-y-2">
+          {(
+            [
+              {
+                key: 'inventory',
+                icon: ClipboardCheck,
+                title: 'Инвентаризация',
+                text: 'Пересчёт остатков с отчётом о недостаче и излишках',
+              },
+              {
+                key: 'writeoff',
+                icon: PackageMinus,
+                title: 'Списание',
+                text: 'Списать брак, потери, просрочку по нескольким позициям',
+              },
+            ] as const
+          ).map((op) => (
             <button
+              key={op.key}
               type="button"
-              onClick={() => {
-                setWarehouseOpsMode('inventory');
-                setWarehouseOpsProducts({});
-              }}
-              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-blue-50 transition-colors text-left border border-gray-100"
+              onClick={() => setWarehouseOpsMode(op.key)}
+              className={cn(
+                'flex w-full items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-card',
+                'transition-[border-color,box-shadow] duration-150 hover:border-line-strong hover:shadow-pop',
+                focusRing,
+              )}
             >
-              <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
-                <ClipboardCheck className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Инвентаризация</p>
-                <p className="text-xs text-gray-500">Пересчёт остатков на складе</p>
-              </div>
+              <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+                <op.icon className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-ink">{op.title}</span>
+                <span className="mt-0.5 block text-xs text-ink-3">{op.text}</span>
+              </span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setWarehouseOpsMode('writeoff');
-                setWarehouseOpsProducts({});
-              }}
-              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-orange-50 transition-colors text-left border border-gray-100"
-            >
-              <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center">
-                <PackageMinus className="w-5 h-5 text-orange-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Списание</p>
-                <p className="text-xs text-gray-500">Списать брак, потери, просрочку</p>
-              </div>
-            </button>
-          </div>
-        </Modal>
-      )}
+          ))}
+        </div>
+      </Modal>
 
       {/* Global inventory modal */}
       {warehouseOpsMode === 'inventory' && (
@@ -3304,6 +1567,7 @@ export default function ProductsPage() {
             setWarehouseOpsOpen(false);
           }}
           title="Инвентаризация"
+          description={activeWarehouse ? `Склад «${activeWarehouse.name}»` : undefined}
           size="lg"
         >
           <GlobalInventoryForm
@@ -3320,7 +1584,9 @@ export default function ProductsPage() {
               }
               queryClient.invalidateQueries({ queryKey: ['products'] });
               queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-              toast.success(`Инвентаризация завершена (${items.length} позиций)`);
+              toast.success(
+                `Инвентаризация завершена (${countLabel(items.length, ['позиция', 'позиции', 'позиций'])})`,
+              );
             }}
             onClose={() => {
               setWarehouseOpsMode(null);
@@ -3339,6 +1605,7 @@ export default function ProductsPage() {
             setWarehouseOpsOpen(false);
           }}
           title="Списание товаров"
+          description={activeWarehouse ? `Склад «${activeWarehouse.name}»` : undefined}
           size="lg"
         >
           <GlobalWriteoffForm
@@ -3352,7 +1619,7 @@ export default function ProductsPage() {
                 });
               }
               queryClient.invalidateQueries({ queryKey: ['products'] });
-              toast.success(`Списано ${items.length} позиций`);
+              toast.success(`Списано: ${countLabel(items.length, ['позиция', 'позиции', 'позиций'])}`);
               setWarehouseOpsMode(null);
               setWarehouseOpsOpen(false);
             }}
@@ -3361,251 +1628,69 @@ export default function ProductsPage() {
       )}
 
       {/* Add new folder modal */}
-      {showFolderModal && (
-        <Modal
-          isOpen
-          onClose={() => {
-            setShowFolderModal(false);
-            setNewFolderName('');
+      <Modal
+        isOpen={showFolderModal}
+        onClose={() => {
+          setShowFolderModal(false);
+          setNewFolderName('');
+        }}
+        title={activePath.length > 0 ? 'Новая подпапка' : 'Новая папка'}
+        description={activePath.length > 0 ? `Внутри «${activePath[activePath.length - 1]}»` : undefined}
+        size="sm"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowFolderModal(false);
+                setNewFolderName('');
+              }}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" form="new-folder-form" disabled={!newFolderName.trim()}>
+              Создать
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="new-folder-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            createFolder();
           }}
-          title={activePath.length > 0 ? `Новая подпапка в "${activePath[activePath.length - 1]}"` : 'Новая папка'}
-          size="sm"
         >
-          <div className="space-y-4">
-            <input
-              type="text"
+          <Field label="Название папки" htmlFor="new-folder-name">
+            <Input
+              id="new-folder-name"
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="Название папки..."
-              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              autoFocus
+              placeholder="Например: Масла"
+              autoComplete="off"
             />
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowFolderModal(false);
-                  setNewFolderName('');
-                }}
-                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (newFolderName.trim()) {
-                    const folderPath =
-                      activePath.length > 0 ? activePath.join('/') + '/' + newFolderName.trim() : newFolderName.trim();
-                    createCategoryMutation.mutate(folderPath);
-                    enterFolder(newFolderName.trim());
-                    setShowFolderModal(false);
-                    setNewFolderName('');
-                  }
-                }}
-                disabled={!newFolderName.trim()}
-                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
-              >
-                Создать
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+          </Field>
+        </form>
+      </Modal>
 
-      {/* Import preview modal */}
-      {showImportModal && importData && (
-        <Modal
-          isOpen
-          onClose={() => {
-            setShowImportModal(false);
-            setImportData(null);
-          }}
-          title="Импорт товаров"
-          size="4xl"
-        >
-          <div className="space-y-4">
-            <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
-              <p className="text-xs font-semibold text-blue-900 mb-1">Поддерживаются Excel (.xlsx, .xls) и CSV файлы</p>
-              <p className="text-[11px] text-blue-800 font-mono">
-                Наименование | Группа | Единица измерения | Цена продажи | Цена закупки
-              </p>
-              <p className="text-[10px] text-blue-600 mt-1">
-                Колонки определяются автоматически по заголовку. Группы/папки через /
-              </p>
-            </div>
-            <p className="text-sm text-gray-600">
-              Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта. Товары с
-              совпадающими названиями будут обновлены.
-            </p>
+      <ImportPreviewModal
+        rows={importData}
+        onClose={() => setImportData(null)}
+        onConfirm={() => void handleImportConfirm()}
+        importing={importing}
+      />
 
-            <div className="max-h-80 overflow-auto rounded-xl border border-gray-200">
-              <table className="w-full min-w-[720px] text-sm table-fixed">
-                <thead className="sticky top-0 z-10 bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">Название</th>
-                    <th className="w-[140px] px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
-                      Группа
-                    </th>
-                    <th className="w-[72px] px-3 py-2 text-center font-medium text-gray-600 whitespace-nowrap">Ед.</th>
-                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
-                      Продажа
-                    </th>
-                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
-                      Закупка
-                    </th>
-                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
-                      Остаток
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {importData.slice(0, 50).map((item, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium text-gray-900 break-words">{item.name}</td>
-                      <td className="px-3 py-2 text-gray-500 truncate">{item.category || '—'}</td>
-                      <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">
-                        {unitLabel(item.unit) !== DEFAULT_UNIT ? unitLabel(item.unit) : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
-                        {item.sellPrice || 0}
-                      </td>
-                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
-                        {item.costPrice || 0}
-                      </td>
-                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
-                        {item.stock || 0}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {importData.length > 50 && (
-                <p className="text-center text-xs text-gray-400 py-2">... и ещё {importData.length - 50} товаров</p>
-              )}
-            </div>
+      <PhotoLightbox url={photoPreview} onClose={() => setPhotoPreview(null)} />
 
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowImportModal(false);
-                  setImportData(null);
-                }}
-                disabled={importing}
-                className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={handleImportConfirm}
-                disabled={importing}
-                className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
-              >
-                {importing && <Loader2 className="h-4 w-4 animate-spin" />}
-                Импортировать
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Photo preview overlay — shown on long-press/right-click on thumbnail */}
-      {photoPreview && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-          onClick={() => setPhotoPreview(null)}
-          onTouchEnd={() => setPhotoPreview(null)}
-        >
-          <img src={photoPreview} alt="" className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain" />
-        </div>
-      )}
-
-      {/* Destructive bulk-delete confirm — type «согласен» to enable the button.
-          Everything is moved to Корзина and is restorable. */}
-      {bulkDeleteMode && (
-        <Modal isOpen onClose={closeBulkDelete} title="Удаление в корзину" size="sm">
-          <div className="space-y-4">
-            {(() => {
-              const isAll = bulkDeleteMode === 'all';
-              const whName = warehouses?.find((w) => w.id === activeWarehouseId)?.name;
-              const productCount = isAll ? allProducts.length : bulkDeleteSelection.productCount;
-              const folderCount = isAll ? 0 : bulkDeleteSelection.folderCount;
-              const canConfirm = bulkConfirmText.trim().toLowerCase() === 'согласен' && !bulkDeleteMutation.isPending;
-              return (
-                <>
-                  <div className="rounded-xl border border-red-100 bg-red-50/60 p-3.5">
-                    <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-red-800">
-                          {isAll
-                            ? `Удалить весь товар${whName ? ` со склада «${whName}»` : ''}?`
-                            : 'Удалить выбранное?'}
-                        </p>
-                        <p className="text-xs text-red-700 mt-1">
-                          В корзину переедет{' '}
-                          <span className="font-semibold">
-                            {productCount} {productCount === 1 ? 'товар' : 'товаров'}
-                          </span>
-                          {folderCount > 0 && (
-                            <>
-                              {' '}
-                              и{' '}
-                              <span className="font-semibold">
-                                {folderCount} {folderCount === 1 ? 'папка' : 'папок'}
-                              </span>
-                            </>
-                          )}
-                          .
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-gray-500">
-                    Всё удаляется в <span className="font-medium text-gray-700">Корзину</span> — можно восстановить. Для
-                    подтверждения введите слово <span className="font-semibold text-gray-900">согласен</span>.
-                  </p>
-
-                  <input
-                    type="text"
-                    value={bulkConfirmText}
-                    onChange={(e) => setBulkConfirmText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && canConfirm) confirmBulkDelete();
-                    }}
-                    placeholder="согласен"
-                    autoFocus
-                    autoComplete="off"
-                    className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
-                  />
-
-                  <div className="flex items-center justify-end gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={closeBulkDelete}
-                      disabled={bulkDeleteMutation.isPending}
-                      className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                    >
-                      Отмена
-                    </button>
-                    <button
-                      type="button"
-                      onClick={confirmBulkDelete}
-                      disabled={!canConfirm}
-                      className="flex items-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:hover:bg-red-600"
-                    >
-                      {bulkDeleteMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}В корзину
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </Modal>
-      )}
+      <BulkDeleteModal
+        mode={bulkDeleteMode}
+        onClose={() => setBulkDeleteMode(null)}
+        warehouseName={activeWarehouse?.name}
+        productCount={bulkDeleteMode === 'all' ? allProducts.length : bulkDeleteSelection.productCount}
+        folderCount={bulkDeleteMode === 'all' ? 0 : bulkDeleteSelection.folderCount}
+        onConfirm={confirmBulkDelete}
+        pending={bulkDeleteMutation.isPending}
+      />
 
       {/* Trash bin — soft-deleted products with restore / hard-delete / empty */}
       <TrashModal isOpen={trashOpen} onClose={() => setTrashOpen(false)} />
@@ -3624,438 +1709,7 @@ export default function ProductsPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Inventory Report Line
-// ---------------------------------------------------------------------------
-
-interface InventoryReportItem {
-  productId: string;
-  name: string;
-  unit?: string;
-  stockBefore: number;
-  actual: number;
-  diff: number;
-  costPrice: number;
-  damageAmount: number; // shortage * costPrice (positive for shortage)
-}
-
-// ---------------------------------------------------------------------------
-// Inventory Report View — shown after inventory is completed
-// ---------------------------------------------------------------------------
-
-function InventoryReport({ items, onClose }: { items: InventoryReportItem[]; onClose: () => void }) {
-  const shortageItems = items.filter((i) => i.diff < 0);
-  const excessItems = items.filter((i) => i.diff > 0);
-  const matchItems = items.filter((i) => i.diff === 0);
-
-  const totalShortageAmount = shortageItems.reduce((sum, i) => sum + Math.abs(i.diff) * i.costPrice, 0);
-  const totalExcessAmount = excessItems.reduce((sum, i) => sum + i.diff * i.costPrice, 0);
-
-  return (
-    <div className="space-y-4 max-h-[70vh] flex flex-col">
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-2.5">
-        <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-center">
-          <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider">Недостача</p>
-          <p className="text-base font-bold text-red-700 mt-0.5">{formatMoney(totalShortageAmount)}</p>
-          <p className="text-[11px] text-red-400 mt-0.5">{shortageItems.length} поз.</p>
-        </div>
-        <div className="rounded-xl bg-green-50 border border-green-100 p-3 text-center">
-          <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Излишки</p>
-          <p className="text-base font-bold text-green-700 mt-0.5">{formatMoney(totalExcessAmount)}</p>
-          <p className="text-[11px] text-green-400 mt-0.5">{excessItems.length} поз.</p>
-        </div>
-        <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-center">
-          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Совпало</p>
-          <p className="text-base font-bold text-gray-700 mt-0.5">{matchItems.length}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">позиций</p>
-        </div>
-      </div>
-
-      {/* Detailed list */}
-      <div className="flex-1 overflow-y-auto min-h-0 space-y-1.5">
-        {/* Shortage items first */}
-        {shortageItems.length > 0 && (
-          <>
-            <p className="text-xs font-semibold text-red-600 uppercase tracking-wider pt-1">Недостача</p>
-            {shortageItems.map((item) => (
-              <div key={item.productId} className="rounded-xl border border-red-100 bg-red-50/40 p-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                    <p className="text-[11px] text-gray-400">
-                      Было: {item.stockBefore} → Факт: {item.actual} {unitLabel(item.unit)}
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-red-600">{item.diff}</p>
-                    <p className="text-[11px] text-red-400">{formatMoney(Math.abs(item.diff) * item.costPrice)}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Excess items */}
-        {excessItems.length > 0 && (
-          <>
-            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider pt-2">Излишки</p>
-            {excessItems.map((item) => (
-              <div key={item.productId} className="rounded-xl border border-green-100 bg-green-50/40 p-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                    <p className="text-[11px] text-gray-400">
-                      Было: {item.stockBefore} → Факт: {item.actual} {unitLabel(item.unit)}
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-green-600">+{item.diff}</p>
-                    <p className="text-[11px] text-green-400">{formatMoney(item.diff * item.costPrice)}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Matching items */}
-        {matchItems.length > 0 && (
-          <>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider pt-2">Без расхождений</p>
-            {matchItems.map((item) => (
-              <div key={item.productId} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                    <p className="text-[11px] text-gray-400">
-                      Остаток: {item.actual} {unitLabel(item.unit)}
-                    </p>
-                  </div>
-                  <CheckIcon className="w-4 h-4 text-green-500 flex-shrink-0" />
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-
-      <div className="flex items-center justify-end pt-3 border-t border-gray-100">
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
-        >
-          Закрыть
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Global Inventory Form
-// ---------------------------------------------------------------------------
-
-function GlobalInventoryForm({
-  products,
-  categories,
-  activePath,
-  onSubmit,
-  onClose,
-}: {
-  products: Product[];
-  categories: string[];
-  activePath: string[];
-  onSubmit: (items: Array<{ productId: string; actual: number; reason: string }>) => void;
-  onClose: () => void;
-}) {
-  const [search, setSearch] = useState('');
-  const [filterCat, setFilterCat] = useState('');
-  const [entries, setEntries] = useState<Record<string, { actual: string; reason: string }>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [reportItems, setReportItems] = useState<InventoryReportItem[] | null>(null);
-
-  const productMap = useMemo(() => {
-    const map = new Map<string, Product>();
-    products.forEach((p) => map.set(p.id, p));
-    return map;
-  }, [products]);
-
-  const filtered = useMemo(() => {
-    let list = products.filter((p) => !p.isBundle);
-    if (filterCat) {
-      list = list.filter((p) => p.category === filterCat || (p.category && p.category.startsWith(filterCat + '/')));
-    }
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((p) => p.name.toLowerCase().includes(q));
-    }
-    return list;
-  }, [products, filterCat, search]);
-
-  const handleSubmit = async () => {
-    const items = Object.entries(entries)
-      .filter(([, v]) => v.actual !== '')
-      .map(([productId, v]) => ({
-        productId,
-        actual: parseFloat(v.actual) || 0,
-        reason: v.reason || 'Инвентаризация',
-      }));
-    if (items.length === 0) {
-      toast.error('Укажите фактические остатки');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      // Build report data before submitting (uses current stock values)
-      const report: InventoryReportItem[] = items.map((item) => {
-        const product = productMap.get(item.productId);
-        const stockBefore = product?.stock ?? 0;
-        const diff = item.actual - stockBefore;
-        return {
-          productId: item.productId,
-          name: product?.name ?? 'Неизвестный товар',
-          unit: product?.unit,
-          stockBefore,
-          actual: item.actual,
-          diff,
-          costPrice: product?.costPrice ?? 0,
-          damageAmount: diff < 0 ? Math.abs(diff) * (product?.costPrice ?? 0) : 0,
-        };
-      });
-
-      await onSubmit(items);
-      setReportItems(report);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Show report after successful inventory
-  if (reportItems) {
-    return <InventoryReport items={reportItems} onClose={onClose} />;
-  }
-
-  const countedIds = new Set(Object.keys(entries).filter((id) => entries[id].actual !== ''));
-
-  return (
-    <div className="space-y-4 max-h-[70vh] flex flex-col">
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск товара..."
-            className="input pl-9"
-          />
-        </div>
-        <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} className="input w-auto">
-          <option value="">Все папки</option>
-          {categories.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <p className="text-xs text-gray-400">
-        Посчитано: <span className="font-bold text-primary-600">{countedIds.size}</span> / {filtered.length} товаров
-      </p>
-
-      <VirtualList
-        items={filtered}
-        getKey={(p) => p.id}
-        estimateSize={72}
-        className="flex-1 overflow-y-auto min-h-0"
-        renderItem={(p) => {
-          const entry = entries[p.id] || { actual: '', reason: '' };
-          const actual = entry.actual !== '' ? parseFloat(entry.actual) || 0 : null;
-          const diff = actual !== null ? actual - p.stock : null;
-          const isCounted = entry.actual !== '';
-
-          return (
-            <div
-              className={`rounded-xl border p-3 mb-2 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                  <p className="text-[11px] text-gray-400">
-                    В системе: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <input
-                    type="number"
-                    value={entry.actual}
-                    onChange={(e) =>
-                      setEntries((prev) => ({
-                        ...prev,
-                        [p.id]: { ...(prev[p.id] || { reason: '' }), actual: e.target.value },
-                      }))
-                    }
-                    placeholder="Факт"
-                    className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-primary-500 focus:outline-none"
-                    min="0"
-                    step="any"
-                  />
-                  {diff !== null && diff !== 0 && (
-                    <span className={`text-xs font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {diff > 0 ? '+' : ''}
-                      {diff}
-                    </span>
-                  )}
-                  {isCounted && diff === 0 && <CheckIcon className="w-4 h-4 text-green-500" />}
-                </div>
-              </div>
-            </div>
-          );
-        }}
-      />
-      {filtered.length === 0 && <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>}
-
-      <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-        <p className="text-xs text-gray-400">{countedIds.size} позиций</p>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={submitting || countedIds.size === 0}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
-        >
-          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
-          Провести инвентаризацию
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Global Writeoff Form
-// ---------------------------------------------------------------------------
-
-function GlobalWriteoffForm({
-  products,
-  onSubmit,
-}: {
-  products: Product[];
-  onSubmit: (items: Array<{ productId: string; quantity: number; reason: string }>) => void;
-}) {
-  const [search, setSearch] = useState('');
-  const [entries, setEntries] = useState<Record<string, { quantity: string; reason: string }>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [reason, setReason] = useState('');
-
-  const filtered = useMemo(() => {
-    let list = products.filter((p) => !p.isBundle && p.stock > 0);
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((p) => p.name.toLowerCase().includes(q));
-    }
-    return list;
-  }, [products, search]);
-
-  const handleSubmit = async () => {
-    const items = Object.entries(entries)
-      .filter(([, v]) => v.quantity !== '' && parseFloat(v.quantity) > 0)
-      .map(([productId, v]) => ({
-        productId,
-        quantity: parseFloat(v.quantity) || 0,
-        reason: v.reason || reason || 'Списание',
-      }));
-    if (items.length === 0) {
-      toast.error('Укажите количество для списания');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await onSubmit(items);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const count = Object.values(entries).filter((v) => v.quantity !== '' && parseFloat(v.quantity) > 0).length;
-
-  return (
-    <div className="space-y-4 max-h-[70vh] flex flex-col">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Поиск товара..."
-          className="input pl-9"
-        />
-      </div>
-
-      <div>
-        <label className="text-xs font-medium text-gray-500 mb-1 block">Общая причина списания</label>
-        <input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Брак, просрочка..."
-          className="input"
-        />
-      </div>
-
-      <VirtualList
-        items={filtered}
-        getKey={(p) => p.id}
-        estimateSize={72}
-        className="flex-1 overflow-y-auto min-h-0"
-        renderItem={(p) => {
-          const entry = entries[p.id] || { quantity: '', reason: '' };
-          return (
-            <div className="rounded-xl border border-gray-100 bg-white p-3 mb-2">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                  <p className="text-[11px] text-gray-400">
-                    Остаток: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}
-                  </p>
-                </div>
-                <input
-                  type="number"
-                  value={entry.quantity}
-                  onChange={(e) =>
-                    setEntries((prev) => ({
-                      ...prev,
-                      [p.id]: { quantity: e.target.value, reason: prev[p.id]?.reason || '' },
-                    }))
-                  }
-                  placeholder="Кол-во"
-                  className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-orange-500 focus:outline-none"
-                  min="0"
-                  max={p.stock}
-                  step="any"
-                />
-              </div>
-            </div>
-          );
-        }}
-      />
-      {filtered.length === 0 && <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>}
-
-      <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-        <p className="text-xs text-gray-400">{count} позиций</p>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={submitting || count === 0}
-          className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
-        >
-          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageMinus className="w-4 h-4" />}
-          Списать
-        </button>
-      </div>
-    </div>
-  );
+/** Значение KPI-плитки: деньги через shared formatMoney (Money), без сокращений. */
+function MoneyValue({ value }: { value: number }) {
+  return <Money value={value} />;
 }

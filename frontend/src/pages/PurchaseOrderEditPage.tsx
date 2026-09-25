@@ -1,22 +1,46 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, Trash2, Package, Search, Sparkles, X } from 'lucide-react';
+import { Plus, Trash2, Package, ShoppingCart, Sparkles, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi, suppliersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import InlineLoader from '../components/InlineLoader';
-import Modal from '../components/Modal';
-import type { PurchaseOrder, PaginatedResponse, Supplier, Product, PurchaseOrderSuggestionGroup } from '../types';
-import { formatMoney } from '../../../shared/utils/formatters';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  DataTable,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  QueryState,
+  Select,
+  SkeletonCard,
+  Textarea,
+} from '../ui';
+import type { DataTableColumn } from '../ui';
+import ProductPickerDrawer from '../components/warehouse/ProductPickerDrawer';
+import type { PurchaseOrder, Product, PurchaseOrderSuggestionGroup } from '../types';
+import { formatQty } from '../utils/units';
+import { parseNumberInput } from '../components/warehouse/format';
 
+/** Строка черновика: количество и цена — строки ввода («12,5» печатается чисто), числа — при отправке. */
 interface LineDraft {
   productId: string;
   name: string;
-  quantity: number;
-  costPrice: number;
+  quantity: string;
+  costPrice: string;
 }
+
+const lineQty = (l: LineDraft): number => parseNumberInput(l.quantity) ?? 0;
+const linePrice = (l: LineDraft): number => parseNumberInput(l.costPrice) ?? 0;
+const lineTotal = (l: LineDraft): number => lineQty(l) * linePrice(l);
 
 export default function PurchaseOrderEditPage() {
   const navigate = useNavigate();
@@ -40,16 +64,24 @@ export default function PurchaseOrderEditPage() {
     }
   }, [hasPermission, navigate]);
 
-  // Suppliers for the select.
+  // Поставщики для селекта. В кеш — массив (тот же ключ и форма, что в
+  // PurchaseOrdersPage): ключ 'suppliers' в whitelist persistent-кеша.
   const { data: suppliers } = useQuery({
     queryKey: ['suppliers', { search: '', page: 1, limit: 1000 }],
-    queryFn: () => suppliersApi.getAll({ page: 1, limit: 1000 }),
-    select: (res) => (res.data as PaginatedResponse<Supplier>).data,
+    queryFn: async () => {
+      const res = await suppliersApi.getAll({ page: 1, limit: 1000 });
+      return res.data.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
-  // Full product catalogue for the picker (shares cache with the cash screen).
-  const { data: allProducts } = useQuery<Product[]>({
+  // Полный каталог для пикера (общий кеш с Кассой).
+  const {
+    data: allProducts,
+    isLoading: productsLoading,
+    isError: productsError,
+    refetch: refetchProducts,
+  } = useQuery<Product[]>({
     queryKey: ['products-all'],
     queryFn: async () => {
       const res = await productsApi.getAll({ limit: 1000 });
@@ -58,15 +90,20 @@ export default function PurchaseOrderEditPage() {
     staleTime: 60_000,
   });
 
-  // When editing, load the existing draft.
-  const { data: existing, isLoading: loadingExisting } = useQuery({
+  // Правка — грузим существующий черновик.
+  const {
+    data: existing,
+    isLoading: loadingExisting,
+    isError: existingError,
+    isFetching: existingFetching,
+    refetch: refetchExisting,
+  } = useQuery({
     queryKey: ['purchase-order', id],
-    queryFn: () => purchaseOrdersApi.getById(id!),
-    select: (res) => res.data as PurchaseOrder,
+    queryFn: async () => (await purchaseOrdersApi.getById(id as string)).data as PurchaseOrder,
     enabled: isEdit,
   });
 
-  // Hydrate the form from the loaded draft once.
+  // Гидрируем форму из черновика один раз.
   useEffect(() => {
     if (!isEdit || hydrated || !existing) return;
     if (existing.status !== 'draft') {
@@ -80,17 +117,14 @@ export default function PurchaseOrderEditPage() {
       (existing.items || []).map((it) => ({
         productId: it.productId,
         name: it.name,
-        quantity: it.quantity,
-        costPrice: it.costPrice,
+        quantity: String(it.quantity),
+        costPrice: String(it.costPrice),
       })),
     );
     setHydrated(true);
   }, [isEdit, hydrated, existing, navigate]);
 
-  const total = useMemo(
-    () => items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.costPrice) || 0), 0),
-    [items],
-  );
+  const total = useMemo(() => items.reduce((sum, it) => sum + lineTotal(it), 0), [items]);
 
   const updateLine = (idx: number, patch: Partial<LineDraft>) => {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -103,7 +137,10 @@ export default function PurchaseOrderEditPage() {
   const addProduct = (product: Product) => {
     setItems((prev) => {
       if (prev.some((it) => it.productId === product.id)) return prev;
-      return [...prev, { productId: product.id, name: product.name, quantity: 1, costPrice: product.costPrice }];
+      return [
+        ...prev,
+        { productId: product.id, name: product.name, quantity: '1', costPrice: String(product.costPrice) },
+      ];
     });
   };
 
@@ -113,8 +150,8 @@ export default function PurchaseOrderEditPage() {
       group.items.map((it) => ({
         productId: it.productId,
         name: it.name,
-        quantity: it.suggestedQuantity > 0 ? it.suggestedQuantity : 1,
-        costPrice: it.costPrice,
+        quantity: String(it.suggestedQuantity > 0 ? it.suggestedQuantity : 1),
+        costPrice: String(it.costPrice),
       })),
     );
     setSuggestOpen(false);
@@ -130,7 +167,7 @@ export default function PurchaseOrderEditPage() {
       toast.error('Добавьте хотя бы один товар');
       return false;
     }
-    if (items.some((it) => !(Number(it.quantity) > 0))) {
+    if (items.some((it) => !(lineQty(it) > 0))) {
       toast.error('Количество должно быть больше нуля');
       return false;
     }
@@ -142,16 +179,16 @@ export default function PurchaseOrderEditPage() {
     note: note.trim() || undefined,
     items: items.map((it) => ({
       productId: it.productId,
-      quantity: Number(it.quantity),
-      costPrice: Number(it.costPrice) || 0,
+      quantity: lineQty(it),
+      costPrice: linePrice(it),
     })),
   });
 
-  // Persist the draft (create or update) and return the saved order.
+  // Сохранить черновик (создать или обновить) и вернуть заказ.
   const persist = async (): Promise<PurchaseOrder> => {
     const payload = buildPayload();
     if (isEdit) {
-      const res = await purchaseOrdersApi.update(id!, payload);
+      const res = await purchaseOrdersApi.update(id as string, payload);
       return res.data;
     }
     const res = await purchaseOrdersApi.create(payload);
@@ -196,249 +233,209 @@ export default function PurchaseOrderEditPage() {
     orderMutation.mutate();
   };
 
-  if (isEdit && loadingExisting) {
-    return <InlineLoader minHeight="min-h-[60vh]" />;
+  const title = isEdit ? 'Редактировать заказ' : 'Новый заказ поставщику';
+
+  if (isEdit && (loadingExisting || existingError)) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-5">
+        <PageHeader title={title} icon={ShoppingCart} backTo="/purchase-orders" />
+        <QueryState
+          isLoading={loadingExisting}
+          isError={existingError}
+          onRetry={() => refetchExisting()}
+          isFetching={existingFetching}
+          errorTitle="Не удалось загрузить заказ"
+          loader={
+            <div className="space-y-5">
+              <SkeletonCard lines={3} />
+              <SkeletonCard lines={4} />
+            </div>
+          }
+        >
+          <></>
+        </QueryState>
+      </div>
+    );
   }
 
+  const lineColumns: DataTableColumn<LineDraft>[] = [
+    {
+      key: 'name',
+      header: 'Товар',
+      render: (l) => <span className="font-medium text-ink">{l.name}</span>,
+      footer: () => 'Итого',
+    },
+    {
+      key: 'quantity',
+      header: 'Кол-во',
+      numeric: true,
+      interactive: true,
+      width: 96,
+      render: (l, idx) => (
+        <Input
+          size="sm"
+          inputMode="decimal"
+          aria-label={`Количество — ${l.name}`}
+          value={l.quantity}
+          invalid={!(lineQty(l) > 0)}
+          onChange={(e) => updateLine(idx, { quantity: e.target.value })}
+          className="text-right tabular-nums"
+        />
+      ),
+    },
+    {
+      key: 'costPrice',
+      header: 'Цена закупки',
+      numeric: true,
+      interactive: true,
+      width: 120,
+      render: (l, idx) => (
+        <Input
+          size="sm"
+          inputMode="decimal"
+          aria-label={`Цена закупки — ${l.name}`}
+          value={l.costPrice}
+          onChange={(e) => updateLine(idx, { costPrice: e.target.value })}
+          className="text-right tabular-nums"
+        />
+      ),
+    },
+    {
+      key: 'total',
+      header: 'Сумма',
+      numeric: true,
+      hideBelow: 'sm',
+      width: 120,
+      render: (l) => <Money value={lineTotal(l)} className="font-medium text-ink" />,
+      footer: () => <Money value={total} />,
+    },
+    {
+      key: 'remove',
+      header: <span className="sr-only">Убрать</span>,
+      interactive: true,
+      align: 'right',
+      width: 48,
+      render: (l, idx) => (
+        <IconButton
+          label={`Убрать ${l.name}`}
+          icon={Trash2}
+          size="sm"
+          variant="danger"
+          onClick={() => removeLine(idx)}
+        />
+      ),
+    },
+  ];
+
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate('/purchase-orders')}
-          className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <h1 className="text-2xl font-bold text-gray-900">
-          {isEdit ? 'Редактировать заказ' : 'Новый заказ поставщику'}
-        </h1>
-      </div>
-
-      {/* Supplier + suggestions */}
-      <div className="card card-body space-y-4">
-        <div>
-          <label className="label">Поставщик *</label>
-          <div className="flex gap-2">
-            <select className="input flex-1" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-              <option value="">Выберите поставщика</option>
-              {(suppliers || []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            {!isEdit && (
-              <button type="button" onClick={() => setSuggestOpen(true)} className="btn-secondary whitespace-nowrap">
-                <Sparkles className="w-4 h-4" />
-                Дозаказ
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <label className="label">Комментарий</label>
-          <textarea
-            className="input"
-            rows={2}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Заметка к заказу..."
-          />
-        </div>
-      </div>
-
-      {/* Line items */}
-      <div className="card card-body space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-900">Товары</h2>
-          <button type="button" onClick={() => setPickerOpen(true)} className="btn-secondary btn-sm">
-            <Plus className="w-4 h-4" />
-            Добавить товар
-          </button>
-        </div>
-
-        {items.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <Package className="w-10 h-10 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">Нет товаров в заказе</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {items.map((it, idx) => (
-              <div key={it.productId} className="rounded-xl border border-gray-100 bg-white p-3">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className="text-sm font-medium text-gray-900 min-w-0">{it.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeLine(idx)}
-                    className="p-1 -mr-1 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 flex-shrink-0"
-                    aria-label="Удалить"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="flex items-end gap-3">
-                  <div className="w-24">
-                    <label className="label !mb-1 text-xs">Кол-во</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step="any"
-                      inputMode="decimal"
-                      className="input tabular-nums"
-                      aria-label={`Количество — ${it.name}`}
-                      value={it.quantity}
-                      onChange={(e) => updateLine(idx, { quantity: e.target.valueAsNumber || 0 })}
-                    />
-                  </div>
-                  <div className="w-32">
-                    <label className="label !mb-1 text-xs">Цена закупки</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step="any"
-                      inputMode="decimal"
-                      className="input tabular-nums"
-                      aria-label={`Цена закупки — ${it.name}`}
-                      value={it.costPrice}
-                      onChange={(e) => updateLine(idx, { costPrice: e.target.valueAsNumber || 0 })}
-                    />
-                  </div>
-                  <div className="flex-1 text-right">
-                    <p className="text-xs text-gray-500 mb-1">Сумма</p>
-                    <p className="text-sm font-semibold text-gray-900 tabular-nums">
-                      {formatMoney((Number(it.quantity) || 0) * (Number(it.costPrice) || 0))}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {items.length > 0 && (
-          <div className="flex items-center justify-between border-t border-gray-100 pt-3">
-            <span className="text-sm font-medium text-gray-600">Итого</span>
-            <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(total)}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Actions */}
-      <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-3">
-        <button type="button" onClick={onSaveDraft} disabled={isBusy} className="btn-secondary">
-          {saveDraftMutation.isPending ? 'Сохранение...' : 'Сохранить черновик'}
-        </button>
-        <button type="button" onClick={onOrder} disabled={isBusy} className="btn-primary">
-          {orderMutation.isPending ? 'Оформление...' : 'Оформить заказ'}
-        </button>
-      </div>
-
-      {/* Product picker */}
-      <ProductPickerModal
-        isOpen={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        products={allProducts || []}
-        selectedIds={items.map((it) => it.productId)}
-        onSelect={addProduct}
+    <div className="mx-auto max-w-3xl space-y-5">
+      <PageHeader
+        title={title}
+        icon={ShoppingCart}
+        backTo="/purchase-orders"
+        subtitle={
+          items.length > 0
+            ? `${items.length} поз. на сумму ${formatQty(total)} ₽`
+            : 'Черновик: поставщик, позиции, цены закупки'
+        }
+        actions={
+          <>
+            <Button variant="secondary" onClick={onSaveDraft} loading={saveDraftMutation.isPending} disabled={isBusy}>
+              Сохранить черновик
+            </Button>
+            <Button icon={Send} onClick={onOrder} loading={orderMutation.isPending} disabled={isBusy}>
+              Оформить заказ
+            </Button>
+          </>
+        }
       />
 
-      {/* Suggestions */}
+      <Card>
+        <CardHeader title="Поставщик" subtitle="У кого заказываем и что важно знать" />
+        <CardBody className="space-y-4">
+          <Field label="Поставщик" htmlFor="po-supplier" required>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Select
+                id="po-supplier"
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                placeholder="Выберите поставщика"
+                options={(suppliers ?? []).map((s) => ({ value: s.id, label: s.name }))}
+                className="sm:flex-1"
+              />
+              {!isEdit && (
+                <Button
+                  variant="secondary"
+                  icon={Sparkles}
+                  onClick={() => setSuggestOpen(true)}
+                  className="whitespace-nowrap"
+                >
+                  Дозаказ по дефициту
+                </Button>
+              )}
+            </div>
+          </Field>
+
+          <Field label="Комментарий" htmlFor="po-note">
+            <Textarea
+              id="po-note"
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Заметка к заказу…"
+            />
+          </Field>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Товары"
+          subtitle={items.length > 0 ? `${items.length} поз.` : 'Позиции заказа и цены закупки'}
+          divider={items.length > 0}
+          actions={
+            <Button variant="secondary" size="sm" icon={Plus} onClick={() => setPickerOpen(true)}>
+              Добавить товар
+            </Button>
+          }
+        />
+        {items.length === 0 ? (
+          <CardBody padding="sm">
+            <EmptyState
+              compact
+              icon={Package}
+              title="В заказе пока нет товаров"
+              description="Добавьте позиции из каталога или заполните заказ по дефициту"
+            />
+          </CardBody>
+        ) : (
+          <DataTable bare rows={items} rowKey={(l) => l.productId} columns={lineColumns} caption="Позиции заказа" />
+        )}
+      </Card>
+
+      <ProductPickerDrawer
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        title="Добавить товар"
+        subtitle="Цена — закупочная из карточки; поправить можно в строке заказа"
+        products={allProducts ?? []}
+        selectedIds={items.map((it) => it.productId)}
+        onSelect={addProduct}
+        closeOnSelect={false}
+        priceKind="cost"
+        isLoading={productsLoading}
+        isError={productsError}
+        onRetry={() => refetchProducts()}
+        emptyTitle="Каталог пуст"
+        emptyDescription="Сначала добавьте товары на склад"
+      />
+
       <SuggestionsModal isOpen={suggestOpen} onClose={() => setSuggestOpen(false)} onApply={applySuggestion} />
     </div>
   );
 }
 
-// ─── Product picker ──────────────────────────────────────────────────────────
-
-interface ProductPickerModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  products: Product[];
-  selectedIds: string[];
-  onSelect: (product: Product) => void;
-}
-
-function ProductPickerModal({ isOpen, onClose, products, selectedIds, onSelect }: ProductPickerModalProps) {
-  const [search, setSearch] = useState('');
-
-  const results = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = q
-      ? products.filter((p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)))
-      : products;
-    return list.slice(0, 100);
-  }, [products, search]);
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Добавить товар" size="lg">
-      <div className="space-y-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск товара..."
-            className="input pl-10 w-full"
-            autoFocus
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-
-        <div className="max-h-[55vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
-          {results.length === 0 ? (
-            <div className="text-center py-10 text-gray-500">
-              <Package className="w-10 h-10 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">Ничего не найдено</p>
-            </div>
-          ) : (
-            results.map((p) => {
-              const added = selectedIds.includes(p.id);
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  disabled={added}
-                  onClick={() => onSelect(p)}
-                  className={`w-full flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
-                    added
-                      ? 'border-gray-100 bg-gray-50 opacity-60 cursor-default'
-                      : 'border-gray-100 bg-white hover:border-primary-300 hover:bg-primary-50/30'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                    <p className="text-xs text-gray-500 tabular-nums">
-                      Остаток: {p.stock} {p.unit || 'шт'} · закупка {formatMoney(p.costPrice)}
-                    </p>
-                  </div>
-                  {added ? (
-                    <span className="text-xs font-medium text-primary-600 flex-shrink-0">Добавлен</span>
-                  ) : (
-                    <Plus className="w-4 h-4 text-primary-600 flex-shrink-0" />
-                  )}
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Reorder suggestions ─────────────────────────────────────────────────────
+// ─── Дозаказ по дефициту ─────────────────────────────────────────────────────
 
 interface SuggestionsModalProps {
   isOpen: boolean;
@@ -447,47 +444,64 @@ interface SuggestionsModalProps {
 }
 
 function SuggestionsModal({ isOpen, onClose, onApply }: SuggestionsModalProps) {
-  const { data: groups, isLoading } = useQuery({
+  const {
+    data: groups,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['purchase-order-suggestions'],
-    queryFn: () => purchaseOrdersApi.suggestions(),
-    select: (res) => res.data as PurchaseOrderSuggestionGroup[],
+    queryFn: async () => (await purchaseOrdersApi.suggestions()).data as PurchaseOrderSuggestionGroup[],
     enabled: isOpen,
     staleTime: 60_000,
   });
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Дозаказ по дефициту" size="lg">
-      {isLoading ? (
-        <InlineLoader />
-      ) : !groups || groups.length === 0 ? (
-        <div className="text-center py-10 text-gray-500">
-          <Sparkles className="w-10 h-10 mx-auto mb-2 opacity-50" />
-          <p className="text-sm">Нет товаров ниже минимального остатка</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {groups.map((group, gi) => (
-            <div key={group.supplierId || `none-${gi}`} className="rounded-xl border border-gray-100 p-3">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <span className="text-sm font-semibold text-gray-900">{group.supplierName || 'Без поставщика'}</span>
-                <button type="button" onClick={() => onApply(group)} className="btn-primary btn-sm">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Дозаказ по дефициту"
+      description="Товары ниже минимального остатка, сгруппированные по поставщику"
+      size="lg"
+    >
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        isEmpty={!groups || groups.length === 0}
+        empty={{
+          icon: Sparkles,
+          title: 'Дефицита нет',
+          description: 'Все товары с минимальным остатком в наличии',
+        }}
+        minHeight="py-10"
+      >
+        <div className="space-y-3">
+          {(groups ?? []).map((group, gi) => (
+            <Card key={group.supplierId || `none-${gi}`} as="article" padding="sm">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="truncate text-sm font-semibold text-ink">{group.supplierName || 'Без поставщика'}</h3>
+                <Button variant="secondary" size="sm" onClick={() => onApply(group)}>
                   Заполнить
-                </button>
+                </Button>
               </div>
-              <ul className="space-y-1">
+              <ul className="divide-y divide-line text-sm">
                 {group.items.map((it) => (
-                  <li key={it.productId} className="flex items-center justify-between text-xs text-gray-600">
-                    <span className="truncate">{it.name}</span>
-                    <span className="flex-shrink-0 ml-2 tabular-nums">
-                      {it.stock}/{it.minStock} → +{it.suggestedQuantity}
+                  <li key={it.productId} className="flex items-center justify-between gap-3 py-1.5">
+                    <span className="truncate text-ink-2">{it.name}</span>
+                    <span className="flex-shrink-0 tabular-nums text-ink-3">
+                      {formatQty(it.stock)} / {formatQty(it.minStock)} →{' '}
+                      <span className="font-medium text-ink">+{formatQty(it.suggestedQuantity)}</span>
                     </span>
                   </li>
                 ))}
               </ul>
-            </div>
+            </Card>
           ))}
         </div>
-      )}
+      </QueryState>
     </Modal>
   );
 }

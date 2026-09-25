@@ -1,35 +1,34 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, ShoppingCart } from 'lucide-react';
 
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
-import Pagination from '../components/Pagination';
+import { DataTable, Money, PageHeader, Pagination, Select, Tabs, Toolbar, buttonClasses } from '../ui';
+import type { DataTableColumn, TabItem } from '../ui';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
-import { useClickableRow } from '../hooks/useClickableRow';
 
-import type { PurchaseOrder, PurchaseOrderStatus, PaginatedResponse, Supplier } from '../types';
-import { formatMoney, formatDateShort } from '../../../shared/utils/formatters';
+import type { PurchaseOrder, PurchaseOrderStatus, PaginatedResponse } from '../types';
+import { formatDateShort } from '../../../shared/utils/formatters';
+import { countLabel } from '../components/warehouse/format';
+import { pageParam, useUrlParams } from '../components/warehouse/useUrlParams';
+
+const LIMIT = 20;
 
 // У проведённой поставки ведущая дата — ДАТА ПОСТАВКИ (159): её можно выбрать
 // при приёмке задним числом и поправить потом. У остальных статусов даты
 // поставки ещё нет — показываем дату создания заказа.
-const poDate = (po: { status: string; receivedAt?: string | null; createdAt: string }): string =>
-  formatDateShort(po.status === 'received' && po.receivedAt ? po.receivedAt : po.createdAt);
+const poDateIso = (po: { status: string; receivedAt?: string | null; createdAt: string }): string =>
+  po.status === 'received' && po.receivedAt ? po.receivedAt : po.createdAt;
 
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
-const clickableRowProps = useClickableRow;
-
-const STATUS_TABS: { value: '' | PurchaseOrderStatus; label: string }[] = [
-  { value: '', label: 'Все' },
-  { value: 'draft', label: 'Черновики' },
-  { value: 'ordered', label: 'Заказано' },
-  { value: 'received', label: 'Получено' },
-  { value: 'cancelled', label: 'Отменён' },
+type StatusTab = 'all' | PurchaseOrderStatus;
+const STATUS_VALUES: PurchaseOrderStatus[] = ['draft', 'ordered', 'received', 'cancelled'];
+const STATUS_TABS: TabItem<StatusTab>[] = [
+  { key: 'all', label: 'Все' },
+  { key: 'draft', label: 'Черновики' },
+  { key: 'ordered', label: 'Заказано' },
+  { key: 'received', label: 'Получено' },
+  { key: 'cancelled', label: 'Отменён' },
 ];
 
 export default function PurchaseOrdersPage() {
@@ -39,172 +38,142 @@ export default function PurchaseOrdersPage() {
   // волна Битрикс24). Просмотр списка — suppliers_access (гейт меню).
   const canWrite = hasPermission('suppliers_manage');
 
-  const [status, setStatus] = useState<'' | PurchaseOrderStatus>('');
-  const [supplierId, setSupplierId] = useState('');
-  const [page, setPage] = useState(1);
-  const limit = 20;
+  // Статус, поставщик и страница — в URL.
+  const [params, setParam] = useUrlParams();
+  const rawStatus = params.get('status') ?? '';
+  const status: '' | PurchaseOrderStatus = (STATUS_VALUES as string[]).includes(rawStatus)
+    ? (rawStatus as PurchaseOrderStatus)
+    : '';
+  const supplierId = params.get('supplier') ?? '';
+  const page = pageParam(params);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['purchase-orders', { status, supplierId, page }],
-    queryFn: () =>
-      purchaseOrdersApi.list({
+    queryFn: async () => {
+      const res = await purchaseOrdersApi.list({
         status: status || undefined,
         supplierId: supplierId || undefined,
         page,
-        limit,
-      }),
-    select: (res) => res.data as PaginatedResponse<PurchaseOrder>,
+        limit: LIMIT,
+      });
+      return res.data as PaginatedResponse<PurchaseOrder>;
+    },
   });
 
-  // Supplier dropdown options
+  // Поставщики для фильтра. В кеш — массив, а не axios-ответ: ключ 'suppliers'
+  // в whitelist persistent-кеша, а сырой ответ не проходит structured clone.
+  // Тот же ключ и та же форма данных — в PurchaseOrderEditPage.
   const { data: suppliers } = useQuery({
     queryKey: ['suppliers', { search: '', page: 1, limit: 1000 }],
-    queryFn: () => suppliersApi.getAll({ page: 1, limit: 1000 }),
-    select: (res) => (res.data as PaginatedResponse<Supplier>).data,
+    queryFn: async () => {
+      const res = await suppliersApi.getAll({ page: 1, limit: 1000 });
+      return res.data.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
-  const orders = data?.data || [];
-  const total = data?.total || 0;
+  const orders = data?.data ?? [];
+  const total = data?.total ?? 0;
 
-  const resetPage = () => setPage(1);
+  const columns: DataTableColumn<PurchaseOrder>[] = [
+    {
+      key: 'supplierName',
+      header: 'Поставщик',
+      primary: true,
+      render: (po) => po.supplierName || 'Без поставщика',
+      footer: (rows) => `Итого на странице (${rows.length})`,
+    },
+    {
+      key: 'date',
+      header: 'Дата',
+      hideBelow: 'sm',
+      sortable: true,
+      sortValue: (po) => poDateIso(po),
+      render: (po) => <span className="tabular-nums text-ink-2">{formatDateShort(poDateIso(po))}</span>,
+    },
+    {
+      key: 'itemCount',
+      header: 'Позиций',
+      numeric: true,
+      hideBelow: 'md',
+      render: (po) => po.itemCount ?? 0,
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (po) => <PurchaseOrderStatusBadge status={po.status} />,
+    },
+    {
+      key: 'total',
+      header: 'Сумма',
+      numeric: true,
+      sortable: true,
+      render: (po) => <Money value={po.total} className="font-medium text-ink" />,
+      footer: (rows) => <Money value={rows.reduce((sum, r) => sum + (r.total || 0), 0)} />,
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
         title="Заказы поставщикам"
         icon={ShoppingCart}
+        subtitle={data ? countLabel(total, ['заказ', 'заказа', 'заказов']) : undefined}
         actions={
           canWrite ? (
-            <button onClick={() => navigate('/purchase-orders/new')} className="btn-primary">
-              <Plus className="w-4 h-4" />
+            <Link to="/purchase-orders/new" className={buttonClasses()}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
               Создать заказ
-            </button>
+            </Link>
           ) : undefined
         }
       />
 
-      {/* Filters */}
-      <div className="space-y-3">
-        {/* Status pills */}
-        <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
-          {STATUS_TABS.map((tab) => {
-            const active = tab.value === status;
-            return (
-              <button
-                key={tab.value || 'all'}
-                onClick={() => {
-                  setStatus(tab.value);
-                  resetPage();
-                }}
-                className={`px-3.5 py-1.5 rounded-full text-sm font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
-                  active
-                    ? 'bg-primary-600 text-white shadow-sm'
-                    : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Supplier filter */}
-        <select
-          className="input max-w-xs"
+      <Toolbar>
+        <Tabs
+          variant="pills"
+          aria-label="Статус заказа"
+          idPrefix="po-status"
+          items={STATUS_TABS}
+          value={status || 'all'}
+          onChange={(key) => setParam({ status: key === 'all' ? null : key, page: null })}
+        />
+        <Select
+          aria-label="Поставщик"
           value={supplierId}
-          onChange={(e) => {
-            setSupplierId(e.target.value);
-            resetPage();
-          }}
-        >
-          <option value="">Все поставщики</option>
-          {(suppliers || []).map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </div>
+          onChange={(e) => setParam({ supplier: e.target.value || null, page: null })}
+          placeholder="Все поставщики"
+          options={(suppliers ?? []).map((s) => ({ value: s.id, label: s.name }))}
+          className="w-full sm:w-60"
+        />
+      </Toolbar>
 
-      {/* List */}
-      <QueryState
+      <DataTable
+        rows={orders}
+        rowKey={(po) => po.id}
+        rowHref={(po) => `/purchase-orders/${po.id}`}
+        rowLabel={(po) => `Открыть заказ: ${po.supplierName || 'без поставщика'}, ${formatDateShort(poDateIso(po))}`}
+        columns={columns}
+        caption="Заказы поставщикам"
         isLoading={isLoading}
         isError={isError}
-        onRetry={refetch}
+        onRetry={() => refetch()}
         isFetching={isFetching}
-        isEmpty={orders.length === 0}
-        empty={{
+        emptyState={{
           icon: ShoppingCart,
-          title: 'Нет заказов',
-          description: 'Создайте заказ поставщику, чтобы пополнить склад',
-          action: canWrite ? { label: 'Создать заказ', onClick: () => navigate('/purchase-orders/new') } : undefined,
+          title: status || supplierId ? 'Заказов с такими условиями нет' : 'Заказов пока нет',
+          description:
+            status || supplierId
+              ? 'Измените статус или поставщика в фильтре'
+              : 'Создайте заказ поставщику, чтобы пополнить склад',
+          action:
+            canWrite && !status && !supplierId
+              ? { label: 'Создать заказ', onClick: () => navigate('/purchase-orders/new') }
+              : undefined,
         }}
-        minHeight="min-h-[40vh]"
-      >
-        {/* Mobile cards */}
-        <div className="md:hidden space-y-3">
-          {orders.map((po) => (
-            <div
-              key={po.id}
-              {...clickableRowProps(() => navigate(`/purchase-orders/${po.id}`), {
-                label: po.supplierName || 'Без поставщика',
-              })}
-              className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <span className="font-semibold text-gray-900 text-sm truncate">
-                  {po.supplierName || 'Без поставщика'}
-                </span>
-                <PurchaseOrderStatusBadge status={po.status} />
-              </div>
-              <div className="flex items-center justify-between text-xs text-gray-500">
-                <span>
-                  {poDate(po)} · {po.itemCount ?? 0} поз.
-                </span>
-                <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+      />
 
-        {/* Desktop table */}
-        <div className="hidden md:block table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Поставщик</th>
-                <th>Дата</th>
-                <th className="text-center">Позиций</th>
-                <th>Статус</th>
-                <th className="text-right">Сумма</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((po) => (
-                <tr
-                  key={po.id}
-                  className="cursor-pointer hover:bg-gray-50"
-                  {...clickableRowProps(() => navigate(`/purchase-orders/${po.id}`), {
-                    label: po.supplierName || 'Без поставщика',
-                  })}
-                >
-                  <td className="font-medium text-gray-900">{po.supplierName || 'Без поставщика'}</td>
-                  <td className="text-gray-600">{poDate(po)}</td>
-                  <td className="text-center text-gray-600 tabular-nums">{po.itemCount ?? 0}</td>
-                  <td>
-                    <PurchaseOrderStatusBadge status={po.status} />
-                  </td>
-                  <td className="text-right font-medium text-gray-900 tabular-nums">{formatMoney(po.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-      </QueryState>
+      <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParam({ page: p === 1 ? null : p })} />
     </div>
   );
 }

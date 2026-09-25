@@ -87,11 +87,48 @@ function shouldPersistQuery(query: Query): boolean {
   return query.state.status === 'success';
 }
 
+/**
+ * Проверка, что результат запроса переживёт structured clone (так IndexedDB
+ * копирует значения). Не проходят: функции, XMLHttpRequest, DOM-узлы, Promise —
+ * то есть СЫРОЙ axios-ответ (`config.transformRequest` — функция, `request` —
+ * XHR), который страница положила в кеш вместо `res.data`.
+ */
+function isCloneable(value: unknown): boolean {
+  if (typeof structuredClone !== 'function') return true;
+  try {
+    structuredClone(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Wrap idb-keyval calls into a TanStack Persister interface. */
 function createIdbPersister(): Persister {
   return {
     persistClient: async (client: PersistedClient) => {
-      await set(KEY, client, idbStore);
+      try {
+        await set(KEY, client, idbStore);
+      } catch (err) {
+        // Один несериализуемый результат валил запись ВСЕГО снимка: `put`
+        // падал с «could not be cloned», а ошибка всплывала как необработанный
+        // reject из persister'а (pageerror в консоли на /suppliers и
+        // /purchase-orders — там в кеш попадал сырой axios-ответ). Страницы
+        // починены (кешируют `res.data`), а здесь — страховка: из снимка
+        // выбрасываем только запросы с несериализуемыми данными, остальные
+        // сохраняем. Whitelist и правила выгрузки не меняются.
+        if (!(err instanceof DOMException && err.name === 'DataCloneError')) throw err;
+        const skipped: string[] = [];
+        const queries = client.clientState.queries.filter((q) => {
+          if (isCloneable(q.state.data)) return true;
+          skipped.push(JSON.stringify(q.queryKey));
+          return false;
+        });
+        console.warn(
+          `[persistentCache] запросы с несериализуемыми данными пропущены (queryFn должен возвращать res.data): ${skipped.join(', ')}`,
+        );
+        await set(KEY, { ...client, clientState: { ...client.clientState, queries } }, idbStore);
+      }
     },
     restoreClient: async () => {
       const stored = (await get<PersistedClient>(KEY, idbStore)) || undefined;

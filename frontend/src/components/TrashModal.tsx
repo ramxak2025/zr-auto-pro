@@ -1,50 +1,47 @@
 /**
- * TrashModal — paginated list of soft-deleted products with two
- * irreversible actions: "Restore" (back to live) and "Delete forever"
- * (hard delete that bypasses the trash). A footer button empties the
- * whole bin in one call.
- *
- * Lives behind a Modal — uses the existing animated Modal so it inherits
- * spring entrance + Esc-to-close + body scroll lock.
+ * TrashModal — корзина склада: soft-deleted товары с двумя действиями —
+ * «Восстановить» и «Удалить навсегда» (hard delete мимо корзины), плюс
+ * «Очистить корзину» одним вызовом. Живёт в Modal (Escape, блокировка
+ * прокрутки, возврат фокуса).
  */
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
-import { Trash2, RotateCcw, AlertCircle, Search } from 'lucide-react';
+import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Modal from './Modal';
-import EmptyState from './EmptyState';
-import LoadingSpinner from './LoadingSpinner';
+import ConfirmDialog from './ConfirmDialog';
+import SearchInput from './SearchInput';
+import QueryState from './QueryState';
+import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Money } from '../ui/Money';
+import { Skeleton } from '../ui/Skeleton';
 import { productsApi } from '../api/services';
 import type { Product } from '../types';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
+import { formatDateTime } from '../../../shared/utils/formatters';
+import { countLabel } from './warehouse/format';
 
 interface TrashModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const formatMoney = (v: number): string =>
-  Math.round(v)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
-
-const formatDate = (iso?: string): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
-    ' ' +
-    d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-  );
-};
+type TrashedProduct = Product & { deletedAt?: string | null };
 
 export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [confirmEmpty, setConfirmEmpty] = useState(false);
+  const [hardDeleteTarget, setHardDeleteTarget] = useState<TrashedProduct | null>(null);
 
-  const { data: items, isLoading } = useQuery<Product[]>({
+  const {
+    data: items,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<TrashedProduct[]>({
     queryKey: ['products-trash'],
     queryFn: async () => {
       const res = await productsApi.getTrash();
@@ -108,120 +105,124 @@ export default function TrashModal({ isOpen, onClose }: TrashModalProps) {
     onError: () => toast.error('Не удалось очистить'),
   });
 
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Корзина склада" size="lg">
-      <div className="flex flex-col gap-3" style={{ minHeight: 'min(60dvh, 480px)' }}>
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по названию"
-            className="input pl-9"
-          />
-        </div>
+  const hasItems = !!items && items.length > 0;
 
-        {/* List */}
-        {isLoading ? (
-          <LoadingSpinner />
-        ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={Trash2}
-            title={items && items.length > 0 ? 'Ничего не найдено' : 'Корзина пуста'}
-            description={
-              items && items.length > 0
-                ? 'Попробуйте изменить поиск.'
-                : 'Удалённые товары сохраняются здесь и могут быть восстановлены.'
-            }
-          />
-        ) : (
-          <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-1">
-            {filtered.map((p, idx) => (
-              <motion.li
-                key={p.id}
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.18, delay: Math.min(idx * 0.02, 0.18) }}
-                className="card flex items-center gap-3 px-3 py-2.5"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-50 text-rose-500 flex-shrink-0">
-                  <Trash2 className="h-4 w-4" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
-                  <p className="text-[11px] text-gray-400 truncate">
-                    {p.category || 'Без папки'}
-                    <span className="mx-1.5 text-gray-300">·</span>
-                    Цена {formatMoney(p.sellPrice)}
-                    {(p as Product & { deletedAt?: string; deleted_at?: string }).deletedAt && (
-                      <>
-                        <span className="mx-1.5 text-gray-300">·</span>
-                        <span className="text-gray-400">
-                          {formatDate((p as Product & { deletedAt?: string }).deletedAt)}
-                        </span>
-                      </>
-                    )}
+  const footer = hasItems ? (
+    confirmEmpty ? (
+      <div role="alert" className="flex flex-1 flex-wrap items-center gap-2">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-bad" aria-hidden="true" />
+        <p className="min-w-0 flex-1 text-sm text-bad-text">
+          Удалить все {countLabel(items.length, ['товар', 'товара', 'товаров'])} навсегда?
+        </p>
+        <Button variant="secondary" size="sm" onClick={() => setConfirmEmpty(false)} disabled={emptyMut.isPending}>
+          Отмена
+        </Button>
+        <Button variant="danger" size="sm" loading={emptyMut.isPending} onClick={() => emptyMut.mutate()}>
+          Да, удалить
+        </Button>
+      </div>
+    ) : (
+      <Button
+        variant="ghost"
+        icon={Trash2}
+        className="mr-auto text-bad-text hover:bg-bad-soft hover:text-bad-text"
+        onClick={() => setConfirmEmpty(true)}
+      >
+        Очистить корзину ({items.length})
+      </Button>
+    )
+  ) : undefined;
+
+  const loader = (
+    <ul className="space-y-1.5" aria-hidden="true">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <li key={i} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2">
+          <Skeleton className="h-9 w-9" />
+          <div className="flex-1 space-y-1.5">
+            <Skeleton variant="text" className={i % 2 ? 'w-2/3' : 'w-1/2'} />
+            <Skeleton variant="text" className="w-1/3" />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Корзина склада"
+      description="Удалённые товары можно восстановить или стереть навсегда"
+      size="lg"
+      footer={footer}
+    >
+      <div className="flex flex-col gap-3" style={{ minHeight: 'min(60dvh, 480px)' }}>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Название или папка…"
+          aria-label="Поиск в корзине"
+        />
+
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={() => refetch()}
+          isFetching={isFetching}
+          loader={loader}
+          isEmpty={filtered.length === 0}
+          empty={{
+            icon: Trash2,
+            title: hasItems ? 'Ничего не найдено' : 'Корзина пуста',
+            description: hasItems
+              ? 'Попробуйте изменить поиск'
+              : 'Удалённые товары сохраняются здесь и могут быть восстановлены',
+          }}
+          minHeight="py-10"
+        >
+          <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+            {filtered.map((p) => (
+              <li key={p.id} className="flex items-center gap-3 rounded-lg border border-line bg-surface px-3 py-2">
+                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-bad-soft text-bad">
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">{p.name}</p>
+                  <p className="truncate text-xs text-ink-3">
+                    {p.category || 'Без папки'} · Цена <Money value={p.sellPrice} />
+                    {p.deletedAt && <> · удалён {formatDateTime(p.deletedAt)}</>}
                   </p>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => restoreMut.mutate(p.id)}
-                    disabled={restoreMut.isPending}
-                    title="Восстановить"
-                    className="h-9 w-9 flex items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm(`Удалить "${p.name}" навсегда? Восстановление будет невозможно.`)) {
-                        hardDeleteMut.mutate(p.id);
-                      }
-                    }}
-                    disabled={hardDeleteMut.isPending}
-                    title="Удалить навсегда"
-                    className="h-9 w-9 flex items-center justify-center rounded-lg text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </motion.li>
+                <IconButton
+                  label={`Восстановить: ${p.name}`}
+                  icon={RotateCcw}
+                  size="sm"
+                  onClick={() => restoreMut.mutate(p.id)}
+                  disabled={restoreMut.isPending}
+                />
+                <IconButton
+                  label={`Удалить навсегда: ${p.name}`}
+                  icon={Trash2}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setHardDeleteTarget(p)}
+                  disabled={hardDeleteMut.isPending}
+                />
+              </li>
             ))}
           </ul>
-        )}
-
-        {/* Empty trash footer */}
-        {items && items.length > 0 && (
-          <div className="border-t border-gray-100 pt-3 -mx-6 px-6">
-            {confirmEmpty ? (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
-                <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                <p className="text-sm text-red-700 flex-1">Удалить все {items.length} товаров навсегда?</p>
-                <button type="button" onClick={() => setConfirmEmpty(false)} className="btn-ghost btn-sm">
-                  Отмена
-                </button>
-                <button
-                  type="button"
-                  onClick={() => emptyMut.mutate()}
-                  disabled={emptyMut.isPending}
-                  className="btn-danger btn-sm"
-                >
-                  {emptyMut.isPending ? 'Удаляю…' : 'Да, удалить'}
-                </button>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setConfirmEmpty(true)} className="btn-ghost w-full text-red-500">
-                <Trash2 className="h-4 w-4" />
-                Очистить корзину ({items.length})
-              </button>
-            )}
-          </div>
-        )}
+        </QueryState>
       </div>
+
+      <ConfirmDialog
+        isOpen={!!hardDeleteTarget}
+        onClose={() => setHardDeleteTarget(null)}
+        onConfirm={() => hardDeleteTarget && hardDeleteMut.mutate(hardDeleteTarget.id)}
+        title="Удалить навсегда?"
+        message={`«${hardDeleteTarget?.name ?? ''}» будет стёрт без возможности восстановления.`}
+        confirmText="Удалить навсегда"
+        variant="danger"
+      />
     </Modal>
   );
 }

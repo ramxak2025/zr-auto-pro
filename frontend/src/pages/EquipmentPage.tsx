@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package,
@@ -6,280 +6,399 @@ import {
   Users,
   Warehouse,
   Trash2,
-  RefreshCw,
-  ArrowLeft,
-  Search,
-  ChevronRight,
   Clock,
   AlertTriangle,
   FolderPlus,
-  X,
   Wrench,
   Shirt,
   RotateCcw,
-  Archive,
-  Image as ImageIcon,
-  Eye,
+  ChevronRight,
+  X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { equipmentApi, usersApi, uploadsApi } from '../api/services';
+import { equipmentApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import Modal from '../components/Modal';
-import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
+import {
+  Badge,
+  Button,
+  Card,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  QueryState,
+  SearchInput,
+  SegmentedControl,
+  Select,
+  SkeletonCard,
+  TabPanel,
+  Tabs,
+  Toolbar,
+  cn,
+  toneChip,
+} from '../ui';
+import type { DataTableColumn, TabItem, Tone } from '../ui';
+import ImageUpload from '../components/ImageUpload';
+import PhotoLightbox from '../components/warehouse/PhotoLightbox';
+import { countLabel, parseNumberInput } from '../components/warehouse/format';
+import { useUrlParams } from '../components/warehouse/useUrlParams';
 import { formatMoney } from '../../../shared/utils/formatters';
-import type { User as UserType } from '../types';
+
+// API имущества типизирован как any[] — локальные формы записей.
+interface EquipmentItem {
+  id: string;
+  name: string;
+  cost: number;
+  status?: string;
+  categoryType?: string;
+  photo?: string | null;
+  serviceLifeMonths?: number | null;
+  expiresAt?: string | null;
+  userName?: string | null;
+  trashExpiresAt?: string | null;
+}
+interface StorageItem {
+  id: string;
+  name: string;
+  purchasePrice: number;
+  quantity: number;
+  unit?: string;
+  photo?: string | null;
+  serviceLifeMonths?: number | null;
+  categoryId?: string | null;
+}
+interface EquipmentCategory {
+  id: string;
+  name: string;
+}
+interface EmployeeSummary {
+  userId: string;
+  fullName: string;
+  avatar?: string | null;
+  toolsCount: number;
+  uniformCount: number;
+  expiredCount: number;
+  activeCount: number;
+  totalCost: number;
+}
 
 type Tab = 'employees' | 'storage' | 'trash';
-const CATEGORY_TYPES = [
-  { key: 'tools', label: 'Инструменты', icon: Wrench, color: 'text-blue-600', bg: 'bg-blue-50' },
-  { key: 'uniform', label: 'Форма', icon: Shirt, color: 'text-purple-600', bg: 'bg-purple-50' },
-  { key: 'other', label: 'Прочее', icon: Package, color: 'text-gray-600', bg: 'bg-gray-100' },
+type CategoryKey = 'tools' | 'uniform' | 'other';
+
+const CATEGORY_TYPES: { key: CategoryKey; label: string; icon: LucideIcon; tone: Tone }[] = [
+  { key: 'tools', label: 'Инструменты', icon: Wrench, tone: 'accent' },
+  { key: 'uniform', label: 'Форма', icon: Shirt, tone: 'info' },
+  { key: 'other', label: 'Прочее', icon: Package, tone: 'neutral' },
 ];
 
-// ─── Photo Viewer Modal ─────────────────────────────────────────────
-function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
+function categoryMeta(key?: string) {
+  return CATEGORY_TYPES.find((c) => c.key === key) ?? CATEGORY_TYPES[2];
+}
+
+function initialsOf(name?: string): string {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
-      <button
-        type="button"
-        aria-label="Закрыть"
-        title="Закрыть"
-        onClick={onClose}
-        className="absolute top-4 right-4 p-2 rounded-full bg-white/20 text-white hover:bg-white/40"
-      >
-        <X className="h-6 w-6" />
-      </button>
-      <img
-        src={url}
-        alt=""
-        className="max-w-[90vw] max-h-[85vh] rounded-xl object-contain"
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
+    name
+      ?.trim()
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || '?'
   );
 }
 
-// ─── Employee Detail Page ───────────────────────────────────────────
+function Avatar({ name, src, size = 'md' }: { name: string; src?: string | null; size?: 'sm' | 'md' | 'lg' }) {
+  const cls = size === 'lg' ? 'h-14 w-14 text-lg' : size === 'sm' ? 'h-8 w-8 text-xs' : 'h-10 w-10 text-sm';
+  return src ? (
+    <img src={src} alt="" className={cn('flex-shrink-0 rounded-full object-cover', cls)} />
+  ) : (
+    <span
+      className={cn(
+        'flex flex-shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-accent-text',
+        cls,
+      )}
+      aria-hidden="true"
+    >
+      {initialsOf(name)}
+    </span>
+  );
+}
+
+function PhotoThumb({
+  photo,
+  name,
+  onPreview,
+}: {
+  photo?: string | null;
+  name: string;
+  onPreview: (url: string) => void;
+}) {
+  if (photo) {
+    return (
+      <button
+        type="button"
+        aria-label={`Открыть фото: ${name}`}
+        onClick={() => onPreview(photo)}
+        className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-md bg-surface-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2"
+      >
+        <img src={photo} alt="" className="h-full w-full object-cover" loading="lazy" />
+      </button>
+    );
+  }
+  return (
+    <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-surface-3">
+      <Package className="h-4 w-4 text-ink-4" aria-hidden="true" />
+    </span>
+  );
+}
+
+// ─── Имущество сотрудника ────────────────────────────────────────────────────
+
 function EmployeeDetail({
-  userId,
-  userName,
-  userAvatar,
+  employee,
   onBack,
   canEdit,
 }: {
-  userId: string;
-  userName: string;
-  userAvatar?: string;
+  employee: EmployeeSummary;
   onBack: () => void;
   canEdit: boolean;
 }) {
   const queryClient = useQueryClient();
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [showIssue, setShowIssue] = useState(false);
+  const [trashTarget, setTrashTarget] = useState<EquipmentItem | null>(null);
 
-  const { data: items = [] } = useQuery({
-    queryKey: ['equipment-user', userId],
-    queryFn: async () => {
-      const res = await equipmentApi.getByUser(userId, true);
-      return res.data;
-    },
+  const itemsQuery = useQuery({
+    queryKey: ['equipment-user', employee.userId],
+    queryFn: async () => (await equipmentApi.getByUser(employee.userId, true)).data as EquipmentItem[],
   });
+  const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
 
-  const { data: storageItems = [] } = useQuery({
+  const storageQuery = useQuery({
     queryKey: ['equipment-storage-all'],
-    queryFn: async () => {
-      const res = await equipmentApi.getStorageItems();
-      return res.data;
-    },
+    queryFn: async () => (await equipmentApi.getStorageItems()).data as StorageItem[],
     enabled: showIssue,
   });
 
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['equipment'] });
+    queryClient.invalidateQueries({ queryKey: ['equipment-user', employee.userId] });
+    queryClient.invalidateQueries({ queryKey: ['equipment-summary'] });
+    queryClient.invalidateQueries({ queryKey: ['eq-storage'] });
+    queryClient.invalidateQueries({ queryKey: ['eq-trash'] });
+  };
+
   const issueMutation = useMutation({
-    mutationFn: (data: any) => equipmentApi.issue(data),
+    mutationFn: (data: Record<string, unknown>) => equipmentApi.issue(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['equipment'] });
+      invalidate();
       toast.success('Выдано');
       setShowIssue(false);
     },
+    onError: () => toast.error('Не удалось выдать'),
   });
 
   const trashMutation = useMutation({
     mutationFn: (id: string) => equipmentApi.trash(id, 'Списание'),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['equipment'] });
-      toast.success('В корзину');
+      invalidate();
+      toast.success('Перемещено в корзину');
     },
+    onError: () => toast.error('Не удалось списать'),
   });
 
   const returnMutation = useMutation({
     mutationFn: (id: string) => equipmentApi.returnToStorage(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['equipment'] });
+      invalidate();
       toast.success('Возвращено на склад');
     },
+    onError: () => toast.error('Не удалось вернуть'),
   });
 
-  const activeItems = items.filter((i: any) => i.status === 'active');
-  const tools = activeItems.filter((i: any) => i.categoryType === 'tools');
-  const uniforms = activeItems.filter((i: any) => i.categoryType === 'uniform');
-  const other = activeItems.filter((i: any) => i.categoryType === 'other');
-  const totalCost = activeItems.reduce((s: number, i: any) => s + i.cost, 0);
-  const initials =
-    userName
-      ?.split(' ')
-      .map((w: string) => w[0])
-      .join('')
-      .slice(0, 2) || '?';
+  const activeItems = useMemo(() => items.filter((i) => i.status === 'active'), [items]);
+  const totalCost = activeItems.reduce((s, i) => s + (i.cost || 0), 0);
 
-  const renderSection = (title: string, icon: any, items: any[], color: string) => {
-    const Icon = icon;
-    if (items.length === 0) return null;
-    return (
-      <div className="space-y-2" key={title}>
-        <div className="flex items-center gap-2">
-          <Icon className={`h-4 w-4 ${color}`} />
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-          <span className="text-xs text-gray-400">{items.length}</span>
-        </div>
-        {items.map((item: any) => {
-          const expired = item.expiresAt && new Date(item.expiresAt) < new Date();
-          return (
-            <div
-              key={item.id}
-              className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm"
-            >
-              {item.photo ? (
-                <button
-                  type="button"
-                  aria-label="Открыть фото"
-                  title="Открыть фото"
-                  onClick={() => setPhotoUrl(item.photo)}
-                  className="flex-shrink-0 group relative"
-                >
-                  <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
-                    <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
-                  </div>
-                </button>
-              ) : (
-                <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0">
-                  <Package className="h-6 w-6 text-gray-200" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
-                <p className="text-xs font-medium text-primary-600 tabular-nums">{formatMoney(item.cost)}</p>
-                {item.serviceLifeMonths && (
-                  <p className={`text-[10px] mt-0.5 ${expired ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>
-                    <Clock className="inline h-3 w-3 mr-0.5" />
-                    {expired ? 'Истёк срок' : `${item.serviceLifeMonths} мес.`}
-                  </p>
-                )}
-              </div>
-              {canEdit && (
-                <div className="flex gap-1 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => returnMutation.mutate(item.id)}
-                    className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500"
-                    aria-label="Вернуть на склад"
-                    title="На склад"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => trashMutation.mutate(item.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
-                    aria-label="Списать"
-                    title="Списать"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
+  const columns: DataTableColumn<EquipmentItem>[] = [
+    {
+      key: 'name',
+      header: 'Предмет',
+      sortable: true,
+      render: (item) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <PhotoThumb photo={item.photo} name={item.name} onPreview={setPhotoUrl} />
+          <span className="truncate font-medium text-ink">{item.name}</span>
+        </span>
+      ),
+      footer: (rows) => `Итого: ${countLabel(rows.length, ['предмет', 'предмета', 'предметов'])}`,
+    },
+    {
+      key: 'categoryType',
+      header: 'Категория',
+      hideBelow: 'sm',
+      sortable: true,
+      render: (item) => {
+        const meta = categoryMeta(item.categoryType);
+        return (
+          <Badge tone={meta.tone} icon={meta.icon}>
+            {meta.label}
+          </Badge>
+        );
+      },
+    },
+    {
+      key: 'serviceLifeMonths',
+      header: 'Срок службы',
+      hideBelow: 'md',
+      render: (item) => {
+        if (!item.serviceLifeMonths) return <span className="text-ink-3">—</span>;
+        const expired = item.expiresAt && new Date(item.expiresAt) < new Date();
+        return expired ? (
+          <Badge tone="warn" icon={Clock}>
+            Истёк срок
+          </Badge>
+        ) : (
+          <span className="text-ink-2">{item.serviceLifeMonths} мес.</span>
+        );
+      },
+    },
+    {
+      key: 'cost',
+      header: 'Стоимость',
+      numeric: true,
+      sortable: true,
+      render: (item) => <Money value={item.cost} className="font-medium text-ink" />,
+      footer: () => <Money value={totalCost} />,
+    },
+    ...(canEdit
+      ? ([
+          {
+            key: 'actions',
+            header: <span className="sr-only">Действия</span>,
+            interactive: true,
+            align: 'right',
+            width: 96,
+            render: (item) => (
+              <span className="inline-flex items-center justify-end gap-1">
+                <IconButton
+                  label={`Вернуть на склад: ${item.name}`}
+                  icon={RotateCcw}
+                  size="sm"
+                  onClick={() => returnMutation.mutate(item.id)}
+                  disabled={returnMutation.isPending}
+                />
+                <IconButton
+                  label={`Списать: ${item.name}`}
+                  icon={Trash2}
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setTrashTarget(item)}
+                  disabled={trashMutation.isPending}
+                />
+              </span>
+            ),
+          },
+        ] as DataTableColumn<EquipmentItem>[])
+      : []),
+  ];
 
   return (
     <div className="space-y-5">
-      <button onClick={onBack} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft className="h-4 w-4" />
-        Назад
-      </button>
-
-      {/* Employee header */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-        <div className="flex items-center gap-4">
-          {userAvatar ? (
-            <img src={userAvatar} alt="" className="h-16 w-16 rounded-full object-cover border-2 border-gray-100" />
-          ) : (
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold text-xl">
-              {initials}
-            </div>
-          )}
-          <div className="flex-1">
-            <h2 className="text-lg font-bold text-gray-900">{userName}</h2>
-            <div className="flex items-center gap-4 mt-1">
-              <span className="text-sm text-gray-500">{activeItems.length} предметов</span>
-              <span className="text-sm font-bold text-primary-600 tabular-nums">{formatMoney(totalCost)}</span>
-            </div>
-          </div>
-          {canEdit && (
-            <button onClick={() => setShowIssue(true)} className="btn-primary text-sm">
-              <Plus className="h-4 w-4" />
+      <PageHeader
+        title={employee.fullName}
+        backTo={onBack}
+        subtitle={
+          itemsQuery.data
+            ? `${countLabel(activeItems.length, ['предмет', 'предмета', 'предметов'])} на ${formatMoney(totalCost)}`
+            : 'Выданное имущество'
+        }
+        meta={<Avatar name={employee.fullName} src={employee.avatar} size="sm" />}
+        actions={
+          canEdit ? (
+            <Button icon={Plus} onClick={() => setShowIssue(true)}>
               Выдать
-            </button>
-          )}
-        </div>
-      </div>
+            </Button>
+          ) : undefined
+        }
+      />
 
-      {activeItems.length === 0 ? (
-        <div className="text-center py-12">
-          <Package className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-          <p className="text-sm text-gray-400">Нет выданного имущества</p>
-        </div>
-      ) : (
-        <div className="space-y-5">
-          {renderSection('Инструменты', Wrench, tools, 'text-blue-600')}
-          {renderSection('Форма', Shirt, uniforms, 'text-purple-600')}
-          {renderSection('Прочее', Package, other, 'text-gray-600')}
-        </div>
-      )}
+      <DataTable
+        rows={activeItems}
+        rowKey={(i) => i.id}
+        columns={columns}
+        caption={`Имущество: ${employee.fullName}`}
+        defaultSort={{ key: 'categoryType', dir: 'asc' }}
+        isLoading={itemsQuery.isLoading}
+        isError={itemsQuery.isError}
+        onRetry={() => itemsQuery.refetch()}
+        isFetching={itemsQuery.isFetching}
+        emptyState={{
+          icon: Package,
+          title: 'Имущество не выдано',
+          description: canEdit ? 'Выдайте инструмент или форму со склада или заведите новый предмет' : undefined,
+        }}
+      />
 
       {showIssue && (
         <IssueModal
-          userId={userId}
-          storageItems={storageItems}
+          userId={employee.userId}
+          storageItems={storageQuery.data ?? []}
+          storageLoading={storageQuery.isLoading}
           onClose={() => setShowIssue(false)}
-          onSave={(d: any) => issueMutation.mutate(d)}
+          onSave={(d) => issueMutation.mutate(d)}
           saving={issueMutation.isPending}
         />
       )}
-      {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
+
+      <ConfirmDialog
+        isOpen={!!trashTarget}
+        onClose={() => setTrashTarget(null)}
+        onConfirm={() => trashTarget && trashMutation.mutate(trashTarget.id)}
+        title="Списать предмет?"
+        message={`«${trashTarget?.name ?? ''}» переедет в корзину имущества; в течение 7 дней его можно восстановить.`}
+        confirmText="Списать"
+        variant="danger"
+      />
+
+      <PhotoLightbox url={photoUrl} onClose={() => setPhotoUrl(null)} />
     </div>
   );
 }
 
-// ─── Issue Modal ────────────────────────────────────────────────────
-function IssueModal({ userId, storageItems, onClose, onSave, saving }: any) {
+// ─── Выдача ──────────────────────────────────────────────────────────────────
+
+function IssueModal({
+  userId,
+  storageItems,
+  storageLoading,
+  onClose,
+  onSave,
+  saving,
+}: {
+  userId: string;
+  storageItems: StorageItem[];
+  storageLoading: boolean;
+  onClose: () => void;
+  onSave: (data: Record<string, unknown>) => void;
+  saving: boolean;
+}) {
   const [source, setSource] = useState<'storage' | 'new'>('storage');
   const [storageItemId, setStorageItemId] = useState('');
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
-  const [categoryType, setCategoryType] = useState('tools');
+  const [categoryType, setCategoryType] = useState<CategoryKey>('tools');
   const [serviceLife, setServiceLife] = useState('');
   const [photo, setPhoto] = useState('');
-  const [uploading, setUploading] = useState(false);
 
   const handleStorageSelect = (id: string) => {
     setStorageItemId(id);
-    const item = storageItems.find((s: any) => s.id === id);
+    const item = storageItems.find((s) => s.id === id);
     if (item) {
       setName(item.name);
       setCost(String(item.purchasePrice));
@@ -288,430 +407,555 @@ function IssueModal({ userId, storageItems, onClose, onSave, saving }: any) {
     }
   };
 
+  const submit = () => {
+    if (!name.trim()) {
+      toast.error('Укажите название');
+      return;
+    }
+    onSave({
+      userId,
+      name: name.trim(),
+      cost: parseNumberInput(cost) ?? 0,
+      categoryType,
+      storageItemId: source === 'storage' ? storageItemId || undefined : undefined,
+      serviceLifeMonths: parseInt(serviceLife, 10) || undefined,
+      photo: photo || undefined,
+    });
+  };
+
+  const available = storageItems.filter((s) => s.quantity > 0);
+
   return (
-    <Modal isOpen onClose={onClose} title="Выдать имущество" size="lg">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Выдать имущество"
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Отмена
+          </Button>
+          <Button onClick={submit} loading={saving}>
+            Выдать
+          </Button>
+        </>
+      }
+    >
       <div className="space-y-4">
-        <div className="flex gap-2">
-          {[
-            { k: 'storage', l: 'Со склада' },
-            { k: 'new', l: 'Новый' },
-          ].map((s) => (
-            <button
-              key={s.k}
-              type="button"
-              onClick={() => setSource(s.k as any)}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === s.k ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500'}`}
-            >
-              {s.l}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl<'storage' | 'new'>
+          aria-label="Источник"
+          fullWidth
+          value={source}
+          onChange={setSource}
+          options={[
+            { value: 'storage', label: 'Со склада' },
+            { value: 'new', label: 'Новый предмет' },
+          ]}
+        />
 
         {source === 'storage' && (
-          <select value={storageItemId} onChange={(e) => handleStorageSelect(e.target.value)} className="input">
-            <option value="">Выберите со склада</option>
-            {storageItems
-              .filter((s: any) => s.quantity > 0)
-              .map((s: any) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} — {formatMoney(s.purchasePrice)} (ост: {s.quantity})
-                </option>
-              ))}
-          </select>
+          <Field
+            label="Предмет со склада"
+            htmlFor="issue-storage-item"
+            hint={
+              storageLoading
+                ? 'Загружаем склад…'
+                : available.length === 0
+                  ? 'На складе нет доступных предметов'
+                  : undefined
+            }
+          >
+            <Select
+              id="issue-storage-item"
+              value={storageItemId}
+              onChange={(e) => handleStorageSelect(e.target.value)}
+              placeholder="Выберите со склада"
+              options={available.map((s) => ({
+                value: s.id,
+                label: `${s.name} — ${formatMoney(s.purchasePrice)} (ост. ${s.quantity})`,
+              }))}
+            />
+          </Field>
         )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Название</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="input" />
-          </div>
-          <div>
-            <label className="label">Стоимость ₽</label>
-            <input value={cost} onChange={(e) => setCost(e.target.value)} className="input" type="number" />
-          </div>
-        </div>
-
-        <div>
-          <label className="label">Категория</label>
-          <div className="flex gap-2">
-            {CATEGORY_TYPES.map((ct) => (
-              <button
-                key={ct.key}
-                type="button"
-                onClick={() => setCategoryType(ct.key)}
-                className={`flex-1 py-2 rounded-lg text-xs font-medium ${categoryType === ct.key ? `${ct.bg} ${ct.color} border border-current/20` : 'bg-gray-50 text-gray-400'}`}
-              >
-                {ct.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="label">Срок службы (мес.)</label>
-          <input
-            value={serviceLife}
-            onChange={(e) => setServiceLife(e.target.value)}
-            className="input"
-            type="number"
-            placeholder="12"
-          />
-        </div>
-
-        <div className="flex items-center gap-3">
-          {photo && <img src={photo} className="h-14 w-14 rounded-lg object-cover" />}
-          <label className="btn-secondary text-xs cursor-pointer">
-            {uploading ? '...' : 'Фото'}
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                setUploading(true);
-                try {
-                  const r = await uploadsApi.upload(f);
-                  setPhoto(r.data.url);
-                } catch {}
-                setUploading(false);
-              }}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Название" htmlFor="issue-name" required>
+            <Input id="issue-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+          </Field>
+          <Field label="Стоимость, ₽" htmlFor="issue-cost">
+            <Input
+              id="issue-cost"
+              inputMode="decimal"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              className="tabular-nums"
             />
-          </label>
+          </Field>
         </div>
 
-        <button
-          onClick={() => {
-            if (!name.trim()) {
-              toast.error('Укажите название');
-              return;
-            }
-            onSave({
-              userId,
-              name: name.trim(),
-              cost: parseFloat(cost) || 0,
-              categoryType,
-              storageItemId: source === 'storage' ? storageItemId : undefined,
-              serviceLifeMonths: parseInt(serviceLife) || undefined,
-              photo: photo || undefined,
-            });
-          }}
-          disabled={saving}
-          className="btn-primary w-full"
-        >
-          {saving ? 'Сохранение...' : 'Выдать'}
-        </button>
+        <Field label="Категория">
+          <SegmentedControl<CategoryKey>
+            aria-label="Категория имущества"
+            fullWidth
+            value={categoryType}
+            onChange={setCategoryType}
+            options={CATEGORY_TYPES.map((c) => ({ value: c.key, label: c.label, icon: c.icon }))}
+          />
+        </Field>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Срок службы, мес." htmlFor="issue-life" hint="По истечении предмет подсветится">
+            <Input
+              id="issue-life"
+              inputMode="numeric"
+              value={serviceLife}
+              onChange={(e) => setServiceLife(e.target.value)}
+              placeholder="12"
+              className="tabular-nums"
+            />
+          </Field>
+          <Field label="Фото">
+            <ImageUpload
+              variant="avatar"
+              label="Фото предмета"
+              value={photo}
+              onChange={setPhoto}
+              onClear={() => setPhoto('')}
+            />
+          </Field>
+        </div>
       </div>
     </Modal>
   );
 }
 
-// ─── Storage Room Tab ───────────────────────────────────────────────
-function StorageTab() {
+// ─── Подсобка ────────────────────────────────────────────────────────────────
+
+function StorageTab({ canEdit }: { canEdit: boolean }) {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
+  const [params, setParam] = useUrlParams();
+  const selectedCat = params.get('cat');
+  const search = params.get('q') ?? '';
+
   const [showCreate, setShowCreate] = useState(false);
   const [catName, setCatName] = useState('');
-  const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [deleteItemTarget, setDeleteItemTarget] = useState<StorageItem | null>(null);
+  const [deleteCatOpen, setDeleteCatOpen] = useState(false);
 
-  const { data: categories = [] } = useQuery({
+  const categoriesQuery = useQuery({
     queryKey: ['eq-categories'],
-    queryFn: async () => (await equipmentApi.getCategories()).data,
+    queryFn: async () => (await equipmentApi.getCategories()).data as EquipmentCategory[],
   });
-  const { data: items = [] } = useQuery({
+  const categories = categoriesQuery.data ?? [];
+
+  const itemsQuery = useQuery({
     queryKey: ['eq-storage', selectedCat, search],
     queryFn: async () =>
-      (await equipmentApi.getStorageItems({ categoryId: selectedCat || undefined, search: search || undefined })).data,
+      (await equipmentApi.getStorageItems({ categoryId: selectedCat || undefined, search: search || undefined }))
+        .data as StorageItem[],
   });
+  const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
 
   const createCatMut = useMutation({
     mutationFn: (name: string) => equipmentApi.createCategory({ name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['eq-categories'] });
       setCatName('');
+      toast.success('Папка создана');
     },
+    onError: () => toast.error('Не удалось создать папку'),
   });
   const removeCatMut = useMutation({
     mutationFn: (id: string) => equipmentApi.removeCategory(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['eq-categories'] });
-      setSelectedCat(null);
+      queryClient.invalidateQueries({ queryKey: ['eq-storage'] });
+      setParam({ cat: null });
+      toast.success('Папка удалена');
     },
+    onError: () => toast.error('Не удалось удалить папку'),
   });
   const createItemMut = useMutation({
-    mutationFn: (data: any) => equipmentApi.createStorageItem(data),
+    mutationFn: (data: Record<string, unknown>) => equipmentApi.createStorageItem(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['eq-storage'] });
+      queryClient.invalidateQueries({ queryKey: ['equipment-storage-all'] });
       setShowCreate(false);
-      toast.success('Добавлено');
+      toast.success('Добавлено на склад');
     },
+    onError: () => toast.error('Не удалось добавить'),
   });
   const removeItemMut = useMutation({
     mutationFn: (id: string) => equipmentApi.removeStorageItem(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['eq-storage'] });
+      queryClient.invalidateQueries({ queryKey: ['equipment-storage-all'] });
       toast.success('Удалено');
     },
+    onError: () => toast.error('Не удалось удалить'),
   });
 
-  // Count items per category
+  // Count items per category (root view queries all items).
   const catCounts = useMemo(() => {
     const map: Record<string, number> = {};
-    items.forEach((i: any) => {
+    items.forEach((i) => {
       if (i.categoryId) map[i.categoryId] = (map[i.categoryId] || 0) + 1;
     });
     return map;
   }, [items]);
 
+  const currentCategory = categories.find((c) => c.id === selectedCat);
+  const inFolderOrSearch = !!selectedCat || !!search;
+
+  const itemColumns: DataTableColumn<StorageItem>[] = [
+    {
+      key: 'name',
+      header: 'Предмет',
+      sortable: true,
+      render: (item) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <PhotoThumb photo={item.photo} name={item.name} onPreview={setPhotoUrl} />
+          <span className="truncate font-medium text-ink">{item.name}</span>
+        </span>
+      ),
+      footer: (rows) => `Итого: ${countLabel(rows.length, ['предмет', 'предмета', 'предметов'])}`,
+    },
+    {
+      key: 'quantity',
+      header: 'В наличии',
+      numeric: true,
+      sortable: true,
+      render: (item) => (
+        <span className={item.quantity > 0 ? 'text-ink-2' : 'text-bad-text'}>
+          {item.quantity} {item.unit || 'шт'}
+        </span>
+      ),
+    },
+    {
+      key: 'serviceLifeMonths',
+      header: 'Срок службы',
+      hideBelow: 'md',
+      render: (item) =>
+        item.serviceLifeMonths ? (
+          <span className="text-ink-2">{item.serviceLifeMonths} мес.</span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'purchasePrice',
+      header: 'Цена',
+      numeric: true,
+      sortable: true,
+      render: (item) => <Money value={item.purchasePrice} className="font-medium text-ink" />,
+      footer: (rows) => <Money value={rows.reduce((s, r) => s + (r.purchasePrice || 0) * (r.quantity || 0), 0)} />,
+    },
+    ...(canEdit
+      ? ([
+          {
+            key: 'actions',
+            header: <span className="sr-only">Действия</span>,
+            interactive: true,
+            align: 'right',
+            width: 56,
+            render: (item) => (
+              <IconButton
+                label={`Удалить: ${item.name}`}
+                icon={Trash2}
+                size="sm"
+                variant="danger"
+                onClick={() => setDeleteItemTarget(item)}
+                disabled={removeItemMut.isPending}
+              />
+            ),
+          },
+        ] as DataTableColumn<StorageItem>[])
+      : []),
+  ];
+
   return (
     <div className="space-y-4">
-      {/* Breadcrumb */}
-      {selectedCat && (
-        <div className="flex items-center gap-2 text-sm">
-          <button
-            onClick={() => setSelectedCat(null)}
-            className="text-primary-600 hover:underline flex items-center gap-1"
-          >
-            <Warehouse className="h-4 w-4" />
-            Подсобка
-          </button>
-          <ChevronRight className="h-3 w-3 text-gray-400" />
-          <span className="font-semibold text-gray-900">{categories.find((c: any) => c.id === selectedCat)?.name}</span>
-        </div>
-      )}
-
-      {/* Folders view — when no category selected */}
-      {!selectedCat && !search && categories.length > 0 && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          {categories.map((c: any) => (
+      <Toolbar>
+        {selectedCat && (
+          <nav aria-label="Папки подсобки" className="flex min-w-0 items-center gap-1 text-sm">
             <button
-              key={c.id}
-              onClick={() => setSelectedCat(c.id)}
-              className="w-full flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 active:bg-gray-100 transition-colors text-left border-b border-gray-50 last:border-0"
+              type="button"
+              onClick={() => setParam({ cat: null, q: null })}
+              className="inline-flex items-center gap-1 rounded-sm font-medium text-accent-text hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
-                <Warehouse className="h-5 w-5 text-amber-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">{c.name}</p>
-                <p className="text-xs text-gray-400">{catCounts[c.id] || 0} предметов</p>
-              </div>
-              <ChevronRight className="h-5 w-5 text-gray-300" />
+              <Warehouse className="h-4 w-4" aria-hidden="true" />
+              Подсобка
             </button>
-          ))}
+            <ChevronRight className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+            <span className="truncate font-semibold text-ink" aria-current="page">
+              {currentCategory?.name ?? '…'}
+            </span>
+          </nav>
+        )}
+        <div className="w-full sm:w-64">
+          <SearchInput
+            value={search}
+            onChange={(value) => setParam({ q: value }, { replace: true })}
+            placeholder="Поиск по подсобке…"
+          />
         </div>
-      )}
-
-      {/* New folder input */}
-      {!selectedCat && (
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <FolderPlus className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              value={catName}
-              onChange={(e) => setCatName(e.target.value)}
-              placeholder="Название новой папки..."
-              className="input pl-9 text-sm"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && catName.trim()) createCatMut.mutate(catName.trim());
-              }}
-            />
+        {canEdit && inFolderOrSearch && (
+          <div className="ml-auto">
+            <Button icon={Plus} onClick={() => setShowCreate(true)}>
+              Добавить на склад
+            </Button>
           </div>
-          {catName.trim() && (
-            <button onClick={() => createCatMut.mutate(catName.trim())} className="btn-primary text-sm">
-              Создать
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </Toolbar>
 
-      {/* Search + Add button — when inside a folder */}
-      {(selectedCat || search) && (
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск..."
-              className="input pl-9"
-            />
-          </div>
-          <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">
-            <Plus className="h-4 w-4" />
-            Добавить
-          </button>
-        </div>
-      )}
-
-      {/* Items list — when inside a folder or searching */}
-      {(selectedCat || search) &&
-        (items.length === 0 ? (
-          <div className="text-center py-12">
-            <Package className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-            <p className="text-sm text-gray-400">Пусто</p>
-            <button onClick={() => setShowCreate(true)} className="btn-secondary text-xs mt-3">
-              <Plus className="h-3 w-3" />
-              Добавить
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {items.map((item: any) => (
-              <div
-                key={item.id}
-                className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
-              >
-                {item.photo ? (
-                  <button
-                    type="button"
-                    aria-label="Открыть фото"
-                    title="Открыть фото"
-                    onClick={() => setPhotoUrl(item.photo)}
-                    className="flex-shrink-0 group relative"
-                  >
-                    <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
-                      <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
-                    </div>
-                  </button>
-                ) : (
-                  <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0">
-                    <Package className="h-6 w-6 text-gray-200" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
-                  <div className="flex items-center gap-3 text-xs mt-0.5">
-                    <span className="text-emerald-600 font-bold tabular-nums">{formatMoney(item.purchasePrice)}</span>
-                    <span className="text-gray-400">
-                      В наличии: {item.quantity} {item.unit}
-                    </span>
-                  </div>
-                  {item.serviceLifeMonths && (
-                    <p className="text-[10px] text-gray-400 mt-0.5">
-                      <Clock className="inline h-3 w-3 mr-0.5" />
-                      Срок: {item.serviceLifeMonths} мес.
-                    </p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  aria-label={`Удалить ${item.name}`}
-                  title="Удалить"
-                  onClick={() => removeItemMut.mutate(item.id)}
-                  className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        ))}
-
-      {/* Delete folder button */}
-      {selectedCat && (
-        <button
-          onClick={() => removeCatMut.mutate(selectedCat)}
-          className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 mx-auto"
+      {/* Папки — на корневом уровне без поиска */}
+      {!inFolderOrSearch && (
+        <QueryState
+          isLoading={categoriesQuery.isLoading}
+          isError={categoriesQuery.isError}
+          onRetry={() => categoriesQuery.refetch()}
+          isFetching={categoriesQuery.isFetching}
+          errorTitle="Не удалось загрузить папки"
+          loader={<SkeletonCard lines={3} />}
         >
-          <Trash2 className="h-3 w-3" />
-          Удалить папку
-        </button>
+          {categories.length > 0 && (
+            <Card as="div">
+              <ul className="divide-y divide-line">
+                {categories.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => setParam({ cat: c.id })}
+                      aria-label={`Открыть папку «${c.name}»`}
+                      className="flex w-full items-center gap-4 px-4 py-3 text-left transition-colors duration-150 hover:bg-surface-2 focus:outline-none focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
+                    >
+                      <span
+                        className={cn(
+                          'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg',
+                          toneChip.warn,
+                        )}
+                      >
+                        <Warehouse className="h-[18px] w-[18px]" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-ink">{c.name}</span>
+                        <span className="block text-xs text-ink-3">
+                          {countLabel(catCounts[c.id] || 0, ['предмет', 'предмета', 'предметов'])}
+                        </span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+          {categories.length === 0 && !canEdit && (
+            <Card>
+              <EmptyState icon={Warehouse} title="В подсобке пока пусто" />
+            </Card>
+          )}
+          {canEdit && (
+            <form
+              className="flex flex-col gap-2 sm:flex-row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (catName.trim()) createCatMut.mutate(catName.trim());
+              }}
+            >
+              <Input
+                leftIcon={FolderPlus}
+                aria-label="Название новой папки"
+                value={catName}
+                onChange={(e) => setCatName(e.target.value)}
+                placeholder="Название новой папки…"
+                autoComplete="off"
+                className="sm:flex-1"
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                icon={FolderPlus}
+                disabled={!catName.trim()}
+                loading={createCatMut.isPending}
+              >
+                Создать папку
+              </Button>
+            </form>
+          )}
+        </QueryState>
+      )}
+
+      {/* Предметы — в папке или при поиске */}
+      {inFolderOrSearch && (
+        <>
+          <DataTable
+            rows={items}
+            rowKey={(i) => i.id}
+            columns={itemColumns}
+            caption="Предметы в подсобке"
+            isLoading={itemsQuery.isLoading}
+            isError={itemsQuery.isError}
+            onRetry={() => itemsQuery.refetch()}
+            isFetching={itemsQuery.isFetching}
+            emptyState={{
+              icon: Package,
+              title: search ? 'Ничего не найдено' : 'В папке пока пусто',
+              description: search ? `По запросу «${search}» предметов нет` : undefined,
+              action:
+                canEdit && !search ? { label: 'Добавить на склад', onClick: () => setShowCreate(true) } : undefined,
+            }}
+          />
+          {selectedCat && canEdit && (
+            <div className="flex justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={Trash2}
+                className="text-bad-text hover:bg-bad-soft hover:text-bad-text"
+                onClick={() => setDeleteCatOpen(true)}
+              >
+                Удалить папку
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       {showCreate && (
         <CreateStorageItemModal
           categoryId={selectedCat}
           onClose={() => setShowCreate(false)}
-          onSave={(d: any) => createItemMut.mutate(d)}
+          onSave={(d) => createItemMut.mutate(d)}
           saving={createItemMut.isPending}
         />
       )}
-      {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
+
+      <ConfirmDialog
+        isOpen={!!deleteItemTarget}
+        onClose={() => setDeleteItemTarget(null)}
+        onConfirm={() => deleteItemTarget && removeItemMut.mutate(deleteItemTarget.id)}
+        title="Удалить предмет со склада?"
+        message={`«${deleteItemTarget?.name ?? ''}» будет удалён из подсобки.`}
+        confirmText="Удалить"
+        variant="danger"
+      />
+
+      <ConfirmDialog
+        isOpen={deleteCatOpen}
+        onClose={() => setDeleteCatOpen(false)}
+        onConfirm={() => selectedCat && removeCatMut.mutate(selectedCat)}
+        title="Удалить папку?"
+        message={`Папка «${currentCategory?.name ?? ''}» будет удалена.`}
+        confirmText="Удалить папку"
+        variant="danger"
+      />
+
+      <PhotoLightbox url={photoUrl} onClose={() => setPhotoUrl(null)} />
     </div>
   );
 }
 
-function CreateStorageItemModal({ categoryId, onClose, onSave, saving }: any) {
+function CreateStorageItemModal({
+  categoryId,
+  onClose,
+  onSave,
+  saving,
+}: {
+  categoryId: string | null;
+  onClose: () => void;
+  onSave: (data: Record<string, unknown>) => void;
+  saving: boolean;
+}) {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [qty, setQty] = useState('1');
   const [serviceLife, setServiceLife] = useState('');
   const [photo, setPhoto] = useState('');
-  const [uploading, setUploading] = useState(false);
+
+  const submit = () => {
+    if (!name.trim()) {
+      toast.error('Укажите название');
+      return;
+    }
+    onSave({
+      name: name.trim(),
+      purchasePrice: parseNumberInput(price) ?? 0,
+      quantity: parseInt(qty, 10) || 1,
+      categoryId,
+      serviceLifeMonths: parseInt(serviceLife, 10) || undefined,
+      photo: photo || undefined,
+    });
+  };
 
   return (
-    <Modal isOpen onClose={onClose} title="Добавить на склад" size="md">
-      <div className="space-y-3">
-        <div>
-          <label className="label">Название</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="input" />
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <div>
-            <label className="label">Цена ₽</label>
-            <input value={price} onChange={(e) => setPrice(e.target.value)} className="input" type="number" />
-          </div>
-          <div>
-            <label className="label">Кол-во</label>
-            <input value={qty} onChange={(e) => setQty(e.target.value)} className="input" type="number" />
-          </div>
-          <div>
-            <label className="label">Срок мес.</label>
-            <input
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Добавить на склад"
+      size="md"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Отмена
+          </Button>
+          <Button onClick={submit} loading={saving}>
+            Добавить
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label="Название" htmlFor="storage-name" required>
+          <Input id="storage-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" />
+        </Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Цена, ₽" htmlFor="storage-price">
+            <Input
+              id="storage-price"
+              inputMode="decimal"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="tabular-nums"
+            />
+          </Field>
+          <Field label="Кол-во" htmlFor="storage-qty">
+            <Input
+              id="storage-qty"
+              inputMode="numeric"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              className="tabular-nums"
+            />
+          </Field>
+          <Field label="Срок, мес." htmlFor="storage-life">
+            <Input
+              id="storage-life"
+              inputMode="numeric"
               value={serviceLife}
               onChange={(e) => setServiceLife(e.target.value)}
-              className="input"
-              type="number"
+              className="tabular-nums"
             />
-          </div>
+          </Field>
         </div>
-        <div className="flex items-center gap-3">
-          {photo && <img src={photo} className="h-12 w-12 rounded-lg object-cover" />}
-          <label className="btn-secondary text-xs cursor-pointer">
-            {uploading ? '...' : 'Фото'}
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={async (e) => {
-                const f = e.target.files?.[0];
-                if (!f) return;
-                setUploading(true);
-                try {
-                  const r = await uploadsApi.upload(f);
-                  setPhoto(r.data.url);
-                } catch {}
-                setUploading(false);
-              }}
-            />
-          </label>
-        </div>
-        <button
-          onClick={() => {
-            if (!name.trim()) return;
-            onSave({
-              name: name.trim(),
-              purchasePrice: parseFloat(price) || 0,
-              quantity: parseInt(qty) || 1,
-              categoryId,
-              serviceLifeMonths: parseInt(serviceLife) || undefined,
-              photo: photo || undefined,
-            });
-          }}
-          disabled={saving}
-          className="btn-primary w-full"
-        >
-          {saving ? '...' : 'Добавить'}
-        </button>
+        <Field label="Фото">
+          <ImageUpload
+            variant="avatar"
+            label="Фото предмета"
+            value={photo}
+            onChange={setPhoto}
+            onClear={() => setPhoto('')}
+          />
+        </Field>
       </div>
     </Modal>
   );
 }
 
-// ─── Trash Tab ──────────────────────────────────────────────────────
+// ─── Корзина ─────────────────────────────────────────────────────────────────
+
 function TrashTab() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -719,262 +963,375 @@ function TrashTab() {
   // (backend DELETE /equipment/:id; у системного «Администратора» сид false —
   // как прежний @Roles директор/superadmin). Кнопку прячем без права.
   const canPermanentDelete = hasPermission('equipment_permanent_delete');
-  const { data: trashItems = [] } = useQuery({
+  const [deleteTarget, setDeleteTarget] = useState<EquipmentItem | null>(null);
+
+  const trashQuery = useQuery({
     queryKey: ['eq-trash'],
-    queryFn: async () => (await equipmentApi.getTrash()).data,
+    queryFn: async () => (await equipmentApi.getTrash()).data as EquipmentItem[],
   });
+  const trashItems = trashQuery.data ?? [];
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['eq'] });
+    queryClient.invalidateQueries({ queryKey: ['eq-trash'] });
+    queryClient.invalidateQueries({ queryKey: ['equipment'] });
+    queryClient.invalidateQueries({ queryKey: ['equipment-summary'] });
+  };
   const restoreMut = useMutation({
     mutationFn: (id: string) => equipmentApi.restore(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['eq'] });
+      invalidate();
       toast.success('Восстановлено');
     },
+    onError: () => toast.error('Не удалось восстановить'),
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => equipmentApi.remove(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['eq'] });
+      invalidate();
       toast.success('Удалено навсегда');
     },
+    onError: () => toast.error('Не удалось удалить'),
   });
 
-  return trashItems.length === 0 ? (
-    <div className="text-center py-12">
-      <Trash2 className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-      <p className="text-sm text-gray-400">Корзина пуста</p>
-    </div>
-  ) : (
-    <div className="space-y-2">
-      <p className="text-xs text-gray-400">Автоудаление через 7 дней</p>
-      {trashItems.map((item: any) => {
-        const daysLeft = item.trashExpiresAt
-          ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000))
-          : '?';
+  const daysLeft = (item: EquipmentItem): number | null =>
+    item.trashExpiresAt
+      ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000))
+      : null;
+
+  const columns: DataTableColumn<EquipmentItem>[] = [
+    {
+      key: 'name',
+      header: 'Предмет',
+      render: (item) => <span className="font-medium text-ink">{item.name}</span>,
+    },
+    {
+      key: 'userName',
+      header: 'Сотрудник',
+      hideBelow: 'sm',
+      render: (item) => item.userName || <span className="text-ink-3">—</span>,
+    },
+    {
+      key: 'cost',
+      header: 'Стоимость',
+      numeric: true,
+      render: (item) => <Money value={item.cost} />,
+    },
+    {
+      key: 'daysLeft',
+      header: 'Автоудаление',
+      hideBelow: 'md',
+      render: (item) => {
+        const d = daysLeft(item);
+        if (d === null) return <span className="text-ink-3">—</span>;
         return (
-          <div
-            key={item.id}
-            className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 opacity-70"
-          >
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-              <p className="text-xs text-gray-400">
-                {item.userName} · {formatMoney(item.cost)} · {daysLeft}д
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => restoreMut.mutate(item.id)}
-              className="p-1.5 rounded-lg hover:bg-green-50 text-green-500"
-              aria-label="Восстановить"
-              title="Восстановить"
-            >
-              <RotateCcw className="h-4 w-4" />
-            </button>
-            {canPermanentDelete && (
-              <button
-                type="button"
-                onClick={() => deleteMut.mutate(item.id)}
-                className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
-                aria-label="Удалить навсегда"
-                title="Удалить навсегда"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+          <Badge tone={d <= 1 ? 'bad' : d <= 3 ? 'warn' : 'neutral'} icon={Clock}>
+            через {countLabel(d, ['день', 'дня', 'дней'])}
+          </Badge>
         );
-      })}
+      },
+    },
+    {
+      key: 'actions',
+      header: <span className="sr-only">Действия</span>,
+      interactive: true,
+      align: 'right',
+      width: 96,
+      render: (item) => (
+        <span className="inline-flex items-center justify-end gap-1">
+          <IconButton
+            label={`Восстановить: ${item.name}`}
+            icon={RotateCcw}
+            size="sm"
+            onClick={() => restoreMut.mutate(item.id)}
+            disabled={restoreMut.isPending}
+          />
+          {canPermanentDelete && (
+            <IconButton
+              label={`Удалить навсегда: ${item.name}`}
+              icon={X}
+              size="sm"
+              variant="danger"
+              onClick={() => setDeleteTarget(item)}
+              disabled={deleteMut.isPending}
+            />
+          )}
+        </span>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-ink-3">Списанное имущество хранится 7 дней, затем удаляется автоматически.</p>
+      <DataTable
+        rows={trashItems}
+        rowKey={(i) => i.id}
+        columns={columns}
+        caption="Корзина имущества"
+        isLoading={trashQuery.isLoading}
+        isError={trashQuery.isError}
+        onRetry={() => trashQuery.refetch()}
+        isFetching={trashQuery.isFetching}
+        emptyState={{ icon: Trash2, title: 'Корзина пуста' }}
+      />
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
+        title="Удалить навсегда?"
+        message={`«${deleteTarget?.name ?? ''}» будет удалён без возможности восстановления.`}
+        confirmText="Удалить навсегда"
+        variant="danger"
+      />
     </div>
   );
 }
 
-// ─── Main Page ──────────────────────────────────────────────────────
+// ─── Страница ────────────────────────────────────────────────────────────────
+
+const TABS: TabItem<Tab>[] = [
+  { key: 'employees', label: 'Сотрудники', icon: Users },
+  { key: 'storage', label: 'Подсобка', icon: Warehouse },
+  { key: 'trash', label: 'Корзина', icon: Trash2 },
+];
+
 export default function EquipmentPage() {
   const { user, hasPermission } = useAuth();
-  const [tab, setTab] = useState<Tab>('employees');
-  const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
   // Волна «права как в Битрикс24»: CRUD имущества (выдача/возврат/списание/
   // склад/корзина) — только с equipment_manage; байпас superadmin/director —
   // внутри hasPermission, admin — по матрице роли. Просмотр — equipment_view.
   const canEdit = hasPermission('equipment_manage');
   const isMaster = user?.role === 'master';
 
-  const {
-    data: summary = [],
-    isLoading: summaryLoading,
-    isError: summaryError,
-    refetch: refetchSummary,
-    isFetching: summaryFetching,
-  } = useQuery({
+  // Вкладка и выбранный сотрудник — в URL.
+  const [params, setParam] = useUrlParams();
+  const tabParam = params.get('tab');
+  const tab: Tab = tabParam === 'storage' || tabParam === 'trash' ? tabParam : 'employees';
+  const employeeId = params.get('employee');
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+
+  const summaryQuery = useQuery({
     queryKey: ['equipment-summary'],
-    queryFn: async () => {
-      const res = await equipmentApi.getSummary();
-      return res.data;
-    },
+    queryFn: async () => (await equipmentApi.getSummary()).data as EmployeeSummary[],
     enabled: !isMaster,
   });
+  const summary = summaryQuery.data ?? [];
 
-  const {
-    data: myEquipment,
-    isLoading: myLoading,
-    isError: myError,
-    refetch: refetchMy,
-    isFetching: myFetching,
-  } = useQuery({
+  const myQuery = useQuery({
     queryKey: ['equipment-my'],
-    queryFn: async () => {
-      const res = await equipmentApi.getMyEquipment();
-      return res.data;
-    },
+    queryFn: async () => (await equipmentApi.getMyEquipment()).data as EquipmentItem[],
     enabled: isMaster,
   });
 
-  // Master view — only their own equipment
+  // Мастер видит только своё имущество.
   if (isMaster) {
-    const items = myEquipment || [];
-    const total = items.reduce((s: number, i: any) => s + i.cost, 0);
+    const items = myQuery.data ?? [];
+    const total = items.reduce((s, i) => s + (i.cost || 0), 0);
+    const myColumns: DataTableColumn<EquipmentItem>[] = [
+      {
+        key: 'name',
+        header: 'Предмет',
+        render: (item) => (
+          <span className="flex min-w-0 items-center gap-3">
+            <PhotoThumb photo={item.photo} name={item.name} onPreview={setPhotoUrl} />
+            <span className="truncate font-medium text-ink">{item.name}</span>
+          </span>
+        ),
+        footer: (rows) => `Итого: ${countLabel(rows.length, ['предмет', 'предмета', 'предметов'])}`,
+      },
+      {
+        key: 'categoryType',
+        header: 'Категория',
+        hideBelow: 'sm',
+        render: (item) => {
+          const meta = categoryMeta(item.categoryType);
+          return (
+            <Badge tone={meta.tone} icon={meta.icon}>
+              {meta.label}
+            </Badge>
+          );
+        },
+      },
+      {
+        key: 'cost',
+        header: 'Стоимость',
+        numeric: true,
+        render: (item) => <Money value={item.cost} className="font-medium text-ink" />,
+        footer: () => <Money value={total} />,
+      },
+    ];
     return (
       <div className="space-y-5">
         <PageHeader
           title="Моё имущество"
           icon={Package}
-          subtitle={`${items.length} предметов на ${formatMoney(total)}`}
+          subtitle={
+            myQuery.data
+              ? `${countLabel(items.length, ['предмет', 'предмета', 'предметов'])} на ${formatMoney(total)}`
+              : undefined
+          }
         />
-        <QueryState
-          isLoading={myLoading}
-          isError={myError}
-          onRetry={refetchMy}
-          isFetching={myFetching}
-          isEmpty={items.length === 0}
-          empty={{ icon: Package, title: 'Нет выданного имущества' }}
-          minHeight="min-h-[40vh]"
-        >
-          <div className="space-y-3">
-            {items.map((item: any) => (
-              <div
-                key={item.id}
-                className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-100 shadow-sm"
-              >
-                {item.photo ? (
-                  <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
-                ) : (
-                  <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50">
-                    <Package className="h-6 w-6 text-gray-200" />
-                  </div>
-                )}
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-gray-900">{item.name}</p>
-                  <p className="text-xs text-primary-600 font-medium tabular-nums">{formatMoney(item.cost)}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </QueryState>
+        <DataTable
+          rows={items}
+          rowKey={(i) => i.id}
+          columns={myColumns}
+          caption="Моё имущество"
+          isLoading={myQuery.isLoading}
+          isError={myQuery.isError}
+          onRetry={() => myQuery.refetch()}
+          isFetching={myQuery.isFetching}
+          emptyState={{ icon: Package, title: 'Имущество не выдано' }}
+        />
+        <PhotoLightbox url={photoUrl} onClose={() => setPhotoUrl(null)} />
       </div>
     );
   }
 
-  // Employee detail view
-  if (selectedEmployee) {
-    return (
-      <EmployeeDetail
-        userId={selectedEmployee.userId}
-        userName={selectedEmployee.fullName}
-        userAvatar={selectedEmployee.avatar}
-        onBack={() => setSelectedEmployee(null)}
-        canEdit={canEdit}
-      />
-    );
+  // Карточка сотрудника — по ?employee=<userId>.
+  if (employeeId) {
+    const employee = summary.find((e) => e.userId === employeeId);
+    if (!summaryQuery.data) {
+      return (
+        <div className="space-y-5">
+          <PageHeader title="Имущество сотрудника" backTo={() => setParam({ employee: null })} />
+          <QueryState
+            isLoading={summaryQuery.isLoading}
+            isError={summaryQuery.isError}
+            onRetry={() => summaryQuery.refetch()}
+            isFetching={summaryQuery.isFetching}
+            loader={<SkeletonCard lines={4} />}
+          >
+            <></>
+          </QueryState>
+        </div>
+      );
+    }
+    if (!employee) {
+      return (
+        <div className="space-y-5">
+          <PageHeader title="Имущество сотрудника" backTo={() => setParam({ employee: null })} />
+          <Card>
+            <EmptyState
+              icon={Users}
+              title="Сотрудник не найден"
+              description="Возможно, ссылка устарела"
+              action={{ label: 'К списку сотрудников', onClick: () => setParam({ employee: null }) }}
+            />
+          </Card>
+        </div>
+      );
+    }
+    return <EmployeeDetail employee={employee} onBack={() => setParam({ employee: null })} canEdit={canEdit} />;
   }
 
-  const tabs: { key: Tab; label: string; icon: typeof Users }[] = [
-    { key: 'employees', label: 'Сотрудники', icon: Users },
-    { key: 'storage', label: 'Подсобка', icon: Warehouse },
-    { key: 'trash', label: 'Корзина', icon: Trash2 },
+  const summaryColumns: DataTableColumn<EmployeeSummary>[] = [
+    {
+      key: 'fullName',
+      header: 'Сотрудник',
+      primary: true,
+      sortable: true,
+      render: (emp) => (
+        <span className="flex min-w-0 items-center gap-3">
+          <Avatar name={emp.fullName} src={emp.avatar} size="sm" />
+          <span className="truncate">{emp.fullName}</span>
+        </span>
+      ),
+      footer: (rows) => `Итого: ${countLabel(rows.length, ['сотрудник', 'сотрудника', 'сотрудников'])}`,
+    },
+    {
+      key: 'toolsCount',
+      header: 'Инструменты',
+      numeric: true,
+      hideBelow: 'md',
+      sortable: true,
+      render: (emp) => (emp.toolsCount > 0 ? emp.toolsCount : <span className="text-ink-3">—</span>),
+    },
+    {
+      key: 'uniformCount',
+      header: 'Форма',
+      numeric: true,
+      hideBelow: 'md',
+      sortable: true,
+      render: (emp) => (emp.uniformCount > 0 ? emp.uniformCount : <span className="text-ink-3">—</span>),
+    },
+    {
+      key: 'expiredCount',
+      header: 'Истёк срок',
+      numeric: true,
+      hideBelow: 'sm',
+      sortable: true,
+      render: (emp) =>
+        emp.expiredCount > 0 ? (
+          <Badge tone="warn" icon={AlertTriangle}>
+            {emp.expiredCount}
+          </Badge>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
+    },
+    {
+      key: 'activeCount',
+      header: 'Предметов',
+      numeric: true,
+      hideBelow: 'sm',
+      sortable: true,
+      render: (emp) => emp.activeCount,
+      footer: (rows) => rows.reduce((s, r) => s + (r.activeCount || 0), 0),
+    },
+    {
+      key: 'totalCost',
+      header: 'Стоимость',
+      numeric: true,
+      sortable: true,
+      render: (emp) => <Money value={emp.totalCost} className="font-medium text-ink" />,
+      footer: (rows) => <Money value={rows.reduce((s, r) => s + (r.totalCost || 0), 0)} />,
+    },
   ];
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Имущество" icon={Package} />
+      <PageHeader
+        title="Имущество"
+        icon={Package}
+        subtitle="Инструменты и форма: у сотрудников, в подсобке, в корзине"
+      />
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all ${tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
-          >
-            <t.icon className="h-4 w-4" />
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        aria-label="Разделы имущества"
+        idPrefix="equipment"
+        items={TABS}
+        value={tab}
+        onChange={(key) => setParam({ tab: key === 'employees' ? null : key, cat: null, q: null })}
+      />
 
-      {tab === 'employees' && (
-        <QueryState
-          isLoading={summaryLoading}
-          isError={summaryError}
-          onRetry={refetchSummary}
-          isFetching={summaryFetching}
-          isEmpty={summary.length === 0}
-          empty={{ icon: Users, title: 'Нет сотрудников', description: 'Имущество появится после выдачи сотрудникам' }}
-          minHeight="min-h-[40vh]"
-        >
-          <div className="space-y-3">
-            {summary.map((emp: any) => (
-              <button
-                key={emp.userId}
-                onClick={() => setSelectedEmployee(emp)}
-                className="w-full flex items-center gap-4 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm hover:border-primary-200 hover:shadow-md transition-all text-left"
-              >
-                {emp.avatar ? (
-                  <img
-                    src={emp.avatar}
-                    alt=""
-                    className="h-12 w-12 rounded-full object-cover border-2 border-gray-100"
-                  />
-                ) : (
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold">
-                    {emp.fullName?.charAt(0)}
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">{emp.fullName}</p>
-                  <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                    {emp.toolsCount > 0 && (
-                      <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
-                        <Wrench className="inline h-3 w-3 mr-0.5" />
-                        {emp.toolsCount}
-                      </span>
-                    )}
-                    {emp.uniformCount > 0 && (
-                      <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full">
-                        <Shirt className="inline h-3 w-3 mr-0.5" />
-                        {emp.uniformCount}
-                      </span>
-                    )}
-                    {emp.expiredCount > 0 && (
-                      <span className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">
-                        <AlertTriangle className="inline h-3 w-3 mr-0.5" />
-                        {emp.expiredCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-sm font-bold text-primary-600 tabular-nums">{formatMoney(emp.totalCost)}</p>
-                  <p className="text-[10px] text-gray-500">{emp.activeCount} предм.</p>
-                </div>
-                <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
-              </button>
-            ))}
-          </div>
-        </QueryState>
-      )}
+      <TabPanel idPrefix="equipment" tabKey="employees" active={tab === 'employees'}>
+        <DataTable
+          rows={summary}
+          rowKey={(emp) => emp.userId}
+          onRowClick={(emp) => setParam({ employee: emp.userId })}
+          rowLabel={(emp) => `Открыть имущество: ${emp.fullName}`}
+          columns={summaryColumns}
+          caption="Имущество по сотрудникам"
+          isLoading={summaryQuery.isLoading}
+          isError={summaryQuery.isError}
+          onRetry={() => summaryQuery.refetch()}
+          isFetching={summaryQuery.isFetching}
+          emptyState={{
+            icon: Users,
+            title: 'Сотрудников пока нет',
+            description: 'Имущество появится после выдачи сотрудникам',
+          }}
+        />
+      </TabPanel>
 
-      {tab === 'storage' && <StorageTab />}
-      {tab === 'trash' && <TrashTab />}
+      <TabPanel idPrefix="equipment" tabKey="storage" active={tab === 'storage'}>
+        <StorageTab canEdit={canEdit} />
+      </TabPanel>
+
+      <TabPanel idPrefix="equipment" tabKey="trash" active={tab === 'trash'}>
+        <TrashTab />
+      </TabPanel>
     </div>
   );
 }

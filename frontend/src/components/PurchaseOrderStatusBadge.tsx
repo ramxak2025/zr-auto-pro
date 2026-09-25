@@ -1,22 +1,31 @@
 import type { PurchaseOrderStatus } from '../types';
+import { Badge } from '../ui/Badge';
+import type { Tone } from '../ui/tokens';
 
 interface StatusMeta {
   label: string;
-  className: string;
+  /** Семантический тон по смыслу: получено — деньги/товар пришли, отменён — плохо, заказано — активно. */
+  tone: Tone;
 }
 
 export const PO_STATUS_META: Record<PurchaseOrderStatus, StatusMeta> = {
-  draft: { label: 'Черновик', className: 'bg-gray-100 text-gray-600' },
-  ordered: { label: 'Заказано', className: 'bg-blue-50 text-blue-700' },
-  received: { label: 'Получено', className: 'bg-green-50 text-green-700' },
-  cancelled: { label: 'Отменён', className: 'bg-red-50 text-red-700' },
+  draft: { label: 'Черновик', tone: 'neutral' },
+  ordered: { label: 'Заказано', tone: 'accent' },
+  received: { label: 'Получено', tone: 'ok' },
+  cancelled: { label: 'Отменён', tone: 'bad' },
 };
 
-export default function PurchaseOrderStatusBadge({ status }: { status: PurchaseOrderStatus }) {
+export default function PurchaseOrderStatusBadge({
+  status,
+  size = 'md',
+}: {
+  status: PurchaseOrderStatus;
+  size?: 'sm' | 'md';
+}) {
   const meta = PO_STATUS_META[status] ?? PO_STATUS_META.draft;
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${meta.className}`}>
+    <Badge tone={meta.tone} size={size} dot>
       {meta.label}
-    </span>
+    </Badge>
   );
 }

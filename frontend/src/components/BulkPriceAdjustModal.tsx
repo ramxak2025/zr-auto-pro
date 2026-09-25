@@ -1,23 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import {
-  Loader2,
-  TrendingUp,
-  TrendingDown,
-  ArrowRight,
-  Search,
-  Check as CheckIcon,
-  X,
-  FolderOpen,
-  Package,
-} from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowRight, X, FolderOpen, Package } from 'lucide-react';
 import { productsApi } from '../api/services';
 import type { Product } from '../types';
 import type { BulkAdjustPriceRequest, BulkAdjustPriceResponse } from '../../../shared/api/types';
-import { formatMoney } from '../../../shared/utils/formatters';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
+import SearchInput from './SearchInput';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { Field } from '../ui/Field';
+import { Input } from '../ui/Input';
+import { Money } from '../ui/Money';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { Badge } from '../ui/Badge';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
+import { countLabel, parseNumberInput } from './warehouse/format';
 
 type Scope = 'all' | 'categories' | 'products';
 type Direction = 'increase' | 'decrease';
@@ -42,6 +42,12 @@ function roundToStep(value: number, mode: RoundingMode, step: number): number {
   return mode === 'up' ? Math.ceil(value / step) * step : Math.floor(value / step) * step;
 }
 
+/**
+ * Массовая корректировка продажных цен: область (весь ассортимент / папки /
+ * позиции) → направление и процент → округление → обязательный предпросмотр →
+ * применить. Деньги чувствительны: «Применить» открывается только после свежего
+ * dry-run, любое изменение условий сбрасывает предпросмотр.
+ */
 export default function BulkPriceAdjustModal({
   isOpen,
   onClose,
@@ -67,7 +73,7 @@ export default function BulkPriceAdjustModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const sortedFolders = useMemo(() => [...folders].sort((a, b) => a.path.localeCompare(b.path)), [folders]);
+  const sortedFolders = useMemo(() => [...folders].sort((a, b) => a.path.localeCompare(b.path, 'ru')), [folders]);
 
   const productResults = useMemo(() => {
     const q = productSearch.trim().toLowerCase();
@@ -120,7 +126,7 @@ export default function BulkPriceAdjustModal({
 
   /** Validate + build the request body. Returns null (and toasts) on invalid input. */
   function buildRequest(dryRun: boolean): BulkAdjustPriceRequest | null {
-    const pct = parseFloat(percent.replace(',', '.'));
+    const pct = parseNumberInput(percent);
     if (!pct || pct <= 0) {
       toast.error('Введите процент больше 0');
       return null;
@@ -172,7 +178,7 @@ export default function BulkPriceAdjustModal({
   const applyMutation = useMutation({
     mutationFn: (req: BulkAdjustPriceRequest) => productsApi.bulkAdjustPrice(req),
     onSuccess: (res) => {
-      toast.success(`Цены обновлены: ${res.data.affected} позиций`);
+      toast.success(`Цены обновлены: ${countLabel(res.data.affected, ['позиция', 'позиции', 'позиций'])}`);
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-stats'] });
@@ -194,252 +200,205 @@ export default function BulkPriceAdjustModal({
 
   const canApply = !!preview && preview.affected > 0 && !applyMutation.isPending;
   const exampleAfter = roundToStep(156, roundingMode, roundingStep);
-
   const examples = preview?.examples ?? [];
+  const customStepActive = customStep !== '';
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Массовая корректировка цен" size="lg">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Массовая корректировка цен"
+      description="Меняет продажные цены выбранной области на процент. Сначала предпросмотр — потом применение"
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={applyMutation.isPending}>
+            Отмена
+          </Button>
+          <Button
+            onClick={() => setConfirmOpen(true)}
+            disabled={!canApply}
+            loading={applyMutation.isPending}
+            title={!preview ? 'Сначала сделайте предпросмотр' : undefined}
+          >
+            Применить
+          </Button>
+        </>
+      }
+    >
       <div className="space-y-5">
-        {/* 1. Scope ------------------------------------------------------- */}
-        <div>
-          <label className="label">Область</label>
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                { key: 'all', label: 'Весь ассортимент' },
-                { key: 'categories', label: 'Папки' },
-                { key: 'products', label: 'Позиции' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setScope(opt.key)}
-                className={`px-3 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
-                  scope === opt.key
-                    ? 'bg-primary-600 text-white border-primary-600'
-                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* 1. Область ---------------------------------------------------- */}
+        <Field label="Область" htmlFor="bulk-scope">
+          <SegmentedControl<Scope>
+            aria-label="Область корректировки"
+            fullWidth
+            value={scope}
+            onChange={setScope}
+            options={[
+              { value: 'all', label: 'Весь ассортимент' },
+              { value: 'categories', label: 'Папки' },
+              { value: 'products', label: 'Позиции' },
+            ]}
+          />
+        </Field>
 
-        {/* Folder multi-select */}
         {scope === 'categories' && (
-          <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+          <div className="space-y-2 rounded-xl border border-line p-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Папки</p>
-              <span className="text-xs text-gray-400">Выбрано: {selectedCategoryIds.size}</span>
+              <p className="text-sm font-medium text-ink-2">Папки склада</p>
+              <span className="text-xs tabular-nums text-ink-3">Выбрано: {selectedCategoryIds.size}</span>
             </div>
             {sortedFolders.length === 0 ? (
-              <p className="text-sm text-gray-400 py-2 text-center">Нет сохранённых папок</p>
+              <p className="py-2 text-center text-sm text-ink-3">Нет сохранённых папок</p>
             ) : (
-              <div className="space-y-1 max-h-52 overflow-y-auto">
-                {sortedFolders.map((f) => {
-                  const on = selectedCategoryIds.has(f.id);
-                  return (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => toggleCategory(f.id)}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left transition-colors ${
-                        on ? 'border-primary-500 bg-primary-50/60' : 'border-gray-200 bg-white hover:bg-gray-50'
-                      }`}
-                    >
-                      <span
-                        className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 ${
-                          on ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
-                        }`}
-                      >
-                        {on && <CheckIcon className="h-3 w-3 text-white" />}
-                      </span>
-                      <FolderOpen className="h-4 w-4 text-primary-500 flex-shrink-0" />
-                      <span className="flex-1 min-w-0 text-sm text-gray-900 truncate">{f.path}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <ul className="max-h-52 space-y-1 overflow-y-auto">
+                {sortedFolders.map((f) => (
+                  <li key={f.id}>
+                    <Checkbox
+                      checked={selectedCategoryIds.has(f.id)}
+                      onChange={() => toggleCategory(f.id)}
+                      className="w-full rounded-lg px-2 py-1.5 hover:bg-surface-2"
+                      label={
+                        <span className="flex items-center gap-2">
+                          <FolderOpen className="h-4 w-4 flex-shrink-0 text-accent" aria-hidden="true" />
+                          <span className="truncate">{f.path}</span>
+                        </span>
+                      }
+                    />
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
 
-        {/* Product searchable multi-select */}
         {scope === 'products' && (
-          <div className="rounded-xl border border-gray-200 p-3 space-y-2">
+          <div className="space-y-2 rounded-xl border border-line p-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Позиции</p>
-              <span className="text-xs text-gray-400">Выбрано: {selectedProductIds.size}</span>
+              <p className="text-sm font-medium text-ink-2">Позиции</p>
+              <span className="text-xs tabular-nums text-ink-3">Выбрано: {selectedProductIds.size}</span>
             </div>
 
-            {/* Selected chips */}
             {selectedProductsList.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
+              <ul className="flex flex-wrap gap-1.5" aria-label="Выбранные позиции">
                 {selectedProductsList.map((p) => (
-                  <span
+                  <li
                     key={p.id}
-                    className="inline-flex items-center gap-1 rounded-full bg-primary-50 text-primary-700 pl-2.5 pr-1.5 py-1 text-xs font-medium"
+                    className="inline-flex items-center gap-1 rounded-md bg-accent-soft py-0.5 pl-2 pr-1 text-xs font-medium text-accent-text"
                   >
                     <span className="max-w-[160px] truncate">{p.name}</span>
                     <button
                       type="button"
                       onClick={() => toggleProduct(p.id)}
-                      className="rounded-full p-0.5 hover:bg-primary-100"
-                      aria-label="Убрать"
+                      aria-label={`Убрать ${p.name}`}
+                      className={cn(
+                        'flex h-5 w-5 items-center justify-center rounded hover:bg-accent-soft-2',
+                        focusRing,
+                      )}
                     >
-                      <X className="h-3 w-3" />
+                      <X className="h-3 w-3" aria-hidden="true" />
                     </button>
-                  </span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
 
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Поиск товара..."
-                className="input pl-9"
-              />
-            </div>
+            <SearchInput value={productSearch} onChange={setProductSearch} placeholder="Поиск товара…" size="sm" />
 
             {productResults.length > 0 && (
-              <div className="space-y-1 max-h-52 overflow-y-auto">
-                {productResults.map((p) => {
-                  const on = selectedProductIds.has(p.id);
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => toggleProduct(p.id)}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left transition-colors ${
-                        on ? 'border-primary-500 bg-primary-50/60' : 'border-gray-200 bg-white hover:bg-gray-50'
-                      }`}
-                    >
-                      <span
-                        className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 ${
-                          on ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
-                        }`}
-                      >
-                        {on && <CheckIcon className="h-3 w-3 text-white" />}
-                      </span>
-                      <Package className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                      <span className="flex-1 min-w-0 text-sm text-gray-900 truncate">{p.name}</span>
-                      <span className="text-xs text-gray-400 tabular-nums flex-shrink-0">
-                        {formatMoney(p.sellPrice)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <ul className="max-h-52 space-y-1 overflow-y-auto">
+                {productResults.map((p) => (
+                  <li key={p.id}>
+                    <Checkbox
+                      checked={selectedProductIds.has(p.id)}
+                      onChange={() => toggleProduct(p.id)}
+                      className="w-full rounded-lg px-2 py-1.5 hover:bg-surface-2"
+                      label={
+                        <span className="flex items-center gap-2">
+                          <Package className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                          <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                          <Money value={p.sellPrice} className="text-xs text-ink-3" />
+                        </span>
+                      }
+                    />
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
 
-        {/* 2. Direction + percent --------------------------------------- */}
-        <div>
-          <label className="label">Действие</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setDirection('increase')}
-              className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
-                direction === 'increase'
-                  ? 'border-green-500 bg-green-50 text-green-700'
-                  : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              <TrendingUp className="h-4 w-4" />
-              Поднять
-            </button>
-            <button
-              type="button"
-              onClick={() => setDirection('decrease')}
-              className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
-                direction === 'decrease'
-                  ? 'border-red-500 bg-red-50 text-red-700'
-                  : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              <TrendingDown className="h-4 w-4" />
-              Снизить
-            </button>
-          </div>
-        </div>
-
-        <div>
-          <label className="label">Процент</label>
-          <div className="relative">
-            <input
-              type="number"
+        {/* 2. Направление и процент -------------------------------------- */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Действие">
+            <SegmentedControl<Direction>
+              aria-label="Направление изменения цены"
+              fullWidth
+              value={direction}
+              onChange={setDirection}
+              options={[
+                { value: 'increase', label: 'Поднять', icon: TrendingUp },
+                { value: 'decrease', label: 'Снизить', icon: TrendingDown },
+              ]}
+            />
+          </Field>
+          <Field label="Процент" htmlFor="bulk-percent">
+            <Input
+              id="bulk-percent"
               inputMode="decimal"
               value={percent}
               onChange={(e) => setPercent(e.target.value)}
-              min="0"
-              step="0.1"
               placeholder="Например: 10"
-              className="input pr-9 tabular-nums"
+              className="tabular-nums"
+              rightSlot={<span className="text-sm text-ink-3">%</span>}
             />
-            <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-              %
-            </span>
-          </div>
+          </Field>
         </div>
 
-        {/* 3. Rounding -------------------------------------------------- */}
-        <div>
-          <label className="label">Округление</label>
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                { key: 'none', label: 'Нет' },
-                { key: 'up', label: 'Вверх' },
-                { key: 'down', label: 'Вниз' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setRoundingMode(opt.key)}
-                className={`px-3 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
-                  roundingMode === opt.key
-                    ? 'bg-primary-600 text-white border-primary-600'
-                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {roundingMode !== 'none' && (
-            <div className="mt-3 space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                {STEP_PRESETS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => {
-                      setRoundingStep(s);
-                      setCustomStep('');
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                      roundingStep === s && customStep === ''
-                        ? 'border-primary-500 bg-primary-50 text-primary-700'
-                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
+        {/* 3. Округление ------------------------------------------------- */}
+        <Field
+          label="Округление"
+          hint={
+            roundingMode !== 'none' ? (
+              <>
+                Округляем до шага {roundingStep}. Пример: 156{' '}
+                <ArrowRight className="inline h-3 w-3" aria-hidden="true" /> {exampleAfter}
+              </>
+            ) : undefined
+          }
+        >
+          <div className="space-y-3">
+            <SegmentedControl<RoundingMode>
+              aria-label="Режим округления"
+              fullWidth
+              value={roundingMode}
+              onChange={setRoundingMode}
+              options={[
+                { value: 'none', label: 'Нет' },
+                { value: 'up', label: 'Вверх' },
+                { value: 'down', label: 'Вниз' },
+              ]}
+            />
+            {roundingMode !== 'none' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedControl<string>
+                  aria-label="Шаг округления"
+                  size="sm"
+                  value={customStepActive ? 'custom' : String(roundingStep)}
+                  onChange={(v) => {
+                    if (v === 'custom') return;
+                    setRoundingStep(Number(v));
+                    setCustomStep('');
+                  }}
+                  options={[
+                    ...STEP_PRESETS.map((s) => ({ value: String(s), label: String(s) })),
+                    { value: 'custom', label: 'Свой', disabled: !customStepActive },
+                  ]}
+                />
+                <Input
+                  size="sm"
+                  inputMode="numeric"
+                  aria-label="Свой шаг округления"
                   value={customStep}
                   onChange={(e) => {
                     setCustomStep(e.target.value);
@@ -447,76 +406,58 @@ export default function BulkPriceAdjustModal({
                     if (v > 0) setRoundingStep(v);
                   }}
                   placeholder="свой шаг"
-                  className="input w-28 tabular-nums"
+                  className="w-28 tabular-nums"
                 />
               </div>
-              <p className="text-xs text-gray-500">
-                Округляем до шага {roundingStep}. Пример: 156 <ArrowRight className="inline h-3 w-3 -mt-0.5" />{' '}
-                {exampleAfter}.
-              </p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </Field>
 
-        {/* 4. Preview --------------------------------------------------- */}
-        <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 space-y-3">
-          <button type="button" onClick={handlePreview} disabled={previewLoading} className="btn-secondary w-full">
-            {previewLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Предпросмотр
-          </button>
+        {/* 4. Предпросмотр ----------------------------------------------- */}
+        <div className="space-y-3 rounded-xl border border-line bg-surface-2 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-ink">Предпросмотр «было → стало»</p>
+            <Button variant="secondary" size="sm" onClick={handlePreview} loading={previewLoading}>
+              Рассчитать
+            </Button>
+          </div>
 
-          {preview && (
+          {preview ? (
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-gray-900">
-                Затронуто <span className="text-primary-600 tabular-nums">{preview.affected}</span> позиций
+              <p className="text-sm text-ink-2">
+                Затронуто{' '}
+                <Badge tone={preview.affected > 0 ? 'accent' : 'neutral'}>
+                  {countLabel(preview.affected, ['позиция', 'позиции', 'позиций'])}
+                </Badge>
               </p>
 
               {examples.length > 0 ? (
-                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+                <div className="overflow-hidden rounded-lg border border-line bg-surface">
+                  <ul className="max-h-64 divide-y divide-line overflow-y-auto">
                     {examples.map((ex) => (
-                      <div key={ex.id} className="flex items-center gap-2 px-3 py-2">
-                        <span className="flex-1 min-w-0 text-sm text-gray-800 truncate">{ex.name}</span>
-                        <span className="text-sm text-gray-400 line-through tabular-nums flex-shrink-0">
-                          {formatMoney(ex.oldPrice)}
-                        </span>
-                        <ArrowRight className="h-3.5 w-3.5 text-gray-300 flex-shrink-0" />
-                        <span className="text-sm font-bold text-gray-900 tabular-nums flex-shrink-0">
-                          {formatMoney(ex.newPrice)}
-                        </span>
-                      </div>
+                      <li key={ex.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                        <span className="min-w-0 flex-1 truncate text-ink-2">{ex.name}</span>
+                        <Money value={ex.oldPrice} className="flex-shrink-0 text-ink-3 line-through" />
+                        <ArrowRight className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                        <Money value={ex.newPrice} className="flex-shrink-0 font-semibold text-ink" />
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                   {preview.affected > examples.length && (
-                    <p className="px-3 py-1.5 text-[11px] text-gray-400 bg-gray-50 border-t border-gray-100">
+                    <p className="border-t border-line bg-surface-2 px-3 py-1.5 text-2xs text-ink-3">
                       Показаны первые {examples.length} из {preview.affected}
                     </p>
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-ink-3">
                   {preview.affected === 0 ? 'Под условие не попала ни одна позиция.' : 'Примеры недоступны.'}
                 </p>
               )}
             </div>
+          ) : (
+            <p className="text-xs text-ink-3">Кнопка «Применить» откроется после расчёта.</p>
           )}
-        </div>
-
-        {/* 5. Actions --------------------------------------------------- */}
-        <div className="flex items-center justify-end gap-3 pt-1">
-          <button type="button" onClick={onClose} className="btn-ghost">
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!canApply}
-            className="btn-primary"
-            title={!preview ? 'Сначала сделайте предпросмотр' : undefined}
-          >
-            {applyMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-            Применить
-          </button>
         </div>
       </div>
 
@@ -524,9 +465,9 @@ export default function BulkPriceAdjustModal({
         isOpen={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={handleApply}
-        title="Подтверждение"
-        message={`Изменить цену у ${preview?.affected ?? 0} позиций?`}
-        confirmText="Изменить"
+        title="Изменить цены?"
+        message={`Продажная цена изменится у ${countLabel(preview?.affected ?? 0, ['позиции', 'позиций', 'позиций'])}. Отменить массовое изменение можно только новой корректировкой.`}
+        confirmText="Изменить цены"
         variant="primary"
       />
     </Modal>
