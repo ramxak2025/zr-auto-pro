@@ -2,15 +2,15 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Archive, ArrowRightLeft, Building2, Home, Check, LogIn, Loader2, Users } from 'lucide-react';
+import { Archive, ArrowRightLeft, Building2, Check, Home, LogIn, Users } from 'lucide-react';
 
 import { pointsApi } from '../api/services';
 import { endSessionWithNotice } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
-import { usePointAccess, pointKindLabel, POINTS_QUERY_KEY } from '../hooks/usePoints';
-import PageHeader from '../components/PageHeader';
-import ConfirmDialog from '../components/ConfirmDialog';
-import { formatMoney } from '../../../shared/utils/formatters';
+import { POINTS_QUERY_KEY, pointKindLabel, usePointAccess, usePointsQuery } from '../hooks/usePoints';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Money, PageHeader, Skeleton, SkeletonCard, cn } from '../ui';
+import { toneChip } from '../ui/tokens';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
 import { buildPointCardRows, type PointCardRow } from '../../../shared/utils/pointCards';
 import { resolveSwitchPointFailure } from '../utils/switchPointFailure';
 import { readOfflineQueueState } from '../utils/swCache';
@@ -37,8 +37,7 @@ import type { PointsListResponse, PointsSummaryResponse, TenantPoint } from '../
  *     кнопка «Перейти в этот филиал» зовёт POST /auth/switch-point. Это не вход
  *     без пароля и не повышение прав: личность подтверждена живой сессией, а
  *     сервер перепроверяет и право, и доступ к целевому филиалу. Технически это
- *     ПЕРЕВЫПУСК сессии — новый токен с новым филиалом, прежний гаснет сразу,
- *     поэтому перехваченный старый токен не остаётся рабочим;
+ *     ПЕРЕВЫПУСК сессии — новый токен с новым филиалом, прежний гаснет сразу;
  *
  *   • СОТРУДНИК меняет филиал ВЫХОДОМ И ВХОДОМ, как и раньше (163). У него
  *     филиал определяет, куда уходят ЕГО деньги (зарплата считается по филиалу
@@ -56,8 +55,7 @@ import type { PointsListResponse, PointsSummaryResponse, TenantPoint } from '../
  * основной — это САМ автосервис владельца, ему принадлежит вся история,
  * заведённая до появления филиалов, и назван он по названию компании. Ровно
  * один такой у тенанта, сервер отдаёт его первым. Поэтому он идёт отдельной
- * секцией сверху: строкой вровень с только что открытым филиалом владелец не
- * понял бы, где лежит его многолетняя выручка.
+ * секцией сверху.
  *
  * КТО ВИДИТ ЧТО:
  *   • список — любой сотрудник тенанта, у которого больше одного автосервиса;
@@ -71,12 +69,10 @@ import type { PointsListResponse, PointsSummaryResponse, TenantPoint } from '../
  *     «Филиалы сотрудника»): это ответ на вопрос про ЧЕЛОВЕКА.
  *
  * ЗАКРЫТЫЙ ФИЛИАЛ ТОЖЕ ПОЛУЧАЕТ КАРТОЧКУ. Список строится по СВОДКЕ
- * (buildPointCardRows), а не по одному лишь живому GET /points. Пока карточки
- * брались только из живых точек, деньги закрытого филиала оставались в итогах
- * тенанта, а карточки для них не существовало: владелец складывал карточки, не
- * получал цифру с главной и читал это как пропажу денег. Такая карточка
- * подписана «Закрыт», нарисована приглушённо, стоит ПОСЛЕ действующих и НЕ
- * предлагает войти — филиал заархивирован, сервер туда не пустит.
+ * (buildPointCardRows), а не по одному лишь живому GET /points: деньги
+ * закрытого филиала остаются в итогах тенанта, и без карточки владелец читал
+ * бы расхождение с главной как пропажу денег. Такая карточка подписана
+ * «Закрыт», приглушена, стоит ПОСЛЕ действующих и НЕ предлагает войти.
  *
  * Автосервисы заводит и архивирует только суперадмин — здесь их не создают.
  */
@@ -95,6 +91,8 @@ export default function PointsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { points, selectable, currentPointId, isLoading } = usePointAccess();
+  // Тот же слот ['points'] — только ради isError/refetch, лишнего запроса нет.
+  const pointsQuery = usePointsQuery();
 
   const canEnter = (pointId: string) => selectable.some((p) => p.id === pointId);
 
@@ -112,41 +110,37 @@ export default function PointsPage() {
   // очереди (167-web). Пустая очередь сюда не попадает вовсе — там переход
   // мгновенный, без единого вопроса.
   const [switchTarget, setSwitchTarget] = useState<{ point: TenantPoint; pending: number } | null>(null);
-  // Филиал, в который прямо сейчас идёт мгновенный переход (167). Не просто
-  // флаг «занято»: пока он не null, ВСЕ кнопки перехода выключены — второй
-  // клик по соседней карточке отправил бы второй перевыпуск сессии, и какой из
-  // двух токенов окажется живым, зависело бы от гонки ответов.
+  // Филиал, в который прямо сейчас идёт мгновенный переход (167). Пока он не
+  // null, ВСЕ кнопки перехода выключены — второй клик по соседней карточке
+  // отправил бы второй перевыпуск сессии, и какой из двух токенов окажется
+  // живым, зависело бы от гонки ответов.
   const [switchingId, setSwitchingId] = useState<string | null>(null);
-  // ТОТ ЖЕ ЗАПРЕТ, НО СИНХРОННЫЙ. Состояние обновляется к следующему рендеру, а
-  // между нажатием и запросом теперь есть await (замер офлайн-очереди): два
-  // быстрых клика по разным карточкам успели бы проскочить оба, увидев в
-  // замыкании ещё пустой switchingId. Два перевыпуска сессии подряд — это гонка
-  // за то, какой токен останется живым, то есть выход на экран входа посреди
-  // работы. Ref выставляется ДО первого await и потому не проскакивает.
+  // ТОТ ЖЕ ЗАПРЕТ, НО СИНХРОННЫЙ: между нажатием и запросом есть await (замер
+  // офлайн-очереди), и два быстрых клика проскочили бы, увидев в замыкании ещё
+  // пустой switchingId. Ref выставляется ДО первого await и потому не проскакивает.
   const switchBusyRef = useRef(false);
   // Отказ сервера при переходе. Держим на экране, а не показываем тостом:
   // тост уезжает через три секунды, а «Мгновенное переключение доступно только
   // руководителю» — это инструкция, которую человек должен успеть прочитать.
   const [switchError, setSwitchError] = useState<string | null>(null);
 
-  const { data: summaryData, isLoading: summaryLoading } = useQuery<PointsSummaryResponse>({
+  const summaryQuery = useQuery<PointsSummaryResponse>({
     queryKey: ['points-summary'],
     queryFn: async () => (await pointsApi.summary()).data,
     enabled: canSeeMoney,
     staleTime: 30_000,
   });
+  const summaryData = summaryQuery.data;
 
   /**
    * МГНОВЕННЫЙ ПЕРЕХОД (167). Сервер перевыпускает сессию, AuthContext.switchPoint
    * применяет новый токен и стирает все кеши — ровно как после входа. Дальше
-   * уводим на главную: она первой покажет цифры нового филиала, и это лучшее
-   * доказательство, что переход состоялся.
+   * уводим на главную: она первой покажет цифры нового филиала.
    *
    * ОФЛАЙН-ОЧЕРЕДЬ РЕШАЕТСЯ ВНУТРИ switchPoint: он доигрывает её под СТАРЫМ
    * токеном и отказывается менять филиал, если что-то осталось. Здесь мы ловим
    * этот отказ отдельно от серверных — у него другая причина и другой ответ
-   * человеку («ваши чеки на месте, вы остались там же»), а
-   * resolveSwitchPointFailure принял бы его за отсутствие связи.
+   * человеку («ваши чеки на месте, вы остались там же»).
    */
   const handleSwitch = async (point: TenantPoint) => {
     if (switchBusyRef.current) return; // защита от двойного нажатия
@@ -157,21 +151,17 @@ export default function PointsPage() {
       await switchPoint(point.id);
       // Индикатор филиала в шапке обязан показать новый автосервис СРАЗУ, а не
       // через сетевой ответ. Переход стирает все кеши (иначе мелькнут цифры
-      // прежнего филиала), и вместе с ними пропадает справочник точек — на этот
-      // кадр подпись в шапке исчезла бы, а человек как раз в этот момент ищет
-      // подтверждение, что попал куда хотел. Справочник филиалов — данные
-      // ТЕНАНТА (имена, адреса, состав), они одинаковы во всех филиалах и
-      // чужими деньгами быть не могут, поэтому класть их обратно безопасно.
-      // Прогрев из commitSession уже в пути и заменит это ответом сервера.
+      // прежнего филиала), и вместе с ними пропадает справочник точек.
+      // Справочник филиалов — данные ТЕНАНТА (имена, адреса, состав), они
+      // одинаковы во всех филиалах и чужими деньгами быть не могут, поэтому
+      // класть их обратно безопасно. Прогрев из commitSession уже в пути.
       queryClient.setQueryData<PointsListResponse>(POINTS_QUERY_KEY, { points, currentPointId: point.id });
       setSwitchingId(null);
       toast.success(`Вы перешли в «${point.name}»`);
       navigate('/dashboard', { replace: true });
     } catch (err) {
       if (isOfflineQueueBlockedError(err)) {
-        // Сессия НЕ тронута: филиал прежний, токен прежний, очередь на диске
-        // цела. Единственное, что нужно человеку, — узнать, что именно не
-        // отправилось и что делать дальше.
+        // Сессия НЕ тронута: филиал прежний, токен прежний, очередь на диске цела.
         setSwitchError(queueBlockMessage(err.verdict, currentPointName));
         setSwitchingId(null);
         return;
@@ -179,18 +169,15 @@ export default function PointsPage() {
       const failure = resolveSwitchPointFailure(err);
       if (failure.action === 'relogin') {
         // Сессия действительно мертва (токен отозван, аккаунт уволен): второй
-        // попытки нет. Уводим на вход, показав причину, — иначе человек
-        // останется на экранах, где ни одна цифра больше не обновится. Кнопки
-        // НАМЕРЕННО оставляем выключенными: до перезагрузки на вход нажимать
-        // здесь больше нечего, а повторное нажатие дало бы ту же ошибку.
+        // попытки нет. Уводим на вход, показав причину. Кнопки НАМЕРЕННО
+        // остаются выключенными: до перезагрузки нажимать здесь больше нечего.
         endSessionWithNotice(failure.message);
         return;
       }
       if (failure.action === 'refresh') {
         // Отказ по ПРАВИЛУ (403), сессия жива. Перечитываем список филиалов и
-        // профиль: чаще всего доступ к филиалу сняли или право управления
-        // персоналом забрали прямо сейчас, и интерфейс обязан перестать
-        // предлагать действие, которого больше нет.
+        // профиль: доступ к филиалу сняли или право забрали прямо сейчас, и
+        // интерфейс обязан перестать предлагать действие, которого больше нет.
         void queryClient.invalidateQueries({ queryKey: POINTS_QUERY_KEY });
         void queryClient.invalidateQueries({ queryKey: ['points-summary'] });
         void refreshUser();
@@ -199,24 +186,16 @@ export default function PointsPage() {
       setSwitchingId(null);
     } finally {
       // Снимаем синхронный запрет ВСЕГДА. На ветке `relogin` кнопки остаются
-      // выключенными сами — там switchingId намеренно не сбрасывается, и жать
-      // до перезагрузки на вход больше нечего.
+      // выключенными сами — там switchingId намеренно не сбрасывается.
       switchBusyRef.current = false;
     }
   };
 
   /**
-   * НАЖАТИЕ «ПЕРЕЙТИ В ЭТОТ ФИЛИАЛ» — развилка по офлайн-очереди (167-web).
-   *
-   *   • очередь пуста (обычный случай, сеть была) → переходим СРАЗУ, без
-   *     единого вопроса: лишний диалог на каждом переходе быстро перестают
-   *     читать, и тогда он не защитит и в тот единственный раз, когда нужен;
-   *   • в очереди что-то есть → спрашиваем. Это деньги, набитые без связи, и
-   *     человек обязан узнать о них ДО перехода и увидеть, сколько их.
-   *
+   * НАЖАТИЕ «ПЕРЕЙТИ В ЭТОТ ФИЛИАЛ» — развилка по офлайн-очереди (167-web):
+   * очередь пуста → переходим СРАЗУ; в очереди что-то есть → спрашиваем.
    * Замер best-effort: отказ диска даёт ноль и НЕ запрещает переход — реальную
-   * гарантию всё равно держит switchPoint, который доигрывает очередь и
-   * откажется менять филиал, если что-то осталось.
+   * гарантию всё равно держит switchPoint.
    */
   const requestSwitch = async (point: TenantPoint) => {
     if (switchBusyRef.current) return;
@@ -240,10 +219,7 @@ export default function PointsPage() {
 
   /**
    * НАЖАТИЕ «ВОЙТИ В ЭТОТ ФИЛИАЛ» (путь сотрудника: выход и вход заново).
-   * Замеряем очередь ради честного предупреждения: выход из аккаунта её
-   * СТИРАЕТ — за клавиатуру может сесть другой человек, и досылать чужие
-   * записи под его токеном нельзя. Молча удалять пробитые чеки — нельзя тем
-   * более, поэтому цифра попадает прямо в текст диалога.
+   * Замеряем очередь ради честного предупреждения: выход из аккаунта её СТИРАЕТ.
    */
   const requestEnter = async (point: TenantPoint) => {
     let pending = 0;
@@ -257,14 +233,12 @@ export default function PointsPage() {
 
   // Карточки строим по ВСЕМ автосервисам тенанта — живым и закрытым с деньгами
   // в периоде, — а не только по доступным этому человеку: сводка по сети это
-  // взгляд сверху, и владелец, назначенный на один филиал, обязан видеть цифры
-  // второго. Действие «Войти» при этом появляется только там, куда сервер его
+  // взгляд сверху. Действие «Войти» при этом появляется только там, куда сервер
   // пустит. Правило сборки и порядок — общие с мобилкой (shared/utils/pointCards).
   const rows = useMemo(() => buildPointCardRows({ points, summary: summaryData?.points ?? [] }), [points, summaryData]);
 
   // Основной сервис — отдельной секцией сверху. Закрытым он быть не может
-  // (API запрещает архивировать основной), но проверку держим явной: закрытая
-  // карточка в секции «Основной сервис» выглядела бы как закрытая компания.
+  // (API запрещает архивировать основной), но проверку держим явной.
   const mainRow = rows.find((r) => r.isMain && !r.isArchived) ?? null;
   const branchRows = rows.filter((r) => r !== mainRow);
 
@@ -272,7 +246,10 @@ export default function PointsPage() {
     <PointCard
       key={row.pointId}
       row={row}
-      summaryLoading={summaryLoading}
+      summaryLoading={summaryQuery.isLoading && !summaryData}
+      summaryError={summaryQuery.isError && !summaryData}
+      onSummaryRetry={() => summaryQuery.refetch()}
+      summaryFetching={summaryQuery.isFetching}
       canSeeMoney={canSeeMoney}
       canSeeProfit={canSeeProfit}
       isCurrent={row.pointId === currentPointId}
@@ -294,87 +271,90 @@ export default function PointsPage() {
   );
 
   return (
-    <div>
-      <PageHeader title="Филиалы" icon={Building2} subtitle="Основной сервис и филиалы" />
+    <div className="space-y-5">
+      <PageHeader title="Филиалы" icon={Building2} subtitle="Основной сервис и филиалы — сводка по сети" />
 
-      <div className="max-w-3xl space-y-6">
-        {isLoading && rows.length === 0 ? (
-          <div className="flex justify-center py-16">
-            <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="card px-5 py-10 text-center">
-            <Building2 className="mx-auto h-8 w-8 text-gray-300" />
-            <p className="mt-3 text-sm font-semibold text-gray-900">Пока нет филиалов</p>
-            <p className="mt-1 text-xs text-gray-500">
-              Дополнительный автосервис заводит суперадмин в панели управления.
+      {isLoading && rows.length === 0 ? (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          <SkeletonCard lines={3} className="md:col-span-2 xl:col-span-3" />
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={3} />
+        </div>
+      ) : pointsQuery.isError && rows.length === 0 ? (
+        <ErrorRow
+          message="Не удалось загрузить список филиалов"
+          onRetry={() => pointsQuery.refetch()}
+          loading={pointsQuery.isFetching}
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={Building2}
+          title="Пока нет филиалов"
+          description="Дополнительный автосервис заводит суперадмин в панели управления."
+        />
+      ) : (
+        <>
+          {/* Объяснение модели первым экраном: это не «главная и её придаток»,
+              а самостоятельные автосервисы одного владельца. Вторая фраза
+              разная: руководителю переход стоит одного нажатия, сотруднику —
+              выхода и входа, и обещать ему лёгкий переход нельзя. */}
+          <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
+            Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя
+            зарплата. Вы работаете в том филиале, который выбран в этой сессии;{' '}
+            {canSwitchInstantly
+              ? 'перейти в другой можно прямо здесь — данные перезагрузятся под новый филиал.'
+              : 'чтобы перейти в другой, нужно выйти и войти заново.'}
+          </p>
+
+          {switchError && (
+            <p
+              role="alert"
+              className="rounded-lg border border-bad/20 bg-bad-soft px-4 py-3 text-sm leading-relaxed text-bad-text"
+            >
+              {switchError}
             </p>
-          </div>
-        ) : (
-          <>
-            {/* Объяснение модели первым экраном: это не «главная и её
-                придаток», а два самостоятельных автосервиса одного владельца.
-                Без этой строки владелец не понимает, почему выручка не
-                суммируется и где он вообще сейчас работает. Вторая фраза
-                разная: руководителю переход стоит одного нажатия, сотруднику —
-                выхода и входа, и обещать ему лёгкий переход нельзя. */}
-            <p className="text-sm leading-relaxed text-gray-600">
-              Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя
-              зарплата. Вы работаете в том филиале, который выбран в этой сессии;{' '}
-              {canSwitchInstantly
-                ? 'перейти в другой можно прямо здесь — данные перезагрузятся под новый филиал.'
-                : 'чтобы перейти в другой, нужно выйти и войти заново.'}
-            </p>
+          )}
 
-            {switchError && (
-              <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700">
-                {switchError}
-              </p>
-            )}
+          {mainRow && (
+            <section aria-labelledby="points-main" className="space-y-2">
+              <h2 id="points-main" className="text-xs font-semibold text-ink-3">
+                Основной сервис
+              </h2>
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">{renderCard(mainRow)}</div>
+            </section>
+          )}
 
-            {mainRow && (
-              <section className="space-y-2">
-                <SectionLabel text="Основной сервис" />
-                {renderCard(mainRow)}
-              </section>
-            )}
-
-            {branchRows.length > 0 && (
-              <section className="space-y-2">
-                <SectionLabel text={branchRows.length === 1 ? 'Филиал' : 'Филиалы'} />
-                <div className="space-y-3">{branchRows.map(renderCard)}</div>
-              </section>
-            )}
-          </>
-        )}
-      </div>
+          {branchRows.length > 0 && (
+            <section aria-labelledby="points-branches" className="space-y-2">
+              <h2 id="points-branches" className="text-xs font-semibold text-ink-3">
+                {branchRows.length === 1 ? 'Филиал' : 'Филиалы'}
+              </h2>
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">{branchRows.map(renderCard)}</div>
+            </section>
+          )}
+        </>
+      )}
 
       {/*
         «Войти в этот филиал» = ВЫЙТИ и войти заново. Этот путь остаётся у
         сотрудника: мгновенный перевыпуск сессии сервер разрешает только
-        держателю права управления персоналом (167).
-
-        Отсюда и честное предупреждение: страница выйдет из аккаунта, всё
-        незавершённое (набранный заказ-наряд живёт только в памяти вкладки)
-        будет потеряно, и понадобится ввести пароль. Лучше сказать это до, чем
-        показать человеку экран входа без объяснений.
+        держателю права управления персоналом (167). Отсюда и честное
+        предупреждение: страница выйдет из аккаунта, всё незавершённое будет
+        потеряно, и понадобится ввести пароль.
       */}
       <ConfirmDialog
         isOpen={!!enterTarget}
         onClose={() => setEnterTarget(null)}
         onConfirm={() => {
           // logout() гасит токен и чистит все кеши, поэтому после входа в
-          // другой филиал на экранах не мелькнут цифры этого. Дальше
-          // маршрутизация сама уводит на /login.
+          // другой филиал на экранах не мелькнут цифры этого.
           logout();
         }}
         title={enterTarget ? `Войти в «${enterTarget.point.name}»?` : ''}
         message={
           'Филиал выбирается при входе, поэтому сейчас произойдёт выход из аккаунта. Введите телефон и пароль ещё раз ' +
           'и выберите этот филиал в списке. Незавершённые заказ-наряды будут потеряны.' +
-          // Про офлайн-очередь говорим отдельной фразой и только когда в ней
-          // что-то есть: постоянная строка про «неотправленные операции»
-          // пугала бы там, где терять нечего.
+          // Про офлайн-очередь говорим отдельной фразой и только когда в ней что-то есть.
           pendingQueueLogoutWarning(enterTarget?.pending ?? 0)
         }
         confirmText="Выйти и войти"
@@ -382,15 +362,9 @@ export default function PointsPage() {
       />
 
       {/*
-        МГНОВЕННЫЙ ПЕРЕХОД ПРИ НЕПУСТОЙ ОФЛАЙН-ОЧЕРЕДИ (167-web). Этот диалог
-        появляется ТОЛЬКО когда на устройстве есть неотправленное: пустая
-        очередь переключает филиал сразу.
-
-        Подтверждение означает «сначала отправь, потом переходи»: switchPoint
-        доигрывает очередь под токеном ТЕКУЩЕГО филиала и меняет сессию только
-        по нулевому остатку. Поэтому кнопка названа действием целиком —
-        «Отправить и перейти», а не «Перейти»: обещать один шаг, делая два,
-        значит соврать ровно там, где на кону деньги.
+        МГНОВЕННЫЙ ПЕРЕХОД ПРИ НЕПУСТОЙ ОФЛАЙН-ОЧЕРЕДИ (167-web). Появляется
+        ТОЛЬКО когда на устройстве есть неотправленное. Подтверждение означает
+        «сначала отправь, потом переходи» — кнопка названа действием целиком.
       */}
       <ConfirmDialog
         isOpen={!!switchTarget}
@@ -408,13 +382,12 @@ export default function PointsPage() {
   );
 }
 
-function SectionLabel({ text }: { text: string }) {
-  return <h2 className="text-xs font-bold uppercase tracking-wide text-gray-400">{text}</h2>;
-}
-
 function PointCard({
   row,
   summaryLoading,
+  summaryError,
+  onSummaryRetry,
+  summaryFetching,
   canSeeMoney,
   canSeeProfit,
   isCurrent,
@@ -427,6 +400,9 @@ function PointCard({
 }: {
   row: PointCardRow;
   summaryLoading: boolean;
+  summaryError: boolean;
+  onSummaryRetry: () => void;
+  summaryFetching: boolean;
   canSeeMoney: boolean;
   canSeeProfit: boolean;
   isCurrent: boolean;
@@ -446,97 +422,92 @@ function PointCard({
   // Дом = сам автосервис владельца, здание = открытый позже филиал.
   const Icon = row.isMain ? Home : Building2;
   const memberCount = point?.memberIds?.length ?? 0;
+  const mastersOnShift =
+    summary && summary.mastersOnShift !== null && summary.mastersOnShift !== undefined
+      ? String(summary.mastersOnShift)
+      : '—';
 
   return (
-    <div
-      className={`card space-y-4 p-5 ${
-        // Закрытый филиал приглушён и не выделен рамкой: он уходит на второй
-        // план, но цифры внутри остаются читаемыми — ради них карточка и есть.
-        // Фон остаётся белым: на сером плитки цифр (bg-gray-50) слились бы с
-        // карточкой. Та же степень приглушения, что и в мобилке.
-        isArchived ? 'opacity-[0.86] shadow-none' : isCurrent ? 'ring-1 ring-primary-500' : ''
-      }`}
+    <Card
+      as="article"
+      padding="none"
+      aria-label={`${kind}: ${row.name}`}
+      className={cn(
+        'flex flex-col',
+        // Закрытый филиал приглушён и не выделен рамкой: цифры внутри остаются
+        // читаемыми — ради них карточка и есть. Текущий — акцентная рамка.
+        isArchived ? 'opacity-80 shadow-none' : isCurrent ? 'border-accent/50 ring-1 ring-accent/30' : '',
+      )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3 px-5 pt-5">
         <span
-          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
-            isArchived
-              ? 'bg-gray-100 text-gray-400'
-              : isCurrent
-                ? 'bg-primary-600 text-white'
-                : 'bg-primary-50 text-primary-600'
-          }`}
+          className={cn(
+            'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg',
+            isArchived ? toneChip.neutral : isCurrent ? 'bg-accent text-white' : toneChip.accent,
+          )}
         >
-          <Icon className="h-5 w-5" />
+          <Icon className="h-5 w-5" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className={`truncate text-base font-bold ${isArchived ? 'text-gray-500' : 'text-gray-900'}`}>{row.name}</p>
-          <p className="truncate text-xs text-gray-500">{row.address ? `${kind} · ${row.address}` : kind}</p>
+          <h3 className={cn('truncate text-md font-semibold', isArchived ? 'text-ink-2' : 'text-ink')}>{row.name}</h3>
+          <p className="truncate text-xs text-ink-3">{row.address ? `${kind} · ${row.address}` : kind}</p>
         </div>
         {/* «Закрыт» важнее «Вы здесь»: человек, оставшийся в сессии закрытого
             филиала, обязан в первую очередь узнать, что филиала больше нет. */}
         {isArchived ? (
-          <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-bold text-gray-500">
-            <Archive className="h-3.5 w-3.5" />
-            Закрыт
-          </span>
+          <Badge icon={Archive}>Закрыт</Badge>
         ) : (
           isCurrent && (
-            <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-600">
-              <Check className="h-3.5 w-3.5" />
+            <Badge tone="accent" icon={Check}>
               Вы здесь
-            </span>
+            </Badge>
           )
         )}
       </div>
 
       {canSeeMoney && (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="px-5 pt-4">
           {summaryLoading && !summary ? (
-            <div className="col-span-2 flex justify-center py-3">
-              <Loader2 className="h-5 w-5 animate-spin text-primary-600" />
+            <div className="grid grid-cols-2 gap-3" role="status" aria-label="Загрузка сводки…">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-10" />
+              ))}
             </div>
+          ) : summaryError && !summary ? (
+            <ErrorRow message="Сводка не загрузилась" onRetry={onSummaryRetry} loading={summaryFetching} />
           ) : (
-            <>
-              <Metric label="Оборот за день" value={summary ? formatMoney(summary.revenueToday) : '—'} />
-              <Metric label="Оборот за месяц" value={summary ? formatMoney(summary.revenueMonth) : '—'} />
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <MiniStat
+                size="sm"
+                label="Оборот за день"
+                value={summary ? <Money value={summary.revenueToday} /> : '—'}
+              />
+              <MiniStat
+                size="sm"
+                label="Оборот за месяц"
+                value={summary ? <Money value={summary.revenueMonth} /> : '—'}
+              />
               {canSeeProfit && (
-                <Metric
+                <MiniStat
+                  size="sm"
                   label="Прибыль за месяц"
-                  value={summary ? formatMoney(summary.profitMonth) : '—'}
-                  tone={
-                    summary && summary.profitMonth < 0
-                      ? 'text-red-600'
-                      : summary && summary.profitMonth > 0
-                        ? 'text-green-600'
-                        : undefined
-                  }
+                  value={summary ? <Money value={summary.profitMonth} colorize /> : '—'}
                 />
               )}
               {/* mastersOnShift === null — учёт смен у тенанта ВЫКЛЮЧЕН, факта
-                  не существует. Рисуем прочерк: «0» прочиталось бы как
-                  «сегодня никто не вышел» и отправило бы владельца искать
-                  несуществующую проблему. */}
-              <Metric
-                label="Мастеров на работе"
-                value={
-                  summary && summary.mastersOnShift !== null && summary.mastersOnShift !== undefined
-                    ? String(summary.mastersOnShift)
-                    : '—'
-                }
-              />
-            </>
+                  не существует. Рисуем прочерк: «0» прочиталось бы как «сегодня
+                  никто не вышел». */}
+              <MiniStat size="sm" label="Мастеров на работе" value={mastersOnShift} />
+            </div>
           )}
         </div>
       )}
 
       {/* Состав филиала — СПРАВОЧНО. Настраивается в карточке сотрудника, и
-          подпись обязана об этом сказать: иначе владелец будет искать здесь
-          кнопку, которой больше нет. У закрытого филиала состава нет: работать
-          в нём уже нельзя, и строка про закреплённых только сбивала бы. */}
+          подпись обязана об этом сказать. У закрытого филиала состава нет. */}
       {point && !isArchived && (
-        <p className="flex items-start gap-1.5 text-xs text-gray-400">
-          <Users className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+        <p className="flex items-start gap-1.5 px-5 pt-4 text-xs text-ink-3">
+          <Users className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
           <span>
             {memberCount > 0
               ? `Закреплены: ${memberCount} — настраивается в карточке сотрудника`
@@ -545,62 +516,51 @@ function PointCard({
         </p>
       )}
 
-      {isArchived ? (
-        // Действия «Войти» здесь НЕ БЫВАЕТ: филиал заархивирован, и сервер в
-        // него не пустит. Карточка существует только ради денег периода —
-        // чтобы сумма карточек сошлась с итогом сети на главной.
-        <p className="flex items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-center text-xs font-semibold text-gray-500">
-          <Archive className="h-4 w-4 flex-shrink-0" />
-          {isCurrent ? 'Филиал закрыт. Вы работаете в нём до выхода' : 'Филиал закрыт — войти нельзя'}
-        </p>
-      ) : isCurrent ? (
-        <div className="flex w-full items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-bold text-gray-500">
-          <Check className="h-4 w-4" />
-          Вы работаете здесь
-        </div>
-      ) : canEnter && canSwitchInstantly ? (
-        // МГНОВЕННЫЙ ПЕРЕХОД (167) — руководителю. Одно нажатие: сервер
-        // перевыпускает сессию, клиент меняет токен и перезагружает все данные.
-        <button
-          type="button"
-          onClick={onSwitch}
-          disabled={switching || switchBlocked}
-          aria-busy={switching}
-          aria-label={`Перейти в автосервис ${row.name} — данные загрузятся заново`}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {switching ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRightLeft className="h-4 w-4" />}
-          {switching ? 'Переходим…' : 'Перейти в этот филиал'}
-        </button>
-      ) : canEnter ? (
-        // СОТРУДНИК: филиал меняется выходом и входом (163). Мгновенный переход
-        // сервер ему не разрешит, поэтому и кнопки такой здесь нет.
-        <button
-          type="button"
-          onClick={onEnter}
-          aria-label={`Войти в автосервис ${row.name} — потребуется выйти и войти заново`}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-primary-700"
-        >
-          <LogIn className="h-4 w-4" />
-          Войти в этот филиал
-        </button>
-      ) : (
-        // Филиал виден в сводке, но войти в него нельзя: сотруднику не выдан
-        // доступ. Пишем это прямо — кнопка, отвечающая отказом, была бы хуже.
-        <p className="rounded-xl bg-gray-50 px-4 py-2.5 text-center text-xs text-gray-500">
-          Вход в этот филиал вам не открыт — доступ настраивает владелец в карточке сотрудника.
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Плитка одной цифры в карточке автосервиса. */
-function Metric({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-xl bg-gray-50 px-3 py-2">
-      <p className="truncate text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</p>
-      <p className={`truncate text-sm font-bold ${tone ?? 'text-gray-900'}`}>{value}</p>
-    </div>
+      <div className="mt-auto px-5 pb-5 pt-4">
+        {isArchived ? (
+          // Действия «Войти» здесь НЕ БЫВАЕТ: филиал заархивирован, сервер в него
+          // не пустит. Карточка существует ради денег периода.
+          <p className="flex items-center justify-center gap-2 rounded-lg bg-surface-3 px-4 py-2.5 text-center text-xs font-medium text-ink-2">
+            <Archive className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            {isCurrent ? 'Филиал закрыт. Вы работаете в нём до выхода' : 'Филиал закрыт — войти нельзя'}
+          </p>
+        ) : isCurrent ? (
+          <p className="flex items-center justify-center gap-2 rounded-lg bg-accent-soft px-4 py-2.5 text-sm font-medium text-accent-text">
+            <Check className="h-4 w-4" aria-hidden="true" />
+            Вы работаете здесь
+          </p>
+        ) : canEnter && canSwitchInstantly ? (
+          // МГНОВЕННЫЙ ПЕРЕХОД (167) — руководителю. Одно нажатие: сервер
+          // перевыпускает сессию, клиент меняет токен и перезагружает все данные.
+          <Button
+            variant="secondary"
+            fullWidth
+            icon={ArrowRightLeft}
+            onClick={onSwitch}
+            disabled={switchBlocked}
+            loading={switching}
+            aria-label={`Перейти в автосервис ${row.name} — данные загрузятся заново`}
+          >
+            Перейти в этот филиал
+          </Button>
+        ) : canEnter ? (
+          // СОТРУДНИК: филиал меняется выходом и входом (163).
+          <Button
+            variant="secondary"
+            fullWidth
+            icon={LogIn}
+            onClick={onEnter}
+            aria-label={`Войти в автосервис ${row.name} — потребуется выйти и войти заново`}
+          >
+            Войти в этот филиал
+          </Button>
+        ) : (
+          // Филиал виден в сводке, но войти в него нельзя: сотруднику не выдан доступ.
+          <p className="rounded-lg bg-surface-2 px-4 py-2.5 text-center text-xs text-ink-3">
+            Вход в этот филиал вам не открыт — доступ настраивает владелец в карточке сотрудника.
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }

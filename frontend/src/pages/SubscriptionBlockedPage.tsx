@@ -1,34 +1,36 @@
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, PauseCircle, Mail, LogOut } from 'lucide-react';
+import { AlertTriangle, LogOut, Mail, PauseCircle } from 'lucide-react';
+
 import { subscriptionApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type { SubscriptionInfo, SubscriptionStatus } from '../types';
+import { Button, Card, Money, buttonClasses, cn } from '../ui';
+import { toneChip } from '../ui/tokens';
 
-// Payment / support inbox surfaced on the hard-gate screen (102).
+// Почта оплаты/поддержки на экране жёсткой блокировки (102).
 const SUPPORT_EMAIL = 'info@autexa.pw';
 
 /**
- * Hard-gate screen shown to EVERY employee of a tenant whose subscription is no
- * longer `active`. App.tsx routes all paths here off the authoritative
- * `SubscriptionInfo.status`; this page only chooses the message (expired vs
- * suspended) and is otherwise read-only — there is no way back into the app
- * until the status flips back to `active` server-side.
+ * Экран жёсткой блокировки для КАЖДОГО сотрудника тенанта, чья подписка больше
+ * не `active`. App.tsx уводит сюда все пути по авторитетному
+ * `SubscriptionInfo.status`; страница лишь выбирает текст (истекла / приостановлена)
+ * и не имеет пути назад в приложение, пока статус не станет `active` на сервере.
  */
 export default function SubscriptionBlockedPage() {
   const { user, logout } = useAuth();
 
-  const { data: sub } = useQuery({
+  // Слот ['subscription'] хранит сам объект подписки — та же форма, что у
+  // оболочки, FeatureGate и App (одна форма слота на всех потребителей).
+  const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: () => subscriptionApi.get(),
-    select: (res) => res.data as SubscriptionInfo,
+    queryFn: async () => (await subscriptionApi.get()).data,
     staleTime: 5 * 60 * 1000,
   });
 
   const tenantName = sub?.tenantName || user?.tenant?.name || 'Автосервис';
 
-  // Authoritative status from GET /subscription. If the request hasn't resolved,
-  // fall back to the me()-embedded tenant: an explicit suspension marker wins,
-  // otherwise we treat the block as an expiry (the common case App gated on).
+  // Авторитетный статус из GET /subscription. Пока запрос не ответил — берём
+  // из me()-тенанта: явный маркер приостановки важнее, иначе считаем истечением.
   const status: SubscriptionStatus = sub?.status ?? (user?.tenant?.suspendedAt ? 'suspended' : 'expired');
 
   const planName = sub?.planName?.trim() || null;
@@ -44,81 +46,69 @@ export default function SubscriptionBlockedPage() {
   const mailUrl = `mailto:${SUPPORT_EMAIL}?subject=${mailSubject}`;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
-          {/* Brand */}
-          <div className="flex justify-center mb-6">
+    <div className="flex min-h-screen items-center justify-center bg-canvas p-4">
+      <main className="w-full max-w-md">
+        <Card padding="none" className="p-8">
+          <div className="mb-6 flex justify-center">
             <img src="/logo.png" alt="Autexa" className="h-11 w-auto object-contain" />
           </div>
 
-          {/* Status icon */}
           <div
-            className={`w-16 h-16 mx-auto mb-5 rounded-2xl flex items-center justify-center ${
-              isSuspended ? 'bg-red-50' : 'bg-amber-50'
-            }`}
+            className={cn(
+              'mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-xl',
+              isSuspended ? toneChip.bad : toneChip.warn,
+            )}
           >
             {isSuspended ? (
-              <PauseCircle className="w-8 h-8 text-red-500" />
+              <PauseCircle className="h-8 w-8" aria-hidden="true" />
             ) : (
-              <AlertTriangle className="w-8 h-8 text-amber-500" />
+              <AlertTriangle className="h-8 w-8" aria-hidden="true" />
             )}
           </div>
 
-          {/* Heading */}
-          <h1 className="text-xl font-bold text-gray-900 text-center mb-1.5">{heading}</h1>
-          <p className="text-sm text-gray-400 text-center mb-5">{tenantName}</p>
+          <h1 className="text-center text-title text-ink">{heading}</h1>
+          <p className="mb-5 mt-1.5 text-center text-sm text-ink-3">{tenantName}</p>
 
-          {/* Message */}
           {isSuspended ? (
-            <p className="text-sm text-gray-600 leading-relaxed text-center mb-6">
+            <p className="mb-6 text-center text-sm leading-relaxed text-ink-2">
               Работа в приложении временно недоступна. Для возобновления свяжитесь с нами:{' '}
-              <a href={mailUrl} className="font-medium text-primary-600 hover:text-primary-700">
+              <a href={mailUrl} className="rounded font-medium text-accent hover:text-accent-hover focus-ring">
                 {SUPPORT_EMAIL}
               </a>
               .
             </p>
           ) : (
-            <p className="text-sm text-gray-600 leading-relaxed text-center mb-6">
+            <p className="mb-6 text-center text-sm leading-relaxed text-ink-2">
               К сожалению, действие вашей подписки на Autexa завершилось. Чтобы продолжить работу,{' '}
               {planName ? (
                 <>
-                  продлите тариф «<span className="font-semibold text-gray-800">{planName}</span>» —{' '}
-                  <span className="font-semibold text-gray-800">{planPrice.toLocaleString('ru-RU')} ₽/мес</span>
+                  продлите тариф «<span className="font-semibold text-ink">{planName}</span>» —{' '}
+                  <Money value={planPrice} className="font-semibold text-ink" />
+                  <span className="font-semibold text-ink">/мес</span>
                 </>
               ) : (
                 'продлите подписку'
               )}
               . До оплаты доступ к разделам ограничен. По вопросам оплаты:{' '}
-              <a href={mailUrl} className="font-medium text-primary-600 hover:text-primary-700">
+              <a href={mailUrl} className="rounded font-medium text-accent hover:text-accent-hover focus-ring">
                 {SUPPORT_EMAIL}
               </a>
               .
             </p>
           )}
 
-          {/* Primary contact — email support */}
-          <a
-            href={mailUrl}
-            className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl transition-colors mb-3"
-          >
-            <Mail className="w-5 h-5" />
+          <a href={mailUrl} className={buttonClasses({ variant: 'primary', size: 'lg', fullWidth: true })}>
+            <Mail className="h-5 w-5" aria-hidden="true" />
             Написать в поддержку
           </a>
 
-          {/* Logout */}
-          <button
-            onClick={logout}
-            className="flex items-center justify-center gap-2 w-full py-2.5 px-4 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
+          <Button variant="ghost" icon={LogOut} fullWidth onClick={logout} className="mt-3">
             Выйти из аккаунта
-          </button>
-        </div>
+          </Button>
+        </Card>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-gray-400 mt-6">Autexa &copy; 2026</p>
-      </div>
+        <p className="mt-6 text-center text-xs text-ink-3">Autexa &copy; 2026</p>
+      </main>
     </div>
   );
 }

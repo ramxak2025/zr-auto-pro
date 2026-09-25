@@ -1,38 +1,41 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft,
-  Building2,
-  Phone,
-  MapPin,
-  Mail,
-  FileText,
-  Save,
-  Loader2,
-  Receipt,
-  Gift,
-  Percent,
-  Wallet,
-  LayoutGrid,
-  Clock,
-} from 'lucide-react';
+import { useEffect, useId, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Building2, Car, Gift, LayoutGrid, Receipt, Settings, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
+
+import { checksApi, loyaltyApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { usePointsQuery } from '../hooks/usePoints';
-import Switch from '../components/Switch';
-import QueryState from '../components/QueryState';
-import Modal from '../components/Modal';
-
-import type { Tenant, LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict } from '../types';
 import {
-  formatMoney,
-  formatDateTime,
-  RU_TIMEZONES,
-  DEFAULT_TIMEZONE,
-  timezoneOption,
-} from '../../../shared/utils/formatters';
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Checkbox,
+  Field,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  QueryState,
+  Select,
+  SkeletonCard,
+  Switch,
+  TabPanel,
+  Tabs,
+  Textarea,
+} from '../ui';
+import type { TabItem } from '../ui';
+import { ErrorRow } from '../components/dashboard/shared';
+import StickySaveBar, { useUnsavedGuard } from '../components/company/StickySaveBar';
+import ToggleRow from '../components/company/ToggleRow';
+import VinSettingsCard from '../components/company/VinSettingsCard';
+import type { LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict, Tenant } from '../types';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
+import { DEFAULT_TIMEZONE, RU_TIMEZONES, formatDateTime, timezoneOption } from '../../../shared/utils/formatters';
 
 interface CompanyForm {
   name: string;
@@ -55,11 +58,46 @@ interface CompanyForm {
   pointsSharedClients: boolean;
 }
 
-// ---- POS «Кассовая смена + роли» ----
-// Single permission-gated switch. GET /checks/pos-settings is readable by
-// anyone, PATCH requires settings_manage (волна Битрикс24). One boolean →
-// mutate on toggle (no separate Save step). The server enforces the cashier
-// rules; this switch just turns the regime on/off tenant-wide.
+function formFromCompany(company: Tenant): CompanyForm {
+  return {
+    name: company.name || '',
+    phone: company.phone || '',
+    address: company.address || '',
+    email: company.email || '',
+    description: company.description || '',
+    legalName: company.legalName || '',
+    inn: company.inn || '',
+    kpp: company.kpp || '',
+    ogrn: company.ogrn || '',
+    receiptFooter: company.receiptFooter || '',
+    timezone: company.timezone || DEFAULT_TIMEZONE,
+    pointsSharedClients: company.pointsSharedClients !== false,
+  };
+}
+
+const EMPTY_FORM: CompanyForm = {
+  name: '',
+  phone: '',
+  address: '',
+  email: '',
+  description: '',
+  legalName: '',
+  inn: '',
+  kpp: '',
+  ogrn: '',
+  receiptFooter: '',
+  timezone: DEFAULT_TIMEZONE,
+  pointsSharedClients: true,
+};
+
+type SettingsTab = 'company' | 'cars' | 'cash' | 'loyalty';
+
+// ---------------------------------------------------------------------------
+// POS «Кассовая смена + роли». Один тумблер под settings_manage: GET
+// /checks/pos-settings читается любым, PATCH — settings_manage (волна
+// Битрикс24). Переключение — сразу мутацией, без отдельного «Сохранить»;
+// правила кассира проверяет сервер, тумблер лишь включает режим для тенанта.
+// ---------------------------------------------------------------------------
 function ShiftModeSection() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -110,9 +148,8 @@ function ShiftModeSection() {
     },
     // 409 и прочие ошибки сервера показываем его текстом (например, конфликт
     // включения режима) — без перевода в общий «Ошибка сохранения», если текст есть.
-    onError: (err: any) => {
-      const msg = err?.response?.data?.message;
-      toast.error(typeof msg === 'string' ? msg : 'Ошибка сохранения');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения');
     },
   });
 
@@ -133,7 +170,7 @@ function ShiftModeSection() {
         setConflict(data as PosSettingsConflict);
         return;
       }
-      toast.error(data?.message || 'Ошибка сохранения');
+      toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения');
     },
   });
 
@@ -171,199 +208,185 @@ function ShiftModeSection() {
     a.isOwnerClass || (acceptorDraft ? acceptorDraft.has(a.id) : a.selected);
 
   return (
-    <div className="card p-5 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Режим кассовой смены</h2>
-        </div>
-        <Switch
-          label="Режим кассовой смены"
-          checked={enabled}
-          onChange={(v) => mutation.mutate(v)}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
+    <Card padding="none">
+      <CardHeader
+        icon={Wallet}
+        title="Режим кассовой смены"
+        subtitle="Кто проводит оплату по заказ-наряду"
+        actions={
+          <Switch
+            label="Режим кассовой смены"
+            checked={enabled}
+            onChange={(v) => mutation.mutate(v)}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        {isError ? (
+          <ErrorRow message="Не удалось загрузить состояние режима" onRetry={() => refetch()} loading={isFetching} />
+        ) : (
+          <>
+            <div className="space-y-1">
+              <p className="text-sm text-ink-2">
+                {enabled
+                  ? 'Оплату по заказ-наряду проводят только кассиры — сотрудники с правом «Приём оплаты». Мастер без этого права создаёт отложенный заказ-наряд без оплаты, а цена товара фиксируется по складу.'
+                  : 'Выключено. Оплату по заказ-наряду может проводить любой сотрудник с доступом к кассе.'}
+              </p>
+              <p className="text-xs text-ink-3">
+                Право «Приём оплаты (кассир)» назначается сотруднику в разделе «Пользователи».
+              </p>
+            </div>
 
-      {isError ? (
-        <div className="flex items-center justify-between gap-3 text-xs text-gray-500">
-          <span>Не удалось загрузить состояние режима.</span>
-          <button onClick={() => refetch()} disabled={isFetching} className="btn-secondary btn-sm press-soft">
-            Повторить
-          </button>
-        </div>
-      ) : (
-        <>
-          <p className="text-xs text-gray-500">
-            {enabled
-              ? 'Оплату по заказ-наряду проводят только кассиры — сотрудники с правом «Приём оплаты». Мастер без этого права создаёт отложенный заказ-наряд без оплаты, а цена товара фиксируется по складу.'
-              : 'Выключено. Оплату по заказ-наряду может проводить любой сотрудник с доступом к кассе.'}
-          </p>
-          <p className="text-[11px] text-gray-500">
-            Право «Приём оплаты (кассир)» назначается сотруднику в разделе «Сотрудники».
-          </p>
+            {/* 155 — «Кто принимает оплату»: режим «по ролям» либо явный список */}
+            <div className="space-y-3 border-t border-line pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-ink">Кто принимает оплату</h3>
+                  <p className="mt-0.5 text-xs text-ink-3">
+                    {manualMode
+                      ? 'Только отмеченные сотрудники. Директор и администратор владельца принимают всегда.'
+                      : 'По ролям: сотрудники с правом «Приём оплаты» из матрицы роли.'}
+                  </p>
+                </div>
+                {manualMode ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => acceptorsMutation.mutate(null)}
+                    disabled={acceptorsMutation.isPending}
+                  >
+                    Сбросить к ролям
+                  </Button>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={startManual}
+                    disabled={acceptorsLoading || acceptorsError || acceptorsMutation.isPending}
+                  >
+                    Выбрать вручную
+                  </Button>
+                )}
+              </div>
 
-          {/* 155 — «Кто принимает оплату»: режим «по ролям» либо явный список */}
-          <div className="pt-3 border-t border-gray-100 space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-gray-900">Кто принимает оплату</h3>
-              {manualMode ? (
-                <button
-                  type="button"
-                  onClick={() => acceptorsMutation.mutate(null)}
-                  disabled={acceptorsMutation.isPending}
-                  className="btn-ghost btn-sm text-xs"
-                >
-                  Сбросить к ролям
-                </button>
+              {acceptorsLoading ? (
+                <p className="py-2 text-xs text-ink-3" role="status">
+                  Загружаем сотрудников…
+                </p>
+              ) : acceptorsError ? (
+                <ErrorRow
+                  message="Не удалось загрузить список сотрудников"
+                  onRetry={() => refetchAcceptors()}
+                  loading={acceptorsFetching}
+                />
               ) : (
-                <button
-                  type="button"
-                  onClick={startManual}
-                  disabled={acceptorsLoading || acceptorsError || acceptorsMutation.isPending}
-                  className="btn-secondary btn-sm"
-                >
-                  Выбрать вручную
-                </button>
+                <ul className="divide-y divide-line rounded-lg border border-line">
+                  {(acceptors ?? []).map((a) => {
+                    const subtitle = `${a.roleName || '—'}${a.isOwnerClass ? ' · всегда может принимать' : ''}`;
+                    return (
+                      <li key={a.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                        {manualMode ? (
+                          <Checkbox
+                            label={a.fullName || 'Без имени'}
+                            description={subtitle}
+                            checked={isAcceptorChecked(a)}
+                            // owner-class — «всегда может», из списка не убирается.
+                            disabled={a.isOwnerClass || acceptorsMutation.isPending}
+                            onChange={() => toggleAcceptor(a.id)}
+                          />
+                        ) : (
+                          <>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm text-ink">{a.fullName || 'Без имени'}</p>
+                              <p className="truncate text-xs text-ink-3">{subtitle}</p>
+                            </div>
+                            {a.effective ? (
+                              <Badge tone="ok" dot>
+                                Принимает
+                              </Badge>
+                            ) : (
+                              <span className="flex-shrink-0 text-xs text-ink-3">Нет права</span>
+                            )}
+                          </>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {acceptorDraft !== null && (
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => acceptorsMutation.mutate([...acceptorDraft])}
+                    loading={acceptorsMutation.isPending}
+                  >
+                    Сохранить список
+                  </Button>
+                </div>
               )}
             </div>
-            <p className="text-xs text-gray-500">
-              {manualMode
-                ? 'Оплату принимают только отмеченные сотрудники. Директор и администратор владельца принимают всегда.'
-                : 'По ролям: оплату принимают сотрудники с правом «Приём оплаты» из матрицы роли.'}
-            </p>
-
-            {acceptorsLoading ? (
-              <p className="text-xs text-gray-400 py-2">Загружаем сотрудников…</p>
-            ) : acceptorsError ? (
-              <div className="flex items-center justify-between gap-3 text-xs text-gray-500 py-1">
-                <span>Не удалось загрузить список сотрудников.</span>
-                <button
-                  type="button"
-                  onClick={() => refetchAcceptors()}
-                  disabled={acceptorsFetching}
-                  className="btn-secondary btn-sm press-soft"
-                >
-                  Повторить
-                </button>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {(acceptors ?? []).map((a) =>
-                  manualMode ? (
-                    <label key={a.id} className="flex items-center gap-3 py-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAcceptorChecked(a)}
-                        // owner-class — «всегда может», из списка не убирается.
-                        disabled={a.isOwnerClass || acceptorsMutation.isPending}
-                        onChange={() => toggleAcceptor(a.id)}
-                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-60"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-gray-900 truncate">{a.fullName || 'Без имени'}</p>
-                        <p className="text-[11px] text-gray-500 truncate">
-                          {a.roleName || '—'}
-                          {a.isOwnerClass ? ' · всегда может принимать' : ''}
-                        </p>
-                      </div>
-                    </label>
-                  ) : (
-                    <div key={a.id} className="flex items-center justify-between gap-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-gray-900 truncate">{a.fullName || 'Без имени'}</p>
-                        <p className="text-[11px] text-gray-500 truncate">
-                          {a.roleName || '—'}
-                          {a.isOwnerClass ? ' · всегда может принимать' : ''}
-                        </p>
-                      </div>
-                      {a.effective ? (
-                        <span className="badge badge-green flex-shrink-0">Принимает</span>
-                      ) : (
-                        <span className="text-[11px] text-gray-400 flex-shrink-0">Нет права</span>
-                      )}
-                    </div>
-                  ),
-                )}
-              </div>
-            )}
-
-            {acceptorDraft !== null && (
-              <button
-                type="button"
-                onClick={() => acceptorsMutation.mutate([...acceptorDraft])}
-                disabled={acceptorsMutation.isPending}
-                className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-              >
-                {acceptorsMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
-                Сохранить список
-              </button>
-            )}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </CardBody>
 
       {/* 409: незакрытые заказ-наряды на доске — режим переключать нельзя */}
       <Modal
         isOpen={!!conflict}
         onClose={() => setConflict(null)}
         title={`Сначала закройте заказы (${conflict?.count ?? 0})`}
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Режим нельзя переключить, пока на доске есть незакрытые заказ-наряды. Примите по ним оплату и выдайте — или
-            снимите с доски.
-          </p>
-          <div className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-            {(conflict?.checks ?? []).map((c) => (
-              <div key={c.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">Заказ #{c.number}</p>
-                  <p className="text-xs text-gray-500 truncate">{c.clientName ?? 'Розничный покупатель'}</p>
-                </div>
-                <span className="text-sm font-bold text-gray-700 tabular-nums whitespace-nowrap">
-                  {formatMoney(c.totalRevenue)}
-                </span>
-              </div>
-            ))}
-          </div>
-          {(conflict?.count ?? 0) > (conflict?.checks?.length ?? 0) && (
-            <p className="text-xs text-gray-400">
-              Показаны первые {conflict?.checks?.length ?? 0} из {conflict?.count ?? 0}.
-            </p>
-          )}
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
-            <button type="button" onClick={() => setConflict(null)} className="btn-secondary">
+        description="Режим нельзя переключить, пока на доске есть незакрытые заказ-наряды"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConflict(null)}>
               Закрыть
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              icon={LayoutGrid}
               onClick={() => {
                 setConflict(null);
                 navigate('/work-board');
               }}
-              className="btn-primary"
             >
-              <LayoutGrid className="w-4 h-4" />
               Перейти на Доску
-            </button>
-          </div>
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-ink-2">Примите по ним оплату и выдайте — или снимите с доски.</p>
+          <ul className="divide-y divide-line rounded-lg border border-line">
+            {(conflict?.checks ?? []).map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-ink">Заказ #{c.number}</p>
+                  <p className="truncate text-xs text-ink-3">{c.clientName ?? 'Розничный покупатель'}</p>
+                </div>
+                <Money value={c.totalRevenue} className="text-sm font-semibold text-ink" />
+              </li>
+            ))}
+          </ul>
+          {(conflict?.count ?? 0) > (conflict?.checks?.length ?? 0) && (
+            <p className="text-xs text-ink-3">
+              Показаны первые {conflict?.checks?.length ?? 0} из {conflict?.count ?? 0}.
+            </p>
+          )}
         </div>
       </Modal>
-    </div>
+    </Card>
   );
 }
 
-// ---- Loyalty program settings (settings_manage) ----
+// ---------------------------------------------------------------------------
+// Программа лояльности (settings_manage)
+// ---------------------------------------------------------------------------
 function LoyaltySettingsSection() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   // Backend PATCH /loyalty/settings → settings_manage (волна Битрикс24).
   const canManage = hasPermission('settings_manage');
+  const idBase = useId();
 
   const {
     data: settings,
@@ -404,7 +427,7 @@ function LoyaltySettingsSection() {
       toast.success('Программа лояльности сохранена');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   if (!canManage) return null;
@@ -428,99 +451,95 @@ function LoyaltySettingsSection() {
     });
   };
 
+  const percentSlot = <span className="text-sm text-ink-3">%</span>;
+
   return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Gift className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Программа лояльности</h2>
-        </div>
-        <Switch
-          label="Программа лояльности"
-          checked={form.enabled}
-          onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
+    <Card padding="none">
+      <CardHeader
+        icon={Gift}
+        title="Программа лояльности"
+        subtitle="Бонусы за покупки и оплата ими"
+        actions={
+          <Switch
+            label="Программа лояльности"
+            checked={form.enabled}
+            onChange={(v) => update({ enabled: v })}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        <p className="text-sm text-ink-2">
+          {form.enabled
+            ? 'Клиентам начисляются бонусы за покупки, которыми можно частично оплатить новый заказ.'
+            : 'Программа выключена. Начисление бонусов остановлено, накопленный баланс остаётся доступным для списания.'}
+        </p>
 
-      <p className="text-xs text-gray-500 -mt-1">
-        {form.enabled
-          ? 'Клиентам начисляются бонусы за покупки, которыми можно частично оплатить новый заказ.'
-          : 'Программа выключена. Начисление бонусов остановлено, накопленный баланс остаётся доступным для списания.'}
-      </p>
-
-      {/* Gate the percent fields + Save behind a successful load — a failed
-          fetch must not expose editable 0/0 defaults that could Save over the
-          real accrual/redeem config. */}
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="py-4"
-        errorTitle="Не удалось загрузить программу лояльности"
-        errorDescription="Проценты скрыты, чтобы не перезаписать сохранённые настройки. Повторите загрузку."
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="label">
-              <Percent className="h-3 w-3 inline mr-1" />
-              Начисление с покупки
-            </label>
-            <div className="relative">
-              <input
+        {/* Проценты и «Сохранить» — только после успешной загрузки: при ошибке
+            нельзя показывать редактируемые 0/0, которыми можно затереть настройку. */}
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="py-4"
+          errorTitle="Не удалось загрузить программу лояльности"
+          errorDescription="Проценты скрыты, чтобы не перезаписать сохранённые настройки. Повторите загрузку."
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Начисление с покупки"
+              htmlFor={`${idBase}-accrual`}
+              hint="Процент от суммы чека, который зачисляется бонусами."
+            >
+              <Input
+                id={`${idBase}-accrual`}
                 value={String(form.accrualPercent)}
                 onChange={(e) => update({ accrualPercent: clampPercent(e.target.value) })}
-                className="input pr-9 tabular-nums"
                 inputMode="numeric"
                 placeholder="0"
+                className="tabular-nums"
+                rightSlot={percentSlot}
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">%</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">Процент от суммы чека, который зачисляется бонусами.</p>
-          </div>
-          <div>
-            <label className="label">
-              <Percent className="h-3 w-3 inline mr-1" />
-              Макс. оплата бонусами
-            </label>
-            <div className="relative">
-              <input
+            </Field>
+            <Field
+              label="Макс. оплата бонусами"
+              htmlFor={`${idBase}-redeem`}
+              hint="Какую долю чека можно погасить бонусами."
+            >
+              <Input
+                id={`${idBase}-redeem`}
                 value={String(form.redeemMaxPercent)}
                 onChange={(e) => update({ redeemMaxPercent: clampPercent(e.target.value) })}
-                className="input pr-9 tabular-nums"
                 inputMode="numeric"
                 placeholder="0"
+                className="tabular-nums"
+                rightSlot={percentSlot}
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">%</span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-1">Какую долю чека можно погасить бонусами.</p>
+            </Field>
           </div>
-        </div>
-
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={mutation.isPending}
-            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+        </QueryState>
+      </CardBody>
+      {dirty && (
+        <CardFooter>
+          <span className="text-xs text-ink-3">Изменения не сохранены</span>
+          <Button onClick={handleSave} loading={mutation.isPending}>
             Сохранить программу
-          </button>
-        )}
-      </QueryState>
-    </div>
+          </Button>
+        </CardFooter>
+      )}
+    </Card>
   );
 }
 
-export default function CompanySettingsPage() {
-  const navigate = useNavigate();
+// ---------------------------------------------------------------------------
+// Реквизиты компании (company_manage) — одна форма, одна кнопка сохранения в
+// липкой полосе снизу (аудит 2.8: кнопка появлялась только под четырьмя
+// карточками и на 1280×800 оставалась за фолдом).
+// ---------------------------------------------------------------------------
+function CompanyDetailsTab() {
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
-  // Реквизиты компании (/my-company) — owner-only ключ company_manage (у
-  // системного «Администратора» сид false — как прежний @Roles d/sa). Секции
-  // «Кассовая смена» и «Лояльность» — settings_manage и self-gate'ятся сами.
-  const canManageCompany = hasPermission('company_manage');
+  const idBase = useId();
 
   const {
     data: company,
@@ -531,25 +550,11 @@ export default function CompanySettingsPage() {
   } = useQuery<Tenant>({
     queryKey: ['my-company'],
     queryFn: async () => (await myCompanyApi.get()).data,
-    enabled: canManageCompany,
   });
 
-  const [form, setForm] = useState<CompanyForm>({
-    name: '',
-    phone: '',
-    address: '',
-    email: '',
-    description: '',
-    legalName: '',
-    inn: '',
-    kpp: '',
-    ogrn: '',
-    receiptFooter: '',
-    timezone: DEFAULT_TIMEZONE,
-    pointsSharedClients: true,
-  });
-
+  const [form, setForm] = useState<CompanyForm>(EMPTY_FORM);
   const [dirty, setDirty] = useState(false);
+  useUnsavedGuard(dirty);
 
   // 156 — тумблер «Общая база клиентов» виден только когда есть что разделять
   // (живых точек больше одной). Общий хук = тот же слот ['points'], что у
@@ -559,20 +564,7 @@ export default function CompanySettingsPage() {
 
   useEffect(() => {
     if (company) {
-      setForm({
-        name: company.name || '',
-        phone: company.phone || '',
-        address: company.address || '',
-        email: company.email || '',
-        description: company.description || '',
-        legalName: company.legalName || '',
-        inn: company.inn || '',
-        kpp: company.kpp || '',
-        ogrn: company.ogrn || '',
-        receiptFooter: company.receiptFooter || '',
-        timezone: company.timezone || DEFAULT_TIMEZONE,
-        pointsSharedClients: company.pointsSharedClients !== false,
-      });
+      setForm(formFromCompany(company));
       setDirty(false);
     }
   }, [company]);
@@ -584,12 +576,17 @@ export default function CompanySettingsPage() {
       toast.success('Настройки сохранены');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const update = (patch: Partial<CompanyForm>) => {
     setForm((prev) => ({ ...prev, ...patch }));
     setDirty(true);
+  };
+
+  const discard = () => {
+    if (company) setForm(formFromCompany(company));
+    setDirty(false);
   };
 
   const handleSave = () => {
@@ -614,251 +611,281 @@ export default function CompanySettingsPage() {
     });
   };
 
-  // Без company_manage реквизиты компании скрыты (сервер отвечает 403 на
-  // GET/PATCH /my-company), но секции на settings_manage остаются доступны.
-  if (!canManageCompany) {
-    return (
-      <div className="space-y-5 max-w-2xl mx-auto pb-8">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <div>
-            <h1 className="page-title">Настройки компании</h1>
-            <p className="text-sm text-gray-500">Кассовая смена и программа лояльности</p>
-          </div>
-        </div>
-        <ShiftModeSection />
-        <LoyaltySettingsSection />
-      </div>
-    );
-  }
+  const tzOptions = useMemo(
+    () => RU_TIMEZONES.map((z) => ({ value: z.id, label: `${z.label} · ${z.utc} — ${z.hint}` })),
+    [],
+  );
 
   return (
-    <div className="space-y-5 max-w-2xl mx-auto pb-8">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <div>
-          <h1 className="page-title">Настройки компании</h1>
-          <p className="text-sm text-gray-500">Реквизиты и данные для чеков</p>
-        </div>
-      </div>
-
-      {/* Gate the entire editable form behind a successful load — on fetch
-          failure the fields would render empty and a Save would overwrite the
-          real company/receipt data. */}
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="min-h-[40vh]"
-        errorTitle="Не удалось загрузить настройки компании"
-        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые реквизиты. Повторите загрузку."
-      >
+    // Форма редактируется только после успешной загрузки: при ошибке поля были
+    // бы пустыми, и «Сохранить» затёр бы настоящие реквизиты.
+    <QueryState
+      isLoading={isLoading}
+      isError={isError}
+      onRetry={refetch}
+      isFetching={isFetching}
+      loader={
         <div className="space-y-5">
-          {/* Company info */}
-          <div className="card p-5 space-y-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Building2 className="h-4 w-4 text-gray-500" />
-              <h2 className="text-sm font-semibold text-gray-900">Основные данные</h2>
-            </div>
-
-            <div>
-              <label className="label">Название компании</label>
-              <input
+          <SkeletonCard lines={4} />
+          <SkeletonCard lines={3} />
+        </div>
+      }
+      minHeight="min-h-[40vh]"
+      errorTitle="Не удалось загрузить настройки компании"
+      errorDescription="Форма скрыта, чтобы не перезаписать сохранённые реквизиты. Повторите загрузку."
+    >
+      <form
+        className="space-y-5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (dirty && !mutation.isPending) handleSave();
+        }}
+      >
+        <Card padding="none">
+          <CardHeader icon={Building2} title="Основные данные" subtitle="Название и контакты автосервиса" />
+          <CardBody className="space-y-4">
+            <Field label="Название компании" htmlFor={`${idBase}-name`}>
+              <Input
+                id={`${idBase}-name`}
+                name="organization"
+                autoComplete="organization"
                 value={form.name}
                 onChange={(e) => update({ name: e.target.value })}
-                className="input"
                 placeholder="Автосервис «Мастер»"
               />
-            </div>
+            </Field>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="label">
-                  <Phone className="h-3 w-3 inline mr-1" />
-                  Телефон
-                </label>
-                <input
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Телефон" htmlFor={`${idBase}-phone`}>
+                <Input
+                  id={`${idBase}-phone`}
+                  type="tel"
+                  name="tel"
+                  autoComplete="tel"
                   value={form.phone}
                   onChange={(e) => update({ phone: e.target.value })}
-                  className="input"
                   placeholder="+7 (999) 123-45-67"
                 />
-              </div>
-              <div>
-                <label className="label">
-                  <Mail className="h-3 w-3 inline mr-1" />
-                  Email
-                </label>
-                <input
+              </Field>
+              <Field label="Email" htmlFor={`${idBase}-email`}>
+                <Input
+                  id={`${idBase}-email`}
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  spellCheck={false}
                   value={form.email}
                   onChange={(e) => update({ email: e.target.value })}
-                  className="input"
                   placeholder="info@autoservice.ru"
                 />
-              </div>
+              </Field>
             </div>
 
-            <div>
-              <label className="label">
-                <MapPin className="h-3 w-3 inline mr-1" />
-                Адрес
-              </label>
-              <input
+            <Field label="Адрес" htmlFor={`${idBase}-address`}>
+              <Input
+                id={`${idBase}-address`}
+                name="street-address"
+                autoComplete="street-address"
                 value={form.address}
                 onChange={(e) => update({ address: e.target.value })}
-                className="input"
                 placeholder="г. Москва, ул. Примерная, д. 1"
               />
-            </div>
+            </Field>
 
-            {/* 157 — часовой пояс автосервиса. Обычный select в стиле
-                остальных полей формы; список фиксированный, сервер принимает
-                только эти id. */}
-            <div>
-              <label className="label">
-                <Clock className="h-3 w-3 inline mr-1" />
-                Часовой пояс
-              </label>
-              <select value={form.timezone} onChange={(e) => update({ timezone: e.target.value })} className="input">
-                {RU_TIMEZONES.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.label} · {z.utc} — {z.hint}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-500">
-                От пояса зависит, что считается «сегодня»: выручка за день, смены и отчёты. Сейчас в этом поясе:{' '}
-                {formatDateTime(new Date().toISOString(), timezoneOption(form.timezone).id)}
-              </p>
-            </div>
+            {/* 157 — часовой пояс автосервиса: список фиксированный, сервер
+                принимает только эти id. */}
+            <Field
+              label="Часовой пояс"
+              htmlFor={`${idBase}-tz`}
+              hint={`От пояса зависит, что считается «сегодня»: выручка за день, смены и отчёты. Сейчас в этом поясе: ${formatDateTime(
+                new Date().toISOString(),
+                timezoneOption(form.timezone).id,
+              )}`}
+            >
+              <Select
+                id={`${idBase}-tz`}
+                value={form.timezone}
+                onChange={(e) => update({ timezone: e.target.value })}
+                options={tzOptions}
+              />
+            </Field>
 
-            <div>
-              <label className="label">Описание</label>
-              <textarea
+            <Field label="Описание" htmlFor={`${idBase}-description`}>
+              <Textarea
+                id={`${idBase}-description`}
                 value={form.description}
                 onChange={(e) => update({ description: e.target.value })}
                 rows={2}
-                className="input resize-none"
                 placeholder="Краткое описание вашего автосервиса"
               />
-            </div>
-          </div>
+            </Field>
+          </CardBody>
+        </Card>
 
-          {/* Receipt / legal details */}
-          <div className="card p-5 space-y-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Receipt className="h-4 w-4 text-gray-500" />
-              <h2 className="text-sm font-semibold text-gray-900">Реквизиты для чеков</h2>
-            </div>
-
-            <div>
-              <label className="label">Юридическое название</label>
-              <input
+        <Card padding="none">
+          <CardHeader icon={Receipt} title="Реквизиты для чеков" subtitle="Печатаются в заказ-наряде и чеке" />
+          <CardBody className="space-y-4">
+            <Field label="Юридическое название" htmlFor={`${idBase}-legal`}>
+              <Input
+                id={`${idBase}-legal`}
                 value={form.legalName}
                 onChange={(e) => update({ legalName: e.target.value })}
-                className="input"
                 placeholder="ИП Иванов И.И. или ООО «Мастер»"
               />
-            </div>
+            </Field>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="label">ИНН</label>
-                <input
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Field label="ИНН" htmlFor={`${idBase}-inn`}>
+                <Input
+                  id={`${idBase}-inn`}
                   value={form.inn}
                   onChange={(e) => update({ inn: e.target.value.replace(/\D/g, '').slice(0, 12) })}
-                  className="input"
                   placeholder="1234567890"
                   inputMode="numeric"
+                  className="tabular-nums"
                 />
-              </div>
-              <div>
-                <label className="label">КПП</label>
-                <input
+              </Field>
+              <Field label="КПП" htmlFor={`${idBase}-kpp`}>
+                <Input
+                  id={`${idBase}-kpp`}
                   value={form.kpp}
                   onChange={(e) => update({ kpp: e.target.value.replace(/\D/g, '').slice(0, 9) })}
-                  className="input"
                   placeholder="123456789"
                   inputMode="numeric"
+                  className="tabular-nums"
                 />
-              </div>
-              <div>
-                <label className="label">ОГРН</label>
-                <input
+              </Field>
+              <Field label="ОГРН" htmlFor={`${idBase}-ogrn`}>
+                <Input
+                  id={`${idBase}-ogrn`}
                   value={form.ogrn}
                   onChange={(e) => update({ ogrn: e.target.value.replace(/\D/g, '').slice(0, 15) })}
-                  className="input"
                   placeholder="1234567890123"
                   inputMode="numeric"
+                  className="tabular-nums"
                 />
-              </div>
+              </Field>
             </div>
 
-            <div>
-              <label className="label">
-                <FileText className="h-3 w-3 inline mr-1" />
-                Текст внизу чека
-              </label>
-              <textarea
+            <Field label="Текст внизу чека" htmlFor={`${idBase}-footer`} hint="Печатается внизу каждого чека.">
+              <Textarea
+                id={`${idBase}-footer`}
                 value={form.receiptFooter}
                 onChange={(e) => update({ receiptFooter: e.target.value })}
                 rows={2}
-                className="input resize-none"
                 placeholder="Спасибо за визит! Ждём вас снова!"
               />
-              <p className="text-xs text-gray-500 mt-1">Этот текст будет печататься внизу каждого чека</p>
-            </div>
+            </Field>
+          </CardBody>
+        </Card>
+
+        {/* 156 — мульти-точки: общая или раздельная база клиентов. Карточка
+            видна только при >1 живой точке (0–1 = одноточечный режим,
+            ничего нового не показываем) и под тем же company_manage, что и
+            остальные реквизиты. Зеркало мобильных настроек компании. */}
+        {pointsCount > 1 && (
+          <Card padding="none">
+            <CardHeader icon={Building2} title="Филиалы" subtitle="Как филиалы делят клиентскую базу" />
+            <CardBody>
+              <ToggleRow
+                label="Общая база клиентов всех филиалов"
+                description="Выключено — у каждого филиала свой список клиентов."
+                checked={form.pointsSharedClients}
+                onChange={(v) => update({ pointsSharedClients: v })}
+              />
+            </CardBody>
+          </Card>
+        )}
+
+        <StickySaveBar
+          visible={dirty}
+          saving={mutation.isPending}
+          onSave={handleSave}
+          onDiscard={discard}
+          saveLabel="Сохранить настройки"
+        />
+      </form>
+    </QueryState>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Страница
+// ---------------------------------------------------------------------------
+export default function CompanySettingsPage() {
+  const { hasPermission } = useAuth();
+  // Реквизиты компании (/my-company) и VIN — owner-only ключ company_manage (у
+  // системного «Администратора» сид false — как прежний @Roles d/sa). Секции
+  // «Кассовая смена» и «Лояльность» — settings_manage и self-gate'ятся сами.
+  const canManageCompany = hasPermission('company_manage');
+  const canManageSettings = hasPermission('settings_manage');
+  const [params, setParams] = useSearchParams();
+
+  const tabs = useMemo<TabItem<SettingsTab>[]>(() => {
+    const items: TabItem<SettingsTab>[] = [];
+    if (canManageCompany) {
+      items.push({ key: 'company', label: 'Реквизиты', icon: Building2 });
+      items.push({ key: 'cars', label: 'Автомобили', icon: Car });
+    }
+    if (canManageSettings) {
+      items.push({ key: 'cash', label: 'Касса', icon: Wallet });
+      items.push({ key: 'loyalty', label: 'Лояльность', icon: Gift });
+    }
+    return items;
+  }, [canManageCompany, canManageSettings]);
+
+  const requested = params.get('tab') as SettingsTab | null;
+  const tab: SettingsTab | null = tabs.some((t) => t.key === requested) ? requested : (tabs[0]?.key ?? null);
+
+  const setTab = (next: SettingsTab) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.set('tab', next);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Настройки компании"
+        icon={Settings}
+        subtitle={
+          canManageCompany
+            ? 'Реквизиты, автомобили, кассовая смена и программа лояльности'
+            : 'Кассовая смена и программа лояльности'
+        }
+      />
+
+      {tabs.length === 0 || !tab ? (
+        <Card padding="md">
+          <p className="text-sm text-ink-2">
+            Настройки компании доступны владельцу и сотрудникам с правом «Управляет настройками».
+          </p>
+        </Card>
+      ) : (
+        <>
+          <Tabs items={tabs} value={tab} onChange={setTab} aria-label="Разделы настроек" idPrefix="company-settings" />
+
+          <div className="max-w-3xl">
+            <TabPanel idPrefix="company-settings" tabKey="company" active={tab === 'company'}>
+              <CompanyDetailsTab />
+            </TabPanel>
+            <TabPanel idPrefix="company-settings" tabKey="cars" active={tab === 'cars'}>
+              <VinSettingsCard />
+            </TabPanel>
+            <TabPanel idPrefix="company-settings" tabKey="cash" active={tab === 'cash'}>
+              <ShiftModeSection />
+            </TabPanel>
+            <TabPanel idPrefix="company-settings" tabKey="loyalty" active={tab === 'loyalty'}>
+              <LoyaltySettingsSection />
+            </TabPanel>
           </div>
-
-          {/* 156 — мульти-точки: общая или раздельная база клиентов. Карточка
-              видна только при >1 живой точке (0–1 = одноточечный режим,
-              ничего нового не показываем) и под тем же company_manage, что и
-              остальные реквизиты. Зеркало мобильных настроек компании. */}
-          {pointsCount > 1 && (
-            <div className="card p-5 space-y-4">
-              <div className="flex items-center gap-2 mb-1">
-                <Building2 className="h-4 w-4 text-gray-500" />
-                <h2 className="text-sm font-semibold text-gray-900">Филиалы</h2>
-              </div>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900">Общая база клиентов всех филиалов</p>
-                  <p className="mt-0.5 text-xs text-gray-500">Выкл: у каждого филиала свой список клиентов.</p>
-                </div>
-                <Switch
-                  checked={form.pointsSharedClients}
-                  onChange={(v) => update({ pointsSharedClients: v })}
-                  label="Общая база клиентов всех филиалов"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Cash-shift mode + cashier roles (owner-class) */}
-          <ShiftModeSection />
-
-          {/* Loyalty program (owner-class) */}
-          <LoyaltySettingsSection />
-
-          {/* Save */}
-          {dirty && (
-            <button
-              onClick={handleSave}
-              disabled={mutation.isPending}
-              className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3.5 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Сохранить настройки
-            </button>
-          )}
-        </div>
-      </QueryState>
+        </>
+      )}
     </div>
   );
 }

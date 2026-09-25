@@ -1,59 +1,47 @@
 import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
 import {
-  ChevronLeft,
-  Phone,
-  Shield,
-  Calendar,
-  Clock,
+  AlertTriangle,
   AtSign,
   Award,
-  TrendingUp,
-  Wallet,
+  Calendar,
+  ChevronRight,
+  Clock,
+  Percent,
+  Phone,
   Receipt,
-  AlertTriangle,
+  Wallet,
 } from 'lucide-react';
-import { usersApi, scheduleApi, salaryApi, checksApi } from '../api/services';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
-import type { User, TodayEmployeeStatus, MasterSalary, EmployeeRanking } from '../types';
-import { roleLabels, formatMoney } from '../../../shared/utils/formatters';
 
-const roleBadgeColors: Record<string, string> = {
-  superadmin: 'bg-red-50 text-red-700 ring-red-100',
-  director: 'bg-purple-50 text-purple-700 ring-purple-100',
-  admin: 'bg-blue-50 text-blue-700 ring-blue-100',
-  master: 'bg-green-50 text-green-700 ring-green-100',
-};
+import { checksApi, salaryApi, scheduleApi, usersApi } from '../api/services';
+import { Card, CardBody, CardHeader, EmptyState, Money, PageHeader, SkeletonCard, StatusPill, cn } from '../ui';
+import { focusRing } from '../ui/tokens';
+import RoleBadge from '../components/company/RoleBadge';
+import UserAvatar from '../components/company/UserAvatar';
+import { shortTime, todayStatusOf } from '../components/company/scheduleStatus';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
+import type { EmployeeRanking, MasterSalary, TodayEmployeeStatus, User } from '../types';
+import { formatPhone } from '../../../shared/validation/phone';
 
-const formatTime = (iso?: string | null): string => {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-};
+const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
-function statusBadge(s?: TodayEmployeeStatus): { text: string; tone: string } {
-  if (!s) return { text: 'Нет данных', tone: 'bg-gray-100 text-gray-600 ring-gray-200' };
-  const note = (s.note || '').toLowerCase();
-  if (note.includes('больнич')) return { text: 'Больничный', tone: 'bg-rose-50 text-rose-700 ring-rose-200' };
-  if (s.isDayOff) return { text: 'Выходной', tone: 'bg-gray-100 text-gray-600 ring-gray-200' };
-  if (s.lateStatus === 'late_major')
-    return { text: `Опозд. >1 ч (${s.lateMinutes} мин)`, tone: 'bg-orange-50 text-orange-700 ring-orange-200' };
-  if (s.lateStatus === 'late_minor')
-    return { text: `Опозд. ${s.lateMinutes} мин`, tone: 'bg-yellow-50 text-yellow-800 ring-yellow-200' };
-  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time')
-    return { text: 'На смене', tone: 'bg-green-50 text-green-700 ring-green-200' };
-  if (note.includes('прогул')) return { text: 'Прогул', tone: 'bg-red-50 text-red-700 ring-red-200' };
-  if (s.hasSchedule) return { text: 'Не пришёл', tone: 'bg-red-50 text-red-700 ring-red-200' };
-  return { text: '—', tone: 'bg-gray-100 text-gray-600 ring-gray-200' };
+function placeLabel(place: number | null, total: number): string {
+  if (!place) return '—';
+  return `${place} из ${total}`;
 }
 
 export default function EmployeeDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
 
-  // Profile
-  const { data: user, isLoading: userLoading } = useQuery<User>({
+  // Профиль
+  const {
+    data: user,
+    isLoading: userLoading,
+    isError: userError,
+    refetch: refetchUser,
+    isFetching: userFetching,
+  } = useQuery<User>({
     queryKey: ['user', id],
     queryFn: async () => {
       const res = await usersApi.getById(id);
@@ -63,8 +51,8 @@ export default function EmployeeDetailPage() {
     staleTime: 60_000,
   });
 
-  // Today schedule status
-  const { data: todayList } = useQuery<TodayEmployeeStatus[]>({
+  // Статус на сегодня
+  const todayQuery = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => {
       const res = await scheduleApi.getToday();
@@ -73,10 +61,10 @@ export default function EmployeeDetailPage() {
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
-  const today = (todayList ?? []).find((t) => t.userId === id);
+  const today = (todayQuery.data ?? []).find((t) => t.userId === id);
 
-  // Salary aggregate (period totals)
-  const { data: salaryRows } = useQuery<MasterSalary[]>({
+  // Зарплата (итоги периода)
+  const salaryQuery = useQuery<MasterSalary[]>({
     queryKey: ['salary-all'],
     queryFn: async () => {
       const res = await salaryApi.getAll();
@@ -85,10 +73,10 @@ export default function EmployeeDetailPage() {
     enabled: !!user && user.role === 'master',
     staleTime: 60_000,
   });
-  const salary = salaryRows?.find((m) => m.masterId === id);
+  const salary = salaryQuery.data?.find((m) => m.masterId === id);
 
-  // Ranking
-  const { data: ranking } = useQuery<EmployeeRanking>({
+  // Рейтинг
+  const rankingQuery = useQuery<EmployeeRanking>({
     queryKey: ['employee-ranking'],
     queryFn: async () => {
       const res = await checksApi.getRanking();
@@ -96,6 +84,7 @@ export default function EmployeeDetailPage() {
     },
     staleTime: 60_000,
   });
+  const ranking = rankingQuery.data;
 
   const rank = useMemo(() => {
     if (!ranking || !user || user.role !== 'master') return null;
@@ -113,257 +102,281 @@ export default function EmployeeDetailPage() {
     };
   }, [ranking, user, id]);
 
-  if (userLoading) return <LoadingSpinner />;
-  if (!user)
+  if (userLoading) {
     return (
-      <EmptyState
-        icon={AlertTriangle}
-        title="Сотрудник не найден"
-        description="Возможно учётка была удалена или у вас нет к ней доступа."
-      />
+      <div className="space-y-5">
+        <PageHeader title="Сотрудник" backTo="/employees" />
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <div className="space-y-5 xl:col-span-2">
+            <SkeletonCard lines={3} />
+            <SkeletonCard lines={3} />
+          </div>
+          <SkeletonCard lines={4} />
+        </div>
+      </div>
     );
+  }
 
-  const initials = user.fullName
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-  const roleClass = roleBadgeColors[user.role] || roleBadgeColors.master;
-  const sb = statusBadge(today);
+  if (userError) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Сотрудник" backTo="/employees" />
+        <ErrorRow
+          message="Не удалось загрузить карточку сотрудника"
+          onRetry={() => refetchUser()}
+          loading={userFetching}
+        />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Сотрудник" backTo="/employees" />
+        <EmptyState
+          icon={AlertTriangle}
+          title="Сотрудник не найден"
+          description="Возможно, учётная запись была удалена или у вас нет к ней доступа."
+        />
+      </div>
+    );
+  }
+
+  const isMaster = user.role === 'master';
+  const status = today ? todayStatusOf(today) : null;
+  const daysOff = user.daysOff ?? [];
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.24, ease: [0.2, 0, 0, 1] }}
-      className="space-y-4 pb-8"
-    >
-      {/* Back */}
-      <Link
-        to="/employees"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
-      >
-        <ChevronLeft className="h-4 w-4" />К списку сотрудников
-      </Link>
-
-      {/* Hero */}
-      <section className="rounded-3xl overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white p-6">
-        <div className="flex items-center gap-4">
-          {user.avatar ? (
-            <img src={user.avatar} alt="" className="h-20 w-20 rounded-2xl object-cover ring-2 ring-white/20" />
-          ) : (
-            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/10 ring-2 ring-white/20 text-2xl font-bold">
-              {initials}
-            </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-bold truncate">{user.fullName}</h1>
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ring-1 ring-inset ${roleClass}`}>
-                {roleLabels[user.role] || user.role}
-              </span>
-              <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ring-1 ring-inset ${sb.tone}`}>
-                {sb.text}
-              </span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Today */}
-      <Section icon={<Clock className="h-4 w-4" />} title="Сегодня">
-        <div className="grid grid-cols-3 gap-2">
-          <Tile
-            label="Смена"
-            value={
-              today?.shiftStart && today?.shiftEnd
-                ? `${formatTime(today.shiftStart)} – ${formatTime(today.shiftEnd)}`
-                : today?.isDayOff
-                  ? 'Выходной'
-                  : '—'
-            }
-          />
-          <Tile label="Пришёл" value={today?.actualArrival ? formatTime(today.actualArrival) : '—'} />
-          <Tile
-            label="Опоздание"
-            value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}
-            tone={
-              today?.lateStatus === 'late_major' ? 'orange' : today?.lateStatus === 'late_minor' ? 'yellow' : undefined
-            }
-          />
-        </div>
-        {today?.note && (
-          <p className="mt-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-100 text-[12px] text-amber-800">
-            {today.note}
-          </p>
-        )}
-      </Section>
-
-      {/* Salary (master only) */}
-      {user.role === 'master' && salary && (
-        <Section icon={<Wallet className="h-4 w-4" />} title="Заработок (период)">
-          <div className="grid grid-cols-2 gap-2">
-            <Tile label="Заработано" value={formatMoney(salary.totalEarnings ?? 0)} highlight />
-            <Tile label="Выручка" value={formatMoney(salary.totalRevenue ?? 0)} highlight />
-            <Tile label="Чеков" value={String(salary.checkCount ?? 0)} />
-            <Tile label="К выплате" value={formatMoney(salary.remainingAmount ?? 0)} />
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            {typeof salary.serviceEarnings === 'number' && (
-              <Tile label="С услуг" value={formatMoney(salary.serviceEarnings)} />
+    <div className="space-y-5">
+      <PageHeader
+        title={user.fullName}
+        backTo="/employees"
+        subtitle={[user.phone ? formatPhone(user.phone) : null, user.username ? `@${user.username}` : null]
+          .filter(Boolean)
+          .join(' · ')}
+        meta={
+          <>
+            <RoleBadge role={user.role} />
+            {status && (
+              <StatusPill tone={status.tone} live={status.tone === 'ok'}>
+                {status.label}
+              </StatusPill>
             )}
-            {typeof salary.productEarnings === 'number' && (
-              <Tile label="С товаров" value={formatMoney(salary.productEarnings)} />
-            )}
-          </div>
-        </Section>
-      )}
+          </>
+        }
+      />
 
-      {/* Ranking (master only) */}
-      {user.role === 'master' && rank && (rank.monthPlace || rank.todayPlace) && (
-        <Section icon={<Award className="h-4 w-4" />} title="Рейтинг">
-          <div className="grid grid-cols-2 gap-2">
-            {rank.todayPlace && (
-              <Tile
-                label="Сегодня"
-                value={`${rank.todayPlace} / ${rank.todayTotal}`}
-                hint={rank.todayPlace === 1 ? '🥇' : rank.todayPlace === 2 ? '🥈' : rank.todayPlace === 3 ? '🥉' : ''}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
+        <div className="space-y-5 xl:col-span-2">
+          {/* Сегодня */}
+          <Card padding="none">
+            <CardHeader icon={Clock} title="Сегодня" subtitle="Смена, приход и опоздание по графику" />
+            <CardBody>
+              {todayQuery.isError && !todayQuery.data ? (
+                <ErrorRow
+                  message="Не удалось загрузить статус на сегодня"
+                  onRetry={() => todayQuery.refetch()}
+                  loading={todayQuery.isFetching}
+                />
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-4">
+                    <MiniStat
+                      label="Смена"
+                      value={
+                        today?.shiftStart && today?.shiftEnd
+                          ? `${shortTime(today.shiftStart)}–${shortTime(today.shiftEnd)}`
+                          : today?.isDayOff
+                            ? 'Выходной'
+                            : '—'
+                      }
+                    />
+                    <MiniStat label="Пришёл" value={today?.actualArrival ? shortTime(today.actualArrival) : '—'} />
+                    <MiniStat
+                      label="Опоздание"
+                      value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}
+                      tone={today && today.lateMinutes > 0 ? 'warn' : 'neutral'}
+                    />
+                  </div>
+                  {today?.note && (
+                    <p className="mt-4 rounded-lg border border-warn/30 bg-warn-soft px-3.5 py-2.5 text-sm text-warn-text">
+                      {today.note}
+                    </p>
+                  )}
+                </>
+              )}
+            </CardBody>
+          </Card>
+
+          {/* Заработок (только мастер) */}
+          {isMaster && (
+            <Card padding="none">
+              <CardHeader
+                icon={Wallet}
+                title="Заработок за период"
+                subtitle="Итоги расчётного периода из раздела «Зарплата»"
               />
-            )}
-            {rank.monthPlace && (
-              <Tile
-                label="Месяц"
-                value={`${rank.monthPlace} / ${rank.monthTotal}`}
-                hint={rank.monthPlace === 1 ? '🥇' : rank.monthPlace === 2 ? '🥈' : rank.monthPlace === 3 ? '🥉' : ''}
-              />
-            )}
-          </div>
-          {rank.monthPlace && (
-            <p className="mt-3 text-xs text-gray-500">
-              Выручка за месяц:{' '}
-              <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(rank.monthRevenue)}</span>
-              <span className="mx-1.5 text-gray-300">·</span>
-              Чеков: <span className="font-semibold text-gray-900 tabular-nums">{rank.monthChecks}</span>
-            </p>
+              <CardBody>
+                {salaryQuery.isLoading && !salaryQuery.data ? (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div key={i} className="h-12 animate-pulse rounded-md bg-line/70" />
+                    ))}
+                  </div>
+                ) : salaryQuery.isError && !salaryQuery.data ? (
+                  <ErrorRow
+                    message="Не удалось загрузить заработок"
+                    onRetry={() => salaryQuery.refetch()}
+                    loading={salaryQuery.isFetching}
+                  />
+                ) : salary ? (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
+                    <MiniStat label="Заработано" value={<Money value={salary.totalEarnings ?? 0} />} tone="accent" />
+                    <MiniStat label="Выручка" value={<Money value={salary.totalRevenue ?? 0} />} />
+                    <MiniStat label="Чеков" value={String(salary.checkCount ?? 0)} />
+                    <MiniStat label="К выплате" value={<Money value={salary.remainingAmount ?? 0} />} />
+                    {typeof salary.serviceEarnings === 'number' && (
+                      <MiniStat label="С услуг" value={<Money value={salary.serviceEarnings} />} size="sm" />
+                    )}
+                    {typeof salary.productEarnings === 'number' && (
+                      <MiniStat label="С товаров" value={<Money value={salary.productEarnings} />} size="sm" />
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-ink-3">За период начислений нет.</p>
+                )}
+              </CardBody>
+            </Card>
           )}
-        </Section>
-      )}
 
-      {/* Quick links to detailed reports */}
-      {user.role === 'master' && (
-        <Section icon={<TrendingUp className="h-4 w-4" />} title="Подробнее">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <Link
-              to={`/checks?masterId=${user.id}`}
-              className="card-interactive flex items-center gap-3 px-4 py-3 no-underline"
-            >
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                <Receipt className="h-4 w-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">Чеки сотрудника</p>
-                <p className="text-xs text-gray-500">все заказ-наряды этого мастера</p>
-              </div>
-              <span className="text-gray-300 text-lg">›</span>
-            </Link>
-            <Link to="/salary" className="card-interactive flex items-center gap-3 px-4 py-3 no-underline">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50 text-green-700">
-                <Wallet className="h-4 w-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">Зарплата</p>
-                <p className="text-xs text-gray-500">расчёты и выплаты</p>
-              </div>
-              <span className="text-gray-300 text-lg">›</span>
-            </Link>
-          </div>
-        </Section>
-      )}
-
-      {/* Contact / settings */}
-      <Section icon={<Phone className="h-4 w-4" />} title="Контакт и условия">
-        <div className="rounded-xl border border-gray-100 divide-y divide-gray-100">
-          <Row icon={<Phone className="h-4 w-4 text-gray-400" />} label="Телефон" value={user.phone || '—'} />
-          {user.username && (
-            <Row icon={<AtSign className="h-4 w-4 text-gray-400" />} label="Логин" value={user.username} />
-          )}
-          <Row
-            icon={<Shield className="h-4 w-4 text-gray-400" />}
-            label="Доля с услуг"
-            value={`${user.salaryPercent || 0}%`}
-          />
-          {typeof user.productSalaryPercent === 'number' && (
-            <Row
-              icon={<Shield className="h-4 w-4 text-gray-400" />}
-              label="Доля с товаров"
-              value={`${user.productSalaryPercent}%`}
-            />
-          )}
-          {user.daysOff && user.daysOff.length > 0 && (
-            <Row
-              icon={<Calendar className="h-4 w-4 text-gray-400" />}
-              label="Выходные"
-              value={user.daysOff.map((d) => ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][d] || '?').join(', ')}
-            />
+          {/* Рейтинг (только мастер) */}
+          {isMaster && (
+            <Card padding="none">
+              <CardHeader icon={Award} title="Рейтинг" subtitle="Место по выручке среди мастеров" />
+              <CardBody>
+                {rankingQuery.isError && !ranking ? (
+                  <ErrorRow
+                    message="Не удалось загрузить рейтинг"
+                    onRetry={() => rankingQuery.refetch()}
+                    loading={rankingQuery.isFetching}
+                  />
+                ) : rank && (rank.monthPlace || rank.todayPlace) ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <MiniStat
+                        label="Сегодня"
+                        value={placeLabel(rank.todayPlace, rank.todayTotal)}
+                        tone={rank.todayPlace === 1 ? 'accent' : 'neutral'}
+                      />
+                      <MiniStat
+                        label="Месяц"
+                        value={placeLabel(rank.monthPlace, rank.monthTotal)}
+                        tone={rank.monthPlace === 1 ? 'accent' : 'neutral'}
+                      />
+                    </div>
+                    {rank.monthPlace && (
+                      <p className="mt-4 text-xs text-ink-3">
+                        Выручка за месяц: <Money value={rank.monthRevenue} className="font-semibold text-ink" />
+                        {' · '}
+                        Чеков: <span className="font-semibold tabular-nums text-ink">{rank.monthChecks}</span>
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-ink-3">Мастер пока не участвует в рейтинге — нет закрытых чеков.</p>
+                )}
+              </CardBody>
+            </Card>
           )}
         </div>
-      </Section>
-    </motion.div>
+
+        <div className="space-y-5">
+          {/* Контакт и условия */}
+          <Card padding="none">
+            <CardHeader icon={Phone} title="Контакт и условия" />
+            <CardBody padding="none">
+              <div className="flex items-center gap-3 px-5 py-4">
+                <UserAvatar name={user.fullName} src={user.avatar} size="lg" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink">{user.fullName}</p>
+                  <p className="text-xs text-ink-3">{user.isActive ? 'Активен' : 'Неактивен'}</p>
+                </div>
+              </div>
+              <dl className="divide-y divide-line border-t border-line text-sm">
+                <Row icon={Phone} label="Телефон" value={user.phone ? formatPhone(user.phone) : '—'} />
+                {user.username && <Row icon={AtSign} label="Логин" value={user.username} />}
+                <Row icon={Percent} label="Доля с услуг" value={`${user.salaryPercent || 0} %`} />
+                {typeof user.productSalaryPercent === 'number' && (
+                  <Row icon={Percent} label="Доля с товаров" value={`${user.productSalaryPercent} %`} />
+                )}
+                {daysOff.length > 0 && (
+                  <Row icon={Calendar} label="Выходные" value={daysOff.map((d) => DAY_ABBR[d] || '?').join(', ')} />
+                )}
+              </dl>
+            </CardBody>
+          </Card>
+
+          {/* Подробнее (только мастер) */}
+          {isMaster && (
+            <Card padding="none">
+              <CardHeader title="Подробнее" as="h3" dense />
+              <nav aria-label="Связанные разделы" className="divide-y divide-line">
+                <QuickLink
+                  to={`/checks?masterId=${user.id}`}
+                  icon={Receipt}
+                  title="Чеки сотрудника"
+                  description="все заказ-наряды этого мастера"
+                />
+                <QuickLink to="/salary" icon={Wallet} title="Зарплата" description="расчёты и выплаты" />
+              </nav>
+            </Card>
+          )}
+
+          {!isMaster && <p className="text-xs text-ink-3">Заработок и рейтинг считаются только по мастерам. </p>}
+        </div>
+      </div>
+    </div>
   );
 }
 
-// ── Reusable section + tile primitives ─────────────────────────────────────
-
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Row({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
   return (
-    <section className="rounded-2xl bg-white border border-gray-100 shadow-sm p-4">
-      <h2 className="flex items-center gap-2 text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3">
-        {icon}
-        <span>{title}</span>
-      </h2>
-      {children}
-    </section>
+    <div className="flex items-center gap-3 px-5 py-3">
+      <Icon className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+      <dt className="flex-1 text-ink-3">{label}</dt>
+      <dd className="font-medium tabular-nums text-ink">{value}</dd>
+    </div>
   );
 }
 
-function Tile({
-  label,
-  value,
-  highlight,
-  tone,
-  hint,
+function QuickLink({
+  to,
+  icon: Icon,
+  title,
+  description,
 }: {
-  label: string;
-  value: string;
-  highlight?: boolean;
-  tone?: 'orange' | 'yellow';
-  hint?: string;
+  to: string;
+  icon: typeof Receipt;
+  title: string;
+  description: string;
 }) {
-  const base = highlight
-    ? 'bg-blue-50/60 border-blue-100 text-blue-900'
-    : tone === 'orange'
-      ? 'bg-orange-50 border-orange-100 text-orange-900'
-      : tone === 'yellow'
-        ? 'bg-yellow-50 border-yellow-100 text-yellow-900'
-        : 'bg-gray-50/60 border-gray-100 text-gray-900';
   return (
-    <div className={`rounded-xl border ${base} px-3 py-2`}>
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">{label}</p>
-      <p className="text-sm font-semibold tabular-nums">
-        {value}
-        {hint && <span className="ml-1.5">{hint}</span>}
-      </p>
-    </div>
-  );
-}
-
-function Row({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      {icon}
-      <span className="text-xs text-gray-500 flex-1">{label}</span>
-      <span className="text-sm font-medium text-gray-900 tabular-nums">{value}</span>
-    </div>
+    <Link
+      to={to}
+      className={cn(
+        'group flex items-center gap-3 px-4 py-3 no-underline transition-colors last:rounded-b-xl hover:bg-surface-2',
+        focusRing,
+      )}
+    >
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-ink group-hover:text-accent-text">{title}</span>
+        <span className="block text-xs text-ink-3">{description}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
+    </Link>
   );
 }

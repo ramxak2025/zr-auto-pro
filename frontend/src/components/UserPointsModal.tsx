@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Building2, Home, Info, Loader2 } from 'lucide-react';
+import { Building2, Home, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { pointsApi } from '../api/services';
 import { POINTS_QUERY_KEY, pointKindLabel, usePointsQuery } from '../hooks/usePoints';
-import Modal from './Modal';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
 import ConfirmDialog from './ConfirmDialog';
+import InlineLoader from './InlineLoader';
+import Modal from './Modal';
+import { ErrorRow } from './dashboard/shared';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 /**
@@ -15,24 +19,18 @@ import { apiErrorMessage } from '../../../shared/utils/apiError';
  * ТРЕБОВАНИЕ ВЛАДЕЛЬЦА ДОСЛОВНО: «чтобы в пользователях была настройка, на
  * каких филиалах они могут работать». Это ответ про ЧЕЛОВЕКА, поэтому живёт в
  * его карточке («Пользователи» → сотрудник), а раздел «Филиалы» показывает
- * состав только для просмотра. Раньше было наоборот — назначали со стороны
- * филиала, и владелец, открывший карточку мастера, не видел ни его доступов,
- * ни способа их изменить.
+ * состав только для просмотра.
  *
  * ЧТО ЭТО ЗНАЧИТ ДЛЯ ЧЕЛОВЕКА. Отмеченные филиалы — те, что он увидит в списке
  * при ВХОДЕ (филиал выбирается один раз, при входе, и живёт в сессии). Пустой
- * набор — НЕ «доступов нет», а «не ограничен»: доступны все живые филиалы. Это
- * конвенция внедрения (156) — тенант, который никого никуда не назначал,
- * продолжает работать без единой настройки. Подпись обязана говорить об этом
- * прямо, иначе владелец снимет все галочки, решив, что заблокировал человека,
- * и получит ровно обратное.
+ * набор — НЕ «доступов нет», а «не ограничен»: доступны все живые филиалы.
+ * Подпись обязана говорить об этом прямо, иначе владелец снимет все галочки,
+ * решив, что заблокировал человека, и получит ровно обратное.
  *
  * ПОЧЕМУ СОХРАНЕНИЕ СПРАШИВАЕТ ПОДТВЕРЖДЕНИЕ. Снятие филиала НЕМЕДЛЕННО
  * обесточивает сессии сотрудника в нём: его следующий запрос получит 401
- * «Филиал больше не доступен — войдите заново». Мастер посреди смены увидит
- * экран входа. Это правильно (иначе он продолжал бы пробивать чеки там, откуда
- * его убрали), но владелец обязан знать об этом ДО нажатия, а не узнавать по
- * звонку мастера.
+ * «Филиал больше не доступен — войдите заново». Владелец обязан знать об этом
+ * ДО нажатия, а не узнавать по звонку мастера.
  *
  * ПРАВО — user_management, тот же ключ, что гейтит PUT /users/:id/points на
  * сервере. Вызывающая страница сама решает, показывать ли вход; без права
@@ -58,7 +56,12 @@ export default function UserPointsModal({ isOpen, onClose, userId, userName }: U
   const { data: pointsData, isLoading: pointsLoading } = usePointsQuery();
   const points = pointsData?.points ?? [];
 
-  const { data: assigned, isError: assignedError } = useQuery({
+  const {
+    data: assigned,
+    isError: assignedError,
+    refetch: refetchAssigned,
+    isFetching: assignedFetching,
+  } = useQuery({
     queryKey: userPointsQueryKey(userId),
     queryFn: async () => (await pointsApi.userPoints(userId)).data.pointIds,
     // Открыто окно — есть запрос. Закрыто — не тратим сеть на каждую строку
@@ -124,61 +127,75 @@ export default function UserPointsModal({ isOpen, onClose, userId, userName }: U
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title="Филиалы сотрудника" size="md">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Филиалы сотрудника"
+        description={userName}
+        size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Отмена
+            </Button>
+            <Button
+              onClick={() => setConfirmOpen(true)}
+              disabled={saveMutation.isPending || !ready || points.length === 0}
+              loading={saveMutation.isPending}
+            >
+              Сохранить
+            </Button>
+          </>
+        }
+      >
         <div className="space-y-4">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">{userName}</p>
-            <p className="mt-1 text-sm leading-relaxed text-gray-600">
-              Отметьте филиалы, в которые сотрудник сможет войти. Филиал выбирается при входе, а чтобы перейти в другой
-              — нужно выйти и войти заново.
-            </p>
-          </div>
+          <p className="text-sm leading-relaxed text-ink-2">
+            Отметьте филиалы, в которые сотрудник сможет войти. Филиал выбирается при входе, а чтобы перейти в другой —
+            нужно выйти и войти заново.
+          </p>
 
           {assignedError ? (
-            <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-              Не удалось загрузить филиалы сотрудника. Закройте окно и попробуйте ещё раз.
-            </p>
+            <ErrorRow
+              message="Не удалось загрузить филиалы сотрудника"
+              onRetry={() => refetchAssigned()}
+              loading={assignedFetching}
+            />
           ) : !ready ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-primary-600" />
-            </div>
+            <InlineLoader minHeight="py-8" />
           ) : points.length === 0 ? (
-            <p className="text-sm text-gray-500">У автосервиса нет филиалов — настраивать нечего.</p>
+            <p className="text-sm text-ink-3">У автосервиса нет филиалов — настраивать нечего.</p>
           ) : (
-            <div className="space-y-1">
+            <ul className="divide-y divide-line rounded-lg border border-line">
               {points.map((point) => {
-                const checked = selected.includes(point.id);
                 const Icon = point.isMain ? Home : Building2;
                 return (
-                  <label
-                    key={point.id}
-                    className="flex cursor-pointer items-center gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-gray-50"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
+                  <li key={point.id} className="px-3.5 py-2.5">
+                    <Checkbox
+                      checked={selected.includes(point.id)}
                       onChange={() => toggle(point.id)}
-                      className="h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      label={
+                        <span className="inline-flex items-center gap-2 font-medium">
+                          <Icon className="h-4 w-4 text-ink-3" aria-hidden="true" />
+                          {point.name}
+                        </span>
+                      }
+                      description={
+                        point.address ? `${pointKindLabel(point)} · ${point.address}` : pointKindLabel(point)
+                      }
+                      className="w-full"
                     />
-                    <Icon className="h-4 w-4 flex-shrink-0 text-gray-400" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-gray-900">{point.name}</span>
-                      <span className="block truncate text-xs text-gray-500">
-                        {point.address ? `${pointKindLabel(point)} · ${point.address}` : pointKindLabel(point)}
-                      </span>
-                    </span>
-                  </label>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           )}
 
           {/* Пустой набор — самая опасная для понимания часть настройки:
               галочек нет, а доступ ЕСТЬ ко всему. Пишем это явно и там, где
               владелец увидит подпись ровно в момент, когда снял последнюю. */}
           {ready && points.length > 0 && (
-            <div className="flex items-start gap-2 rounded-xl bg-gray-50 px-4 py-3 text-xs leading-relaxed text-gray-600">
-              <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+            <div className="flex items-start gap-2 rounded-lg bg-surface-2 px-4 py-3 text-xs leading-relaxed text-ink-2">
+              <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
               <span>
                 {selected.length === 0
                   ? 'Ни один филиал не отмечен — сотрудник не ограничен и может войти в любой филиал.'
@@ -186,20 +203,6 @@ export default function UserPointsModal({ isOpen, onClose, userId, userName }: U
               </span>
             </div>
           )}
-
-          <div className="flex items-center justify-end gap-3 pt-1">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Отмена
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmOpen(true)}
-              disabled={saveMutation.isPending || !ready || points.length === 0}
-              className="btn-primary disabled:opacity-50"
-            >
-              {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Сохранить'}
-            </button>
-          </div>
         </div>
       </Modal>
 

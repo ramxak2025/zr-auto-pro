@@ -1,73 +1,93 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft,
-  CreditCard,
-  Receipt,
-  Save,
-  Loader2,
-  KeyRound,
-  Info,
-  PhoneCall,
-  Copy,
-  Check,
-  Link2,
-  Wallet,
-} from 'lucide-react';
+import { ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { Navigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Copy, CreditCard, Info, Link2, PhoneCall, Plug, Receipt, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { paymentsApi, fiscalApi, telephonyApi, walletApi } from '../api/services';
-import { useAuth } from '../contexts/AuthContext';
-import Switch from '../components/Switch';
-import QueryState from '../components/QueryState';
 
+import { fiscalApi, paymentsApi, telephonyApi, walletApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Field,
+  IconButton,
+  Input,
+  PageHeader,
+  QueryState,
+  Select,
+  Switch,
+  Tabs,
+  Textarea,
+} from '../ui';
+import type { TabItem } from '../ui';
+import { useUnsavedGuard } from '../components/company/StickySaveBar';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type {
-  PaymentIntegrationSettings,
   FiscalSettings,
-  PaymentProviderName,
   FiscalSno,
   FiscalVat,
+  PaymentIntegrationSettings,
+  PaymentProviderName,
   TelephonySettings,
   WalletSettings,
 } from '../types';
 
-// Shared field styles (match CompanySettingsPage rhythm)
-const inputCls =
-  'w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:border-primary-300 focus:ring-1 focus:ring-primary-200 outline-none transition-all disabled:bg-gray-50 disabled:text-gray-400';
-const textareaCls = `${inputCls} font-mono text-xs leading-relaxed min-h-[88px] resize-y`;
-const labelCls = 'text-xs font-medium text-gray-600 mb-1 block';
-const hintCls = 'text-[11px] text-gray-500 mt-1';
+type IntegrationTab = 'acquiring' | 'fiscal' | 'telephony' | 'wallet';
 
-function StoredBadge({ ok, label }: { ok: boolean; label: string }) {
+const TAB_ITEMS: TabItem<IntegrationTab>[] = [
+  { key: 'acquiring', label: 'Эквайринг', icon: CreditCard },
+  { key: 'fiscal', label: 'Онлайн-касса', icon: Receipt },
+  { key: 'telephony', label: 'Телефония', icon: PhoneCall },
+  { key: 'wallet', label: 'Apple Wallet', icon: Wallet },
+];
+
+const HINT = 'Ключи — в личном кабинете провайдера; до ввода функция неактивна.';
+
+/** Подсказка под заголовком карточки с иконкой. */
+function Hint({ children }: { children: ReactNode }) {
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-        ok ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-400'
-      }`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-green-500' : 'bg-gray-300'}`} />
-      {label}
-    </span>
+    <p className="flex items-start gap-1.5 text-xs text-ink-3">
+      <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+      <span>{children}</span>
+    </p>
   );
 }
 
-// Accessible toggle wrapper — `label` gives the switch an accessible name
-// (the old sr-only checkbox announced as an unnamed "checkbox").
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-  label: string;
-}) {
-  return <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} />;
+/** Метка «ключ/сертификат сохранён» — тон по смыслу: есть → ok, нет → нейтрально. */
+function StoredBadge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <Badge tone={ok ? 'ok' : 'neutral'} dot size="sm">
+      {label}
+    </Badge>
+  );
 }
 
-const HINT = 'Ключи — в ЛК провайдера; до ввода функция неактивна.';
+/** Подвал карточки с кнопкой сохранения — появляется только при правках. */
+function SaveFooter({
+  dirty,
+  saving,
+  onSave,
+  label,
+}: {
+  dirty: boolean;
+  saving: boolean;
+  onSave: () => void;
+  label: string;
+}) {
+  if (!dirty) return null;
+  return (
+    <CardFooter>
+      <span className="text-xs text-ink-3">Изменения не сохранены</span>
+      <Button onClick={onSave} loading={saving}>
+        {label}
+      </Button>
+    </CardFooter>
+  );
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 //  Эквайринг (карта / СБП)
@@ -80,6 +100,7 @@ const PAYMENT_PROVIDERS: { value: PaymentProviderName; label: string }[] = [
 
 function AcquiringCard() {
   const queryClient = useQueryClient();
+  const idBase = useId();
 
   const {
     data: settings,
@@ -99,6 +120,7 @@ function AcquiringCard() {
     secretKey: string;
   }>({ provider: 'yookassa', enabled: false, shopId: '', secretKey: '' });
   const [dirty, setDirty] = useState(false);
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
     if (settings) {
@@ -121,7 +143,7 @@ function AcquiringCard() {
       toast.success('Эквайринг сохранён');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const update = (patch: Partial<typeof form>) => {
@@ -135,8 +157,8 @@ function AcquiringCard() {
       enabled: form.enabled,
       shopId: form.shopId.trim(),
     };
-    // Only send the secret when the user actually typed a new one — an empty
-    // field means "keep the stored key" (the input only ever shows a mask).
+    // Секрет отправляем только когда ввели новый — пустое поле значит «оставить
+    // сохранённый ключ» (в поле всегда только маска).
     const secret = form.secretKey.trim();
     if (secret) payload.secretKey = secret;
     mutation.mutate(payload);
@@ -148,95 +170,76 @@ function AcquiringCard() {
       : 'Секретный ключ магазина';
 
   return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <CreditCard className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Эквайринг (карта / СБП)</h2>
-        </div>
-        <Toggle
-          label="Эквайринг"
-          checked={form.enabled}
-          onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
-
-      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
-        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
-        <span>{HINT}</span>
-      </p>
-
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="py-6"
-        errorTitle="Не удалось загрузить настройки"
-        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
-      >
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Провайдер</label>
-              <select
-                value={form.provider}
-                onChange={(e) => update({ provider: e.target.value as PaymentProviderName })}
-                className={inputCls}
-              >
-                {PAYMENT_PROVIDERS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+    <Card padding="none">
+      <CardHeader
+        icon={CreditCard}
+        title="Эквайринг (карта / СБП)"
+        subtitle="Приём онлайн-оплат по ссылке из заказ-наряда"
+        actions={
+          <Switch
+            label="Эквайринг"
+            checked={form.enabled}
+            onChange={(v) => update({ enabled: v })}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        <Hint>{HINT}</Hint>
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="py-6"
+          errorTitle="Не удалось загрузить настройки"
+          errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Провайдер" htmlFor={`${idBase}-provider`}>
+                <Select
+                  id={`${idBase}-provider`}
+                  value={form.provider}
+                  onChange={(e) => update({ provider: e.target.value as PaymentProviderName })}
+                  options={PAYMENT_PROVIDERS}
+                />
+              </Field>
+              <Field label="Shop ID" htmlFor={`${idBase}-shop`}>
+                <Input
+                  id={`${idBase}-shop`}
+                  value={form.shopId}
+                  onChange={(e) => update({ shopId: e.target.value })}
+                  placeholder="123456"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
+              </Field>
             </div>
-            <div>
-              <label className={labelCls}>Shop ID</label>
-              <input
-                value={form.shopId}
-                onChange={(e) => update({ shopId: e.target.value })}
-                className={inputCls}
-                placeholder="123456"
-                inputMode="numeric"
+
+            <Field
+              label="Секретный ключ"
+              htmlFor={`${idBase}-secret`}
+              hint={
+                settings?.hasSecretKey
+                  ? 'Ключ сохранён. Оставьте поле пустым, чтобы не менять его.'
+                  : 'Ключ ещё не задан — эквайринг неактивен, пока он не введён.'
+              }
+            >
+              <Input
+                id={`${idBase}-secret`}
+                type="password"
+                autoComplete="new-password"
+                value={form.secretKey}
+                onChange={(e) => update({ secretKey: e.target.value })}
+                placeholder={keyPlaceholder}
               />
-            </div>
+            </Field>
           </div>
-
-          <div>
-            <label className={labelCls}>
-              <KeyRound className="h-3 w-3 inline mr-1" />
-              Секретный ключ
-            </label>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={form.secretKey}
-              onChange={(e) => update({ secretKey: e.target.value })}
-              className={inputCls}
-              placeholder={keyPlaceholder}
-            />
-            <p className={hintCls}>
-              {settings?.hasSecretKey
-                ? 'Ключ сохранён. Оставьте поле пустым, чтобы не менять его.'
-                : 'Ключ ещё не задан — эквайринг неактивен, пока он не введён.'}
-            </p>
-          </div>
-        </div>
-
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={mutation.isPending}
-            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Сохранить эквайринг
-          </button>
-        )}
-      </QueryState>
-    </div>
+        </QueryState>
+      </CardBody>
+      <SaveFooter dirty={dirty} saving={mutation.isPending} onSave={handleSave} label="Сохранить эквайринг" />
+    </Card>
   );
 }
 
@@ -264,6 +267,7 @@ const VAT_OPTIONS: { value: FiscalVat; label: string }[] = [
 
 function FiscalCard() {
   const queryClient = useQueryClient();
+  const idBase = useId();
 
   const {
     data: settings,
@@ -298,6 +302,7 @@ function FiscalCard() {
     vat: '',
   });
   const [dirty, setDirty] = useState(false);
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
     if (settings) {
@@ -334,7 +339,7 @@ function FiscalCard() {
       toast.success('Онлайн-касса сохранена');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const update = (patch: Partial<typeof form>) => {
@@ -361,7 +366,7 @@ function FiscalCard() {
       paymentAddress: form.paymentAddress.trim(),
       companyEmail: form.companyEmail.trim(),
     };
-    // Send the password only when re-entered — empty keeps the stored secret.
+    // Пароль отправляем только при повторном вводе — пустое поле сохраняет старый.
     const pwd = form.password.trim();
     if (pwd) payload.password = pwd;
     if (form.sno) payload.sno = form.sno;
@@ -375,152 +380,127 @@ function FiscalCard() {
       : 'Пароль АТОЛ';
 
   return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Receipt className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Онлайн-касса 54-ФЗ (АТОЛ)</h2>
-        </div>
-        <Toggle
-          label="Онлайн-касса 54-ФЗ"
-          checked={form.enabled}
-          onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
+    <Card padding="none">
+      <CardHeader
+        icon={Receipt}
+        title="Онлайн-касса 54-ФЗ (АТОЛ)"
+        subtitle="Фискализация чеков через АТОЛ Онлайн"
+        actions={
+          <Switch
+            label="Онлайн-касса 54-ФЗ"
+            checked={form.enabled}
+            onChange={(v) => update({ enabled: v })}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        <Hint>{HINT}</Hint>
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="py-6"
+          errorTitle="Не удалось загрузить настройки"
+          errorDescription="Форма скрыта, чтобы не перезаписать сохранённые данные. Повторите загрузку."
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Логин" htmlFor={`${idBase}-login`}>
+                <Input
+                  id={`${idBase}-login`}
+                  value={form.login}
+                  onChange={(e) => update({ login: e.target.value })}
+                  placeholder="Логин АТОЛ"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Пароль" htmlFor={`${idBase}-password`}>
+                <Input
+                  id={`${idBase}-password`}
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.password}
+                  onChange={(e) => update({ password: e.target.value })}
+                  placeholder={pwdPlaceholder}
+                />
+              </Field>
+            </div>
 
-      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
-        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
-        <span>{HINT}</span>
-      </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Код группы" htmlFor={`${idBase}-group`}>
+                <Input
+                  id={`${idBase}-group`}
+                  value={form.groupCode}
+                  onChange={(e) => update({ groupCode: e.target.value })}
+                  placeholder="group_code ККТ"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Система налогообложения" htmlFor={`${idBase}-sno`}>
+                <Select
+                  id={`${idBase}-sno`}
+                  value={form.sno}
+                  onChange={(e) => update({ sno: e.target.value as FiscalSno | '' })}
+                  placeholder="Не выбрана"
+                  options={SNO_OPTIONS}
+                />
+              </Field>
+            </div>
 
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="py-6"
-        errorTitle="Не удалось загрузить настройки"
-        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые данные. Повторите загрузку."
-      >
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Логин</label>
-              <input
-                value={form.login}
-                onChange={(e) => update({ login: e.target.value })}
-                className={inputCls}
-                placeholder="Логин АТОЛ"
-                autoComplete="off"
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="ИНН" htmlFor={`${idBase}-inn`}>
+                <Input
+                  id={`${idBase}-inn`}
+                  value={form.inn}
+                  onChange={(e) => update({ inn: e.target.value.replace(/\D/g, '').slice(0, 12) })}
+                  placeholder="1234567890"
+                  inputMode="numeric"
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field label="НДС" htmlFor={`${idBase}-vat`}>
+                <Select
+                  id={`${idBase}-vat`}
+                  value={form.vat}
+                  onChange={(e) => update({ vat: e.target.value as FiscalVat | '' })}
+                  placeholder="Не выбран"
+                  options={VAT_OPTIONS}
+                />
+              </Field>
+            </div>
+
+            <Field label="Адрес расчётов" htmlFor={`${idBase}-address`}>
+              <Input
+                id={`${idBase}-address`}
+                value={form.paymentAddress}
+                onChange={(e) => update({ paymentAddress: e.target.value })}
+                placeholder="г. Москва, ул. Примерная, д. 1"
+                autoComplete="street-address"
               />
-            </div>
-            <div>
-              <label className={labelCls}>
-                <KeyRound className="h-3 w-3 inline mr-1" />
-                Пароль
-              </label>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={form.password}
-                onChange={(e) => update({ password: e.target.value })}
-                className={inputCls}
-                placeholder={pwdPlaceholder}
+            </Field>
+
+            <Field
+              label="Email компании"
+              htmlFor={`${idBase}-email`}
+              hint="На этот адрес ОФД отправит электронный чек, если у клиента нет почты."
+            >
+              <Input
+                id={`${idBase}-email`}
+                type="email"
+                autoComplete="email"
+                spellCheck={false}
+                value={form.companyEmail}
+                onChange={(e) => update({ companyEmail: e.target.value })}
+                placeholder="info@autoservice.ru"
               />
-            </div>
+            </Field>
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Код группы</label>
-              <input
-                value={form.groupCode}
-                onChange={(e) => update({ groupCode: e.target.value })}
-                className={inputCls}
-                placeholder="group_code ККТ"
-              />
-            </div>
-            <div>
-              <label className={labelCls}>СНО</label>
-              <select
-                value={form.sno}
-                onChange={(e) => update({ sno: e.target.value as FiscalSno | '' })}
-                className={inputCls}
-              >
-                <option value="">Не выбрана</option>
-                {SNO_OPTIONS.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>ИНН</label>
-              <input
-                value={form.inn}
-                onChange={(e) => update({ inn: e.target.value.replace(/\D/g, '').slice(0, 12) })}
-                className={inputCls}
-                placeholder="1234567890"
-                inputMode="numeric"
-              />
-            </div>
-            <div>
-              <label className={labelCls}>НДС</label>
-              <select
-                value={form.vat}
-                onChange={(e) => update({ vat: e.target.value as FiscalVat | '' })}
-                className={inputCls}
-              >
-                <option value="">Не выбран</option>
-                {VAT_OPTIONS.map((v) => (
-                  <option key={v.value} value={v.value}>
-                    {v.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className={labelCls}>Адрес расчётов</label>
-            <input
-              value={form.paymentAddress}
-              onChange={(e) => update({ paymentAddress: e.target.value })}
-              className={inputCls}
-              placeholder="г. Москва, ул. Примерная, д. 1"
-            />
-          </div>
-
-          <div>
-            <label className={labelCls}>Email компании</label>
-            <input
-              type="email"
-              value={form.companyEmail}
-              onChange={(e) => update({ companyEmail: e.target.value })}
-              className={inputCls}
-              placeholder="info@autoservice.ru"
-            />
-            <p className={hintCls}>На этот адрес ОФД отправит электронный чек, если у клиента нет почты.</p>
-          </div>
-        </div>
-
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={mutation.isPending}
-            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Сохранить онлайн-кассу
-          </button>
-        )}
-      </QueryState>
-    </div>
+        </QueryState>
+      </CardBody>
+      <SaveFooter dirty={dirty} saving={mutation.isPending} onSave={handleSave} label="Сохранить онлайн-кассу" />
+    </Card>
   );
 }
 
@@ -528,14 +508,11 @@ function FiscalCard() {
 //  Телефония (Mango Office)
 // ──────────────────────────────────────────────────────────────────────────
 
-const MANGO_HINT = 'Ключи — в ЛК Mango; до ввода телефония неактивна.';
-
 /**
- * The public origin Mango must POST its call-event callbacks to. The webhook
- * route itself is server-only (signature-verified) — here we only *display* the
- * URL for the owner to paste into the Mango VPBX panel. Mirrors how axios
- * resolves its baseURL: an absolute VITE_API_URL → its origin; a relative
- * '/api' → the current page origin.
+ * Публичный origin, куда Mango шлёт события звонков. Сам маршрут вебхука —
+ * серверный (проверка подписи); здесь только ПОКАЗЫВАЕМ адрес, чтобы владелец
+ * вставил его в панель Mango VPBX. Зеркалит резолв baseURL у axios:
+ * абсолютный VITE_API_URL → его origin; относительный '/api' → origin страницы.
  */
 function apiOrigin(): string {
   const base = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
@@ -548,6 +525,7 @@ function apiOrigin(): string {
 
 function TelephonyCard() {
   const queryClient = useQueryClient();
+  const idBase = useId();
   const { user } = useAuth();
   const tenantId = user?.tenantId ?? '';
 
@@ -569,10 +547,11 @@ function TelephonyCard() {
   });
   const [dirty, setDirty] = useState(false);
   const [copied, setCopied] = useState(false);
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
     if (settings) {
-      // Secrets are write-only — the inputs always start empty and only show a mask.
+      // Секреты write-only — поля всегда стартуют пустыми и показывают только маску.
       setForm({ enabled: settings.enabled, apiKey: '', apiSalt: '' });
       setDirty(false);
     }
@@ -587,7 +566,7 @@ function TelephonyCard() {
       toast.success('Телефония сохранена');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const update = (patch: Partial<typeof form>) => {
@@ -600,7 +579,7 @@ function TelephonyCard() {
       provider: 'mango',
       enabled: form.enabled,
     };
-    // Send secrets only when re-entered — an empty field keeps the stored value.
+    // Секреты отправляем только при повторном вводе — пустое поле сохраняет старое.
     const key = form.apiKey.trim();
     if (key) payload.apiKey = key;
     const salt = form.apiSalt.trim();
@@ -632,113 +611,90 @@ function TelephonyCard() {
   };
 
   return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <PhoneCall className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Телефония (Mango Office)</h2>
-        </div>
-        <Toggle
-          label="Телефония"
-          checked={form.enabled}
-          onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
-
-      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
-        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
-        <span>{MANGO_HINT}</span>
-      </p>
-
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="py-6"
-        errorTitle="Не удалось загрузить настройки"
-        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
-      >
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>
-                <KeyRound className="h-3 w-3 inline mr-1" />
-                API key (vpbx)
-              </label>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={form.apiKey}
-                onChange={(e) => update({ apiKey: e.target.value })}
-                className={inputCls}
-                placeholder={keyPlaceholder}
-              />
+    <Card padding="none">
+      <CardHeader
+        icon={PhoneCall}
+        title="Телефония (Mango Office)"
+        subtitle="Журнал звонков и уведомления о пропущенных"
+        actions={
+          <Switch
+            label="Телефония"
+            checked={form.enabled}
+            onChange={(v) => update({ enabled: v })}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        <Hint>Ключи — в личном кабинете Mango; до ввода телефония неактивна.</Hint>
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="py-6"
+          errorTitle="Не удалось загрузить настройки"
+          errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="API key (vpbx)" htmlFor={`${idBase}-key`}>
+                <Input
+                  id={`${idBase}-key`}
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.apiKey}
+                  onChange={(e) => update({ apiKey: e.target.value })}
+                  placeholder={keyPlaceholder}
+                />
+              </Field>
+              <Field label="Соль для подписи" htmlFor={`${idBase}-salt`}>
+                <Input
+                  id={`${idBase}-salt`}
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.apiSalt}
+                  onChange={(e) => update({ apiSalt: e.target.value })}
+                  placeholder={saltPlaceholder}
+                />
+              </Field>
             </div>
-            <div>
-              <label className={labelCls}>
-                <KeyRound className="h-3 w-3 inline mr-1" />
-                Соль для подписи
-              </label>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={form.apiSalt}
-                onChange={(e) => update({ apiSalt: e.target.value })}
-                className={inputCls}
-                placeholder={saltPlaceholder}
-              />
-            </div>
-          </div>
 
-          <p className={hintCls}>
-            {settings?.hasApiKey && settings?.hasApiSalt
-              ? 'Ключи сохранены. Оставьте поля пустыми, чтобы не менять их.'
-              : 'Ключи ещё не заданы — телефония неактивна, пока они не введены.'}
-          </p>
-
-          <div>
-            <label className={labelCls}>
-              <Link2 className="h-3 w-3 inline mr-1" />
-              Webhook для Mango VPBX
-            </label>
-            <div className="flex items-stretch gap-2">
-              <input
-                readOnly
-                value={webhookUrl || 'Tenant не определён — обратитесь к администратору'}
-                onFocus={(e) => e.currentTarget.select()}
-                className={`${inputCls} font-mono text-xs bg-gray-50 cursor-text`}
-              />
-              <button
-                type="button"
-                onClick={copyWebhook}
-                disabled={!webhookUrl}
-                className="flex-shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
-                title="Скопировать ссылку"
-              >
-                {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-              </button>
-            </div>
-            <p className={hintCls}>
-              Вставьте этот адрес в настройки событий Mango VPBX (входящий / пропущенный звонок), чтобы звонки попадали
-              в раздел «Звонки» и приходили уведомления.
+            <p className="text-xs text-ink-3">
+              {settings?.hasApiKey && settings?.hasApiSalt
+                ? 'Ключи сохранены. Оставьте поля пустыми, чтобы не менять их.'
+                : 'Ключи ещё не заданы — телефония неактивна, пока они не введены.'}
             </p>
-          </div>
-        </div>
 
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={mutation.isPending}
-            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Сохранить телефонию
-          </button>
-        )}
-      </QueryState>
-    </div>
+            <Field
+              label="Webhook для Mango VPBX"
+              htmlFor={`${idBase}-webhook`}
+              hint="Вставьте этот адрес в настройки событий Mango VPBX (входящий / пропущенный звонок), чтобы звонки попадали в раздел «Звонки» и приходили уведомления."
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  id={`${idBase}-webhook`}
+                  readOnly
+                  value={webhookUrl || 'Tenant не определён — обратитесь к администратору'}
+                  onFocus={(e) => e.currentTarget.select()}
+                  leftIcon={Link2}
+                  className="font-mono text-xs"
+                />
+                <IconButton
+                  label={copied ? 'Скопировано' : 'Скопировать ссылку'}
+                  icon={copied ? Check : Copy}
+                  variant="secondary"
+                  onClick={copyWebhook}
+                  disabled={!webhookUrl}
+                  className={copied ? 'text-ok' : undefined}
+                />
+              </div>
+            </Field>
+          </div>
+        </QueryState>
+      </CardBody>
+      <SaveFooter dirty={dirty} saving={mutation.isPending} onSave={handleSave} label="Сохранить телефонию" />
+    </Card>
   );
 }
 
@@ -746,10 +702,9 @@ function TelephonyCard() {
 //  Apple Wallet (карта лояльности)
 // ──────────────────────────────────────────────────────────────────────────
 
-const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Developer. До загрузки карта недоступна.';
-
 function WalletCard() {
   const queryClient = useQueryClient();
+  const idBase = useId();
 
   const {
     data: settings,
@@ -786,11 +741,12 @@ function WalletCard() {
     wwdrPem: '',
   });
   const [dirty, setDirty] = useState(false);
+  useUnsavedGuard(dirty);
 
   useEffect(() => {
     if (settings) {
-      // Cert material is write-only — those fields always start empty and the
-      // form only ever shows a "stored" flag, never the real PEM/password.
+      // Сертификаты write-only — поля стартуют пустыми, форма показывает только
+      // флаг «загружен», а не реальный PEM/пароль.
       setForm({
         enabled: settings.enabled,
         passTypeId: settings.passTypeId ?? '',
@@ -826,7 +782,7 @@ function WalletCard() {
       toast.success('Apple Wallet сохранён');
       setDirty(false);
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения'),
   });
 
   const update = (patch: Partial<typeof form>) => {
@@ -854,8 +810,8 @@ function WalletCard() {
       logoUrl: form.logoUrl.trim(),
       bgColor: form.bgColor.trim(),
     };
-    // Cert material is sent only when (re)entered — an empty field keeps the
-    // stored secret untouched (the form shows a flag, not the real value).
+    // Сертификаты отправляем только при (повторном) вводе — пустое поле
+    // сохраняет секрет нетронутым.
     const cert = form.certPem.trim();
     if (cert) payload.certPem = cert;
     const certKey = form.certKeyPem.trim();
@@ -874,230 +830,256 @@ function WalletCard() {
     ? 'Ключ загружен — вставьте новый PEM, чтобы заменить'
     : '-----BEGIN PRIVATE KEY-----';
   const certPwdPlaceholder = settings?.hasCertKeyPassword
-    ? '•••••• загружен — введите, чтобы заменить'
+    ? 'Пароль загружен — введите, чтобы заменить'
     : 'Пароль приватного ключа (если задан)';
   const wwdrPlaceholder = settings?.hasWwdr
     ? 'Сертификат WWDR загружен — вставьте новый PEM, чтобы заменить'
     : '-----BEGIN CERTIFICATE-----';
 
   return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-900">Apple Wallet (карта лояльности)</h2>
-        </div>
-        <Toggle
-          label="Apple Wallet"
-          checked={form.enabled}
-          onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || isError || mutation.isPending}
-        />
-      </div>
-
-      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
-        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
-        <span>{WALLET_HINT}</span>
-      </p>
-
-      <QueryState
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={refetch}
-        isFetching={isFetching}
-        minHeight="py-6"
-        errorTitle="Не удалось загрузить настройки"
-        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые сертификаты. Повторите загрузку."
-      >
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            <StoredBadge ok={!!settings?.hasCert} label="Сертификат" />
-            <StoredBadge ok={!!settings?.hasCertKey} label="Ключ" />
-            <StoredBadge ok={!!settings?.hasWwdr} label="WWDR" />
-            <StoredBadge
-              ok={!!settings?.configured}
-              label={settings?.configured ? 'Готово к выдаче' : 'Не настроено'}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Pass Type ID</label>
-              <input
-                value={form.passTypeId}
-                onChange={(e) => update({ passTypeId: e.target.value })}
-                className={inputCls}
-                placeholder="pass.com.autexa.loyalty"
-                autoComplete="off"
+    <Card padding="none">
+      <CardHeader
+        icon={Wallet}
+        title="Apple Wallet (карта лояльности)"
+        subtitle="Карта клиента в Wallet с балансом бонусов"
+        actions={
+          <Switch
+            label="Apple Wallet"
+            checked={form.enabled}
+            onChange={(v) => update({ enabled: v })}
+            disabled={isLoading || isError || mutation.isPending}
+          />
+        }
+      />
+      <CardBody className="space-y-4">
+        <Hint>Сертификат Apple Pass Type ID — из Apple Developer. До загрузки карта недоступна.</Hint>
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="py-6"
+          errorTitle="Не удалось загрузить настройки"
+          errorDescription="Форма скрыта, чтобы не перезаписать сохранённые сертификаты. Повторите загрузку."
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-1.5">
+              <StoredBadge ok={!!settings?.hasCert} label="Сертификат" />
+              <StoredBadge ok={!!settings?.hasCertKey} label="Ключ" />
+              <StoredBadge ok={!!settings?.hasWwdr} label="WWDR" />
+              <StoredBadge
+                ok={!!settings?.configured}
+                label={settings?.configured ? 'Готово к выдаче' : 'Не настроено'}
               />
             </div>
-            <div>
-              <label className={labelCls}>Team ID</label>
-              <input
-                value={form.teamId}
-                onChange={(e) => update({ teamId: e.target.value })}
-                className={inputCls}
-                placeholder="98SHYK65HQ"
-                autoComplete="off"
-              />
-            </div>
-          </div>
 
-          <div>
-            <label className={labelCls}>Название организации</label>
-            <input
-              value={form.organizationName}
-              onChange={(e) => update({ organizationName: e.target.value })}
-              className={inputCls}
-              placeholder="Название автосервиса на карте"
-            />
-            <p className={hintCls}>Печатается на карте. Если оставить пустым — подставится название компании.</p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelCls}>Логотип (URL)</label>
-              <input
-                value={form.logoUrl}
-                onChange={(e) => update({ logoUrl: e.target.value })}
-                className={inputCls}
-                placeholder="https://…/logo.png"
-                inputMode="url"
-              />
-            </div>
-            <div>
-              <label className={labelCls}>Цвет фона</label>
-              <div className="flex items-stretch gap-2">
-                <input
-                  value={form.bgColor}
-                  onChange={(e) => update({ bgColor: e.target.value })}
-                  className={inputCls}
-                  placeholder="#1E88E5"
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Pass Type ID" htmlFor={`${idBase}-pass`}>
+                <Input
+                  id={`${idBase}-pass`}
+                  value={form.passTypeId}
+                  onChange={(e) => update({ passTypeId: e.target.value })}
+                  placeholder="pass.com.autexa.loyalty"
+                  autoComplete="off"
                 />
-                <input
-                  type="color"
-                  value={/^#[0-9a-fA-F]{6}$/.test(form.bgColor) ? form.bgColor : '#1E88E5'}
-                  onChange={(e) => update({ bgColor: e.target.value })}
-                  className="h-[42px] w-12 flex-shrink-0 cursor-pointer rounded-xl border border-gray-200 bg-white p-1"
-                  title="Выбрать цвет"
-                  aria-label="Выбрать цвет фона"
+              </Field>
+              <Field label="Team ID" htmlFor={`${idBase}-team`}>
+                <Input
+                  id={`${idBase}-team`}
+                  value={form.teamId}
+                  onChange={(e) => update({ teamId: e.target.value })}
+                  placeholder="98SHYK65HQ"
+                  autoComplete="off"
                 />
-              </div>
+              </Field>
             </div>
-          </div>
 
-          <div>
-            <label className={labelCls}>
-              <KeyRound className="h-3 w-3 inline mr-1" />
-              Certificate PEM
-            </label>
-            <textarea
-              value={form.certPem}
-              onChange={(e) => update({ certPem: e.target.value })}
-              className={textareaCls}
-              placeholder={certPlaceholder}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
+            <Field
+              label="Название организации"
+              htmlFor={`${idBase}-org`}
+              hint="Печатается на карте. Если оставить пустым — подставится название компании."
+            >
+              <Input
+                id={`${idBase}-org`}
+                value={form.organizationName}
+                onChange={(e) => update({ organizationName: e.target.value })}
+                placeholder="Название автосервиса на карте"
+                autoComplete="organization"
+              />
+            </Field>
 
-          <div>
-            <label className={labelCls}>
-              <KeyRound className="h-3 w-3 inline mr-1" />
-              Certificate key PEM
-            </label>
-            <textarea
-              value={form.certKeyPem}
-              onChange={(e) => update({ certKeyPem: e.target.value })}
-              className={textareaCls}
-              placeholder={certKeyPlaceholder}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Логотип (URL)" htmlFor={`${idBase}-logo`}>
+                <Input
+                  id={`${idBase}-logo`}
+                  value={form.logoUrl}
+                  onChange={(e) => update({ logoUrl: e.target.value })}
+                  placeholder="https://…/logo.png"
+                  inputMode="url"
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Цвет фона" htmlFor={`${idBase}-color`}>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id={`${idBase}-color`}
+                    value={form.bgColor}
+                    onChange={(e) => update({ bgColor: e.target.value })}
+                    placeholder="#1E88E5"
+                    className="font-mono"
+                  />
+                  <input
+                    type="color"
+                    value={/^#[0-9a-fA-F]{6}$/.test(form.bgColor) ? form.bgColor : '#1E88E5'}
+                    onChange={(e) => update({ bgColor: e.target.value })}
+                    className="h-9 w-12 flex-shrink-0 cursor-pointer rounded-lg border border-line-strong bg-surface p-1 focus-ring"
+                    aria-label="Выбрать цвет фона"
+                  />
+                </div>
+              </Field>
+            </div>
 
-          <div>
-            <label className={labelCls}>
-              <KeyRound className="h-3 w-3 inline mr-1" />
-              Пароль ключа
-            </label>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={form.certKeyPassword}
-              onChange={(e) => update({ certKeyPassword: e.target.value })}
-              className={inputCls}
-              placeholder={certPwdPlaceholder}
-            />
-          </div>
+            <Field label="Certificate PEM" htmlFor={`${idBase}-cert`}>
+              <Textarea
+                id={`${idBase}-cert`}
+                value={form.certPem}
+                onChange={(e) => update({ certPem: e.target.value })}
+                placeholder={certPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                rows={4}
+                className="font-mono text-xs"
+              />
+            </Field>
 
-          <div>
-            <label className={labelCls}>
-              <KeyRound className="h-3 w-3 inline mr-1" />
-              WWDR PEM
-            </label>
-            <textarea
-              value={form.wwdrPem}
-              onChange={(e) => update({ wwdrPem: e.target.value })}
-              className={textareaCls}
-              placeholder={wwdrPlaceholder}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <p className={hintCls}>
-              {settings?.hasCert && settings?.hasCertKey && settings?.hasWwdr
-                ? 'Сертификаты загружены. Оставьте поля пустыми, чтобы не менять их.'
-                : 'Apple WWDR (Worldwide Developer Relations) — промежуточный сертификат Apple для подписи карты.'}
-            </p>
-          </div>
-        </div>
+            <Field label="Certificate key PEM" htmlFor={`${idBase}-certkey`}>
+              <Textarea
+                id={`${idBase}-certkey`}
+                value={form.certKeyPem}
+                onChange={(e) => update({ certKeyPem: e.target.value })}
+                placeholder={certKeyPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                rows={4}
+                className="font-mono text-xs"
+              />
+            </Field>
 
-        {dirty && (
-          <button
-            onClick={handleSave}
-            disabled={mutation.isPending}
-            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Сохранить Apple Wallet
-          </button>
-        )}
-      </QueryState>
-    </div>
+            <Field label="Пароль ключа" htmlFor={`${idBase}-certpwd`}>
+              <Input
+                id={`${idBase}-certpwd`}
+                type="password"
+                autoComplete="new-password"
+                value={form.certKeyPassword}
+                onChange={(e) => update({ certKeyPassword: e.target.value })}
+                placeholder={certPwdPlaceholder}
+              />
+            </Field>
+
+            <Field
+              label="WWDR PEM"
+              htmlFor={`${idBase}-wwdr`}
+              hint={
+                settings?.hasCert && settings?.hasCertKey && settings?.hasWwdr
+                  ? 'Сертификаты загружены. Оставьте поля пустыми, чтобы не менять их.'
+                  : 'Apple WWDR (Worldwide Developer Relations) — промежуточный сертификат Apple для подписи карты.'
+              }
+            >
+              <Textarea
+                id={`${idBase}-wwdr`}
+                value={form.wwdrPem}
+                onChange={(e) => update({ wwdrPem: e.target.value })}
+                placeholder={wwdrPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                rows={4}
+                className="font-mono text-xs"
+              />
+            </Field>
+          </div>
+        </QueryState>
+      </CardBody>
+      <SaveFooter dirty={dirty} saving={mutation.isPending} onSave={handleSave} label="Сохранить Apple Wallet" />
+    </Card>
   );
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-//  Page
+//  Страница
 // ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Панель вкладки, которая НЕ размонтируется: все четыре карточки остаются в
+ * дереве (как и раньше — четыре запроса на открытии страницы), поэтому
+ * несохранённые правки одной интеграции переживают переключение на другую.
+ */
+function Panel({ active, tabKey, children }: { active: boolean; tabKey: IntegrationTab; children: ReactNode }) {
+  return (
+    <div
+      role="tabpanel"
+      id={`integrations-panel-${tabKey}`}
+      aria-labelledby={`integrations-tab-${tabKey}`}
+      hidden={!active}
+      tabIndex={0}
+      className="outline-none"
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function IntegrationsPage() {
-  const navigate = useNavigate();
   const { hasPermission } = useAuth();
+  const [params, setParams] = useSearchParams();
   // Настройки интеграций (fiscal/payments/telephony/wallet) — settings_manage
   // (волна Битрикс24; так же гейтится backend PATCH */settings).
   const canManage = hasPermission('settings_manage');
+
+  const requested = params.get('tab') as IntegrationTab | null;
+  const tab: IntegrationTab = useMemo(
+    () => (TAB_ITEMS.some((t) => t.key === requested) ? (requested as IntegrationTab) : 'acquiring'),
+    [requested],
+  );
+  const setTab = (next: IntegrationTab) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next === 'acquiring') p.delete('tab');
+        else p.set('tab', next);
+        return p;
+      },
+      { replace: true },
+    );
+  };
 
   if (!canManage) {
     return <Navigate to="/" replace />;
   }
 
   return (
-    <div className="space-y-5 max-w-2xl mx-auto pb-8">
-      <div className="flex items-center gap-3 mb-6">
-        <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <div>
-          <h1 className="page-title">Интеграции</h1>
-          <p className="text-sm text-gray-500">Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet</p>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Интеграции"
+        icon={Plug}
+        subtitle="Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet"
+      />
 
-      <AcquiringCard />
-      <FiscalCard />
-      <TelephonyCard />
-      <WalletCard />
+      <Tabs items={TAB_ITEMS} value={tab} onChange={setTab} aria-label="Интеграции" idPrefix="integrations" />
+
+      <div className="max-w-3xl">
+        <Panel active={tab === 'acquiring'} tabKey="acquiring">
+          <AcquiringCard />
+        </Panel>
+        <Panel active={tab === 'fiscal'} tabKey="fiscal">
+          <FiscalCard />
+        </Panel>
+        <Panel active={tab === 'telephony'} tabKey="telephony">
+          <TelephonyCard />
+        </Panel>
+        <Panel active={tab === 'wallet'} tabKey="wallet">
+          <WalletCard />
+        </Panel>
+      </div>
     </div>
   );
 }

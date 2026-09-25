@@ -1,51 +1,63 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus,
-  Pencil,
-  Trash2,
-  Users,
-  Loader2,
-  Package,
-  X,
-  Search,
-  Gift,
   Archive,
-  RotateCcw,
-  UserX,
-  KeyRound,
-  ShieldCheck,
   Building2,
+  Gift,
+  KeyRound,
+  Package,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Search,
+  Shield,
+  ShieldCheck,
+  Trash2,
+  UserX,
+  Users,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { usersApi, productsApi, rolesApi } from '../api/services';
+import { productsApi, rolesApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { User, UserRole, Product, PaginatedResponse } from '../types';
+import { PaginatedResponse, Product, User, UserRole } from '../types';
 import type { Role } from '../types';
-import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
-import QueryState from '../components/QueryState';
-import IconButton from '../components/IconButton';
+import {
+  Badge,
+  Button,
+  ConfirmDialog,
+  DataTable,
+  EmptyState,
+  Field,
+  IconButton,
+  InlineLoader,
+  Input,
+  Modal,
+  Money,
+  PageHeader,
+  SearchInput,
+  Select,
+  Toolbar,
+} from '../ui';
+import type { DataTableColumn } from '../ui';
 import PhoneInput from '../components/PhoneInput';
-import RolesManagement from '../components/RolesManagement';
 import RateByMonthModal from '../components/RateByMonthModal';
+import RolesManagement from '../components/RolesManagement';
 import UserPointsModal from '../components/UserPointsModal';
+import RoleBadge from '../components/company/RoleBadge';
+import ToggleRow from '../components/company/ToggleRow';
+import UserAvatar from '../components/company/UserAvatar';
+import { ErrorRow } from '../components/dashboard/shared';
 import { usePointAccess } from '../hooks/usePoints';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { roleLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
-const roleBadgeMapDismissed: Record<string, string> = {
-  director: 'badge-blue',
-  admin: 'badge-green',
-  master: 'badge-yellow',
-};
-
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** Russian day-noun pluralization: 1 день, 2 дня, 5 дней. */
+/** 1 день, 2 дня, 5 дней. */
 function pluralizeDays(n: number): string {
   const mod100 = n % 100;
   const mod10 = n % 10;
@@ -56,8 +68,8 @@ function pluralizeDays(n: number): string {
 }
 
 /**
- * Restore window: 1 year from dismissedAt. Returns whole days left (clamped to
- * ≥ 0). Used to tell the manager «можно восстановить ещё N дней».
+ * Окно восстановления — год с момента увольнения. Возвращает целые дни
+ * (не меньше 0), чтобы сказать управляющему «можно восстановить ещё N дней».
  */
 function restoreDaysLeft(dismissedAt: string): number {
   const dismissed = new Date(dismissedAt).getTime();
@@ -71,12 +83,6 @@ function formatDismissedDate(dismissedAt: string): string {
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
-
-const roleBadgeMap: Record<string, string> = {
-  director: 'badge-blue',
-  admin: 'badge-green',
-  master: 'badge-yellow',
-};
 
 interface UserFormData {
   fullName: string;
@@ -103,9 +109,24 @@ const emptyForm: UserFormData = {
   isActive: true,
 };
 
+const ROLE_OPTIONS = [
+  { value: UserRole.DIRECTOR, label: 'Директор' },
+  { value: UserRole.ADMIN, label: 'Админ' },
+  { value: UserRole.MASTER, label: 'Мастер' },
+];
+
+/** Число из поля процента: только цифры, 0–100. */
+function clampPercent(raw: string): number {
+  const n = Number(raw.replace(/[^\d]/g, ''));
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(100, Math.max(0, n));
+}
+
 export default function UsersPage() {
   const { hasPermission, refreshUser, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const formId = useId();
 
   // Волна «права как в Битрикс24»: backend users/ и roles/ гейтятся ключом
   // user_management (не строкой роли), а /auth/me отдаёт эффективные права из
@@ -118,7 +139,6 @@ export default function UsersPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
   const [dismissedOpen, setDismissedOpen] = useState(false);
   // 150 — «Ставка по месяцам»: смена ставки за прошлый/будущий месяц + история.
@@ -132,20 +152,30 @@ export default function UsersPage() {
   // одноточечный автосервис про мульти-точки не знает вовсе.
   const { multiPoint } = usePointAccess();
 
+  // Поиск по имени/телефону — в URL (?q=), чтобы F5 и «Назад» его не теряли.
+  const q = params.get('q') ?? '';
+  const setQuery = (value: string) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (value) p.set('q', value);
+        else p.delete('q');
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
   // В слоте ['users'] лежит МАССИВ сотрудников — так его пишут и читают все
   // остальные потребители (прогрев после входа в AuthContext, главная,
-  // расписание, планирование) и так он кладётся в IndexedDB-снимок. Здесь
-  // раньше хранился целиком ответ axios, а массив доставался через select:
-  // кто монтировался первым, тот и определял форму слота. После входа слот
-  // грелся массивом — и «Сотрудники» показывали «Нет сотрудников», хотя люди
-  // есть; в обратную сторону главная получала ответ axios и падала на
-  // usersData.filter. Форма слота обязана быть ОДНА.
+  // расписание, планирование) и так он кладётся в IndexedDB-снимок. Форма
+  // слота обязана быть ОДНА.
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users'],
     queryFn: async () => (await usersApi.getAll()).data as User[],
   });
 
-  // Список ролей — для select'а «Роль (набор прав)» в карточке сотрудника и для
+  // Список ролей — для select'а «Роль (доступ)» в карточке сотрудника и для
   // модалки управления. Инвалидация ['roles'] в RolesManagement обновляет оба.
   const { data: rolesData, isLoading: rolesLoading } = useQuery({
     queryKey: ['roles'],
@@ -153,23 +183,35 @@ export default function UsersPage() {
     select: (res) => res.data as Role[],
     enabled: canManageUsers,
   });
-  const roles = rolesData ?? [];
+  const roles = useMemo(() => rolesData ?? [], [rolesData]);
   const systemRoles = roles.filter((r) => r.isSystem);
   const customRoles = roles.filter((r) => !r.isSystem);
+  const roleNameById = useMemo(() => new Map(roles.map((r) => [r.id, r.name])), [roles]);
 
-  // Defensive: the backend already excludes dismissed/purged employees from the
-  // active list, but if a stale persisted cache ever serves one, never show it.
-  const users = (data ?? []).filter((u) => !u.dismissedAt && !u.purgedAt);
+  // Защита: бэкенд уже исключает уволенных/удалённых из активного списка, но
+  // устаревший персист-снимок не должен показать никого лишнего.
+  const users = useMemo(() => (data ?? []).filter((u) => !u.dismissedAt && !u.purgedAt), [data]);
+
+  const visibleUsers = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return users;
+    const digits = needle.replace(/\D/g, '');
+    return users.filter(
+      (u) =>
+        u.fullName.toLowerCase().includes(needle) ||
+        (digits.length >= 3 && (u.phone || '').replace(/\D/g, '').includes(digits)),
+    );
+  }, [users, q]);
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => usersApi.create(data),
+    mutationFn: (payload: any) => usersApi.create(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('Сотрудник создан');
       closeModal();
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка создания сотрудника');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка создания сотрудника');
     },
   });
 
@@ -177,7 +219,7 @@ export default function UsersPage() {
     // ROLE-ONLY (консолидация 2026-07): доступ сотрудника задаётся ТОЛЬКО
     // назначенной ролью (PATCH /users/:id { roleId }). Персональные права
     // (GET/PATCH /users/:id/permissions) сняты — общий PATCH их больше не везёт.
-    mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
+    mutationFn: ({ id, payload }: { id: string; payload: any }) => usersApi.update(id, payload),
     onSuccess: (_res, vars) => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       // Смена СВОЕЙ роли (roleId) меняет собственные эффективные права —
@@ -186,8 +228,8 @@ export default function UsersPage() {
       toast.success('Сотрудник обновлён');
       closeModal();
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка обновления');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка обновления');
     },
   });
 
@@ -198,14 +240,10 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
       toast.success('Сотрудник уволен');
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка увольнения');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка увольнения');
     },
   });
-
-  if (!hasPermission('user_management')) {
-    return <EmptyState icon={Users} title="Нет доступа" description="У вас нет прав для управления сотрудниками" />;
-  }
 
   const openCreate = () => {
     setEditingUser(null);
@@ -233,6 +271,113 @@ export default function UsersPage() {
     setForm({ ...emptyForm });
   };
 
+  const canDismiss = (user: User) =>
+    user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director';
+
+  const columns = useMemo<DataTableColumn<User>[]>(
+    () => [
+      {
+        key: 'fullName',
+        header: 'Сотрудник',
+        primary: true,
+        sortable: true,
+        render: (u) => (
+          <span className="inline-flex min-w-0 items-center gap-2.5">
+            <UserAvatar name={u.fullName} src={u.avatar} size="sm" />
+            <span className="min-w-0">
+              <span className="block truncate">{u.fullName}</span>
+              {/* На телефоне колонка «Роль» скрыта — роль уходит второй строкой под имя */}
+              <span className="block text-2xs font-normal text-ink-3 sm:hidden">
+                {roleLabels[u.role] || u.role}
+                {u.id === currentUser?.id ? ' · это вы' : ''}
+              </span>
+              {u.id === currentUser?.id && (
+                <span className="hidden text-2xs font-normal text-ink-3 sm:block">Это вы</span>
+              )}
+            </span>
+          </span>
+        ),
+      },
+      {
+        key: 'phone',
+        header: 'Телефон',
+        hideBelow: 'md',
+        render: (u) => <span className="tabular-nums">{formatPhone(u.phone)}</span>,
+      },
+      { key: 'role', header: 'Роль', hideBelow: 'sm', render: (u) => <RoleBadge role={u.role} /> },
+      {
+        key: 'roleId',
+        header: 'Роль доступа',
+        hideBelow: 'lg',
+        truncate: true,
+        width: 200,
+        render: (u) =>
+          u.roleId && roleNameById.get(u.roleId) ? (
+            roleNameById.get(u.roleId)
+          ) : (
+            <span className="text-ink-3">Без роли</span>
+          ),
+      },
+      {
+        key: 'salaryPercent',
+        header: 'Ставка',
+        numeric: true,
+        sortable: true,
+        hideBelow: 'sm',
+        width: 96,
+        render: (u) => `${u.salaryPercent ?? 0} %`,
+      },
+      {
+        key: 'isActive',
+        header: 'Статус',
+        hideBelow: 'sm',
+        width: 120,
+        render: (u) =>
+          u.isActive ? (
+            <Badge tone="ok" dot>
+              Активен
+            </Badge>
+          ) : (
+            <Badge tone="neutral" dot>
+              Неактивен
+            </Badge>
+          ),
+      },
+      {
+        key: 'actions',
+        header: <span className="sr-only">Действия</span>,
+        interactive: true,
+        width: 88,
+        align: 'right',
+        render: (u) => (
+          <span className="inline-flex items-center gap-1">
+            <IconButton label="Редактировать сотрудника" icon={Pencil} size="sm" onClick={() => openEdit(u)} />
+            {canDismiss(u) && (
+              <IconButton
+                label="Уволить сотрудника"
+                icon={Trash2}
+                variant="danger"
+                size="sm"
+                onClick={() => setDeleteId(u.id)}
+              />
+            )}
+          </span>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser?.id, roleNameById],
+  );
+
+  if (!canManageUsers) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Пользователи" icon={Shield} />
+        <EmptyState icon={Users} title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
+      </div>
+    );
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.fullName.trim()) {
@@ -248,9 +393,7 @@ export default function UsersPage() {
       return;
     }
     // Проверяем длину ЗДЕСЬ, до запроса. Политика — 8 символов (её же держат
-    // users.service и DTO). Раньше веб не проверял ничего: человек отправлял
-    // короткий пароль и получал отказ с сервера уже после круга — а мобильная
-    // админка вдобавок обещала «минимум 6».
+    // users.service и DTO).
     if (form.password && form.password.length < 8) {
       toast.error('Пароль должен быть не менее 8 символов');
       return;
@@ -274,243 +417,195 @@ export default function UsersPage() {
         payload.password = form.password;
       }
       // Назначение роли (единственный источник прав). Только держатель
-      // user_management (select виден только ему) и только в edit-режиме:
-      // CreateUserRequest roleId не принимает. null снимает роль (возврат к
-      // легаси-дефолтам строковой роли). Сервер сам защищает от самолокаута
-      // (нельзя снять с себя user_management).
+      // user_management и только в edit-режиме: CreateUserRequest roleId не
+      // принимает. null снимает роль (возврат к легаси-дефолтам строковой
+      // роли). Сервер сам защищает от самолокаута.
       if (canManageUsers) {
         payload.roleId = form.roleId;
       }
-      updateMutation.mutate({ id: editingUser.id, data: payload });
+      updateMutation.mutate({ id: editingUser.id, payload });
     }
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
-  if (isLoading) return <LoadingSpinner />;
+  const rolesLink = (
+    <button
+      type="button"
+      onClick={() => setRolesOpen(true)}
+      className="rounded font-medium text-accent underline underline-offset-2 hover:text-accent-hover focus-ring"
+    >
+      «Роли»
+    </button>
+  );
 
   return (
-    <div>
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Сотрудники</h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          {canManageUsers && (
-            <button onClick={() => setRolesOpen(true)} className="btn-secondary">
-              <KeyRound className="w-4 h-4" />
+    <div className="space-y-5">
+      <PageHeader
+        title="Пользователи"
+        icon={Shield}
+        subtitle={isLoading ? 'Доступ и роли сотрудников' : `${users.length} активных · доступ задаётся ролью`}
+        actions={
+          <>
+            <Button variant="secondary" icon={KeyRound} onClick={() => setRolesOpen(true)}>
               Роли
-            </button>
-          )}
-          <button onClick={() => setDismissedOpen(true)} className="btn-secondary">
-            <Archive className="w-4 h-4" />
-            Уволенные
-          </button>
-          <button onClick={openCreate} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Новый сотрудник
-          </button>
-        </div>
-      </div>
+            </Button>
+            <Button variant="secondary" icon={Archive} onClick={() => setDismissedOpen(true)}>
+              Уволенные
+            </Button>
+            <Button icon={Plus} onClick={openCreate}>
+              Новый сотрудник
+            </Button>
+          </>
+        }
+      />
 
-      {/* Table */}
-      <QueryState
-        isLoading={false}
+      <Toolbar>
+        <SearchInput value={q} onChange={setQuery} placeholder="Имя или телефон…" className="w-full sm:w-72" />
+        {q && (
+          <span className="text-sm text-ink-3">
+            Найдено: <span className="tabular-nums text-ink">{visibleUsers.length}</span>
+          </span>
+        )}
+      </Toolbar>
+
+      <DataTable
+        rows={visibleUsers}
+        rowKey={(u) => u.id}
+        onRowClick={openEdit}
+        rowLabel={(u) => `Открыть карточку: ${u.fullName}`}
+        columns={columns}
+        isLoading={isLoading}
         isError={isError}
         onRetry={refetch}
         isFetching={isFetching}
-        isEmpty={users.length === 0}
-        empty={{
-          icon: Users,
-          title: 'Нет сотрудников',
-          description: 'Добавьте первого сотрудника',
-          action: { label: 'Добавить', onClick: openCreate },
-        }}
-        minHeight="min-h-[40vh]"
-      >
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {users.map((user) => (
-              <div key={user.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-semibold text-gray-900 text-sm truncate">{user.fullName}</span>
-                    <span className={`flex-shrink-0 ${roleBadgeMap[user.role] || 'badge-gray'}`}>
-                      {roleLabels[user.role] || user.role}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <IconButton
-                      label="Редактировать сотрудника"
-                      icon={Pencil}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEdit(user)}
-                    />
-                    {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
-                      <IconButton
-                        label="Уволить сотрудника"
-                        icon={Trash2}
-                        variant="danger"
-                        size="sm"
-                        onClick={() => setDeleteId(user.id)}
-                      />
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-gray-500">
-                  <span>{formatPhone(user.phone)}</span>
-                  <span className="text-gray-300">|</span>
-                  <span>{user.salaryPercent}%</span>
-                  <span className="text-gray-300">|</span>
-                  {user.isActive ? (
-                    <span className="text-green-600 text-xs font-medium">Активен</span>
-                  ) : (
-                    <span className="text-red-600 text-xs font-medium">Неактивен</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+        caption="Сотрудники с доступом в систему"
+        emptyState={
+          q
+            ? { icon: Search, title: 'Никого не нашли', description: 'Измените запрос или очистите поиск' }
+            : {
+                icon: Users,
+                title: 'Нет сотрудников',
+                description: 'Добавьте первого сотрудника — он сможет войти по телефону и паролю',
+                action: { label: 'Добавить', onClick: openCreate },
+              }
+        }
+      />
 
-          {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Имя</th>
-                  <th>Телефон</th>
-                  <th>Роль</th>
-                  <th>% ставка</th>
-                  <th>Статус</th>
-                  <th>Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td className="font-medium text-gray-900">{user.fullName}</td>
-                    <td>{formatPhone(user.phone)}</td>
-                    <td>
-                      <span className={roleBadgeMap[user.role] || 'badge-gray'}>
-                        {roleLabels[user.role] || user.role}
-                      </span>
-                    </td>
-                    <td>{user.salaryPercent}%</td>
-                    <td>
-                      {user.isActive ? (
-                        <span className="badge-green">Активен</span>
-                      ) : (
-                        <span className="badge-red">Неактивен</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <IconButton
-                          label="Редактировать сотрудника"
-                          icon={Pencil}
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEdit(user)}
-                        />
-                        {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
-                          <IconButton
-                            label="Уволить сотрудника"
-                            icon={Trash2}
-                            variant="danger"
-                            size="sm"
-                            onClick={() => setDeleteId(user.id)}
-                          />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      </QueryState>
-
-      {/* Create / Edit Modal */}
+      {/* Создание / редактирование */}
       <Modal
         isOpen={modalOpen}
         onClose={closeModal}
         title={editingUser ? 'Редактировать сотрудника' : 'Новый сотрудник'}
+        description={
+          editingUser
+            ? `${roleLabels[editingUser.role] || editingUser.role} · ${formatPhone(editingUser.phone)}`
+            : 'Логин — номер телефона, пароль не короче 8 символов'
+        }
         size="lg"
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeModal} disabled={isSaving}>
+              Отмена
+            </Button>
+            <Button type="submit" form={formId} loading={isSaving}>
+              {editingUser ? 'Сохранить' : 'Создать'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Full Name */}
-          <div>
-            <label className="label">ФИО</label>
-            <input
-              type="text"
-              className="input"
+        <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+          <Field label="ФИО" htmlFor={`${formId}-name`} required>
+            <Input
+              id={`${formId}-name`}
+              name="name"
+              autoComplete="name"
               value={form.fullName}
               onChange={(e) => setForm({ ...form, fullName: e.target.value })}
               placeholder="Иванов Иван Иванович"
               required
             />
-          </div>
+          </Field>
 
-          {/* Phone (login) */}
-          <div>
-            <label className="label">Телефон (логин для входа)</label>
+          <Field label="Телефон (логин для входа)" htmlFor={`${formId}-phone`} required>
             <PhoneInput
+              id={`${formId}-phone`}
+              name="tel"
+              autoComplete="tel"
               value={form.phone}
               onChange={(value) => setForm({ ...form, phone: value })}
               placeholder="+7 (XXX) XXX-XX-XX"
             />
-          </div>
+          </Field>
 
-          {/* Password */}
-          {!editingUser ? (
-            <div>
-              <label className="label">Пароль</label>
-              <input
-                type="password"
-                className="input"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder="Введите пароль"
-                required
+          <Field
+            label={editingUser ? 'Новый пароль' : 'Пароль'}
+            htmlFor={`${formId}-password`}
+            required={!editingUser}
+            hint={editingUser ? 'Оставьте пустым, чтобы не менять. Не короче 8 символов.' : 'Не короче 8 символов.'}
+          >
+            <Input
+              id={`${formId}-password`}
+              type="password"
+              autoComplete="new-password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'}
+              required={!editingUser}
+            />
+          </Field>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Роль" htmlFor={`${formId}-role`}>
+              <Select
+                id={`${formId}-role`}
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
+                options={ROLE_OPTIONS}
               />
-            </div>
-          ) : (
-            <div>
-              <label className="label">Новый пароль (оставьте пустым, чтобы не менять)</label>
-              <input
-                type="password"
-                className="input"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder="Новый пароль"
+            </Field>
+
+            <Field label="Ставка от услуг" htmlFor={`${formId}-percent`}>
+              <Input
+                id={`${formId}-percent`}
+                inputMode="numeric"
+                value={String(form.salaryPercent)}
+                onChange={(e) => setForm({ ...form, salaryPercent: clampPercent(e.target.value) })}
+                className="tabular-nums"
+                rightSlot={<span className="text-sm text-ink-3">%</span>}
               />
-            </div>
+            </Field>
+          </div>
+          {editingUser && (
+            <p className="-mt-2 text-xs text-ink-3">
+              Ставка меняется с текущего месяца. Задним числом или на будущее —{' '}
+              <button
+                type="button"
+                onClick={() => setRateUser(editingUser)}
+                className="rounded font-medium text-accent underline underline-offset-2 hover:text-accent-hover focus-ring"
+              >
+                ставка по месяцам
+              </button>
+              .
+            </p>
           )}
-
-          {/* Role */}
-          <div>
-            <label className="label">Роль</label>
-            <select
-              className="input"
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
-            >
-              <option value={UserRole.DIRECTOR}>Директор</option>
-              <option value={UserRole.ADMIN}>Админ</option>
-              <option value={UserRole.MASTER}>Мастер</option>
-            </select>
-          </div>
 
           {/* Назначенная роль прав — ЕДИНСТВЕННЫЙ источник доступа (ROLE-ONLY).
               Только edit-режим: создание её не принимает (роль назначается после
               создания). Виден только owner-class. */}
           {editingUser && canManageUsers && (
-            <div>
-              <label className="label">Роль (доступ)</label>
-              <select
-                className="input"
+            <Field
+              label="Роль доступа"
+              htmlFor={`${formId}-access`}
+              hint={
+                <>
+                  Доступ сотрудника полностью определяется ролью. Что может роль — настраивается в {rolesLink}.
+                  Изменения применяются в течение ~30 секунд.
+                </>
+              }
+            >
+              <Select
+                id={`${formId}-access`}
                 value={form.roleId ?? ''}
                 onChange={(e) => setForm({ ...form, roleId: e.target.value || null })}
               >
@@ -533,75 +628,26 @@ export default function UsersPage() {
                     ))}
                   </optgroup>
                 )}
-              </select>
-              <p className="text-xs text-gray-400 mt-1">
-                Доступ сотрудника полностью определяется ролью. Чтобы изменить, что может роль, откройте{' '}
-                <button
-                  type="button"
-                  onClick={() => setRolesOpen(true)}
-                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
-                >
-                  «Роли»
-                </button>
-                . Изменения применяются в течение ~30 секунд.
-              </p>
-            </div>
+              </Select>
+            </Field>
           )}
 
-          {/* Salary Percent */}
-          <div>
-            <label className="label">% ставка от услуг</label>
-            <input
-              type="number"
-              className="input"
-              value={form.salaryPercent}
-              onChange={(e) => setForm({ ...form, salaryPercent: Number(e.target.value) })}
-              min={0}
-              max={100}
-              step={1}
-            />
-            {editingUser && (
-              <p className="text-xs text-gray-400 mt-1">
-                Меняет ставку с текущего месяца. Задним числом или на будущее —{' '}
-                <button
-                  type="button"
-                  onClick={() => setRateUser(editingUser)}
-                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
-                >
-                  ставка по месяцам
-                </button>
-                .
-              </p>
-            )}
-          </div>
-
-          {/* Product Commission — only for existing users */}
+          {/* Комиссия с товаров — только у существующих */}
           {editingUser && (form.role === UserRole.MASTER || form.role === UserRole.ADMIN) && (
-            <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                    <Gift className="w-4 h-4 text-green-600" />
-                    Комиссия с товаров
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {editingUser.productSalaryPercent
-                      ? `${editingUser.productSalaryPercent}% с чистой прибыли`
-                      : 'Не настроена'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCommissionUserId(editingUser.id);
-                    setCommissionModalOpen(true);
-                  }}
-                  className="text-sm font-medium text-green-700 hover:text-green-800 bg-green-100 hover:bg-green-200 px-3 py-1.5 rounded-lg transition-colors"
-                >
+            <SettingRow
+              icon={Gift}
+              title="Комиссия с товаров"
+              description={
+                editingUser.productSalaryPercent
+                  ? `${editingUser.productSalaryPercent}% с чистой прибыли`
+                  : 'Не настроена'
+              }
+              action={
+                <Button variant="secondary" size="sm" onClick={() => setCommissionUserId(editingUser.id)}>
                   Настроить
-                </button>
-              </div>
-            </div>
+                </Button>
+              }
+            />
           )}
 
           {/* ── Филиалы сотрудника (163) ──────────────────────────────────
@@ -610,83 +656,40 @@ export default function UsersPage() {
               созданного сотрудника нет id, которому назначать доступ. У
               одноточечного тенанта блока нет вовсе. */}
           {editingUser && canManageUsers && multiPoint && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-                    <Building2 className="h-4 w-4 text-gray-400" />
-                    Филиалы сотрудника
-                  </p>
-                  <p className="mt-0.5 text-xs text-gray-500">Где он может работать — выбирается им при входе</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setPointsUser(editingUser)}
-                  className="flex-shrink-0 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-200 transition-colors hover:bg-gray-100"
-                >
+            <SettingRow
+              icon={Building2}
+              title="Филиалы сотрудника"
+              description="Где он может работать — выбирается им при входе"
+              action={
+                <Button variant="secondary" size="sm" onClick={() => setPointsUser(editingUser)}>
                   Настроить
-                </button>
-              </div>
-            </div>
+                </Button>
+              }
+            />
           )}
 
-          {/* Active Toggle */}
-          <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={form.isActive}
-                onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
-            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
-          </div>
+          <ToggleRow
+            label="Активен"
+            description="Неактивный сотрудник не может войти в систему, но остаётся в отчётах."
+            checked={form.isActive}
+            onChange={(v) => setForm({ ...form, isActive: v })}
+          />
 
           {/* Права доступа — ROLE-ONLY (консолидация 2026-07). Персональных
-              галочек прав больше нет: доступ сотрудника = его роль. Настройка
-              возможностей — во вкладке «Роли». */}
+              галочек прав больше нет: доступ сотрудника = его роль. */}
           {canManageUsers && (
-            <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
-              <ShieldCheck className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-gray-500">
+            <div className="flex items-start gap-2.5 rounded-lg border border-line bg-surface-2 px-4 py-3">
+              <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
+              <p className="text-xs leading-relaxed text-ink-2">
                 Права доступа задаёт назначенная роль — отдельных галочек по сотруднику больше нет. Чтобы изменить, что
-                может роль, откройте{' '}
-                <button
-                  type="button"
-                  onClick={() => setRolesOpen(true)}
-                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
-                >
-                  «Роли»
-                </button>
-                .
+                может роль, откройте {rolesLink}.
               </p>
             </div>
           )}
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={isSaving} className="btn-primary">
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : editingUser ? (
-                'Сохранить'
-              ) : (
-                'Создать'
-              )}
-            </button>
-          </div>
         </form>
       </Modal>
 
-      {/* Dismiss Confirmation */}
+      {/* Увольнение */}
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
@@ -695,19 +698,16 @@ export default function UsersPage() {
           setDeleteId(null);
         }}
         title="Уволить сотрудника"
-        message="Уволить сотрудника? Он переместится в Уволенные, восстановить можно в течение года."
+        message="Уволить сотрудника? Он переместится в «Уволенные», восстановить можно в течение года."
         confirmText="Уволить"
         variant="danger"
       />
 
-      {/* Product Commission Modal */}
+      {/* Комиссия с товаров */}
       {commissionUserId && (
         <ProductCommissionModal
-          isOpen={commissionModalOpen}
-          onClose={() => {
-            setCommissionModalOpen(false);
-            setCommissionUserId(null);
-          }}
+          isOpen={!!commissionUserId}
+          onClose={() => setCommissionUserId(null)}
           userId={commissionUserId}
           userName={users.find((u) => u.id === commissionUserId)?.fullName || ''}
         />
@@ -737,7 +737,6 @@ export default function UsersPage() {
         />
       )}
 
-      {/* «Уволенные» (dismissed employees) Modal */}
       <DismissedModal isOpen={dismissedOpen} onClose={() => setDismissedOpen(false)} />
 
       {/* Роли и права (Bitrix24-style) — только owner-class */}
@@ -754,18 +753,43 @@ export default function UsersPage() {
   );
 }
 
-// ─── «Уволенные» (dismissed employees recycle bin) ──────────────────
+/** Строка настройки в карточке сотрудника: иконка · заголовок/пояснение ‖ действие. */
+function SettingRow({
+  icon: Icon,
+  title,
+  description,
+  action,
+}: {
+  icon: typeof Gift;
+  title: string;
+  description: string;
+  action: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-ink">{title}</p>
+          <p className="mt-0.5 text-xs text-ink-3">{description}</p>
+        </div>
+      </div>
+      <div className="flex-shrink-0">{action}</div>
+    </div>
+  );
+}
+
+// ─── «Уволенные» (корзина сотрудников) ──────────────────────────────
 
 function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [restoreUser, setRestoreUser] = useState<User | null>(null);
   const [purgeUser, setPurgeUser] = useState<User | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users-dismissed'],
     queryFn: () => usersApi.listDismissed(),
-    // Backend already excludes purged rows; filter defensively in case a stale
-    // cache snapshot ever carries one.
+    // Бэкенд уже исключает удалённых; фильтруем на случай устаревшего снимка кеша.
     select: (res) => (res.data as User[]).filter((u) => !u.purgedAt),
     enabled: isOpen,
   });
@@ -783,8 +807,8 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
       invalidate();
       toast.success('Сотрудник восстановлен');
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка восстановления');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка восстановления');
     },
   });
 
@@ -794,8 +818,8 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
       invalidate();
       toast.success('Сотрудник удалён полностью');
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка удаления');
     },
   });
 
@@ -803,82 +827,89 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title="Уволенные сотрудники" size="lg">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Уволенные сотрудники"
+        description="Восстановить можно в течение года после увольнения"
+        size="lg"
+      >
         {isLoading ? (
-          <div className="flex items-center justify-center py-10">
-            <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
-          </div>
+          <InlineLoader minHeight="py-10" />
+        ) : isError ? (
+          <ErrorRow message="Не удалось загрузить уволенных" onRetry={() => refetch()} loading={isFetching} />
         ) : dismissed.length === 0 ? (
-          <div className="text-center py-10 text-gray-400">
-            <UserX className="w-10 h-10 mx-auto mb-3 opacity-40" />
-            <p className="text-sm font-medium text-gray-500">Нет уволенных сотрудников</p>
-            <p className="text-xs mt-1">
-              Уволенные сотрудники появятся здесь и могут быть восстановлены в течение года
-            </p>
-          </div>
+          <EmptyState
+            compact
+            icon={UserX}
+            title="Нет уволенных сотрудников"
+            description="Уволенные появятся здесь и могут быть восстановлены в течение года"
+          />
         ) : (
-          <div className="space-y-3">
+          <ul className="space-y-2">
             {dismissed.map((user) => {
               const daysLeft = user.dismissedAt ? restoreDaysLeft(user.dismissedAt) : 0;
               const canRestore = daysLeft > 0;
               return (
-                <div
+                <li
                   key={user.id}
-                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 rounded-xl border border-gray-100 px-4 py-3"
+                  className="flex flex-col gap-3 rounded-lg border border-line px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-gray-900 text-sm truncate">{user.fullName}</span>
-                      <span className={`flex-shrink-0 ${roleBadgeMapDismissed[user.role] || 'badge-gray'}`}>
-                        {roleLabels[user.role] || user.role}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {user.dismissedAt ? (
-                        <>
-                          Уволен {formatDismissedDate(user.dismissedAt)}
-                          {' · '}
-                          {canRestore ? (
-                            <span className="text-gray-500">
-                              можно восстановить ещё {daysLeft} {pluralizeDays(daysLeft)}
-                            </span>
-                          ) : (
-                            <span className="text-red-500">срок восстановления истёк</span>
-                          )}
-                        </>
-                      ) : (
-                        'Уволен'
-                      )}
+                  <div className="flex min-w-0 items-center gap-3">
+                    <UserAvatar name={user.fullName} src={user.avatar} size="sm" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-ink">{user.fullName}</span>
+                        <RoleBadge role={user.role} size="sm" />
+                      </div>
+                      <p className="mt-0.5 text-xs text-ink-3">
+                        {user.dismissedAt ? (
+                          <>
+                            Уволен {formatDismissedDate(user.dismissedAt)}
+                            {' · '}
+                            {canRestore ? (
+                              <>
+                                можно восстановить ещё {daysLeft} {pluralizeDays(daysLeft)}
+                              </>
+                            ) : (
+                              <span className="text-bad-text">срок восстановления истёк</span>
+                            )}
+                          </>
+                        ) : (
+                          'Уволен'
+                        )}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <button
+                  <div className="flex flex-shrink-0 items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={RotateCcw}
                       onClick={() => setRestoreUser(user)}
                       disabled={busy || !canRestore}
-                      className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg transition-colors"
-                      title={canRestore ? 'Восстановить' : 'Срок восстановления истёк'}
+                      title={canRestore ? undefined : 'Срок восстановления истёк'}
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
                       Восстановить
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Trash2}
                       onClick={() => setPurgeUser(user)}
                       disabled={busy}
-                      className="inline-flex items-center gap-1.5 text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg transition-colors"
-                      title="Удалить полностью"
+                      className="text-bad-text hover:text-bad-text"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
                       Удалить полностью
-                    </button>
+                    </Button>
                   </div>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
       </Modal>
 
-      {/* Restore confirmation */}
       <ConfirmDialog
         isOpen={!!restoreUser}
         onClose={() => setRestoreUser(null)}
@@ -896,7 +927,6 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
         variant="primary"
       />
 
-      {/* Purge (delete completely) confirmation */}
       <ConfirmDialog
         isOpen={!!purgeUser}
         onClose={() => setPurgeUser(null)}
@@ -917,7 +947,7 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
   );
 }
 
-// ─── Product Commission Configuration Modal ─────────────────────────
+// ─── Комиссия с товаров ─────────────────────────────────────────────
 
 function ProductCommissionModal({
   isOpen,
@@ -931,30 +961,29 @@ function ProductCommissionModal({
   userName: string;
 }) {
   const queryClient = useQueryClient();
+  const idBase = useId();
   const [globalPct, setGlobalPct] = useState(0);
   const [items, setItems] = useState<Array<{ productId: string; percent: number; productName: string }>>([]);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Load current commissions
   const { data: commissionData, isLoading } = useQuery({
     queryKey: ['product-commissions', userId],
     queryFn: () => usersApi.getProductCommissions(userId),
     enabled: isOpen,
   });
 
-  // Load all products
   const { data: productsData } = useQuery({
     queryKey: ['products-all-commission'],
     queryFn: () => productsApi.getAll({ limit: 1000 }),
     enabled: isOpen,
   });
 
-  const allProducts: Product[] = (() => {
+  const allProducts: Product[] = useMemo(() => {
     const d = productsData?.data;
     if (!d) return [];
     return Array.isArray(d) ? d : (d as PaginatedResponse<Product>).data || [];
-  })();
+  }, [productsData]);
 
   useEffect(() => {
     if (commissionData?.data) {
@@ -996,8 +1025,8 @@ function ProductCommissionModal({
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('Комиссии сохранены');
       onClose();
-    } catch {
-      toast.error('Ошибка сохранения');
+    } catch (err) {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка сохранения');
     } finally {
       setSaving(false);
     }
@@ -1011,153 +1040,146 @@ function ProductCommissionModal({
           .slice(0, 10)
       : [];
 
-  const formatCurrency = (v: number) =>
-    new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: 'RUB',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(v);
+  const percentSlot = <span className="text-sm text-ink-3">%</span>;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Комиссия с товаров — ${userName}`} size="lg">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Комиссия с товаров"
+      description={userName}
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Отмена
+          </Button>
+          <Button onClick={handleSave} loading={saving} disabled={isLoading}>
+            Сохранить
+          </Button>
+        </>
+      }
+    >
       {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
-        </div>
+        <InlineLoader minHeight="py-8" />
       ) : (
         <div className="space-y-5">
-          {/* Global product commission */}
-          <div className="bg-gradient-to-r from-primary-50 to-blue-50 rounded-xl p-4 border border-primary-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Глобальный % со всех товаров</p>
-                <p className="text-xs text-gray-500 mt-0.5">С чистой прибыли каждого товара</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={globalPct}
-                  onChange={(e) => setGlobalPct(Math.max(0, Math.min(100, Number(e.target.value))))}
-                  className="w-20 text-right text-sm font-semibold border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500"
-                />
-                <span className="text-sm font-medium text-gray-500">%</span>
-              </div>
+          {/* Глобальный процент */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-4 py-3">
+            <div className="min-w-0">
+              <label htmlFor={`${idBase}-global`} className="block text-sm font-medium text-ink">
+                Глобальный % со всех товаров
+              </label>
+              <p className="mt-0.5 text-xs text-ink-3">С чистой прибыли каждого товара</p>
             </div>
+            <Input
+              id={`${idBase}-global`}
+              inputMode="numeric"
+              value={String(globalPct)}
+              onChange={(e) => setGlobalPct(clampPercent(e.target.value))}
+              className="w-24 text-right tabular-nums"
+              rightSlot={percentSlot}
+            />
           </div>
 
-          {/* Product-specific commissions */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Индивидуальные товары</p>
-                <p className="text-xs text-gray-500">Переопределяют глобальный процент</p>
-              </div>
+          {/* Индивидуальные товары */}
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium text-ink">Индивидуальные товары</p>
+              <p className="text-xs text-ink-3">Переопределяют глобальный процент</p>
             </div>
 
-            {/* Search to add products */}
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
+            <div className="relative">
+              <Input
+                aria-label="Найти и добавить товар"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Найти и добавить товар..."
-                className="input pl-10 w-full"
+                placeholder="Найти и добавить товар…"
+                leftIcon={Search}
+                autoComplete="off"
+                rightSlot={
+                  search ? (
+                    <IconButton label="Очистить поиск" icon={X} size="sm" onClick={() => setSearch('')} />
+                  ) : undefined
+                }
               />
-              {search && (
-                <button
-                  onClick={() => setSearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
               {searchResults.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-10 max-h-48 overflow-y-auto">
+                <ul
+                  role="listbox"
+                  aria-label="Найденные товары"
+                  className="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-pop"
+                >
                   {searchResults.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => addProduct(p)}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left"
-                    >
-                      <Package className="w-4 h-4 text-gray-300 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-900 truncate">{p.name}</p>
-                        <p className="text-xs text-gray-400">Прибыль: {formatCurrency(p.sellPrice - p.costPrice)}</p>
-                      </div>
-                      <Plus className="w-4 h-4 text-primary-500 flex-shrink-0" />
-                    </button>
+                    <li key={p.id} role="option" aria-selected={false}>
+                      <button
+                        type="button"
+                        onClick={() => addProduct(p)}
+                        className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-surface-3 focus-ring"
+                      >
+                        <Package className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-ink">{p.name}</span>
+                          <span className="block text-xs text-ink-3">
+                            Прибыль: <Money value={p.sellPrice - p.costPrice} />
+                          </span>
+                        </span>
+                        <Plus className="h-4 w-4 flex-shrink-0 text-accent" aria-hidden="true" />
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
 
-            {/* Selected products with commissions */}
             {items.length === 0 ? (
-              <div className="text-center py-6 text-gray-400">
-                <Gift className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">Нет индивидуальных товаров</p>
-                <p className="text-xs mt-1">Будет применяться глобальный %</p>
-              </div>
+              <EmptyState
+                compact
+                icon={Gift}
+                title="Нет индивидуальных товаров"
+                description="Будет применяться глобальный процент"
+              />
             ) : (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
+              <ul className="max-h-60 space-y-2 overflow-y-auto">
                 {items.map((item) => {
                   const product = allProducts.find((p) => p.id === item.productId);
                   const profit = product ? product.sellPrice - product.costPrice : 0;
                   const bonus = Math.round((profit * item.percent) / 100);
+                  const inputId = `${idBase}-item-${item.productId}`;
                   return (
-                    <div key={item.productId} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{item.productName}</p>
-                        <p className="text-xs text-gray-400">
-                          Прибыль: {formatCurrency(profit)} → Бонус:{' '}
-                          <span className="text-green-600 font-medium">{formatCurrency(bonus)}</span>
+                    <li
+                      key={item.productId}
+                      className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <label htmlFor={inputId} className="block truncate text-sm font-medium text-ink">
+                          {item.productName}
+                        </label>
+                        <p className="text-xs text-ink-3">
+                          Прибыль: <Money value={profit} /> → бонус:{' '}
+                          <Money value={bonus} className="font-medium text-ok-text" />
                         </p>
                       </div>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={item.percent}
-                        onChange={(e) =>
-                          updatePercent(item.productId, Math.max(0, Math.min(100, Number(e.target.value))))
-                        }
-                        className="w-16 text-right text-sm font-medium border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                      <Input
+                        id={inputId}
+                        inputMode="numeric"
+                        size="sm"
+                        value={String(item.percent)}
+                        onChange={(e) => updatePercent(item.productId, clampPercent(e.target.value))}
+                        className="w-20 text-right tabular-nums"
+                        rightSlot={percentSlot}
                       />
-                      <span className="text-xs text-gray-400">%</span>
-                      <button
+                      <IconButton
+                        label={`Убрать ${item.productName}`}
+                        icon={X}
+                        size="sm"
+                        variant="danger"
                         onClick={() => removeProduct(item.productId)}
-                        className="p-1 text-red-400 hover:text-red-600"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+                      />
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             )}
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Отмена
-            </button>
-            <button onClick={handleSave} disabled={saving} className="btn-primary">
-              {saving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Сохранение...
-                </>
-              ) : (
-                'Сохранить'
-              )}
-            </button>
           </div>
         </div>
       )}
