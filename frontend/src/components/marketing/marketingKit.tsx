@@ -1,5 +1,13 @@
 import { type ReactNode } from 'react';
-import { Loader2, Star, type LucideIcon } from 'lucide-react';
+import { Star, type LucideIcon } from 'lucide-react';
+import { Button } from '../../ui/Button';
+import { Card, CardBody, CardHeader } from '../../ui/Card';
+import { Skeleton } from '../../ui/Skeleton';
+import UiEmptyState from '../EmptyState';
+import Switch from '../Switch';
+import { cn } from '../../ui/cn';
+import { toneSoft, type Tone } from '../../ui/tokens';
+import { ErrorRow } from '../dashboard/shared';
 
 // ─── Russian plural helper (shared across marketing views) ──────────
 export function plural(n: number, forms: [string, string, string]): string {
@@ -21,115 +29,148 @@ export function lastVisitLabel(iso: string | null): string {
 }
 
 // ─── Headed section card ────────────────────────────────────────────
-// A single, consistent card chrome for every marketing sub-section:
-// icon chip + title + optional subtitle + optional right-slot, then body.
+// Единая обёртка секций маркетинга поверх ui/Card + CardHeader: иконка-чип в
+// семантическом тоне (по смыслу, не по вкусу), заголовок 15/600, подзаголовок,
+// правый слот (тумблер / кнопка / бейдж), тело.
 export function SectionCard({
-  icon: Icon,
-  iconClass = 'bg-primary-50 text-primary-600',
+  icon,
+  iconTone = 'neutral',
   title,
   subtitle,
   right,
   children,
-  className = '',
+  className,
+  bodyPadding = 'md',
+  dense = false,
+  as = 'h3',
 }: {
   icon?: LucideIcon;
-  iconClass?: string;
+  iconTone?: Tone;
   title: string;
   subtitle?: ReactNode;
   right?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** none — когда внутри таблица/список на всю ширину карточки. */
+  bodyPadding?: 'none' | 'sm' | 'md';
+  dense?: boolean;
+  as?: 'h2' | 'h3';
 }) {
   return (
-    <section className={`card ${className}`}>
-      <header className="flex items-center gap-2.5 px-4 sm:px-5 pt-4 pb-3">
-        {Icon && (
-          <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${iconClass}`}>
-            <Icon className="h-4 w-4" />
-          </span>
-        )}
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold leading-tight text-gray-900">{title}</h3>
-          {subtitle != null && <p className="text-xs text-gray-500 leading-snug">{subtitle}</p>}
-        </div>
-        {right != null && <div className="ml-auto flex-shrink-0">{right}</div>}
-      </header>
-      <div className="px-4 sm:px-5 pb-4 sm:pb-5">{children}</div>
-    </section>
+    <Card padding="none" className={className}>
+      <CardHeader
+        icon={icon}
+        iconTone={iconTone}
+        title={title}
+        subtitle={subtitle}
+        actions={right}
+        dense={dense}
+        as={as}
+      />
+      <CardBody padding={bodyPadding}>{children}</CardBody>
+    </Card>
   );
 }
 
-// ─── iOS-style switch ───────────────────────────────────────────────
+// ─── Тумблер ────────────────────────────────────────────────────────
+/** Совместимость с прежним API маркетинга: ui-переключатель Switch (role="switch"). */
 export function Toggle({
   checked,
   onChange,
   label,
+  disabled,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
+  disabled?: boolean;
 }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors ${checked ? 'bg-primary-600' : 'bg-gray-200'}`}
-    >
-      <span
-        className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`}
-      />
-    </button>
-  );
+  return <Switch checked={checked} onChange={onChange} label={label} disabled={disabled} />;
 }
 
 // ─── Star rating row ────────────────────────────────────────────────
-export function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'md' | 'lg' }) {
+export function Stars({ rating, size = 'sm', label }: { rating: number; size?: 'sm' | 'md' | 'lg'; label?: string }) {
   const cls = size === 'lg' ? 'h-6 w-6' : size === 'md' ? 'h-5 w-5' : 'h-4 w-4';
   return (
-    <div className="flex gap-0.5">
+    <span className="inline-flex gap-0.5" role="img" aria-label={label ?? `Оценка ${rating} из 5`}>
       {[1, 2, 3, 4, 5].map((i) => (
-        <Star key={i} className={`${cls} ${i <= rating ? 'fill-amber-400 text-amber-400' : 'text-gray-200'}`} />
+        <Star
+          key={i}
+          className={cn(cls, i <= rating ? 'fill-warn text-warn' : 'text-line-strong')}
+          aria-hidden="true"
+        />
       ))}
-    </div>
+    </span>
   );
 }
 
 // ─── Template-variable chips ────────────────────────────────────────
 export function VarChips({ vars }: { vars: string[] }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap gap-1.5" aria-label="Подстановки шаблона">
       {vars.map((v) => (
-        <span key={v} className="rounded-full bg-primary-50 px-2 py-0.5 font-mono text-xs text-primary-600">
+        <code key={v} className={cn('rounded-md px-2 py-0.5 font-mono text-xs', toneSoft.accent)}>
           {v}
-        </span>
+        </code>
       ))}
     </div>
   );
 }
 
-// ─── Loading / empty primitives ─────────────────────────────────────
-export function LoadingBlock({ className = 'py-12' }: { className?: string }) {
+// ─── Loading / empty / error primitives ─────────────────────────────
+/** Заглушка секции в форме будущего контента (несколько строк), не спиннер. */
+export function LoadingBlock({ className, lines = 3 }: { className?: string; lines?: number }) {
   return (
-    <div className={`flex justify-center ${className}`}>
-      <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+    <div className={cn('space-y-3 py-2', className)} role="status" aria-label="Загрузка…">
+      {Array.from({ length: lines }).map((_, i) => (
+        <Skeleton key={i} className={cn('h-10', i === lines - 1 ? 'w-2/3' : 'w-full')} />
+      ))}
     </div>
   );
 }
 
-export function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }) {
+export function EmptyState({ icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }) {
+  return <UiEmptyState icon={icon} title={title} description={hint} compact />;
+}
+
+/** Ошибка загрузки секции с «Повторить» — ошибка ≠ пусто (аудит S2). */
+export function SectionError({
+  message,
+  onRetry,
+  loading,
+}: {
+  message: string;
+  onRetry?: () => void;
+  loading?: boolean;
+}) {
+  return <ErrorRow message={message} onRetry={onRetry} loading={loading} />;
+}
+
+// ─── Информационная плашка ──────────────────────────────────────────
+/** Короткое пояснение под/над секцией: нейтральное, «ok» (гарантии), «info», «warn». */
+export function InfoNote({
+  icon: Icon,
+  tone = 'neutral',
+  children,
+  className,
+}: {
+  icon?: LucideIcon;
+  tone?: Tone;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <div className="py-10 text-center">
-      <Icon className="mx-auto mb-3 h-10 w-10 text-gray-200" />
-      <p className="text-sm font-medium text-gray-500">{title}</p>
-      {hint && <p className="mt-1 text-xs text-gray-400">{hint}</p>}
+    <div
+      className={cn('flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-xs leading-snug', toneSoft[tone], className)}
+    >
+      {Icon && <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
 
-// ─── Dirty-state save button (full width, primary) ──────────────────
+// ─── Dirty-state save button ────────────────────────────────────────
+/** Появляется только при несохранённых изменениях; прижата вправо, не во всю ширину. */
 export function SaveButton({
   onClick,
   disabled,
@@ -142,9 +183,10 @@ export function SaveButton({
   children?: ReactNode;
 }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled || saving} className="btn-primary w-full">
-      {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-      {children}
-    </button>
+    <div className="flex justify-end">
+      <Button type="button" onClick={onClick} disabled={disabled} loading={saving}>
+        {children}
+      </Button>
+    </div>
   );
 }

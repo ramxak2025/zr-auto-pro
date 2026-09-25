@@ -1,6 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, CalendarClock, CreditCard, Link2, MessageSquareText, Plus, Star, Trash2 } from 'lucide-react';
+import {
+  Bell,
+  CalendarClock,
+  CreditCard,
+  ExternalLink,
+  Link2,
+  MessageSquareText,
+  Plus,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { installmentsApi, marketingApi } from '../../api/services';
@@ -11,7 +21,18 @@ import type {
   ReviewPlatformLink,
   ReviewSettings,
 } from '../../types';
-import { LoadingBlock, SaveButton, SectionCard, Toggle, VarChips } from './marketingKit';
+import ConfirmDialog from '../ConfirmDialog';
+import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Select } from '../../ui/Select';
+import { Textarea } from '../../ui/Textarea';
+import { cn } from '../../ui/cn';
+import { focusRing } from '../../ui/tokens';
+import { InfoNote, LoadingBlock, SaveButton, SectionCard, SectionError, Toggle, VarChips } from './marketingKit';
 
 // Deep-link anchors — auto-mailings & reputation jump here.
 export type SettingsSection = 'platforms' | 'review' | 'installments' | 'service' | 'car-ready';
@@ -24,6 +45,31 @@ function Anchor({ id, children }: { id: string; children: ReactNode }) {
   );
 }
 
+/** Строка «подпись + тумблер» внутри карточки настроек. */
+function ToggleRow({
+  title,
+  description,
+  checked,
+  onChange,
+  label,
+}: {
+  title: string;
+  description?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-ink">{title}</p>
+        {description && <p className="text-xs text-ink-3">{description}</p>}
+      </div>
+      <Toggle checked={checked} onChange={onChange} label={label} />
+    </div>
+  );
+}
+
 // ─── Площадки для отзывов ───────────────────────────────────────────
 const PLATFORM_LABELS: Record<string, string> = {
   google: 'Google Maps',
@@ -31,21 +77,23 @@ const PLATFORM_LABELS: Record<string, string> = {
   '2gis': '2ГИС',
   avito: 'Авито',
 };
-const PLATFORM_BADGE: Record<string, string> = {
-  google: 'bg-blue-50 text-blue-600',
-  yandex: 'bg-red-50 text-red-600',
-  '2gis': 'bg-green-50 text-green-600',
-  avito: 'bg-emerald-50 text-emerald-600',
-};
+const PLATFORM_OPTIONS = Object.entries(PLATFORM_LABELS).map(([value, label]) => ({ value, label }));
 
 function PlatformLinksCard() {
   const qc = useQueryClient();
-  const { data: links = [], isLoading } = useQuery({
+  const {
+    data: links = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'platform-links'],
     queryFn: () => marketingApi.getPlatformLinks().then((r) => r.data),
   });
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ platform: 'google', url: '' });
+  const [toRemove, setToRemove] = useState<ReviewPlatformLink | null>(null);
 
   const upsert = useMutation({
     mutationFn: (data: { platform: string; url: string }) => marketingApi.upsertPlatformLink(data).then((r) => r.data),
@@ -71,85 +119,105 @@ function PlatformLinksCard() {
   return (
     <SectionCard
       icon={Link2}
-      iconClass="bg-primary-50 text-primary-600"
+      iconTone="accent"
       title="Площадки для отзывов"
       subtitle="Куда ведём довольных клиентов оставить отзыв"
       right={
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Plus}
+          aria-expanded={showForm}
           onClick={() => setShowForm((v) => !v)}
-          className="press-soft rounded-lg p-1 text-primary-600 hover:bg-primary-50"
-          aria-label="Добавить"
         >
-          <Plus className="h-5 w-5" />
-        </button>
+          Добавить
+        </Button>
       }
     >
       {showForm && (
-        <div className="mb-4 space-y-3 rounded-xl bg-gray-50 p-3">
-          <div>
-            <label className="label">Площадка</label>
-            <select
+        <form
+          className="mb-4 space-y-3 rounded-lg border border-line bg-surface-2 p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (form.url.trim()) upsert.mutate({ platform: form.platform, url: form.url.trim() });
+          }}
+        >
+          <Field label="Площадка" htmlFor="platform-kind">
+            <Select
+              id="platform-kind"
               value={form.platform}
               onChange={(e) => setForm({ ...form, platform: e.target.value })}
-              className="input"
-            >
-              <option value="google">Google Maps</option>
-              <option value="yandex">Яндекс</option>
-              <option value="2gis">2ГИС</option>
-              <option value="avito">Авито</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">Ссылка</label>
-            <input
+              options={PLATFORM_OPTIONS}
+            />
+          </Field>
+          <Field label="Ссылка" htmlFor="platform-url">
+            <Input
+              id="platform-url"
+              type="url"
+              inputMode="url"
               value={form.url}
               onChange={(e) => setForm({ ...form, url: e.target.value })}
-              className="input"
-              placeholder="https://..."
+              placeholder="https://…"
+              required
             />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setShowForm(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" size="sm" loading={upsert.isPending} disabled={!form.url.trim()}>
+              Сохранить
+            </Button>
           </div>
-          <button
-            onClick={() => form.url.trim() && upsert.mutate({ platform: form.platform, url: form.url.trim() })}
-            disabled={upsert.isPending}
-            className="btn-primary btn-sm w-full"
-          >
-            Сохранить
-          </button>
-        </div>
+        </form>
       )}
 
       {isLoading ? (
-        <LoadingBlock className="py-6" />
+        <LoadingBlock lines={2} />
+      ) : isError ? (
+        <SectionError message="Не удалось загрузить площадки" onRetry={() => refetch()} loading={isFetching} />
       ) : links.length === 0 && !showForm ? (
-        <p className="py-4 text-center text-sm text-gray-400">Добавьте ссылки на площадки для отзывов</p>
+        <p className="py-2 text-sm text-ink-3">Добавьте ссылки на площадки для отзывов</p>
       ) : (
-        <div className="space-y-2">
+        <ul className="divide-y divide-line">
           {links.map((l) => (
-            <div key={l.id} className="flex items-center justify-between rounded-xl bg-gray-50 p-3">
+            <li key={l.id} className="flex items-center justify-between gap-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
-                <span className={`badge ${PLATFORM_BADGE[l.platform] || 'bg-gray-100 text-gray-600'}`}>
-                  {PLATFORM_LABELS[l.platform] || l.platform}
-                </span>
+                <Badge outline>{PLATFORM_LABELS[l.platform] || l.platform}</Badge>
                 <a
                   href={l.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="truncate text-xs text-blue-500 hover:underline"
+                  className={cn(
+                    'inline-flex min-w-0 items-center gap-1 truncate text-xs text-accent-text hover:underline',
+                    focusRing,
+                  )}
                 >
-                  {l.url}
+                  <span className="truncate">{l.url}</span>
+                  <ExternalLink className="h-3 w-3 flex-shrink-0" aria-hidden="true" />
                 </a>
               </div>
-              <button
-                onClick={() => remove.mutate(l.id)}
-                className="press-soft flex-shrink-0 p-1 text-gray-400 hover:text-red-500"
-                aria-label="Удалить"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
+              <IconButton
+                label="Удалить ссылку"
+                icon={Trash2}
+                size="sm"
+                variant="danger"
+                onClick={() => setToRemove(l)}
+              />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
+
+      <ConfirmDialog
+        isOpen={!!toRemove}
+        onClose={() => setToRemove(null)}
+        onConfirm={() => toRemove && remove.mutate(toRemove.id)}
+        title="Удалить площадку"
+        message={`Ссылка на ${toRemove ? PLATFORM_LABELS[toRemove.platform] || toRemove.platform : ''} будет удалена — клиентов туда больше не поведём. Продолжить?`}
+        confirmText="Удалить"
+        variant="danger"
+      />
     </SectionCard>
   );
 }
@@ -157,7 +225,13 @@ function PlatformLinksCard() {
 // ─── По отзывам (запрос + автоотправка) ─────────────────────────────
 function ReviewRequestCard() {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'settings'],
     queryFn: () => marketingApi.getSettings().then((r) => r.data),
   });
@@ -184,63 +258,52 @@ function ReviewRequestCard() {
   });
 
   return (
-    <SectionCard
-      icon={Star}
-      iconClass="bg-amber-50 text-amber-600"
-      title="Текст запроса отзыва"
-      subtitle="Уходит клиенту после закрытия заказ-наряда"
-    >
-      {isLoading || !settings ? (
-        <LoadingBlock className="py-6" />
+    <SectionCard icon={Star} title="Текст запроса отзыва" subtitle="Уходит клиенту после закрытия заказ-наряда">
+      {isLoading ? (
+        <LoadingBlock lines={3} />
+      ) : isError || !settings ? (
+        <SectionError message="Не удалось загрузить настройки отзывов" onRetry={() => refetch()} loading={isFetching} />
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-900">Автоотправка</p>
-              <p className="text-xs text-gray-500">Отправлять запрос отзыва автоматически</p>
-            </div>
-            <Toggle
-              checked={!!form.autoSendEnabled}
-              onChange={(v) => set({ autoSendEnabled: v })}
-              label="Автоотправка отзывов"
-            />
-          </div>
+          <ToggleRow
+            title="Автоотправка"
+            description="Отправлять запрос отзыва автоматически"
+            checked={!!form.autoSendEnabled}
+            onChange={(v) => set({ autoSendEnabled: v })}
+            label="Автоотправка отзывов"
+          />
 
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Время отправки</label>
-              <input
+            <Field label="Время отправки" htmlFor="review-time">
+              <Input
+                id="review-time"
                 type="time"
                 value={form.sendTime || '20:00'}
                 onChange={(e) => set({ sendTime: e.target.value })}
-                className="input"
               />
-            </div>
-            <div>
-              <label className="label">Задержка (часов)</label>
-              <input
-                type="number"
-                min={0}
-                max={48}
+            </Field>
+            <Field label="Задержка после закрытия" htmlFor="review-delay">
+              <Input
+                id="review-delay"
+                inputMode="numeric"
                 value={form.feedbackDelayHours ?? 2}
-                onChange={(e) => set({ feedbackDelayHours: parseInt(e.target.value) || 0 })}
-                className="input"
+                onChange={(e) => set({ feedbackDelayHours: Math.max(0, Math.min(48, parseInt(e.target.value) || 0)) })}
+                rightSlot={<span className="text-sm text-ink-3">ч</span>}
               />
-            </div>
+            </Field>
           </div>
 
-          <div>
-            <label className="label">Шаблон сообщения</label>
-            <textarea
+          <Field label="Шаблон сообщения" htmlFor="review-template">
+            <Textarea
+              id="review-template"
               rows={4}
               value={form.messageTemplate || ''}
               onChange={(e) => set({ messageTemplate: e.target.value })}
-              className="input resize-none"
             />
             <div className="mt-2">
               <VarChips vars={['{clientName}', '{tenantName}', '{reviewLink}', '{motivation}']} />
             </div>
-          </div>
+          </Field>
 
           {dirty && (
             <SaveButton
@@ -262,9 +325,21 @@ function ReviewRequestCard() {
 }
 
 // ─── По рассрочкам ──────────────────────────────────────────────────
+const INSTALLMENT_MODES: { value: InstallmentReminderSettings['mode']; label: string }[] = [
+  { value: 'off', label: 'Выкл' },
+  { value: 'auto', label: 'Авто' },
+  { value: 'manual', label: 'Вручную' },
+];
+
 function InstallmentReminderCard() {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['installments', 'reminder-settings'],
     queryFn: () => installmentsApi.getReminderSettings().then((r) => r.data),
   });
@@ -291,80 +366,66 @@ function InstallmentReminderCard() {
     onError: () => toast.error('Ошибка сохранения'),
   });
 
-  const modes: { key: InstallmentReminderSettings['mode']; label: string }[] = [
-    { key: 'off', label: 'Выкл' },
-    { key: 'auto', label: 'Авто' },
-    { key: 'manual', label: 'Вручную' },
-  ];
-
   return (
-    <SectionCard
-      icon={CreditCard}
-      iconClass="bg-indigo-50 text-indigo-600"
-      title="Напоминания по рассрочкам"
-      subtitle="Клиенту о предстоящем платеже"
-    >
-      {isLoading || !settings ? (
-        <LoadingBlock className="py-6" />
+    <SectionCard icon={CreditCard} title="Напоминания по рассрочкам" subtitle="Клиенту о предстоящем платеже">
+      {isLoading ? (
+        <LoadingBlock lines={3} />
+      ) : isError || !settings ? (
+        <SectionError
+          message="Не удалось загрузить настройки напоминаний"
+          onRetry={() => refetch()}
+          loading={isFetching}
+        />
       ) : (
         <div className="space-y-4">
           <div>
-            <label className="label">Режим</label>
-            <div className="flex gap-2">
-              {modes.map((m) => (
-                <button
-                  key={m.key}
-                  onClick={() => set({ mode: m.key })}
-                  className={`press-soft flex-1 rounded-xl border py-2 text-xs font-semibold transition-colors ${
-                    form.mode === m.key
-                      ? 'border-primary-200 bg-primary-50 text-primary-700'
-                      : 'border-transparent bg-gray-50 text-gray-500'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+            <p className="label">Режим</p>
+            <SegmentedControl
+              aria-label="Режим напоминаний по рассрочкам"
+              fullWidth
+              value={form.mode ?? 'off'}
+              onChange={(mode) => set({ mode })}
+              options={INSTALLMENT_MODES}
+            />
           </div>
 
           {form.mode !== 'off' && (
             <>
-              <div className="grid grid-cols-1 gap-3">
-                <div>
-                  <label className="label">За сколько дней напомнить</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={30}
-                    value={form.daysBefore ?? 3}
-                    onChange={(e) => set({ daysBefore: parseInt(e.target.value) || 0 })}
-                    className="input"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-gray-700">Напоминать в день платежа</p>
-                <Toggle checked={!!form.onDue} onChange={(v) => set({ onDue: v })} label="В день платежа" />
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-gray-700">Напоминать по просрочке</p>
-                <Toggle checked={!!form.onOverdue} onChange={(v) => set({ onOverdue: v })} label="По просрочке" />
-              </div>
+              <Field label="За сколько дней напомнить" htmlFor="inst-days">
+                <Input
+                  id="inst-days"
+                  inputMode="numeric"
+                  value={form.daysBefore ?? 3}
+                  onChange={(e) => set({ daysBefore: Math.max(0, Math.min(30, parseInt(e.target.value) || 0)) })}
+                  rightSlot={<span className="text-sm text-ink-3">дн.</span>}
+                />
+              </Field>
+              <ToggleRow
+                title="Напоминать в день платежа"
+                checked={!!form.onDue}
+                onChange={(v) => set({ onDue: v })}
+                label="В день платежа"
+              />
+              <ToggleRow
+                title="Напоминать по просрочке"
+                checked={!!form.onOverdue}
+                onChange={(v) => set({ onOverdue: v })}
+                label="По просрочке"
+              />
             </>
           )}
 
-          <div>
-            <label className="label">Шаблон сообщения</label>
-            <textarea
+          <Field label="Шаблон сообщения" htmlFor="inst-template">
+            <Textarea
+              id="inst-template"
               rows={3}
               value={form.template || ''}
               onChange={(e) => set({ template: e.target.value })}
-              className="input resize-none"
             />
             <div className="mt-2">
               <VarChips vars={['{clientName}', '{amount}', '{date}']} />
             </div>
-          </div>
+          </Field>
 
           {dirty && <SaveButton onClick={() => save.mutate(form)} saving={save.isPending} />}
         </div>
@@ -376,7 +437,13 @@ function InstallmentReminderCard() {
 // ─── По записям / визитам (ТО-напоминание) ──────────────────────────
 function ServiceReminderCard() {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'reminders'],
     queryFn: () => marketingApi.getReminderSettings().then((r) => r.data),
   });
@@ -405,39 +472,48 @@ function ServiceReminderCard() {
   return (
     <SectionCard
       icon={CalendarClock}
-      iconClass="bg-sky-50 text-sky-600"
       title="Напоминание о визите"
       subtitle="Приглашаем на плановое ТО тех, кто давно не приезжал"
-      right={<Toggle checked={!!form.enabled} onChange={(v) => set({ enabled: v })} label="Напоминание о визите" />}
+      right={
+        settings ? (
+          <Toggle checked={!!form.enabled} onChange={(v) => set({ enabled: v })} label="Напоминание о визите" />
+        ) : undefined
+      }
     >
-      {isLoading || !settings ? (
-        <LoadingBlock className="py-6" />
+      {isLoading ? (
+        <LoadingBlock lines={3} />
+      ) : isError || !settings ? (
+        <SectionError
+          message="Не удалось загрузить настройки напоминаний"
+          onRetry={() => refetch()}
+          loading={isFetching}
+        />
       ) : (
         <div className="space-y-4">
-          <div>
-            <label className="label">Интервал (месяцев)</label>
-            <input
-              type="number"
-              min={1}
-              max={36}
+          <Field
+            label="Интервал"
+            htmlFor="service-interval"
+            hint="Через сколько месяцев после последнего визита напомнить"
+          >
+            <Input
+              id="service-interval"
+              inputMode="numeric"
               value={form.monthsInterval ?? 6}
-              onChange={(e) => set({ monthsInterval: parseInt(e.target.value) || 1 })}
-              className="input"
+              onChange={(e) => set({ monthsInterval: Math.max(1, Math.min(36, parseInt(e.target.value) || 1)) })}
+              rightSlot={<span className="text-sm text-ink-3">мес.</span>}
             />
-            <p className="mt-1 text-xs text-gray-400">Через сколько месяцев после последнего визита напомнить</p>
-          </div>
-          <div>
-            <label className="label">Шаблон сообщения</label>
-            <textarea
+          </Field>
+          <Field label="Шаблон сообщения" htmlFor="service-template">
+            <Textarea
+              id="service-template"
               rows={3}
               value={form.messageTemplate || ''}
               onChange={(e) => set({ messageTemplate: e.target.value })}
-              className="input resize-none"
             />
             <div className="mt-2">
               <VarChips vars={['{name}', '{months}']} />
             </div>
-          </div>
+          </Field>
           {dirty && <SaveButton onClick={() => save.mutate(form)} saving={save.isPending} />}
         </div>
       )}
@@ -448,7 +524,13 @@ function ServiceReminderCard() {
 // ─── Готовность авто ────────────────────────────────────────────────
 function CarReadyCard() {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'car-ready'],
     queryFn: () => marketingApi.getCarReadySettings().then((r) => r.data),
   });
@@ -478,28 +560,36 @@ function CarReadyCard() {
   return (
     <SectionCard
       icon={Bell}
-      iconClass="bg-emerald-50 text-emerald-600"
       title="Уведомление «Машина готова»"
       subtitle="Уходит клиенту, когда заказ-наряд переходит в статус «Готов»"
-      right={<Toggle checked={form.enabled} onChange={(v) => set({ enabled: v })} label="Уведомление о готовности" />}
+      right={
+        settings ? (
+          <Toggle checked={form.enabled} onChange={(v) => set({ enabled: v })} label="Уведомление о готовности" />
+        ) : undefined
+      }
     >
-      {isLoading || !settings ? (
-        <LoadingBlock className="py-6" />
+      {isLoading ? (
+        <LoadingBlock lines={2} />
+      ) : isError || !settings ? (
+        <SectionError
+          message="Не удалось загрузить настройки уведомления"
+          onRetry={() => refetch()}
+          loading={isFetching}
+        />
       ) : (
         <div className="space-y-3">
-          <div>
-            <label className="label">Шаблон сообщения</label>
-            <textarea
+          <Field label="Шаблон сообщения" htmlFor="car-ready-template">
+            <Textarea
+              id="car-ready-template"
               rows={3}
               value={form.messageTemplate}
               onChange={(e) => set({ messageTemplate: e.target.value })}
               placeholder="Здравствуйте, {clientName}! Ваш автомобиль {car} по заказу {number} готов к выдаче."
-              className="input resize-none"
             />
             <div className="mt-2">
               <VarChips vars={['{number}', '{car}', '{clientName}']} />
             </div>
-          </div>
+          </Field>
           {dirty && <SaveButton onClick={() => save.mutate(form)} saving={save.isPending} />}
         </div>
       )}
@@ -519,29 +609,32 @@ export default function MarketingSettingsView({ focus }: { focus?: SettingsSecti
 
   return (
     <div className="space-y-5">
-      <div className="flex items-start gap-2 rounded-xl bg-gray-50 px-3.5 py-3">
-        <MessageSquareText className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
-        <p className="text-xs text-gray-500">
-          Здесь — площадки для отзывов и тексты всех автоматических сообщений. Сами каналы (WhatsApp, SMS, Telegram)
-          подключаются в разделе «Интеграции».
-        </p>
-      </div>
+      <InfoNote icon={MessageSquareText}>
+        Здесь — площадки для отзывов и тексты всех автоматических сообщений. Сами каналы (WhatsApp, SMS, Telegram)
+        подключаются в разделе «Интеграции».
+      </InfoNote>
 
-      <Anchor id="settings-platforms">
-        <PlatformLinksCard />
-      </Anchor>
-      <Anchor id="settings-review">
-        <ReviewRequestCard />
-      </Anchor>
-      <Anchor id="settings-installments">
-        <InstallmentReminderCard />
-      </Anchor>
-      <Anchor id="settings-service">
-        <ServiceReminderCard />
-      </Anchor>
-      <Anchor id="settings-car-ready">
-        <CarReadyCard />
-      </Anchor>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start">
+        <div className="space-y-5">
+          <Anchor id="settings-platforms">
+            <PlatformLinksCard />
+          </Anchor>
+          <Anchor id="settings-review">
+            <ReviewRequestCard />
+          </Anchor>
+          <Anchor id="settings-car-ready">
+            <CarReadyCard />
+          </Anchor>
+        </div>
+        <div className="space-y-5">
+          <Anchor id="settings-installments">
+            <InstallmentReminderCard />
+          </Anchor>
+          <Anchor id="settings-service">
+            <ServiceReminderCard />
+          </Anchor>
+        </div>
+      </div>
     </div>
   );
 }

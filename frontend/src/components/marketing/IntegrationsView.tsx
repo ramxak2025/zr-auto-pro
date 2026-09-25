@@ -16,7 +16,15 @@ import toast from 'react-hot-toast';
 
 import { marketingApi } from '../../api/services';
 import type { MessagingIntegration } from '../../types';
-import { LoadingBlock, SectionCard, Toggle } from './marketingKit';
+import ConfirmDialog from '../ConfirmDialog';
+import { Badge, StatusPill } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
+import { Field } from '../../ui/Field';
+import { IconButton } from '../../ui/IconButton';
+import { Input } from '../../ui/Input';
+import { Select } from '../../ui/Select';
+import { cn } from '../../ui/cn';
+import { InfoNote, LoadingBlock, SectionCard, SectionError, Toggle } from './marketingKit';
 
 type ProviderType = MessagingIntegration['providerType'];
 
@@ -91,192 +99,192 @@ function IntegrationForm({
   });
 
   const set = (patch: Partial<FormState>) => setForm((prev) => ({ ...prev, ...patch }));
+  const uid = `int-${editing?.id ?? 'new'}`;
 
   // Legacy-строка типа вне creatable-списка ('sms'/'email'): при редактировании
   // добавляем её тип в options, иначе disabled-select показал бы пустоту.
   const typeOptions =
     editing && !allowedTypes.includes(editing.providerType) ? [...allowedTypes, editing.providerType] : allowedTypes;
 
+  const secretPlaceholder = editing ? 'Оставьте пустым, чтобы не менять' : undefined;
+
   return (
-    <div className="mb-4 space-y-3 rounded-xl bg-gray-50 p-3">
+    <div className="mb-4 space-y-3 rounded-lg border border-line bg-surface-2 p-3">
       {typeOptions.length > 1 && (
-        <div>
-          <label className="label">Тип</label>
-          <select
+        <Field label="Тип" htmlFor={`${uid}-type`}>
+          <Select
+            id={`${uid}-type`}
             value={form.providerType}
             onChange={(e) => set({ providerType: e.target.value as ProviderType })}
             disabled={!!editing}
-            className="input disabled:bg-gray-100 disabled:text-gray-500"
-          >
-            {typeOptions.map((t) => (
-              <option key={t} value={t}>
-                {t === 'sms' ? 'SMS (другой провайдер)' : PROVIDER_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </div>
+            options={typeOptions.map((t) => ({
+              value: t,
+              label: t === 'sms' ? 'SMS (другой провайдер)' : PROVIDER_LABELS[t],
+            }))}
+          />
+        </Field>
       )}
 
       {form.providerType === 'moizvonki' && (
         <>
-          <div>
-            <label className="label">Домен (поддомен в moizvonki.ru)</label>
-            <div className="flex items-center">
-              <input
-                value={form.webhookUrl}
-                onChange={(e) => set({ webhookUrl: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
-                className="input rounded-r-none"
-                placeholder="mycompany"
-              />
-              <span className="rounded-r-lg border border-l-0 border-gray-300 bg-gray-100 px-3 py-2.5 text-xs text-gray-500">
-                .moizvonki.ru
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-gray-400">Если адрес mycompany.moizvonki.ru — введите mycompany</p>
-          </div>
-          <div>
-            <label className="label">Email (логин в Мои Звонки)</label>
-            <input
+          <Field
+            label="Домен (поддомен в moizvonki.ru)"
+            htmlFor={`${uid}-domain`}
+            hint="Если адрес mycompany.moizvonki.ru — введите mycompany"
+          >
+            <Input
+              id={`${uid}-domain`}
+              value={form.webhookUrl}
+              onChange={(e) => set({ webhookUrl: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+              placeholder="mycompany"
+              autoComplete="off"
+              rightSlot={<span className="text-xs text-ink-3">.moizvonki.ru</span>}
+              className="pr-28"
+            />
+          </Field>
+          <Field label="Email (логин в Мои Звонки)" htmlFor={`${uid}-email`}>
+            <Input
+              id={`${uid}-email`}
               type="email"
+              autoComplete="off"
               value={form.senderName}
               onChange={(e) => set({ senderName: e.target.value })}
-              className="input"
               placeholder="user@mail.ru"
             />
-          </div>
-          <div>
-            <label className="label">Ключ API</label>
-            <input
+          </Field>
+          <Field label="Ключ API" htmlFor={`${uid}-key`}>
+            <Input
+              id={`${uid}-key`}
+              type="password"
+              autoComplete="new-password"
               value={form.apiKey}
               onChange={(e) => set({ apiKey: e.target.value })}
-              className="input"
-              placeholder={editing ? 'Оставьте пустым, чтобы не менять' : 'Настройки → Интеграция → Ключ API'}
+              placeholder={secretPlaceholder ?? 'Настройки → Интеграция → Ключ API'}
             />
-          </div>
+          </Field>
         </>
       )}
 
       {form.providerType === 'smsru' && (
         <>
-          <div>
-            <label className="label">API ID (из кабинета sms.ru)</label>
-            <input
+          <Field label="API ID (из кабинета sms.ru)" htmlFor={`${uid}-key`}>
+            <Input
+              id={`${uid}-key`}
+              type="password"
+              autoComplete="new-password"
               value={form.apiKey}
               onChange={(e) => set({ apiKey: e.target.value })}
-              className="input"
-              placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+              placeholder={secretPlaceholder ?? 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX'}
             />
-          </div>
-          <div>
-            <label className="label">Имя отправителя (опц.)</label>
-            <input
+          </Field>
+          <Field label="Имя отправителя" htmlFor={`${uid}-sender`} hint="Необязательно — одобренное в sms.ru">
+            <Input
+              id={`${uid}-sender`}
               value={form.senderName}
               onChange={(e) => set({ senderName: e.target.value })}
-              className="input"
-              placeholder="Одобренное в sms.ru"
+              placeholder="AUTEXA"
             />
-          </div>
+          </Field>
         </>
       )}
 
       {form.providerType === 'whatsapp' && (
         <>
-          <div>
-            <label className="label">Access token (постоянный)</label>
-            <input
+          <Field
+            label="Access token (постоянный)"
+            htmlFor={`${uid}-key`}
+            hint="Хранится зашифрованно и не показывается повторно"
+          >
+            <Input
+              id={`${uid}-key`}
               type="password"
               autoComplete="new-password"
               value={form.apiKey}
               onChange={(e) => set({ apiKey: e.target.value })}
-              className="input"
-              placeholder={editing ? 'Оставьте пустым, чтобы не менять' : 'Bearer-токен WhatsApp Cloud API'}
+              placeholder={secretPlaceholder ?? 'Bearer-токен WhatsApp Cloud API'}
             />
-            <p className="mt-1 text-xs text-gray-400">Хранится зашифрованно и не показывается повторно.</p>
-          </div>
-          <div>
-            <label className="label">Phone number ID</label>
-            <input
+          </Field>
+          <Field
+            label="Phone number ID"
+            htmlFor={`${uid}-pnid`}
+            hint="Meta for Developers → WhatsApp → API Setup → Phone number ID"
+          >
+            <Input
+              id={`${uid}-pnid`}
+              inputMode="numeric"
               value={form.phoneNumberId}
               onChange={(e) => set({ phoneNumberId: e.target.value })}
-              className="input"
               placeholder="напр. 123456789012345"
             />
-            <p className="mt-1 text-xs text-gray-400">Meta for Developers → WhatsApp → API Setup → Phone number ID.</p>
-          </div>
+          </Field>
         </>
       )}
 
       {form.providerType === 'telegram' && (
         <>
-          <div>
-            <label className="label">Токен бота</label>
-            <input
+          <Field label="Токен бота" htmlFor={`${uid}-key`} hint="Получите у @BotFather. Хранится зашифрованно">
+            <Input
+              id={`${uid}-key`}
               type="password"
               autoComplete="new-password"
               value={form.apiKey}
               onChange={(e) => set({ apiKey: e.target.value })}
-              className="input"
-              placeholder={editing ? 'Оставьте пустым, чтобы не менять' : '123456:ABC-DEF1234...'}
+              placeholder={secretPlaceholder ?? '123456:ABC-DEF1234…'}
             />
-            <p className="mt-1 text-xs text-gray-400">Получите у @BotFather. Хранится зашифрованно.</p>
-          </div>
-          <div>
-            <label className="label">Chat ID</label>
-            <input
+          </Field>
+          <Field label="Chat ID" htmlFor={`${uid}-chat`}>
+            <Input
+              id={`${uid}-chat`}
               value={form.chatId}
               onChange={(e) => set({ chatId: e.target.value })}
-              className="input"
               placeholder="напр. -1001234567890"
             />
-          </div>
-          <div className="flex items-start gap-2 rounded-xl bg-blue-50 p-3">
-            <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-800">
-              Telegram-бот не пишет клиенту на телефон — уведомление приходит в указанный чат владельца или сотрудников.
-            </p>
-          </div>
+          </Field>
+          <InfoNote icon={Info} tone="info">
+            Telegram-бот не пишет клиенту на телефон — уведомление приходит в указанный чат владельца или сотрудников.
+          </InfoNote>
         </>
       )}
 
       {(form.providerType === 'sms' || form.providerType === 'email') && (
         <>
-          <div>
-            <label className="label">API ключ</label>
-            <input
+          <Field label="API ключ" htmlFor={`${uid}-key`}>
+            <Input
+              id={`${uid}-key`}
+              type="password"
+              autoComplete="new-password"
               value={form.apiKey}
               onChange={(e) => set({ apiKey: e.target.value })}
-              className="input"
-              placeholder={editing ? 'Оставьте пустым, чтобы не менять' : 'Ваш API ключ'}
+              placeholder={secretPlaceholder ?? 'Ваш API ключ'}
             />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="label">Имя отправителя</label>
-              <input value={form.senderName} onChange={(e) => set({ senderName: e.target.value })} className="input" />
-            </div>
-            <div>
-              <label className="label">Телефон</label>
-              <input
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Имя отправителя" htmlFor={`${uid}-sender`}>
+              <Input
+                id={`${uid}-sender`}
+                value={form.senderName}
+                onChange={(e) => set({ senderName: e.target.value })}
+              />
+            </Field>
+            <Field label="Телефон" htmlFor={`${uid}-phone`}>
+              <Input
+                id={`${uid}-phone`}
+                type="tel"
                 value={form.senderPhone}
                 onChange={(e) => set({ senderPhone: e.target.value })}
-                className="input"
               />
-            </div>
+            </Field>
           </div>
         </>
       )}
 
-      <div className="flex gap-2">
-        <button onClick={onCancel} className="btn-secondary btn-sm flex-1">
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>
           Отмена
-        </button>
-        <button
-          onClick={() => onSave(editing ? { ...form, id: editing.id } : form)}
-          disabled={saving}
-          className="btn-primary btn-sm flex-1"
-        >
+        </Button>
+        <Button size="sm" onClick={() => onSave(editing ? { ...form, id: editing.id } : form)} loading={saving}>
           Сохранить
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -298,48 +306,38 @@ function ProviderRow({
 }) {
   const showSmsToggle = CLIENT_SMS_TYPES.includes(integration.providerType);
   const smsOn = integration.smsNotificationsEnabled;
+  const details = [
+    integration.senderName ? integration.senderName : null,
+    integration.providerType === 'whatsapp' && integration.phoneNumberId ? `ID ${integration.phoneNumberId}` : null,
+    integration.providerType === 'telegram' && integration.chatId ? `чат ${integration.chatId}` : null,
+  ].filter(Boolean);
 
   return (
-    <div className="rounded-xl bg-gray-50 p-3">
-      <div className="flex items-center justify-between">
+    <li className="rounded-lg border border-line p-3">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span
-            className={`h-2 w-2 flex-shrink-0 rounded-full ${integration.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
-            title={integration.isActive ? 'Активен' : 'Отключён'}
-          />
-          <span className="text-sm font-medium text-gray-900">
+          <StatusPill tone={integration.isActive ? 'ok' : 'neutral'} size="sm">
+            {integration.isActive ? 'Активен' : 'Отключён'}
+          </StatusPill>
+          <span className="truncate text-sm font-medium text-ink">
             {PROVIDER_LABELS[integration.providerType] || integration.providerType}
           </span>
-          {integration.senderName && <span className="truncate text-xs text-gray-500">({integration.senderName})</span>}
-          {integration.providerType === 'whatsapp' && integration.phoneNumberId && (
-            <span className="truncate text-xs text-gray-500">· ID {integration.phoneNumberId}</span>
-          )}
-          {integration.providerType === 'telegram' && integration.chatId && (
-            <span className="truncate text-xs text-gray-500">· чат {integration.chatId}</span>
-          )}
+          {details.length > 0 && <span className="truncate text-xs text-ink-3">· {details.join(' · ')}</span>}
         </div>
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <button
-            onClick={onEdit}
-            className="press-soft p-1 text-gray-400 hover:text-primary-600"
-            aria-label="Изменить"
-          >
-            <Pencil className="h-4 w-4" />
-          </button>
-          <button onClick={onRemove} className="press-soft p-1 text-gray-400 hover:text-red-500" aria-label="Удалить">
-            <Trash2 className="h-4 w-4" />
-          </button>
+        <div className="flex flex-shrink-0 items-center gap-0.5">
+          <IconButton label="Изменить" icon={Pencil} size="sm" onClick={onEdit} />
+          <IconButton label="Удалить" icon={Trash2} size="sm" variant="danger" onClick={onRemove} />
         </div>
       </div>
 
       {showSmsToggle && (
-        <div className="mt-2.5 flex items-start gap-3 border-t border-gray-200/70 pt-2.5">
+        <div className="mt-2.5 flex items-start gap-3 border-t border-line pt-2.5">
           <div className="min-w-0 flex-1">
-            <p className="flex items-center gap-1.5 text-xs font-medium text-gray-700">
-              <MessageSquareText className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+            <p className="flex items-center gap-1.5 text-xs font-medium text-ink-2">
+              <MessageSquareText className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
               Отправлять SMS клиентам
             </p>
-            <p className="mt-0.5 text-[11px] leading-snug text-gray-400">
+            <p className="mt-0.5 text-2xs leading-snug text-ink-3">
               {smsOn
                 ? 'Клиенты получают SMS (готовность авто, напоминания, отзывы).'
                 : integration.providerType === 'moizvonki'
@@ -347,19 +345,16 @@ function ProviderRow({
                   : 'SMS клиентам отключены. Интеграция остаётся подключённой.'}
             </p>
           </div>
-          <div className={smsPending ? 'pointer-events-none opacity-50' : ''}>
-            <Toggle checked={smsOn} onChange={onToggleSms} label="Отправлять SMS клиентам" />
-          </div>
+          <Toggle checked={smsOn} onChange={onToggleSms} label="Отправлять SMS клиентам" disabled={smsPending} />
         </div>
       )}
-    </div>
+    </li>
   );
 }
 
 // ─── A configurable group (telephony OR messaging) ──────────────────
 function ConfigurableGroup({
   icon,
-  iconClass,
   title,
   subtitle,
   allowedTypes,
@@ -368,7 +363,6 @@ function ConfigurableGroup({
   emptyLabel,
 }: {
   icon: typeof Phone;
-  iconClass: string;
   title: string;
   subtitle: string;
   /** Типы, чьи СУЩЕСТВУЮЩИЕ строки показываются в этой группе. */
@@ -381,6 +375,7 @@ function ConfigurableGroup({
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<MessagingIntegration | null>(null);
+  const [toRemove, setToRemove] = useState<MessagingIntegration | null>(null);
 
   const rows = integrations.filter((i) => allowedTypes.includes(i.providerType));
 
@@ -437,24 +432,27 @@ function ConfigurableGroup({
   return (
     <SectionCard
       icon={icon}
-      iconClass={iconClass}
+      iconTone="accent"
       title={title}
       subtitle={subtitle}
       right={
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={Plus}
+          aria-expanded={open && !editing}
           onClick={() => {
             setEditing(null);
             setOpen((v) => !v);
           }}
-          className="press-soft rounded-lg p-1 text-primary-600 hover:bg-primary-50"
-          aria-label="Добавить"
         >
-          <Plus className="h-5 w-5" />
-        </button>
+          Добавить
+        </Button>
       }
     >
       {open && (
         <IntegrationForm
+          key={editing?.id ?? 'new'}
           allowedTypes={creatableTypes ?? allowedTypes}
           editing={editing}
           saving={upsert.isPending}
@@ -467,9 +465,9 @@ function ConfigurableGroup({
       )}
 
       {rows.length === 0 && !open ? (
-        <p className="py-4 text-center text-sm text-gray-400">{emptyLabel}</p>
+        <p className="py-2 text-sm text-ink-3">{emptyLabel}</p>
       ) : (
-        <div className="space-y-2">
+        <ul className="space-y-2">
           {rows.map((i) => (
             <ProviderRow
               key={i.id}
@@ -479,12 +477,22 @@ function ConfigurableGroup({
                 setEditing(i);
                 setOpen(true);
               }}
-              onRemove={() => remove.mutate(i.id)}
+              onRemove={() => setToRemove(i)}
               onToggleSms={(next) => toggleSms.mutate({ integration: i, next })}
             />
           ))}
-        </div>
+        </ul>
       )}
+
+      <ConfirmDialog
+        isOpen={!!toRemove}
+        onClose={() => setToRemove(null)}
+        onConfirm={() => toRemove && remove.mutate(toRemove.id)}
+        title="Удалить интеграцию"
+        message={`«${toRemove ? PROVIDER_LABELS[toRemove.providerType] || toRemove.providerType : ''}» будет отключена, сообщения через неё перестанут уходить. Продолжить?`}
+        confirmText="Удалить"
+        variant="danger"
+      />
     </SectionCard>
   );
 }
@@ -492,84 +500,87 @@ function ConfigurableGroup({
 // ─── Placeholder group (no backend yet — honest «по запросу») ───────
 function PlannedGroup({
   icon: Icon,
-  iconClass,
   title,
   subtitle,
   body,
 }: {
   icon: typeof Receipt;
-  iconClass: string;
   title: string;
   subtitle: string;
   body: string;
 }) {
   return (
-    <SectionCard
-      icon={Icon}
-      iconClass={iconClass}
-      title={title}
-      subtitle={subtitle}
-      right={<span className="badge-gray">по запросу</span>}
-    >
-      <p className="text-sm text-gray-500">{body}</p>
+    <SectionCard icon={Icon} title={title} subtitle={subtitle} right={<Badge outline>по запросу</Badge>}>
+      <p className="text-sm text-ink-2">{body}</p>
     </SectionCard>
   );
 }
 
 export default function IntegrationsView() {
-  const { data: integrations, isLoading } = useQuery({
+  const {
+    data: integrations,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['marketing', 'integrations'],
     queryFn: () => marketingApi.getIntegrations().then((r) => r.data),
   });
 
-  if (isLoading || !integrations) return <LoadingBlock />;
+  if (isLoading) {
+    return (
+      <div className="grid gap-5 lg:grid-cols-2">
+        <LoadingBlock lines={3} />
+        <LoadingBlock lines={3} />
+      </div>
+    );
+  }
+  if (isError || !integrations) {
+    return <SectionError message="Не удалось загрузить интеграции" onRetry={() => refetch()} loading={isFetching} />;
+  }
 
   return (
     <div className="space-y-5">
-      <ConfigurableGroup
-        icon={Phone}
-        iconClass="bg-sky-50 text-sky-600"
-        title="Телефония"
-        subtitle="Интеграция звонков — воронка обращений и пропущенные"
-        allowedTypes={TELEPHONY_TYPES}
-        integrations={integrations}
-        emptyLabel="Мои Звонки не подключены"
-      />
+      <div className={cn('grid gap-5 lg:grid-cols-2 lg:items-start')}>
+        <ConfigurableGroup
+          icon={Phone}
+          title="Телефония"
+          subtitle="Интеграция звонков — воронка обращений и пропущенные"
+          allowedTypes={TELEPHONY_TYPES}
+          integrations={integrations}
+          emptyLabel="Мои Звонки не подключены"
+        />
 
-      <ConfigurableGroup
-        icon={MessageSquare}
-        iconClass="bg-emerald-50 text-emerald-600"
-        title="Каналы рассылок"
-        subtitle="Через что уходят сообщения клиентам — WhatsApp, SMS.RU, Telegram"
-        allowedTypes={MESSAGING_TYPES}
-        creatableTypes={CREATABLE_MESSAGING_TYPES}
-        integrations={integrations}
-        emptyLabel="Каналы рассылок не подключены"
-      />
+        <ConfigurableGroup
+          icon={MessageSquare}
+          title="Каналы рассылок"
+          subtitle="Через что уходят сообщения клиентам — WhatsApp, SMS.RU, Telegram"
+          allowedTypes={MESSAGING_TYPES}
+          creatableTypes={CREATABLE_MESSAGING_TYPES}
+          integrations={integrations}
+          emptyLabel="Каналы рассылок не подключены"
+        />
 
-      <PlannedGroup
-        icon={Receipt}
-        iconClass="bg-indigo-50 text-indigo-600"
-        title="Онлайн-касса (54-ФЗ)"
-        subtitle="Фискализация чеков"
-        body="Подключение фискального накопителя настраивается через поддержку. Напишите нам — поможем связать кассу с Autexa."
-      />
+        <PlannedGroup
+          icon={Receipt}
+          title="Онлайн-касса (54-ФЗ)"
+          subtitle="Фискализация чеков"
+          body="Подключение фискального накопителя настраивается через поддержку. Напишите нам — поможем связать кассу с Autexa."
+        />
 
-      <PlannedGroup
-        icon={CreditCard}
-        iconClass="bg-amber-50 text-amber-600"
-        title="Эквайринг"
-        subtitle="Приём оплаты картой"
-        body="Приём безналичной оплаты подключается индивидуально по вашему банку-эквайеру. Оставьте заявку в поддержке."
-      />
-
-      <div className="flex items-start gap-2 rounded-xl bg-gray-50 px-3.5 py-3">
-        <Zap className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
-        <p className="text-xs text-gray-500">
-          Тексты сообщений и площадки для отзывов настраиваются в разделе «Настройки», а сами рассылки — в разделе
-          «Рассылки».
-        </p>
+        <PlannedGroup
+          icon={CreditCard}
+          title="Эквайринг"
+          subtitle="Приём оплаты картой"
+          body="Приём безналичной оплаты подключается индивидуально по вашему банку-эквайеру. Оставьте заявку в поддержке."
+        />
       </div>
+
+      <InfoNote icon={Zap}>
+        Тексты сообщений и площадки для отзывов настраиваются в разделе «Настройки», а сами рассылки — в разделе
+        «Рассылки».
+      </InfoNote>
     </div>
   );
 }

@@ -1,15 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { format, parseISO, startOfWeek, startOfMonth, startOfQuarter, startOfYear } from 'date-fns';
+import { format, parseISO, startOfQuarter, startOfYear } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import {
-  CalendarDays,
   UserPlus,
   Repeat,
   PhoneCall,
   Star,
   BarChart3,
-  Loader2,
   TrendingUp,
   Gift,
   Wallet,
@@ -18,59 +17,50 @@ import {
 } from 'lucide-react';
 
 import { reportsApi } from '../../api/services';
+import { useTenantCalendar } from '../../hooks/useTenantTimezone';
 import { formatMoney } from '../../../../shared/utils/formatters';
 import type { MarketingReport, MarketingTrendPoint } from '../../types';
+import { Badge } from '../../ui/Badge';
+import { Card } from '../../ui/Card';
+import { Input } from '../../ui/Input';
+import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Skeleton } from '../../ui/Skeleton';
+import { Toolbar, ToolbarGroup, ToolbarSeparator } from '../../ui/Toolbar';
+import { cn } from '../../ui/cn';
+import { toneText, type Tone } from '../../ui/tokens';
+import { EmptyState, SectionCard, SectionError, plural } from './marketingKit';
 
 // ─── Period presets ─────────────────────────────────────────────────
 const PRESETS = [
-  { key: 'today', label: 'Сегодня' },
-  { key: 'week', label: 'Неделя' },
-  { key: 'month', label: 'Месяц' },
-  { key: 'quarter', label: 'Квартал' },
-  { key: 'year', label: 'Год' },
+  { value: 'today', label: 'Сегодня' },
+  { value: 'week', label: 'Неделя' },
+  { value: 'month', label: 'Месяц' },
+  { value: 'quarter', label: 'Квартал' },
+  { value: 'year', label: 'Год' },
 ] as const;
 
-type PresetKey = (typeof PRESETS)[number]['key'];
+type PresetKey = (typeof PRESETS)[number]['value'];
 type Range = { from: string; to: string };
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function rangeFor(preset: PresetKey): Range {
-  const now = new Date();
-  const to = format(now, 'yyyy-MM-dd');
-  switch (preset) {
-    case 'today':
-      return { from: to, to };
-    case 'week':
-      return { from: format(startOfWeek(now, { weekStartsOn: 1 }), 'yyyy-MM-dd'), to };
-    case 'month':
-      return { from: format(startOfMonth(now), 'yyyy-MM-dd'), to };
-    case 'quarter':
-      return { from: format(startOfQuarter(now), 'yyyy-MM-dd'), to };
-    case 'year':
-      return { from: format(startOfYear(now), 'yyyy-MM-dd'), to };
-  }
+/** 'YYYY-MM-DD' → локальная Date без сдвига пояса (только календарная арифметика). */
+function parseDayKey(key: string): Date {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y || 1970, (m || 1) - 1, d || 1);
 }
 
 // ─── Number / text helpers ──────────────────────────────────────────
+const pct1Fmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 });
 const formatInt = (n: number): string => Math.round(n).toLocaleString('ru-RU');
 const formatPct = (n: number): string => `${Math.round(n)}%`;
-const formatPct1 = (n: number): string => `${n.toFixed(1)}%`;
-/** Compact ruble amount for chart tooltips / axis: 12 300 → 12,3 тыс. */
+const formatPct1 = (n: number): string => `${pct1Fmt.format(n)}%`;
+const compactFmt = new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 });
+/** Compact ruble amount for chart tooltips / axis: 12 300 → 12,3 тыс. ₽ */
 function formatMoneyShort(n: number): string {
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')} млн ₽`;
-  if (abs >= 10_000) return `${Math.round(n / 1000).toLocaleString('ru-RU')} тыс. ₽`;
-  return formatMoney(n);
+  return Math.abs(n) >= 10_000 ? `${compactFmt.format(n)} ₽` : formatMoney(n);
 }
 
-function plural(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return forms[0];
-  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return forms[1];
-  return forms[2];
-}
-
-/** '2026-06-15' → 'июн' / 'июн 26' — used on the trend x-axis. */
+/** '2026-06-15' → 'июн' / '15 июн' — used on the trend x-axis. */
 function bucketLabel(iso: string, grain: 'weekly' | 'monthly'): string {
   try {
     const d = parseISO(iso);
@@ -91,81 +81,56 @@ function bucketLabelLong(iso: string, grain: 'weekly' | 'monthly'): string {
 }
 
 // ─── Presentational primitives ──────────────────────────────────────
-function Section({
-  icon: Icon,
-  iconClass,
-  title,
-  subtitle,
-  right,
-  children,
-}: {
-  icon: LucideIcon;
-  iconClass: string;
-  title: string;
-  subtitle?: string;
-  right?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-      <header className="flex items-center gap-2.5 px-4 sm:px-5 pt-4 pb-3">
-        <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${iconClass}`}>
-          <Icon className="h-4 w-4" />
-        </span>
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-gray-900 leading-tight">{title}</h3>
-          {subtitle && (
-            <p className="text-xs text-gray-400 truncate" title={subtitle}>
-              {subtitle}
-            </p>
-          )}
-        </div>
-        {right && <div className="ml-auto flex-shrink-0">{right}</div>}
-      </header>
-      <div className="px-4 sm:px-5 pb-4 sm:pb-5">{children}</div>
-    </section>
-  );
-}
-
 function StatBox({
   label,
   value,
   sub,
-  valueClass = 'text-gray-900',
+  tone = 'neutral',
 }: {
   label: string;
   value: ReactNode;
   sub?: ReactNode;
-  valueClass?: string;
+  tone?: Tone;
 }) {
   return (
-    <div className="rounded-xl bg-gray-50 px-3.5 py-3">
-      <p className="text-[11px] font-medium text-gray-500 leading-tight">{label}</p>
-      <p className={`mt-0.5 text-lg font-bold tabular-nums leading-tight ${valueClass}`}>{value}</p>
-      {sub != null && <p className="mt-0.5 text-[11px] text-gray-400 tabular-nums leading-tight">{sub}</p>}
+    <div className="min-w-0 rounded-lg bg-surface-2 px-3.5 py-3">
+      <p className="truncate text-xs leading-tight text-ink-3">{label}</p>
+      <p
+        className={cn(
+          'mt-1 truncate text-lg font-semibold leading-tight tabular-nums',
+          tone === 'neutral' ? 'text-ink' : toneText[tone],
+        )}
+      >
+        {value}
+      </p>
+      {sub != null && <p className="mt-0.5 truncate text-2xs leading-tight tabular-nums text-ink-3">{sub}</p>}
     </div>
   );
 }
 
+function SubTitle({ icon: Icon, children }: { icon?: LucideIcon; children: ReactNode }) {
+  return (
+    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+      {Icon && <Icon className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />}
+      {children}
+    </p>
+  );
+}
+
 /** Decreasing horizontal bars for a conversion funnel. */
-function FunnelBars({ stages, barClass }: { stages: { label: string; value: number }[]; barClass: string }) {
+function FunnelBars({ stages }: { stages: { label: string; value: number }[] }) {
   const max = Math.max(1, ...stages.map((s) => s.value));
   return (
     <div className="space-y-2">
       {stages.map((s) => {
         const w = (s.value / max) * 100;
         return (
-          <div key={s.label} className="flex items-center gap-2.5 sm:gap-3">
-            <span className="w-28 sm:w-44 flex-shrink-0 truncate text-xs text-gray-600">{s.label}</span>
-            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${barClass}`}
-                style={{ width: `${Math.max(w, 4)}%` }}
-              />
+          <div key={s.label} className="flex items-center gap-3">
+            <span className="w-28 flex-shrink-0 truncate text-xs text-ink-2 sm:w-44">{s.label}</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
+              <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(w, 3)}%` }} />
             </div>
-            <span className="w-11 text-right text-sm font-semibold tabular-nums text-gray-900">
-              {formatInt(s.value)}
-            </span>
+            <span className="w-12 text-right text-sm font-semibold tabular-nums text-ink">{formatInt(s.value)}</span>
           </div>
         );
       })}
@@ -180,35 +145,33 @@ function FunnelBars({ stages, barClass }: { stages: { label: string; value: numb
  */
 function BarList({
   rows,
-  barClass,
   emptyLabel,
 }: {
   rows: { key: string; label: string; primary: number; primaryText: string; secondaryText?: string }[];
-  barClass: string;
   emptyLabel: string;
 }) {
-  if (rows.length === 0) return <p className="text-xs text-gray-400">{emptyLabel}</p>;
+  if (rows.length === 0) return <p className="text-xs text-ink-3">{emptyLabel}</p>;
   const max = Math.max(1, ...rows.map((r) => r.primary));
   return (
-    <div className="space-y-2.5">
+    <ul className="space-y-2.5">
       {rows.map((r) => (
-        <div key={r.key}>
+        <li key={r.key}>
           <div className="flex items-baseline justify-between gap-2">
-            <span className="truncate text-sm text-gray-700">{r.label}</span>
-            <span className="flex-shrink-0 text-sm font-semibold tabular-nums text-gray-900">
+            <span className="truncate text-sm text-ink-2">{r.label}</span>
+            <span className="flex-shrink-0 text-sm font-semibold tabular-nums text-ink">
               {r.primaryText}
-              {r.secondaryText && <span className="font-normal text-gray-400"> · {r.secondaryText}</span>}
+              {r.secondaryText && <span className="font-normal text-ink-3"> · {r.secondaryText}</span>}
             </span>
           </div>
-          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-100">
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${barClass}`}
-              style={{ width: `${Math.max((r.primary / max) * 100, 4)}%` }}
+              className="h-full rounded-full bg-accent"
+              style={{ width: `${Math.max((r.primary / max) * 100, 3)}%` }}
             />
           </div>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -221,55 +184,14 @@ const C_BASE = 14;
 const PAD_RATIO = C_PAD / C_W;
 
 type MetricKey = 'revenue' | 'newClients' | 'returningRate' | 'calls' | 'reviews';
-const METRICS: {
-  key: MetricKey;
-  label: string;
-  stroke: string;
-  fillFrom: string;
-  chip: string;
-  format: (n: number) => string;
-}[] = [
-  {
-    key: 'revenue',
-    label: 'Выручка',
-    stroke: 'rgb(16,185,129)',
-    fillFrom: 'rgba(16,185,129,0.24)',
-    chip: 'bg-emerald-600',
-    format: formatMoneyShort,
-  },
-  {
-    key: 'newClients',
-    label: 'Новые',
-    stroke: 'rgb(37,99,235)',
-    fillFrom: 'rgba(37,99,235,0.22)',
-    chip: 'bg-blue-600',
-    format: (n) => `${formatInt(n)} нов.`,
-  },
-  {
-    key: 'returningRate',
-    label: 'Возвращаемость',
-    stroke: 'rgb(99,102,241)',
-    fillFrom: 'rgba(99,102,241,0.20)',
-    chip: 'bg-indigo-600',
-    format: formatPct1,
-  },
-  {
-    key: 'calls',
-    label: 'Звонки',
-    stroke: 'rgb(2,132,199)',
-    fillFrom: 'rgba(2,132,199,0.20)',
-    chip: 'bg-sky-600',
-    format: (n) => `${formatInt(n)} зв.`,
-  },
-  {
-    key: 'reviews',
-    label: 'Отзывы',
-    stroke: 'rgb(217,119,6)',
-    fillFrom: 'rgba(217,119,6,0.20)',
-    chip: 'bg-amber-600',
-    format: (n) => `${formatInt(n)} отз.`,
-  },
+const METRICS: { key: MetricKey; label: string; format: (n: number) => string }[] = [
+  { key: 'revenue', label: 'Выручка', format: formatMoneyShort },
+  { key: 'newClients', label: 'Новые', format: (n) => `${formatInt(n)} нов.` },
+  { key: 'returningRate', label: 'Возвращаемость', format: formatPct1 },
+  { key: 'calls', label: 'Звонки', format: (n) => `${formatInt(n)} зв.` },
+  { key: 'reviews', label: 'Отзывы', format: (n) => `${formatInt(n)} отз.` },
 ];
+const ACCENT = 'rgb(37 99 235)';
 
 function coords(values: number[], max: number) {
   const stepX = (C_W - C_PAD * 2) / Math.max(values.length - 1, 1);
@@ -305,13 +227,8 @@ function TrendChart({ points, grain }: { points: MarketingTrendPoint[]; grain: '
     [values, metric.key],
   );
 
-  if (points.length === 0) {
-    return <p className="py-10 text-center text-sm text-gray-400">Недостаточно данных для графика за период.</p>;
-  }
-
-  const areaD = pts.length > 0 ? `${wavePath(pts)} L ${pts[pts.length - 1].x} ${C_H} L ${pts[0].x} ${C_H} Z` : '';
-  const hovered = hoverIdx !== null ? points[hoverIdx] : null;
   const denom = Math.max(points.length - 1, 1);
+  const hovered = hoverIdx !== null ? points[hoverIdx] : null;
   const hoverLeftPct = hoverIdx !== null ? (PAD_RATIO + (hoverIdx / denom) * (1 - 2 * PAD_RATIO)) * 100 : 50;
 
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -322,179 +239,126 @@ function TrendChart({ points, grain }: { points: MarketingTrendPoint[]; grain: '
     setHoverIdx(Math.round(ratio * denom));
   };
 
+  const areaD = pts.length > 0 ? `${wavePath(pts)} L ${pts[pts.length - 1].x} ${C_H} L ${pts[0].x} ${C_H} Z` : '';
+
   return (
     <div>
-      {/* Metric selector */}
-      <div className="mb-3 flex flex-wrap gap-1.5">
-        {METRICS.map((m) => (
-          <button
-            key={m.key}
-            type="button"
-            onClick={() => setMetricKey(m.key)}
-            className={`h-7 rounded-full px-3 text-xs font-semibold transition-colors ${
-              m.key === metricKey ? `${m.chip} text-white shadow-sm` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
-        {metric.key !== 'returningRate' && (
-          <span className="ml-auto self-center text-xs text-gray-400 tabular-nums">
-            Итого: <span className="font-semibold text-gray-600">{metric.format(total)}</span>
+      {/* Metric selector — одна серия за раз, поэтому и цвет один (акцент) */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <SegmentedControl
+          aria-label="Метрика графика"
+          size="sm"
+          value={metricKey}
+          onChange={setMetricKey}
+          options={METRICS.map((m) => ({ value: m.key, label: m.label }))}
+        />
+        {metric.key !== 'returningRate' && points.length > 0 && (
+          <span className="ml-auto text-xs tabular-nums text-ink-3">
+            Итого: <span className="font-semibold text-ink">{metric.format(total)}</span>
           </span>
         )}
       </div>
 
-      <div
-        className="relative"
-        style={{ height: `${C_H + 22}px` }}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHoverIdx(null)}
-      >
-        <svg viewBox={`0 0 ${C_W} ${C_H}`} className="w-full" style={{ height: `${C_H}px` }} preserveAspectRatio="none">
-          <defs>
-            <linearGradient id={`trendGrad-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={metric.fillFrom} />
-              <stop offset="100%" stopColor="rgba(255,255,255,0)" />
-            </linearGradient>
-          </defs>
-
-          {[0.25, 0.5, 0.75].map((p) => (
-            <line
-              key={p}
-              x1={C_PAD}
-              y1={C_H * (1 - p)}
-              x2={C_W - C_PAD}
-              y2={C_H * (1 - p)}
-              stroke="rgba(15,23,42,0.06)"
-              strokeWidth="1"
-            />
-          ))}
-
-          <path d={areaD} fill={`url(#trendGrad-${metric.key})`} />
-          <path
-            d={wavePath(pts)}
-            fill="none"
-            stroke={metric.stroke}
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {hoverIdx !== null && pts[hoverIdx] && (
-            <>
-              <line
-                x1={pts[hoverIdx].x}
-                y1={0}
-                x2={pts[hoverIdx].x}
-                y2={C_H}
-                stroke={metric.stroke}
-                strokeOpacity="0.3"
-                strokeWidth="1"
-              />
-              <circle cx={pts[hoverIdx].x} cy={pts[hoverIdx].y} r="4" fill={metric.stroke} />
-            </>
-          )}
-        </svg>
-
-        {/* x-axis labels (thinned to avoid crowding) */}
-        <div className="relative mt-1 h-4">
-          {points.map((p, idx) => {
-            const step = Math.ceil(points.length / 8);
-            if (idx % step !== 0 && idx !== points.length - 1) return null;
-            const xPct = (PAD_RATIO + (idx / denom) * (1 - 2 * PAD_RATIO)) * 100;
-            return (
-              <span
-                key={p.periodStart}
-                className="absolute -translate-x-1/2 whitespace-nowrap text-[9px] capitalize text-gray-400"
-                style={{ left: `${xPct}%` }}
-              >
-                {bucketLabel(p.periodStart, grain)}
-              </span>
-            );
-          })}
-        </div>
-
-        {hovered && (
-          <div
-            className="pointer-events-none absolute -top-1 z-10 -translate-x-1/2 rounded-lg bg-gray-900 px-3 py-2 text-left shadow-lg"
-            style={{ left: `${Math.min(Math.max(hoverLeftPct, 12), 88)}%` }}
+      {points.length === 0 ? (
+        <p className="py-10 text-center text-sm text-ink-3">Недостаточно данных для графика за период.</p>
+      ) : (
+        <div
+          className="relative"
+          style={{ height: `${C_H + 22}px` }}
+          onMouseMove={onMove}
+          onMouseLeave={() => setHoverIdx(null)}
+        >
+          <svg
+            viewBox={`0 0 ${C_W} ${C_H}`}
+            className="w-full"
+            style={{ height: `${C_H}px` }}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Динамика: ${metric.label}`}
           >
-            <p className="text-[10px] font-medium capitalize text-gray-400">
-              {bucketLabelLong(hovered.periodStart, grain)}
-            </p>
-            <p className="text-sm font-bold text-white tabular-nums">{metric.format(hovered[metric.key])}</p>
-            <p className="mt-0.5 text-[10px] text-gray-300 tabular-nums">
-              {formatMoneyShort(hovered.revenue)} · {hovered.newClients} нов. · {hovered.calls} зв.
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+            <defs>
+              <linearGradient id="marketingTrendGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgb(37 99 235 / 0.22)" />
+                <stop offset="100%" stopColor="rgb(37 99 235 / 0)" />
+              </linearGradient>
+            </defs>
 
-// ─── Period selector ────────────────────────────────────────────────
-function PeriodBar({
-  range,
-  preset,
-  today,
-  onPreset,
-  onFrom,
-  onTo,
-}: {
-  range: Range;
-  preset: PresetKey | 'custom';
-  today: string;
-  onPreset: (p: PresetKey) => void;
-  onFrom: (v: string) => void;
-  onTo: (v: string) => void;
-}) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 sm:p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <CalendarDays className="hidden h-4 w-4 flex-shrink-0 text-gray-400 sm:block" />
-        <div className="flex flex-wrap gap-1.5">
-          {PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => onPreset(p.key)}
-              className={`h-8 rounded-lg px-3 text-xs font-semibold transition-colors ${
-                preset === p.key
-                  ? 'bg-primary-600 text-white shadow-sm'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
-              }`}
+            {[0.25, 0.5, 0.75].map((p) => (
+              <line
+                key={p}
+                x1={C_PAD}
+                y1={C_H * (1 - p)}
+                x2={C_W - C_PAD}
+                y2={C_H * (1 - p)}
+                stroke="rgb(15 23 42 / 0.06)"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+
+            <path d={areaD} fill="url(#marketingTrendGrad)" />
+            <path
+              d={wavePath(pts)}
+              fill="none"
+              stroke={ACCENT}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+
+            {hoverIdx !== null && pts[hoverIdx] && (
+              <>
+                <line
+                  x1={pts[hoverIdx].x}
+                  y1={0}
+                  x2={pts[hoverIdx].x}
+                  y2={C_H}
+                  stroke={ACCENT}
+                  strokeOpacity="0.3"
+                  strokeWidth="1"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle cx={pts[hoverIdx].x} cy={pts[hoverIdx].y} r="4" fill={ACCENT} />
+              </>
+            )}
+          </svg>
+
+          {/* x-axis labels (thinned to avoid crowding) */}
+          <div className="relative mt-1 h-4">
+            {points.map((p, idx) => {
+              const step = Math.ceil(points.length / 8);
+              if (idx % step !== 0 && idx !== points.length - 1) return null;
+              const xPct = (PAD_RATIO + (idx / denom) * (1 - 2 * PAD_RATIO)) * 100;
+              return (
+                <span
+                  key={p.periodStart}
+                  className="absolute -translate-x-1/2 whitespace-nowrap text-2xs capitalize text-ink-3"
+                  style={{ left: `${xPct}%` }}
+                >
+                  {bucketLabel(p.periodStart, grain)}
+                </span>
+              );
+            })}
+          </div>
+
+          {hovered && (
+            <div
+              className="pointer-events-none absolute -top-1 z-10 -translate-x-1/2 rounded-lg bg-ink px-3 py-2 text-left shadow-pop"
+              style={{ left: `${Math.min(Math.max(hoverLeftPct, 12), 88)}%` }}
+              role="status"
             >
-              {p.label}
-            </button>
-          ))}
+              <p className="text-2xs font-medium capitalize text-white/70">
+                {bucketLabelLong(hovered.periodStart, grain)}
+              </p>
+              <p className="text-sm font-semibold tabular-nums text-white">{metric.format(hovered[metric.key])}</p>
+              <p className="mt-0.5 text-2xs tabular-nums text-white/80">
+                {formatMoneyShort(hovered.revenue)} · {hovered.newClients} нов. · {hovered.calls} зв.
+              </p>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-1.5 sm:ml-auto">
-          <input
-            type="date"
-            value={range.from}
-            max={range.to}
-            onChange={(e) => onFrom(e.target.value)}
-            aria-label="Дата начала"
-            className={`h-8 rounded-lg border bg-white px-2 text-xs text-gray-700 transition-colors focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-400/30 ${
-              preset === 'custom' ? 'border-primary-300' : 'border-gray-200'
-            }`}
-          />
-          <span className="text-gray-300">—</span>
-          <input
-            type="date"
-            value={range.to}
-            min={range.from}
-            max={today}
-            onChange={(e) => onTo(e.target.value)}
-            aria-label="Дата конца"
-            className={`h-8 rounded-lg border bg-white px-2 text-xs text-gray-700 transition-colors focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-400/30 ${
-              preset === 'custom' ? 'border-primary-300' : 'border-gray-200'
-            }`}
-          />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -523,68 +387,59 @@ function ReportBody({ data }: { data: MarketingReport }) {
   const revTotalSource = revBySource.reduce((s, r) => s + r.revenue, 0);
 
   return (
-    <div className="space-y-4">
-      {/* ── Тренды (hero) ── */}
-      <Section
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start">
+      {/* ── Тренды (hero, на всю ширину) ── */}
+      <SectionCard
         icon={TrendingUp}
-        iconClass="bg-primary-50 text-primary-600"
+        iconTone="accent"
         title="Тренды"
         subtitle="Динамика ключевых метрик за период"
+        className="xl:col-span-2"
         right={
-          <div className="flex gap-1 rounded-lg bg-gray-100 p-0.5">
-            {(['weekly', 'monthly'] as const).map((g) => (
-              <button
-                key={g}
-                type="button"
-                onClick={() => setGrain(g)}
-                className={`h-7 rounded-md px-2.5 text-xs font-semibold transition-colors ${
-                  grain === g ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {g === 'weekly' ? 'Недели' : 'Месяцы'}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            aria-label="Шаг графика"
+            size="sm"
+            value={grain}
+            onChange={setGrain}
+            options={[
+              { value: 'weekly', label: 'Недели' },
+              { value: 'monthly', label: 'Месяцы' },
+            ]}
+          />
         }
       >
         <TrendChart points={trendPoints} grain={grain} />
-      </Section>
+      </SectionCard>
 
       {/* ── Привлечение ── */}
-      <Section
-        icon={UserPlus}
-        iconClass="bg-emerald-50 text-emerald-600"
-        title="Привлечение"
-        subtitle="Считаем по дате заведения клиента в базу"
-      >
-        <div className="grid grid-cols-2 gap-2.5">
+      <SectionCard icon={UserPlus} title="Привлечение" subtitle="Считаем по дате заведения клиента в базу">
+        <div className="grid grid-cols-2 gap-3">
           <StatBox
-            label="Новые (добавлены в базу за период)"
+            label="Новые (добавлены за период)"
             value={formatInt(acq.newClients)}
             sub={formatMoney(acq.newRevenue)}
-            valueClass="text-emerald-600"
+            tone="accent"
           />
           <StatBox
             label="Существующие (уже были в базе)"
             value={formatInt(acq.returningClients)}
             sub={formatMoney(acq.returningRevenue)}
-            valueClass="text-blue-600"
           />
         </div>
 
         {totalRev > 0 && (
           <div className="mt-3">
-            <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
-              <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${newRevPct}%` }} />
-              <div className="bg-blue-500 transition-all duration-500" style={{ width: `${100 - newRevPct}%` }} />
+            <div className="flex h-2 w-full overflow-hidden rounded-full bg-surface-3" aria-hidden="true">
+              <div className="bg-accent" style={{ width: `${newRevPct}%` }} />
+              <div className="bg-ink-4" style={{ width: `${100 - newRevPct}%` }} />
             </div>
-            <div className="mt-1.5 flex items-center justify-between text-[11px] text-gray-500 tabular-nums">
+            <div className="mt-1.5 flex items-center justify-between text-2xs tabular-nums text-ink-3">
               <span className="flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="inline-block h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
                 Новые {formatMoney(acq.newRevenue)}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                <span className="inline-block h-2 w-2 rounded-full bg-ink-4" aria-hidden="true" />
                 Существующие {formatMoney(acq.returningRevenue)}
               </span>
             </div>
@@ -593,9 +448,8 @@ function ReportBody({ data }: { data: MarketingReport }) {
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
-            <p className="mb-2 text-xs font-semibold text-gray-500">Новые по источникам</p>
+            <SubTitle>Новые по источникам</SubTitle>
             <BarList
-              barClass="bg-primary-500"
               emptyLabel="Источники не указаны"
               rows={sources.map((s) => ({
                 key: s.source || 'none',
@@ -607,9 +461,8 @@ function ReportBody({ data }: { data: MarketingReport }) {
             />
           </div>
           <div>
-            <p className="mb-2 text-xs font-semibold text-gray-500">Когорты первого визита</p>
+            <SubTitle>Когорты первого визита</SubTitle>
             <BarList
-              barClass="bg-emerald-500"
               emptyLabel="Новых клиентов за период нет"
               rows={cohort.map((wk) => ({
                 key: wk.periodStart,
@@ -621,24 +474,19 @@ function ReportBody({ data }: { data: MarketingReport }) {
             />
           </div>
         </div>
-      </Section>
+      </SectionCard>
 
       {/* ── Удержание ── */}
-      <Section
-        icon={Repeat}
-        iconClass="bg-indigo-50 text-indigo-600"
-        title="Удержание"
-        subtitle="За всё время по клиентам периода"
-      >
-        <div className="grid grid-cols-3 gap-2.5">
-          <StatBox label="Возвращаемость" value={formatPct(ret.returningRate)} valueClass="text-indigo-600" />
+      <SectionCard icon={Repeat} title="Удержание" subtitle="За всё время по клиентам периода">
+        <div className="grid grid-cols-3 gap-3">
+          <StatBox label="Возвращаемость" value={formatPct(ret.returningRate)} tone="accent" />
           <StatBox label="Средний LTV" value={formatMoney(ret.avgLtv)} />
           <StatBox
             label="Между визитами"
             value={
               <>
                 {formatInt(ret.avgDaysBetweenVisits)}
-                <span className="ml-1 text-sm font-medium text-gray-400">
+                <span className="ml-1 text-sm font-medium text-ink-3">
                   {plural(Math.round(ret.avgDaysBetweenVisits), ['день', 'дня', 'дней'])}
                 </span>
               </>
@@ -648,24 +496,22 @@ function ReportBody({ data }: { data: MarketingReport }) {
 
         {repeatTotal > 0 && (
           <div className="mt-4">
-            <p className="mb-2 text-xs font-semibold text-gray-500">Частота визитов (за всё время)</p>
+            <SubTitle>Частота визитов (за всё время)</SubTitle>
             <div className="flex items-end justify-between gap-2 sm:gap-3">
               {repeatDist.map((b) => {
                 const h = (b.clients / repeatMax) * 100;
                 const share = repeatTotal > 0 ? (b.clients / repeatTotal) * 100 : 0;
                 return (
                   <div key={b.visits} className="flex flex-1 flex-col items-center">
-                    <span className="mb-1 text-[11px] font-semibold tabular-nums text-gray-700">
-                      {formatInt(b.clients)}
-                    </span>
+                    <span className="mb-1 text-2xs font-semibold tabular-nums text-ink-2">{formatInt(b.clients)}</span>
                     <div className="flex h-24 w-full items-end justify-center">
                       <div
-                        className="w-full max-w-[44px] rounded-t-md bg-indigo-400 transition-all duration-500"
+                        className="w-full max-w-[44px] rounded-t-md bg-accent/80"
                         style={{ height: `${Math.max(h, 3)}%` }}
                         title={`${formatPct(share)} клиентов`}
                       />
                     </div>
-                    <span className="mt-1.5 text-[11px] text-gray-500">
+                    <span className="mt-1.5 text-2xs text-ink-3">
                       {b.visits === '1' ? '1 визит' : b.visits === '5+' ? '5+ визитов' : `${b.visits} виз.`}
                     </span>
                   </div>
@@ -674,172 +520,168 @@ function ReportBody({ data }: { data: MarketingReport }) {
             </div>
           </div>
         )}
-      </Section>
+      </SectionCard>
 
       {/* ── Звонки — воронка ── */}
-      <Section
+      <SectionCard
         icon={PhoneCall}
-        iconClass="bg-sky-50 text-sky-600"
         title="Звонки — воронка"
         subtitle="Телефония и путь обращения в заказ-наряд"
         right={
-          c.total > 0 ? <span className="badge-info tabular-nums">{formatPct(c.answerRate)} ответов</span> : undefined
+          c.total > 0 ? (
+            <Badge tone="accent" className="tabular-nums">
+              {formatPct(c.answerRate)} ответов
+            </Badge>
+          ) : undefined
         }
       >
         {c.total === 0 ? (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-ink-3">
             Нет данных о звонках за период. Подключите телефонию «Мои Звонки» в разделе «Интеграции».
           </p>
         ) : (
           <>
-            <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-5">
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
               <StatBox label="Всего" value={formatInt(c.total)} />
               <StatBox label="Входящие" value={formatInt(c.incoming)} />
               <StatBox label="Исходящие" value={formatInt(c.outgoing)} />
-              <StatBox
-                label="Пропущено"
-                value={formatInt(c.missed)}
-                valueClass={c.missed > 0 ? 'text-amber-600' : 'text-gray-900'}
-              />
+              <StatBox label="Пропущено" value={formatInt(c.missed)} tone={c.missed > 0 ? 'warn' : 'neutral'} />
               <StatBox
                 label="Не перезвонили"
                 value={formatInt(c.notCalledBack)}
-                valueClass={c.notCalledBack > 0 ? 'text-red-600' : 'text-gray-900'}
+                tone={c.notCalledBack > 0 ? 'bad' : 'neutral'}
               />
             </div>
 
             <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold text-gray-500">Воронка обращений</p>
+              <SubTitle>Воронка обращений</SubTitle>
               <FunnelBars
-                barClass="bg-sky-500"
                 stages={[
                   { label: 'Уникальные звонившие', value: c.funnel.uniqueCallers },
                   { label: 'Доехали до сервиса', value: c.funnel.arrivedClients },
                   { label: 'Оформлено заказ-нарядов', value: c.funnel.createdChecks },
                 ]}
               />
-              <div className="mt-3 grid grid-cols-3 gap-2.5">
-                <StatBox label="Конверсия" value={formatPct(c.funnel.conversionRate)} valueClass="text-sky-600" />
+              <div className="mt-3 grid grid-cols-3 gap-3">
+                <StatBox label="Конверсия" value={formatPct(c.funnel.conversionRate)} tone="accent" />
                 <StatBox label="Повторные" value={formatInt(c.funnel.repeatClients)} />
-                <StatBox label="Выручка" value={formatMoney(c.funnel.revenue)} valueClass="text-emerald-600" />
+                <StatBox label="Выручка" value={formatMoney(c.funnel.revenue)} />
               </div>
             </div>
           </>
         )}
-      </Section>
+      </SectionCard>
 
       {/* ── Отзывы ── */}
-      <Section icon={Star} iconClass="bg-amber-50 text-amber-600" title="Отзывы" subtitle="Оценки и запросы за период">
+      <SectionCard icon={Star} title="Отзывы" subtitle="Оценки и запросы за период">
         {rv.total === 0 && rv.tokensSent === 0 ? (
-          <p className="text-sm text-gray-400">Отзывов и запросов за период нет.</p>
+          <p className="text-sm text-ink-3">Отзывов и запросов за период нет.</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2.5">
-              <div className="rounded-xl bg-gray-50 px-3.5 py-3">
-                <p className="text-[11px] font-medium text-gray-500 leading-tight">Средняя оценка</p>
-                <p className="mt-0.5 flex items-center gap-1.5 text-lg font-bold tabular-nums leading-tight text-gray-900">
-                  {rv.avgRating.toFixed(1)}
-                  <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                </p>
-                <p className="mt-0.5 text-[11px] text-gray-400 tabular-nums leading-tight">
-                  {formatInt(rv.total)} {plural(rv.total, ['отзыв', 'отзыва', 'отзывов'])}
-                </p>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              <StatBox
+                label="Средняя оценка"
+                value={
+                  <span className="inline-flex items-center gap-1.5">
+                    {pct1Fmt.format(rv.avgRating)}
+                    <Star className="h-4 w-4 fill-warn text-warn" aria-hidden="true" />
+                  </span>
+                }
+                sub={`${formatInt(rv.total)} ${plural(rv.total, ['отзыв', 'отзыва', 'отзывов'])}`}
+              />
 
-              <div className="rounded-xl bg-gray-50 px-3.5 py-3">
-                <p className="text-[11px] font-medium text-gray-500 leading-tight">Тональность</p>
+              <div className="min-w-0 rounded-lg bg-surface-2 px-3.5 py-3">
+                <p className="text-xs leading-tight text-ink-3">Тональность</p>
                 {sentiment > 0 ? (
                   <>
-                    <div className="mt-2 flex h-2.5 w-full overflow-hidden rounded-full bg-gray-200">
-                      <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${posShare}%` }} />
-                      <div className="bg-red-400 transition-all duration-500" style={{ width: `${100 - posShare}%` }} />
+                    <div
+                      className="mt-2.5 flex h-2 w-full overflow-hidden rounded-full bg-surface-3"
+                      aria-hidden="true"
+                    >
+                      <div className="bg-ok" style={{ width: `${posShare}%` }} />
+                      <div className="bg-bad" style={{ width: `${100 - posShare}%` }} />
                     </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[11px] tabular-nums">
-                      <span className="flex items-center gap-1 text-emerald-600">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                        {formatInt(rv.positive)}
+                    <div className="mt-1.5 flex items-center justify-between text-2xs tabular-nums">
+                      <span className="flex items-center gap-1 text-ok-text">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-ok" aria-hidden="true" />
+                        {formatInt(rv.positive)} положит.
                       </span>
-                      <span className="flex items-center gap-1 text-red-500">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-400" />
-                        {formatInt(rv.negative)}
+                      <span className="flex items-center gap-1 text-bad-text">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-bad" aria-hidden="true" />
+                        {formatInt(rv.negative)} негатив.
                       </span>
                     </div>
                   </>
                 ) : (
-                  <p className="mt-1.5 text-[11px] text-gray-400">Пока без оценок</p>
+                  <p className="mt-1.5 text-2xs text-ink-3">Пока без оценок</p>
                 )}
               </div>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              <StatBox label="Отвечаемость" value={formatPct(rv.responseRate)} valueClass="text-amber-600" />
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatBox label="Отвечаемость" value={formatPct(rv.responseRate)} tone="accent" />
               <StatBox label="Конверсия" value={formatPct(rv.conversionRate)} />
               <StatBox label="Отправлено" value={formatInt(rv.tokensSent)} />
               <StatBox label="Ответили" value={formatInt(rv.tokensResponded)} />
             </div>
           </>
         )}
-      </Section>
+      </SectionCard>
 
       {/* ── Лояльность ── */}
-      <Section
+      <SectionCard
         icon={Gift}
-        iconClass="bg-fuchsia-50 text-fuchsia-600"
         title="Лояльность"
         subtitle="Бонусная программа за период"
         right={
           loy.enabled ? (
-            <span className="badge-success tabular-nums">{formatPct1(loy.accrualPercent)} кешбэк</span>
+            <Badge tone="accent" className="tabular-nums">
+              {formatPct1(loy.accrualPercent)} кешбэк
+            </Badge>
           ) : (
-            <span className="badge-gray">выключена</span>
+            <Badge outline>выключена</Badge>
           )
         }
       >
         {!loy.enabled && loy.accrualCount === 0 && loy.redemptionCount === 0 && loy.outstandingBalance === 0 ? (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-ink-3">
             Бонусная программа не используется. Включите её в разделе «Лояльность», чтобы начислять клиентам кешбэк.
           </p>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              <StatBox label="Участники" value={formatInt(loy.participants)} valueClass="text-fuchsia-600" />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatBox label="Участники" value={formatInt(loy.participants)} tone="accent" />
               <StatBox
                 label="Начислено"
                 value={formatMoney(loy.pointsAccrued)}
                 sub={`${formatInt(loy.accrualCount)} ${plural(loy.accrualCount, ['операция', 'операции', 'операций'])}`}
-                valueClass="text-emerald-600"
               />
               <StatBox
                 label="Списано"
                 value={formatMoney(loy.pointsRedeemed)}
                 sub={`${formatInt(loy.redemptionCount)} ${plural(loy.redemptionCount, ['операция', 'операции', 'операций'])}`}
-                valueClass="text-blue-600"
               />
               <StatBox label="Остаток бонусов" value={formatMoney(loy.outstandingBalance)} />
             </div>
-            <p className="mt-2.5 text-[11px] leading-snug text-gray-400">
+            <p className="mt-2.5 text-2xs leading-snug text-ink-3">
               «Остаток бонусов» — текущая суммарная задолженность программы перед клиентами за всё время, а не только за
               период.
             </p>
           </>
         )}
-      </Section>
+      </SectionCard>
 
       {/* ── Выручка ── */}
-      <Section
+      <SectionCard
         icon={Wallet}
-        iconClass="bg-green-50 text-green-600"
         title="Выручка"
         subtitle="По источникам клиентов и мастерам (без гарантийных)"
+        className="xl:col-span-2"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-5 sm:grid-cols-2">
           <div>
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-500">
-              <BarChart3 className="h-3.5 w-3.5 text-gray-400" />
-              По источникам
-            </p>
+            <SubTitle icon={BarChart3}>По источникам</SubTitle>
             <BarList
-              barClass="bg-green-500"
               emptyLabel="Выручки за период нет"
               rows={revBySource.map((r) => ({
                 key: r.source || 'none',
@@ -850,16 +692,12 @@ function ReportBody({ data }: { data: MarketingReport }) {
               }))}
             />
             {revTotalSource > 0 && (
-              <p className="mt-2 text-[11px] text-gray-400 tabular-nums">Всего: {formatMoney(revTotalSource)}</p>
+              <p className="mt-2 text-2xs tabular-nums text-ink-3">Всего: {formatMoney(revTotalSource)}</p>
             )}
           </div>
           <div>
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-500">
-              <Users className="h-3.5 w-3.5 text-gray-400" />
-              По мастерам
-            </p>
+            <SubTitle icon={Users}>По мастерам</SubTitle>
             <BarList
-              barClass="bg-teal-500"
               emptyLabel="Выручки за период нет"
               rows={revByMaster.map((r) => ({
                 key: r.masterId ?? 'none',
@@ -871,29 +709,80 @@ function ReportBody({ data }: { data: MarketingReport }) {
             />
           </div>
         </div>
-      </Section>
+      </SectionCard>
+    </div>
+  );
+}
+
+function ReportSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2" role="status" aria-label="Загрузка отчёта">
+      <Card padding="md" className="xl:col-span-2">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="mt-4 h-44" />
+      </Card>
+      {[0, 1, 2, 3].map((i) => (
+        <Card key={i} padding="md">
+          <Skeleton className="h-5 w-32" />
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <Skeleton className="h-16" />
+            <Skeleton className="h-16" />
+          </div>
+        </Card>
+      ))}
     </div>
   );
 }
 
 // ─── Main view ──────────────────────────────────────────────────────
 export default function MarketingReportsView() {
-  const today = format(new Date(), 'yyyy-MM-dd');
-  const [range, setRange] = useState<Range>(() => rangeFor('month'));
-  const [preset, setPreset] = useState<PresetKey | 'custom'>('month');
+  // «Сегодня / неделя / месяц» — по календарю АВТОСЕРВИСА (157), как везде.
+  const { today, weekStart, monthStart } = useTenantCalendar();
+  const rangeFor = (preset: PresetKey): Range => {
+    switch (preset) {
+      case 'today':
+        return { from: today, to: today };
+      case 'week':
+        return { from: weekStart, to: today };
+      case 'month':
+        return { from: monthStart, to: today };
+      case 'quarter':
+        return { from: format(startOfQuarter(parseDayKey(today)), 'yyyy-MM-dd'), to: today };
+      case 'year':
+        return { from: format(startOfYear(parseDayKey(today)), 'yyyy-MM-dd'), to: today };
+    }
+  };
 
-  const applyPreset = (p: PresetKey) => {
-    setPreset(p);
-    setRange(rangeFor(p));
-  };
-  const setFrom = (from: string) => {
-    setPreset('custom');
-    setRange((r) => ({ ...r, from }));
-  };
-  const setTo = (to: string) => {
-    setPreset('custom');
-    setRange((r) => ({ ...r, to }));
-  };
+  // Период — в URL (?from=&to=): «отчёт за июль» можно переслать.
+  const [params, setParams] = useSearchParams();
+  const rawFrom = params.get('from');
+  const rawTo = params.get('to');
+  const range: Range =
+    rawFrom && rawTo && DAY_KEY_RE.test(rawFrom) && DAY_KEY_RE.test(rawTo) && rawFrom <= rawTo
+      ? { from: rawFrom, to: rawTo }
+      : rangeFor('month');
+  const preset: PresetKey | 'custom' =
+    PRESETS.find((p) => {
+      const r = rangeFor(p.value);
+      return r.from === range.from && r.to === range.to;
+    })?.value ?? 'custom';
+
+  const setRange = (next: Range) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        const def = rangeFor('month');
+        if (next.from === def.from && next.to === def.to) {
+          p.delete('from');
+          p.delete('to');
+        } else {
+          p.set('from', next.from);
+          p.set('to', next.to);
+        }
+        return p;
+      },
+      { replace: true },
+    );
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['marketing-report', range.from, range.to],
@@ -916,29 +805,59 @@ export default function MarketingReportsView() {
     data.revenue.bySource.length === 0;
 
   return (
-    <div className="space-y-4">
-      <PeriodBar range={range} preset={preset} today={today} onPreset={applyPreset} onFrom={setFrom} onTo={setTo} />
+    <div className="space-y-5">
+      <Toolbar>
+        <SegmentedControl
+          aria-label="Период отчёта"
+          value={preset === 'custom' ? '' : preset}
+          onChange={(p) => setRange(rangeFor(p as PresetKey))}
+          options={PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+        />
+        <ToolbarSeparator />
+        <ToolbarGroup>
+          <label htmlFor="mreport-from" className="text-xs font-medium text-ink-3">
+            с
+          </label>
+          <Input
+            id="mreport-from"
+            type="date"
+            size="sm"
+            value={range.from}
+            max={range.to}
+            onChange={(e) => e.target.value && setRange({ ...range, from: e.target.value })}
+            className="!w-[8.75rem]"
+          />
+          <label htmlFor="mreport-to" className="text-xs font-medium text-ink-3">
+            по
+          </label>
+          <Input
+            id="mreport-to"
+            type="date"
+            size="sm"
+            value={range.to}
+            min={range.from}
+            max={today}
+            onChange={(e) => e.target.value && setRange({ ...range, to: e.target.value })}
+            className="!w-[8.75rem]"
+          />
+        </ToolbarGroup>
+      </Toolbar>
 
       {isLoading ? (
-        <div className="flex justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
-        </div>
+        <ReportSkeleton />
       ) : isError ? (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm py-14 text-center">
-          <p className="text-sm text-gray-500">Не удалось загрузить отчёт.</p>
-          <button type="button" onClick={() => refetch()} className="btn-secondary btn-sm mt-3">
-            Повторить
-          </button>
-        </div>
+        <SectionError message="Не удалось загрузить отчёт" onRetry={() => refetch()} loading={isFetching} />
       ) : !data || isEmpty ? (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm py-16 text-center">
-          <BarChart3 className="mx-auto h-10 w-10 text-gray-200" />
-          <p className="mt-3 text-sm font-medium text-gray-500">За период данных нет</p>
-          <p className="mt-1 text-xs text-gray-400">Выберите другой период или дождитесь активности клиентов</p>
-        </div>
+        <Card>
+          <EmptyState
+            icon={BarChart3}
+            title="За период данных нет"
+            hint="Выберите другой период или дождитесь активности клиентов"
+          />
+        </Card>
       ) : (
         <div
-          className={`transition-opacity duration-200 ${isFetching ? 'opacity-60' : 'opacity-100'}`}
+          className={cn('transition-opacity duration-150', isFetching ? 'opacity-60' : 'opacity-100')}
           aria-busy={isFetching}
         >
           <ReportBody data={data} />

@@ -1,10 +1,9 @@
-import { useMemo, useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useRef, useState, FormEvent } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CreditCard,
   Phone,
-  ChevronRight,
   AlertTriangle,
   Banknote,
   CalendarClock,
@@ -17,16 +16,34 @@ import {
   Trash2,
   ShieldCheck,
   MessageCircle,
+  Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { installmentsApi, checkPhotosApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import PageHeader from '../components/PageHeader';
-import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { useClickableRow } from '../hooks/useClickableRow';
 import { dueLabel } from '../components/InstallmentsWidget';
+import { ErrorRow, MiniStat } from '../components/dashboard/shared';
+import { Badge, StatusPill } from '../ui/Badge';
+import { Button } from '../ui/Button';
+import { Checkbox } from '../ui/Checkbox';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Drawer } from '../ui/Drawer';
+import { Field } from '../ui/Field';
+import { IconButton } from '../ui/IconButton';
+import { Input } from '../ui/Input';
+import { Money } from '../ui/Money';
+import { RadioGroup } from '../ui/RadioGroup';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { Skeleton } from '../ui/Skeleton';
+import { StatCard } from '../ui/StatCard';
+import { Textarea } from '../ui/Textarea';
+import { Toolbar } from '../ui/Toolbar';
+import { cn } from '../ui/cn';
+import { focusRing, toneChip, type Tone } from '../ui/tokens';
 
 import type {
   InstallmentPlan,
@@ -37,33 +54,24 @@ import type {
   InstallmentReminderSettings,
   CheckPhoto,
 } from '../types';
-import { formatMoney } from '../../../shared/utils/formatters';
+import { formatDateTime, formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 type Segment = 'open' | 'overdue' | 'closed';
 
-const SEGMENTS: { key: Segment; label: string }[] = [
-  { key: 'open', label: 'Открытые' },
-  { key: 'overdue', label: 'Просроченные' },
-  { key: 'closed', label: 'Закрытые' },
+const SEGMENTS: { value: Segment; label: string }[] = [
+  { value: 'open', label: 'Открытые' },
+  { value: 'overdue', label: 'Просроченные' },
+  { value: 'closed', label: 'Закрытые' },
 ];
+const SEGMENT_KEYS = SEGMENTS.map((s) => s.value);
 
 /** «YYYY-MM-DD» → «дд.мм.гггг». */
 function fmtDate(d?: string | null): string {
   if (!d) return '—';
   const p = d.slice(0, 10).split('-');
   return p.length === 3 ? `${p[2]}.${p[1]}.${p[0]}` : d;
-}
-
-function fmtDateTime(d?: string | null): string {
-  if (!d) return '—';
-  const date = new Date(d);
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const yy = String(date.getFullYear()).slice(2);
-  const hh = String(date.getHours()).padStart(2, '0');
-  const mi = String(date.getMinutes()).padStart(2, '0');
-  return `${dd}.${mm}.${yy} ${hh}:${mi}`;
 }
 
 /** Цифры телефона — для tel:/wa.me ссылок. Пустой телефон → null (R12). */
@@ -83,16 +91,18 @@ function waLink(phone?: string | null): string | null {
   return digits ? `https://wa.me/${digits}` : null;
 }
 
+const dueTone: Record<'red' | 'amber' | 'gray', string> = {
+  red: 'text-bad-text',
+  amber: 'text-warn-text',
+  gray: 'text-ink-3',
+};
+
 // Единый таймлайн «Истории»: первый взнос + платежи + переносы, новые сверху
 // (зеркало мобильной деталки, Round 13 #7).
 type HistoryEvent =
   | { kind: 'down'; ts: number; date: string; amount: number }
   | { kind: 'payment'; ts: number; payment: InstallmentPayment }
   | { kind: 'reschedule'; ts: number; reschedule: InstallmentReschedule };
-
-// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
-// us spread it inside a `.map()` without tripping react-hooks/rules-of-hooks.
-const clickableRowProps = useClickableRow;
 
 /**
  * Погашение рассрочки двигает деньги: платёж ложится в кассу принявшего.
@@ -113,10 +123,53 @@ const MONEY_QUERY_KEYS: readonly string[][] = [
 const isQueuedOffline = (res: { status?: number; data?: unknown } | undefined): boolean =>
   res?.status === 202 && (res?.data as { queued?: boolean } | undefined)?.queued === true;
 
-function StatusBadge({ plan }: { plan: InstallmentPlan }) {
-  if (plan.status === 'closed') return <span className="badge-green">Закрыта</span>;
-  if (plan.overdue) return <span className="badge-red">Просрочена</span>;
-  return <span className="badge-blue">Открыта</span>;
+function StatusBadge({ plan, size = 'md' }: { plan: InstallmentPlan; size?: 'sm' | 'md' }) {
+  if (plan.status === 'closed')
+    return (
+      <StatusPill tone="ok" size={size}>
+        Закрыта
+      </StatusPill>
+    );
+  if (plan.overdue)
+    return (
+      <StatusPill tone="bad" size={size}>
+        Просрочена
+      </StatusPill>
+    );
+  return (
+    <StatusPill tone="accent" size={size}>
+      Открыта
+    </StatusPill>
+  );
+}
+
+/** Ссылка-иконка (tel:/wa.me) в геометрии IconButton sm. */
+function IconLink({
+  href,
+  label,
+  icon: Icon,
+  external = false,
+}: {
+  href: string;
+  label: string;
+  icon: typeof Phone;
+  external?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      aria-label={label}
+      title={label}
+      target={external ? '_blank' : undefined}
+      rel={external ? 'noreferrer' : undefined}
+      className={cn(
+        'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-surface-3 hover:text-ink',
+        focusRing,
+      )}
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
+    </a>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -130,7 +183,22 @@ export default function InstallmentsPage() {
   // installments/*; волна Битрикс24). Список планов читается всеми.
   const canManage = hasPermission('debts_manage');
 
-  const [segment, setSegment] = useState<Segment>('open');
+  // Сегмент — в URL (?status=overdue): F5 и пересылка ссылки сохраняют вкладку.
+  const [params, setParams] = useSearchParams();
+  const rawSegment = params.get('status') as Segment | null;
+  const segment: Segment = rawSegment && SEGMENT_KEYS.includes(rawSegment) ? rawSegment : 'open';
+  const setSegment = (s: Segment) => {
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (s === 'open') p.delete('status');
+        else p.set('status', s);
+        return p;
+      },
+      { replace: true },
+    );
+  };
+
   const [selected, setSelected] = useState<InstallmentPlan | null>(null);
   const [remindersOpen, setRemindersOpen] = useState(false);
 
@@ -150,192 +218,162 @@ export default function InstallmentsPage() {
     return { remaining, overdue, count: plans.length };
   }, [plans]);
 
+  const columns: DataTableColumn<InstallmentPlan>[] = [
+    {
+      key: 'client',
+      header: 'Клиент',
+      primary: true,
+      render: (p) => {
+        const due = dueLabel(p.dueInDays);
+        return (
+          <span className="min-w-0">
+            <span className="block truncate">{p.clientName || 'Клиент'}</span>
+            {p.clientPhone && (
+              <span className="block truncate text-xs font-normal tabular-nums text-ink-3">
+                {formatPhone(p.clientPhone)}
+              </span>
+            )}
+            {/* На узких экранах — номер заказа и срок под именем (колонки скрыты). */}
+            <span className="block text-xs font-normal text-ink-3 md:hidden">
+              {p.checkNumber ? `Заказ-наряд #${p.checkNumber}` : 'Без заказ-наряда'}
+              {p.status !== 'closed' && (
+                <span className={cn('ml-1.5', dueTone[due.tone])}>
+                  · {fmtDate(p.nextPaymentDate)} · {due.text}
+                </span>
+              )}
+            </span>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'check',
+      header: 'Заказ-наряд',
+      hideBelow: 'md',
+      width: 120,
+      render: (p) =>
+        p.checkNumber ? <span className="tabular-nums">#{p.checkNumber}</span> : <span className="text-ink-4">—</span>,
+    },
+    {
+      key: 'total',
+      header: 'Сумма',
+      numeric: true,
+      hideBelow: 'lg',
+      width: 120,
+      render: (p) => <Money value={p.total} />,
+      footer: (rows) => <Money value={rows.reduce((s, p) => s + p.total, 0)} />,
+    },
+    {
+      key: 'paid',
+      header: 'Внесено',
+      numeric: true,
+      hideBelow: 'lg',
+      width: 120,
+      render: (p) => <Money value={p.paid} />,
+      footer: (rows) => <Money value={rows.reduce((s, p) => s + p.paid, 0)} />,
+    },
+    {
+      key: 'remaining',
+      header: 'Остаток',
+      numeric: true,
+      sortable: true,
+      width: 130,
+      render: (p) => <Money value={p.remaining} className="font-semibold text-ink" />,
+      footer: (rows) => <Money value={rows.reduce((s, p) => s + p.remaining, 0)} />,
+    },
+    {
+      key: 'next',
+      header: 'След. платёж',
+      hideBelow: 'md',
+      sortable: true,
+      sortValue: (p) => p.nextPaymentDate ?? '',
+      width: 200,
+      render: (p) => {
+        if (p.status === 'closed') return <span className="text-ink-4">—</span>;
+        const due = dueLabel(p.dueInDays);
+        return (
+          <span className="whitespace-nowrap">
+            <span className="tabular-nums">{fmtDate(p.nextPaymentDate)}</span>
+            <span className={cn('ml-1.5 text-xs', dueTone[due.tone])}>{due.text}</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      hideBelow: 'sm',
+      width: 130,
+      render: (p) => <StatusBadge plan={p} size="sm" />,
+    },
+  ];
+
   return (
-    <div>
-      {/* Header */}
+    <div className="space-y-5">
       <PageHeader
-        className="mb-6"
         title="Рассрочка"
         icon={CreditCard}
         subtitle="Заказ-наряды, проданные в рассрочку, и график платежей"
         actions={
           canManage ? (
-            <button type="button" onClick={() => setRemindersOpen(true)} className="btn-secondary btn-sm">
-              <Bell className="h-4 w-4" />
+            <Button variant="secondary" icon={Bell} onClick={() => setRemindersOpen(true)}>
               Напоминания
-            </button>
+            </Button>
           ) : undefined
         }
       />
 
-      {/* Summary cards */}
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="card card-body">
-          <p className="stat-label">Остаток к оплате</p>
-          <p className="stat-value tabular-nums">{formatMoney(totals.remaining)}</p>
-        </div>
-        <div className="card card-body">
-          <p className="stat-label">Просроченных</p>
-          <p className={`stat-value tabular-nums ${totals.overdue > 0 ? 'text-red-600' : ''}`}>{totals.overdue}</p>
-        </div>
-        <div className="card card-body">
-          <p className="stat-label">Всего в разделе</p>
-          <p className="stat-value tabular-nums">{totals.count}</p>
-        </div>
+      <Toolbar>
+        <SegmentedControl aria-label="Статус рассрочки" options={SEGMENTS} value={segment} onChange={setSegment} />
+      </Toolbar>
+
+      {/* Summary — по текущему списку */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard
+          compact
+          label="Остаток к оплате"
+          value={formatMoney(totals.remaining)}
+          hint="по открытым в этом списке"
+          icon={Wallet}
+          loading={isLoading}
+        />
+        <StatCard
+          compact
+          label="Просроченных"
+          value={totals.overdue}
+          icon={AlertTriangle}
+          tone={totals.overdue > 0 ? 'bad' : 'neutral'}
+          loading={isLoading}
+        />
+        <StatCard compact label="Всего в списке" value={totals.count} icon={CreditCard} loading={isLoading} />
       </div>
 
-      {/* Segmented control */}
-      <div className="mb-4 inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
-        {SEGMENTS.map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            onClick={() => setSegment(s.key)}
-            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${
-              segment === s.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      <QueryState
+      <DataTable
+        caption="Рассрочки"
+        columns={columns}
+        rows={plans}
+        rowKey={(p) => p.id}
+        onRowClick={(p) => setSelected(p)}
+        rowLabel={(p) => `Открыть рассрочку · ${p.clientName || 'Клиент'}`}
+        selectedKey={selected?.id ?? null}
         isLoading={isLoading}
         isError={isError}
-        onRetry={refetch}
+        onRetry={() => refetch()}
         isFetching={isFetching}
         errorTitle="Не удалось загрузить рассрочки"
-        isEmpty={plans.length === 0}
-        empty={{
+        emptyState={{
           icon: CreditCard,
-          title: segment === 'closed' ? 'Закрытых рассрочек нет' : 'Активных рассрочек нет',
+          title:
+            segment === 'closed'
+              ? 'Закрытых рассрочек нет'
+              : segment === 'overdue'
+                ? 'Просроченных нет'
+                : 'Активных рассрочек нет',
           description: 'Рассрочка создаётся при продаже заказ-наряда со способом оплаты «Рассрочка»',
         }}
-        minHeight="min-h-[40vh]"
-      >
-        <>
-          {/* Desktop / tablet table */}
-          <div className="table-container hidden md:block">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Клиент</th>
-                  <th>Заказ-наряд</th>
-                  <th className="text-right">Сумма</th>
-                  <th className="text-right">Внесено</th>
-                  <th className="text-right">Остаток</th>
-                  <th>След. платёж</th>
-                  <th>Статус</th>
-                  <th className="w-10" />
-                </tr>
-              </thead>
-              <tbody>
-                {plans.map((p) => {
-                  const due = dueLabel(p.dueInDays);
-                  return (
-                    <tr
-                      key={p.id}
-                      {...clickableRowProps(() => setSelected(p), { label: `Рассрочка · ${p.clientName || 'Клиент'}` })}
-                      className="cursor-pointer"
-                    >
-                      <td>
-                        <p className="font-medium text-gray-900">{p.clientName || 'Клиент'}</p>
-                        {p.clientPhone && <p className="mt-0.5 text-xs text-gray-500">{formatPhone(p.clientPhone)}</p>}
-                      </td>
-                      <td className="text-gray-600">{p.checkNumber ? `#${p.checkNumber}` : '—'}</td>
-                      <td className="text-right text-gray-700 tabular-nums">{formatMoney(p.total)}</td>
-                      <td className="text-right text-gray-700 tabular-nums">{formatMoney(p.paid)}</td>
-                      <td className="whitespace-nowrap text-right font-bold text-gray-900 tabular-nums">
-                        {formatMoney(p.remaining)}
-                      </td>
-                      <td>
-                        {p.status === 'closed' ? (
-                          <span className="text-gray-400">—</span>
-                        ) : (
-                          <span className="whitespace-nowrap">
-                            <span className="text-gray-700">{fmtDate(p.nextPaymentDate)}</span>
-                            <span
-                              className={`ml-1.5 text-xs ${
-                                due.tone === 'red'
-                                  ? 'text-red-600'
-                                  : due.tone === 'amber'
-                                    ? 'text-amber-600'
-                                    : 'text-gray-500'
-                              }`}
-                            >
-                              {due.text}
-                            </span>
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <StatusBadge plan={p} />
-                      </td>
-                      <td className="text-right">
-                        <ChevronRight className="inline-block h-4 w-4 text-gray-300" />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+      />
 
-          {/* Mobile cards */}
-          <div className="space-y-3 md:hidden">
-            {plans.map((p) => {
-              const due = dueLabel(p.dueInDays);
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSelected(p)}
-                  className="card press-soft w-full p-4 text-left"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <div
-                        className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
-                          p.overdue ? 'bg-red-50' : 'bg-violet-50'
-                        }`}
-                      >
-                        {p.overdue ? (
-                          <AlertTriangle className="h-4 w-4 text-red-500" />
-                        ) : (
-                          <CreditCard className="h-4 w-4 text-violet-600" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-gray-900">{p.clientName || 'Клиент'}</p>
-                        <p className="text-xs text-gray-500">
-                          {p.checkNumber ? `Заказ-наряд #${p.checkNumber}` : 'Без заказ-наряда'}
-                        </p>
-                      </div>
-                    </div>
-                    <StatusBadge plan={p} />
-                  </div>
-                  <div className="mt-3 flex items-end justify-between">
-                    <div className="text-xs text-gray-500">
-                      {p.status !== 'closed' && (
-                        <span className={due.tone === 'red' ? 'text-red-600' : undefined}>
-                          {fmtDate(p.nextPaymentDate)} · {due.text}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[11px] text-gray-500">Остаток</p>
-                      <p className="text-base font-bold text-gray-900 tabular-nums">{formatMoney(p.remaining)}</p>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </>
-      </QueryState>
-
-      <InstallmentDetailModal
+      <InstallmentDetailDrawer
         plan={selected}
         canManage={canManage}
         onClose={() => setSelected(null)}
@@ -351,10 +389,10 @@ export default function InstallmentsPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Detail modal — pay / reschedule / payoff + payment history
+//  Detail drawer — pay / reschedule / payoff + payment history
 // ─────────────────────────────────────────────────────────────────────────
 
-function InstallmentDetailModal({
+function InstallmentDetailDrawer({
   plan,
   canManage,
   onClose,
@@ -366,6 +404,7 @@ function InstallmentDetailModal({
   onNavigateCheck: (checkId: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const timeZone = useTenantTimezone();
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
   // Способ оплаты (119): дефолт «Наличными» — погашения почти всегда нал.
@@ -384,13 +423,23 @@ function InstallmentDetailModal({
   const [gPhone, setGPhone] = useState('');
   const [guarantorToDelete, setGuarantorToDelete] = useState<InstallmentGuarantor | null>(null);
 
+  // Пока панель уезжает (180 мс), показываем последний план — без пустого заголовка.
+  const lastPlanRef = useRef<InstallmentPlan | null>(null);
+  if (plan) lastPlanRef.current = plan;
+  const shownPlan = plan ?? lastPlanRef.current;
+
   const isOpen = !!plan;
-  const planId = plan?.id ?? '';
-  const clientId = plan?.clientId ?? '';
+  const planId = shownPlan?.id ?? '';
+  const clientId = shownPlan?.clientId ?? '';
 
   // Client ledger gives the fresh plan (guarantors / reschedules / car — the
   // flat list() doesn't carry them) + this plan's payment history.
-  const { data: ledger } = useQuery<InstallmentClientLedger>({
+  const {
+    data: ledger,
+    isError: ledgerError,
+    refetch: refetchLedger,
+    isFetching: ledgerFetching,
+  } = useQuery<InstallmentClientLedger>({
     queryKey: ['installments', 'client', clientId],
     queryFn: async () => {
       const res = await installmentsApi.clientLedger(clientId);
@@ -401,12 +450,12 @@ function InstallmentDetailModal({
 
   // Свежий план из ledger (поручители/переносы/авто); до его прихода — плоский
   // план из списка (мгновенный рендер, как в мобильной деталке).
-  const view = useMemo(() => ledger?.plans?.find((p) => p.id === planId) ?? plan, [ledger, planId, plan]);
+  const view = useMemo(() => ledger?.plans?.find((p) => p.id === planId) ?? shownPlan, [ledger, planId, shownPlan]);
   const open = view?.status === 'open';
 
   const payments = useMemo(() => (ledger?.payments ?? []).filter((p) => p.planId === planId), [ledger, planId]);
   const guarantors = view?.guarantors ?? [];
-  const reschedules = view?.reschedules ?? [];
+  const reschedules = useMemo(() => view?.reschedules ?? [], [view]);
 
   // Единый таймлайн: первый взнос + платежи + переносы, новые сверху.
   const history = useMemo<HistoryEvent[]>(() => {
@@ -459,7 +508,7 @@ function InstallmentDetailModal({
       setMethod('cash');
       onClose();
     },
-    onError: () => toast.error('Не удалось принять оплату'),
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Не удалось принять оплату'),
   });
 
   const rescheduleMutation = useMutation({
@@ -477,7 +526,7 @@ function InstallmentDetailModal({
       toast.success('Дата платежа обновлена');
       onClose();
     },
-    onError: () => toast.error('Не удалось перенести дату'),
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Не удалось перенести дату'),
   });
 
   const addGuarantorMutation = useMutation({
@@ -491,7 +540,7 @@ function InstallmentDetailModal({
       setGRelation('');
       setGPhone('');
     },
-    onError: () => toast.error('Не удалось добавить поручителя'),
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Не удалось добавить поручителя'),
   });
 
   const removeGuarantorMutation = useMutation({
@@ -522,8 +571,8 @@ function InstallmentDetailModal({
       setPayoffOpen(false);
       onClose();
     },
-    onError: () => {
-      toast.error('Не удалось погасить рассрочку');
+    onError: (err) => {
+      toast.error(apiErrorMessage(err) ?? 'Не удалось погасить рассрочку');
       setPayoffOpen(false);
     },
   });
@@ -577,401 +626,399 @@ function InstallmentDetailModal({
     });
   };
 
-  if (!plan || !view) return null;
+  const clientTel = telLink(view?.clientPhone);
+  const clientWa = waLink(view?.clientPhone);
 
-  const clientTel = telLink(view.clientPhone);
-  const clientWa = waLink(view.clientPhone);
+  const sectionTitle = (text: string) => <p className="mb-2 text-xs font-semibold text-ink-3">{text}</p>;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Рассрочка · ${view.clientName || 'Клиент'}`} size="lg">
-      <div className="space-y-5">
-        {/* Summary grid */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-xl bg-gray-50 p-3 text-center">
-            <p className="text-[11px] text-gray-500">Сумма</p>
-            <p className="mt-0.5 text-sm font-bold text-gray-900 tabular-nums">{formatMoney(view.total)}</p>
+    <Drawer
+      open={isOpen}
+      onClose={onClose}
+      size="lg"
+      title={`Рассрочка · ${view?.clientName || 'Клиент'}`}
+      subtitle={
+        view
+          ? `${view.checkNumber ? `Заказ-наряд #${view.checkNumber}` : 'Без заказ-наряда'} · c ${fmtDate(view.createdAt)}`
+          : undefined
+      }
+    >
+      {view && (
+        <div className="space-y-6">
+          {/* Summary */}
+          <div className="grid grid-cols-3 gap-3 rounded-lg bg-surface-2 px-4 py-3">
+            <MiniStat label="Сумма" value={<Money value={view.total} />} />
+            <MiniStat label="Внесено" value={<Money value={view.paid} />} tone="ok" />
+            <MiniStat
+              label="Остаток"
+              value={<Money value={view.remaining} />}
+              tone={view.remaining > 0 ? 'bad' : 'neutral'}
+            />
           </div>
-          <div className="rounded-xl bg-green-50 p-3 text-center">
-            <p className="text-[11px] text-gray-500">Внесено</p>
-            <p className="mt-0.5 text-sm font-bold text-green-700 tabular-nums">{formatMoney(view.paid)}</p>
-          </div>
-          <div className="rounded-xl bg-rose-50 p-3 text-center">
-            <p className="text-[11px] text-gray-500">Остаток</p>
-            <p className="mt-0.5 text-sm font-bold text-rose-700 tabular-nums">{formatMoney(view.remaining)}</p>
-          </div>
-        </div>
 
-        {/* Meta — клиент, телефон (tel:/wa.me), авто из заказ-наряда */}
-        <div className="space-y-1.5 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-gray-500">Статус</span>
-            <StatusBadge plan={view} />
-          </div>
-          {view.status === 'open' && (
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Следующий платёж</span>
-              <span className="font-medium text-gray-900">{fmtDate(view.nextPaymentDate)}</span>
-            </div>
+          {ledgerError && (
+            <ErrorRow
+              message="Не удалось загрузить историю платежей и поручителей"
+              onRetry={() => refetchLedger()}
+              loading={ledgerFetching}
+            />
           )}
-          {view.clientPhone && clientTel && (
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Телефон</span>
-              <span className="inline-flex items-center gap-2">
-                <a
-                  href={clientTel}
-                  className="inline-flex items-center gap-1 font-medium text-primary-600 hover:text-primary-700"
-                >
-                  <Phone className="h-3.5 w-3.5" />
-                  {formatPhone(view.clientPhone)}
-                </a>
-                {clientWa && (
-                  <a
-                    href={clientWa}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 font-medium text-green-600 hover:text-green-700"
-                    title="Написать в WhatsApp"
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                    WhatsApp
-                  </a>
-                )}
-              </span>
+
+          {/* Meta — клиент, телефон (tel:/wa.me), авто из заказ-наряда */}
+          <dl className="space-y-2 text-sm">
+            <div className="flex items-center justify-between gap-4">
+              <dt className="text-ink-3">Статус</dt>
+              <dd>
+                <StatusBadge plan={view} />
+              </dd>
             </div>
-          )}
-          {view.carId && (
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Автомобиль</span>
-              <span className="inline-flex items-center gap-1.5 font-medium text-gray-900">
-                <Car className="h-3.5 w-3.5 text-gray-400" />
-                {view.carMakeModel || 'Авто'}
-                {view.carPlate && (
-                  <span className="rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wider text-gray-700">
-                    {view.carPlate}
+            {view.status === 'open' && (
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink-3">Следующий платёж</dt>
+                <dd className="font-medium tabular-nums text-ink">
+                  {fmtDate(view.nextPaymentDate)}
+                  <span className={cn('ml-1.5 text-xs font-normal', dueTone[dueLabel(view.dueInDays).tone])}>
+                    {dueLabel(view.dueInDays).text}
                   </span>
-                )}
-              </span>
-            </div>
-          )}
-          {view.checkId && (
-            <div className="flex items-center justify-between">
-              <span className="text-gray-500">Заказ-наряд</span>
-              <button
-                type="button"
-                onClick={() => onNavigateCheck(view.checkId as string)}
-                className="inline-flex items-center gap-1 font-medium text-primary-600 hover:text-primary-700"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                {view.checkNumber ? `#${view.checkNumber}` : 'Открыть'}
-              </button>
-            </div>
-          )}
-          {view.comment && (
-            <div className="flex items-start justify-between gap-4">
-              <span className="text-gray-500">Комментарий</span>
-              <span className="text-right text-gray-700">{view.comment}</span>
-            </div>
-          )}
-        </div>
+                </dd>
+              </div>
+            )}
+            {view.clientPhone && clientTel && (
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink-3">Телефон</dt>
+                <dd className="inline-flex items-center gap-1">
+                  <a
+                    href={clientTel}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 font-medium tabular-nums text-accent-text hover:underline',
+                      focusRing,
+                    )}
+                  >
+                    <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+                    {formatPhone(view.clientPhone)}
+                  </a>
+                  {clientWa && <IconLink href={clientWa} label="Написать в WhatsApp" icon={MessageCircle} external />}
+                </dd>
+              </div>
+            )}
+            {view.carId && (
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink-3">Автомобиль</dt>
+                <dd className="inline-flex items-center gap-2 font-medium text-ink">
+                  <Car className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
+                  {view.carMakeModel || 'Авто'}
+                  {view.carPlate && (
+                    <Badge outline size="sm" className="tabular-nums tracking-wide">
+                      {view.carPlate}
+                    </Badge>
+                  )}
+                </dd>
+              </div>
+            )}
+            {view.checkId && (
+              <div className="flex items-center justify-between gap-4">
+                <dt className="text-ink-3">Заказ-наряд</dt>
+                <dd>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateCheck(view.checkId as string)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded font-medium text-accent-text hover:underline',
+                      focusRing,
+                    )}
+                  >
+                    <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                    {view.checkNumber ? `#${view.checkNumber}` : 'Открыть'}
+                  </button>
+                </dd>
+              </div>
+            )}
+            {view.comment && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-ink-3">Комментарий</dt>
+                <dd className="text-right text-ink-2">{view.comment}</dd>
+              </div>
+            )}
+          </dl>
 
-        {/* Actions (owner-class, open plans only) */}
-        {canManage && open && (
-          <form onSubmit={handlePay} className="space-y-3 rounded-xl border border-gray-200 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Принять оплату</p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/* Actions (owner-class, open plans only) */}
+          {canManage && open && (
+            <form onSubmit={handlePay} className="space-y-3 rounded-xl border border-line p-4">
+              {sectionTitle('Принять оплату')}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Сумма платежа" htmlFor="inst-pay-amount">
+                  <Input
+                    id="inst-pay-amount"
+                    name="amount"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="0"
+                    rightSlot={<span className="text-sm text-ink-3">₽</span>}
+                  />
+                </Field>
+                <Field label="Следующий платёж" htmlFor="inst-pay-next">
+                  <Input
+                    id="inst-pay-next"
+                    type="date"
+                    value={nextDate}
+                    onChange={(e) => setNextDate(e.target.value)}
+                  />
+                </Field>
+              </div>
+              {/* Способ оплаты (119): сегмент «Наличными / Картой», дефолт нал. */}
               <div>
-                <label className="label">Сумма платежа</label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className="input"
-                  placeholder="0"
+                <p className="label">Как приняты деньги</p>
+                <SegmentedControl
+                  aria-label="Способ оплаты"
+                  fullWidth
+                  value={method}
+                  onChange={setMethod}
+                  options={[
+                    { value: 'cash', label: 'Наличными', icon: Banknote },
+                    { value: 'card', label: 'Картой', icon: CreditCard },
+                  ]}
                 />
               </div>
-              <div>
-                <label className="label">Следующий платёж</label>
-                <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} className="input" />
-              </div>
-            </div>
-            {/* Способ оплаты (119): сегмент «Наличными / Картой», дефолт нал. */}
-            <div>
-              <label className="label">Как приняты деньги</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
+              <Field label="Комментарий" htmlFor="inst-pay-comment">
+                <Input
+                  id="inst-pay-comment"
+                  name="comment"
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  placeholder="Необязательно"
+                />
+              </Field>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Button type="submit" size="sm" icon={CheckCircle2} loading={payMutation.isPending}>
+                  Принять оплату
+                </Button>
+                <Button
                   type="button"
-                  onClick={() => setMethod('cash')}
-                  className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
-                    method === 'cash'
-                      ? 'border-primary-600 bg-primary-600 text-white'
-                      : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
-                  }`}
+                  variant="secondary"
+                  size="sm"
+                  icon={CalendarClock}
+                  onClick={handleReschedule}
+                  disabled={rescheduleMutation.isPending}
                 >
-                  <Banknote className="h-4 w-4" />
-                  Наличными
-                </button>
-                <button
+                  Перенести дату
+                </Button>
+                <Button
                   type="button"
-                  onClick={() => setMethod('card')}
-                  className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
-                    method === 'card'
-                      ? 'border-primary-600 bg-primary-600 text-white'
-                      : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
-                  }`}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPayoffOpen(true)}
+                  disabled={payoffMutation.isPending}
+                  className="ml-auto"
                 >
-                  <CreditCard className="h-4 w-4" />
-                  Картой
-                </button>
+                  Погасить полностью
+                </Button>
               </div>
-            </div>
-            <div>
-              <label className="label">Комментарий</label>
-              <input
-                type="text"
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                className="input"
-                placeholder="Необязательно"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <button type="submit" disabled={payMutation.isPending} className="btn-primary btn-sm">
-                <CheckCircle2 className="h-4 w-4" />
-                {payMutation.isPending ? 'Сохраняем…' : 'Принять оплату'}
-              </button>
-              <button
-                type="button"
-                onClick={handleReschedule}
-                disabled={rescheduleMutation.isPending}
-                className="btn-secondary btn-sm"
-              >
-                <CalendarClock className="h-4 w-4" />
-                Перенести дату
-              </button>
-              <button
-                type="button"
-                onClick={() => setPayoffOpen(true)}
-                disabled={payoffMutation.isPending}
-                className="btn-secondary btn-sm ml-auto !text-green-700"
-              >
-                Погасить полностью
-              </button>
-            </div>
-          </form>
-        )}
+            </form>
+          )}
 
-        {/* Поручители (Round 13 #6) */}
-        {(guarantors.length > 0 || canManage) && (
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Поручители</p>
-              {canManage && (
-                <button
-                  type="button"
-                  onClick={() => setGuarantorFormOpen((v) => !v)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:text-primary-700"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Добавить
-                </button>
+          {/* Поручители (Round 13 #6) */}
+          {(guarantors.length > 0 || canManage) && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                {sectionTitle('Поручители')}
+                {canManage && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={Plus}
+                    onClick={() => setGuarantorFormOpen((v) => !v)}
+                    aria-expanded={guarantorFormOpen}
+                  >
+                    Добавить
+                  </Button>
+                )}
+              </div>
+              {guarantors.length === 0 && !guarantorFormOpen && (
+                <p className="py-1 text-sm text-ink-3">
+                  Поручителей нет. Добавьте человека, который ручается за должника.
+                </p>
+              )}
+              {guarantors.length > 0 && (
+                <ul className="divide-y divide-line">
+                  {guarantors.map((g) => {
+                    const gTel = telLink(g.phone);
+                    const gWa = waLink(g.phone);
+                    return (
+                      <li key={g.id} className="flex items-center gap-3 py-2.5">
+                        <span
+                          className={cn(
+                            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+                            toneChip.neutral,
+                          )}
+                        >
+                          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-ink">{g.fullName}</p>
+                          <p className="truncate text-xs text-ink-3">
+                            {[g.relation, g.phone ? formatPhone(g.phone) : null].filter(Boolean).join(' · ') || '—'}
+                          </p>
+                        </div>
+                        {gTel && <IconLink href={gTel} label={`Позвонить: ${g.fullName}`} icon={Phone} />}
+                        {gWa && <IconLink href={gWa} label={`WhatsApp: ${g.fullName}`} icon={MessageCircle} external />}
+                        {canManage && (
+                          <IconButton
+                            label="Удалить поручителя"
+                            icon={Trash2}
+                            variant="danger"
+                            size="sm"
+                            onClick={() => setGuarantorToDelete(g)}
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {canManage && guarantorFormOpen && (
+                <form onSubmit={handleAddGuarantor} className="mt-2 space-y-3 rounded-xl border border-line p-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Field label="Имя" htmlFor="inst-g-name" required>
+                      <Input
+                        id="inst-g-name"
+                        value={gName}
+                        onChange={(e) => setGName(e.target.value)}
+                        placeholder="Иван Петров"
+                        maxLength={200}
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Field label="Кем приходится" htmlFor="inst-g-relation">
+                      <Input
+                        id="inst-g-relation"
+                        value={gRelation}
+                        onChange={(e) => setGRelation(e.target.value)}
+                        placeholder="Брат, коллега…"
+                        maxLength={200}
+                      />
+                    </Field>
+                    <Field label="Телефон" htmlFor="inst-g-phone">
+                      <Input
+                        id="inst-g-phone"
+                        type="tel"
+                        inputMode="tel"
+                        value={gPhone}
+                        onChange={(e) => setGPhone(e.target.value)}
+                        placeholder="+7…"
+                        maxLength={32}
+                      />
+                    </Field>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setGuarantorFormOpen(false)}>
+                      Отмена
+                    </Button>
+                    <Button type="submit" size="sm" disabled={!gName.trim()} loading={addGuarantorMutation.isPending}>
+                      Добавить
+                    </Button>
+                  </div>
+                </form>
               )}
             </div>
-            {guarantors.length === 0 && !guarantorFormOpen && (
-              <p className="py-1 text-sm text-gray-400">
-                Поручителей нет. Добавьте человека, который ручается за должника.
-              </p>
-            )}
-            {guarantors.length > 0 && (
-              <ul className="divide-y divide-gray-100">
-                {guarantors.map((g) => {
-                  const gTel = telLink(g.phone);
-                  const gWa = waLink(g.phone);
+          )}
+
+          {/* Фото заказ-наряда — read-only стрип (носитель — чек) */}
+          {photos.length > 0 && (
+            <div>
+              {sectionTitle('Фото заказ-наряда')}
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {photos.map((photo) => (
+                  <a
+                    key={photo.id}
+                    href={photo.photoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={cn('flex-shrink-0 rounded-lg', focusRing)}
+                  >
+                    <img
+                      src={photo.photoUrl}
+                      alt="Фото заказ-наряда"
+                      width={80}
+                      height={80}
+                      loading="lazy"
+                      className="h-20 w-20 rounded-lg border border-line object-cover"
+                    />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Единая история: первый взнос + платежи + переносы даты */}
+          <div>
+            {sectionTitle('История')}
+            {history.length === 0 ? (
+              <p className="py-2 text-sm text-ink-3">Платежей пока нет</p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {history.map((ev) => {
+                  if (ev.kind === 'reschedule') {
+                    const r = ev.reschedule;
+                    return (
+                      <HistoryRow
+                        key={`r-${r.id}`}
+                        icon={CalendarClock}
+                        tone="warn"
+                        title={`${r.oldDate ? fmtDate(r.oldDate) : 'без даты'} → ${r.newDate ? fmtDate(r.newDate) : 'без даты'}`}
+                        meta={`${formatDateTime(r.createdAt, timeZone)}${r.createdByName ? ` · ${r.createdByName}` : ''}`}
+                        note={r.reason}
+                        right={<span className="text-xs text-ink-3">перенос</span>}
+                      />
+                    );
+                  }
+                  if (ev.kind === 'down') {
+                    return (
+                      <HistoryRow
+                        key="down"
+                        icon={Banknote}
+                        tone="accent"
+                        title={<Money value={ev.amount} />}
+                        meta={`${formatDateTime(ev.date, timeZone)} · Первый взнос`}
+                      />
+                    );
+                  }
+                  const pm = ev.payment;
                   return (
-                    <li key={g.id} className="flex items-center gap-3 py-2.5">
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-50">
-                        <ShieldCheck className="h-4 w-4 text-amber-600" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-gray-900">{g.fullName}</p>
-                        <p className="truncate text-xs text-gray-500">
-                          {[g.relation, g.phone ? formatPhone(g.phone) : null].filter(Boolean).join(' · ') || '—'}
-                        </p>
-                      </div>
-                      {gTel && (
-                        <a
-                          href={gTel}
-                          className="rounded-lg p-1.5 text-green-600 hover:bg-green-50"
-                          title={`Позвонить: ${g.fullName}`}
-                        >
-                          <Phone className="h-4 w-4" />
-                        </a>
-                      )}
-                      {gWa && (
-                        <a
-                          href={gWa}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-lg p-1.5 text-green-600 hover:bg-green-50"
-                          title={`WhatsApp: ${g.fullName}`}
-                        >
-                          <MessageCircle className="h-4 w-4" />
-                        </a>
-                      )}
-                      {canManage && (
-                        <button
-                          type="button"
-                          onClick={() => setGuarantorToDelete(g)}
-                          className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                          title="Удалить поручителя"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </li>
+                    <HistoryRow
+                      key={pm.id}
+                      icon={CheckCircle2}
+                      tone="ok"
+                      title={<Money value={pm.amount} />}
+                      meta={`${formatDateTime(pm.paidAt, timeZone)}${pm.createdByName ? ` · ${pm.createdByName}` : ''}${
+                        pm.comment ? ` · ${pm.comment}` : ''
+                      }`}
+                      right={
+                        pm.paymentMethod ? (
+                          <span className="text-xs text-ink-3">
+                            {pm.paymentMethod === 'card' ? 'картой' : 'наличными'}
+                          </span>
+                        ) : undefined
+                      }
+                    />
                   );
                 })}
               </ul>
             )}
-            {canManage && guarantorFormOpen && (
-              <form onSubmit={handleAddGuarantor} className="mt-2 space-y-2 rounded-xl border border-gray-200 p-3">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <input
-                    type="text"
-                    value={gName}
-                    onChange={(e) => setGName(e.target.value)}
-                    className="input"
-                    placeholder="Имя *"
-                    maxLength={200}
-                  />
-                  <input
-                    type="text"
-                    value={gRelation}
-                    onChange={(e) => setGRelation(e.target.value)}
-                    className="input"
-                    placeholder="Кем приходится"
-                    maxLength={200}
-                  />
-                  <input
-                    type="tel"
-                    value={gPhone}
-                    onChange={(e) => setGPhone(e.target.value)}
-                    className="input"
-                    placeholder="Телефон"
-                    maxLength={32}
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => setGuarantorFormOpen(false)} className="btn-secondary btn-sm">
-                    Отмена
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!gName.trim() || addGuarantorMutation.isPending}
-                    className="btn-primary btn-sm"
-                  >
-                    {addGuarantorMutation.isPending ? 'Сохраняем…' : 'Добавить'}
-                  </button>
-                </div>
-              </form>
-            )}
           </div>
-        )}
-
-        {/* Фото заказ-наряда — read-only стрип (носитель — чек) */}
-        {photos.length > 0 && (
-          <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Фото заказ-наряда</p>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {photos.map((photo) => (
-                <a key={photo.id} href={photo.photoUrl} target="_blank" rel="noreferrer" className="flex-shrink-0">
-                  <img
-                    src={photo.photoUrl}
-                    alt="Фото заказ-наряда"
-                    loading="lazy"
-                    className="h-20 w-20 rounded-lg border border-gray-200 object-cover"
-                  />
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Единая история: первый взнос + платежи + переносы даты */}
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">История</p>
-          {history.length === 0 ? (
-            <p className="py-2 text-sm text-gray-400">Платежей пока нет</p>
-          ) : (
-            <ul className="divide-y divide-gray-100">
-              {history.map((ev) => {
-                if (ev.kind === 'reschedule') {
-                  const r = ev.reschedule;
-                  return (
-                    <li key={`r-${r.id}`} className="flex items-center gap-3 py-2.5">
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-50">
-                        <CalendarClock className="h-4 w-4 text-amber-600" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-900">
-                          {r.oldDate ? fmtDate(r.oldDate) : 'без даты'} → {r.newDate ? fmtDate(r.newDate) : 'без даты'}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {fmtDateTime(r.createdAt)}
-                          {r.createdByName ? ` · ${r.createdByName}` : ''}
-                        </p>
-                        {r.reason && <p className="text-xs italic text-gray-400">{r.reason}</p>}
-                      </div>
-                      <span className="text-xs text-gray-400">перенос</span>
-                    </li>
-                  );
-                }
-                if (ev.kind === 'down') {
-                  return (
-                    <li key="down" className="flex items-center gap-3 py-2.5">
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-blue-50">
-                        <Banknote className="h-4 w-4 text-blue-600" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(ev.amount)}</p>
-                        <p className="text-xs text-gray-500">{fmtDateTime(ev.date)} · Первый взнос</p>
-                      </div>
-                    </li>
-                  );
-                }
-                const pm = ev.payment;
-                return (
-                  <li key={pm.id} className="flex items-center gap-3 py-2.5">
-                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-green-50">
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(pm.amount)}</p>
-                      <p className="text-xs text-gray-500">
-                        {fmtDateTime(pm.paidAt)}
-                        {pm.createdByName ? ` · ${pm.createdByName}` : ''}
-                        {pm.comment ? ` · ${pm.comment}` : ''}
-                      </p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
         </div>
-      </div>
+      )}
 
       <ConfirmDialog
         isOpen={payoffOpen}
         onClose={() => setPayoffOpen(false)}
         onConfirm={() => payoffMutation.mutate()}
         title="Погасить полностью"
-        message={`Остаток ${formatMoney(view.remaining)} будет внесён (${
+        message={`Остаток ${formatMoney(view?.remaining ?? 0)} будет внесён (${
           method === 'card' ? 'картой' : 'наличными'
         }), рассрочка закроется. Продолжить?`}
         confirmText="Погасить"
+        loading={payoffMutation.isPending}
       />
 
       <ConfirmDialog
@@ -981,44 +1028,78 @@ function InstallmentDetailModal({
         title="Удалить поручителя"
         message={`Поручитель «${guarantorToDelete?.fullName ?? ''}» будет удалён из рассрочки. Продолжить?`}
         confirmText="Удалить"
+        variant="danger"
       />
 
       {/* Причина переноса (Round 13 #7) — PATCH уходит только отсюда. */}
-      <Modal isOpen={rescheduleOpen} onClose={() => setRescheduleOpen(false)} title="Перенос платежа" size="sm">
-        <div className="space-y-3">
-          <p className="text-sm text-gray-700">
-            {view.nextPaymentDate ? `${fmtDate(view.nextPaymentDate)} → ` : 'Новая дата: '}
-            <span className="font-semibold">{fmtDate(nextDate)}</span>
-          </p>
-          <div>
-            <label className="label">Причина переноса (необязательно)</label>
-            <input
-              type="text"
-              value={rescheduleReason}
-              onChange={(e) => setRescheduleReason(e.target.value)}
-              className="input"
-              placeholder="Например: клиент попросил до зарплаты"
-              maxLength={500}
-              autoFocus
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={() => setRescheduleOpen(false)} className="btn-secondary btn-sm">
+      <Modal
+        isOpen={rescheduleOpen}
+        onClose={() => setRescheduleOpen(false)}
+        title="Перенос платежа"
+        size="sm"
+        description={
+          <>
+            {view?.nextPaymentDate ? `${fmtDate(view.nextPaymentDate)} → ` : 'Новая дата: '}
+            <span className="font-semibold text-ink">{fmtDate(nextDate)}</span>
+          </>
+        }
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setRescheduleOpen(false)}>
               Отмена
-            </button>
-            <button
-              type="button"
-              onClick={submitReschedule}
-              disabled={rescheduleMutation.isPending}
-              className="btn-primary btn-sm"
-            >
-              <CalendarClock className="h-4 w-4" />
-              {rescheduleMutation.isPending ? 'Сохраняем…' : 'Перенести'}
-            </button>
-          </div>
-        </div>
+            </Button>
+            <Button size="sm" icon={CalendarClock} onClick={submitReschedule} loading={rescheduleMutation.isPending}>
+              Перенести
+            </Button>
+          </>
+        }
+      >
+        <Field
+          label="Причина переноса"
+          htmlFor="inst-reschedule-reason"
+          hint="Необязательно — попадёт в историю рассрочки"
+        >
+          <Input
+            id="inst-reschedule-reason"
+            value={rescheduleReason}
+            onChange={(e) => setRescheduleReason(e.target.value)}
+            placeholder="Например: клиент попросил до зарплаты"
+            maxLength={500}
+            autoFocus
+          />
+        </Field>
       </Modal>
-    </Modal>
+    </Drawer>
+  );
+}
+
+function HistoryRow({
+  icon: Icon,
+  tone,
+  title,
+  meta,
+  note,
+  right,
+}: {
+  icon: typeof Banknote;
+  tone: Tone;
+  title: React.ReactNode;
+  meta: string;
+  note?: string | null;
+  right?: React.ReactNode;
+}) {
+  return (
+    <li className="flex items-center gap-3 py-2.5">
+      <span className={cn('flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg', toneChip[tone])}>
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium tabular-nums text-ink">{title}</p>
+        <p className="text-xs tabular-nums text-ink-3">{meta}</p>
+        {note && <p className="text-xs italic text-ink-3">{note}</p>}
+      </div>
+      {right}
+    </li>
   );
 }
 
@@ -1026,10 +1107,10 @@ function InstallmentDetailModal({
 //  Reminder settings modal
 // ─────────────────────────────────────────────────────────────────────────
 
-const MODES: { key: InstallmentReminderSettings['mode']; label: string; hint: string }[] = [
-  { key: 'off', label: 'Выключены', hint: 'Напоминания не отправляются' },
-  { key: 'auto', label: 'Авто', hint: 'Система сама шлёт по графику' },
-  { key: 'manual', label: 'Вручную', hint: 'Отправляете кнопкой ниже' },
+const MODES: { value: InstallmentReminderSettings['mode']; label: string; description: string }[] = [
+  { value: 'off', label: 'Выключены', description: 'Напоминания не отправляются' },
+  { value: 'auto', label: 'Автоматически', description: 'Система сама шлёт по графику' },
+  { value: 'manual', label: 'Вручную', description: 'Отправляете кнопкой в этом окне' },
 ];
 
 function ReminderSettingsModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -1042,7 +1123,7 @@ function ReminderSettingsModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
   const [template, setTemplate] = useState('');
   const [hydrated, setHydrated] = useState(false);
 
-  useQuery<InstallmentReminderSettings>({
+  const { isError, refetch, isFetching } = useQuery<InstallmentReminderSettings>({
     queryKey: ['installments', 'reminder-settings'],
     queryFn: async () => {
       const res = await installmentsApi.getReminderSettings();
@@ -1067,7 +1148,7 @@ function ReminderSettingsModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
       toast.success('Настройки сохранены');
       onClose();
     },
-    onError: () => toast.error('Не удалось сохранить настройки'),
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Не удалось сохранить настройки'),
   });
 
   const sendMutation = useMutation({
@@ -1075,7 +1156,7 @@ function ReminderSettingsModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
     onSuccess: (res) => {
       toast.success(`Отправлено: ${res.data.sent} из ${res.data.total}`);
     },
-    onError: () => toast.error('Не удалось отправить напоминания'),
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Не удалось отправить напоминания'),
   });
 
   const handleSave = (e: FormEvent) => {
@@ -1085,106 +1166,96 @@ function ReminderSettingsModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Напоминания о платежах" size="lg">
-      <form onSubmit={handleSave} className="space-y-5">
-        {!hydrated ? (
-          <p className="py-4 text-sm text-gray-400">Загрузка…</p>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Напоминания о платежах"
+      description="Сообщение клиенту перед датой платежа, в день платежа и при просрочке"
+      size="lg"
+      footer={
+        hydrated ? (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={saveMutation.isPending}>
+              Отмена
+            </Button>
+            <Button type="submit" form="inst-reminders-form" loading={saveMutation.isPending}>
+              Сохранить
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      <form id="inst-reminders-form" onSubmit={handleSave} className="space-y-5">
+        {isError && !hydrated ? (
+          <ErrorRow
+            message="Не удалось загрузить настройки напоминаний"
+            onRetry={() => refetch()}
+            loading={isFetching}
+          />
+        ) : !hydrated ? (
+          <div className="space-y-3" aria-busy="true">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-10" />
+            <Skeleton className="h-24" />
+          </div>
         ) : (
           <>
-            {/* Mode */}
-            <div>
-              <label className="label">Режим</label>
-              <div className="grid grid-cols-3 gap-2">
-                {MODES.map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    onClick={() => setMode(m.key)}
-                    className={`rounded-xl border-2 px-3 py-2.5 text-center transition-colors ${
-                      mode === m.key
-                        ? 'border-primary-500 bg-primary-50 text-primary-700'
-                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                    }`}
-                  >
-                    <span className="block text-sm font-semibold">{m.label}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 text-xs text-gray-400">{MODES.find((m) => m.key === mode)?.hint}</p>
-            </div>
+            <RadioGroup label="Режим" value={mode} onChange={setMode} options={MODES} orientation="horizontal" />
 
             {mode !== 'off' && (
               <>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="label">За сколько дней напомнить</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
+                  <Field label="За сколько дней напомнить" htmlFor="inst-rem-days">
+                    <Input
+                      id="inst-rem-days"
+                      inputMode="numeric"
                       value={daysBefore}
-                      onChange={(e) => setDaysBefore(e.target.value)}
-                      className="input"
+                      onChange={(e) => setDaysBefore(e.target.value.replace(/\D/g, ''))}
+                      rightSlot={<span className="text-sm text-ink-3">дн.</span>}
                     />
-                  </div>
-                  <div className="flex flex-col justify-center gap-2 pt-1">
-                    <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-                      <input
-                        type="checkbox"
-                        checked={onDue}
-                        onChange={(e) => setOnDue(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                      />
-                      Напоминать в день платежа
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
-                      <input
-                        type="checkbox"
-                        checked={onOverdue}
-                        onChange={(e) => setOnOverdue(e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                      />
-                      Напоминать при просрочке
-                    </label>
+                  </Field>
+                  <div className="flex flex-col justify-center gap-2 pt-1 sm:pt-7">
+                    <Checkbox
+                      checked={onDue}
+                      onChange={(e) => setOnDue(e.target.checked)}
+                      label="Напоминать в день платежа"
+                    />
+                    <Checkbox
+                      checked={onOverdue}
+                      onChange={(e) => setOnOverdue(e.target.checked)}
+                      label="Напоминать при просрочке"
+                    />
                   </div>
                 </div>
 
-                <div>
-                  <label className="label">Текст сообщения</label>
-                  <textarea
+                <Field
+                  label="Текст сообщения"
+                  htmlFor="inst-rem-template"
+                  hint={`Подстановки: {clientName}, {amount}, {date}`}
+                >
+                  <Textarea
+                    id="inst-rem-template"
                     value={template}
                     onChange={(e) => setTemplate(e.target.value)}
                     rows={3}
-                    className="input"
                     placeholder="Напоминаем, у вас оплата {date} на сумму {amount}"
                   />
-                  <p className="mt-1 text-xs text-gray-400">
-                    Доступные подстановки: {'{clientName}'}, {'{amount}'}, {'{date}'}
-                  </p>
-                </div>
+                </Field>
 
                 {mode === 'manual' && (
-                  <button
+                  <Button
                     type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Send}
                     onClick={() => sendMutation.mutate()}
-                    disabled={sendMutation.isPending}
-                    className="btn-secondary btn-sm"
+                    loading={sendMutation.isPending}
                   >
-                    <Send className="h-4 w-4" />
-                    {sendMutation.isPending ? 'Отправляем…' : 'Отправить напоминания сейчас'}
-                  </button>
+                    Отправить напоминания сейчас
+                  </Button>
                 )}
               </>
             )}
-
-            <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
-              <button type="button" onClick={onClose} className="btn-secondary">
-                Отмена
-              </button>
-              <button type="submit" disabled={saveMutation.isPending} className="btn-primary">
-                {saveMutation.isPending ? 'Сохраняем…' : 'Сохранить'}
-              </button>
-            </div>
           </>
         )}
       </form>
