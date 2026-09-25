@@ -1072,16 +1072,26 @@ function VinSettingsSection({ index }: { index: number }) {
     mutationFn: (data: UpdateVinSettingsRequest) => vinApi.updateSettings(data),
     // Optimistic только для тумблера: он должен щёлкать мгновенно.
     onMutate: async (next) => {
-      if (typeof next.enabled !== 'boolean') return { prev: undefined as VinSettings | undefined };
+      const empty = { prev: undefined as VinSettings | undefined, prevCompany: undefined as Tenant | undefined };
+      if (typeof next.enabled !== 'boolean') return empty;
       await queryClient.cancelQueries({ queryKey: VIN_SETTINGS_KEY });
+      await queryClient.cancelQueries({ queryKey: ['my-company'] });
       const prev = queryClient.getQueryData<VinSettings>(VIN_SETTINGS_KEY);
       if (prev) queryClient.setQueryData<VinSettings>(VIN_SETTINGS_KEY, { ...prev, enabled: next.enabled });
-      return { prev };
+      // useVinEnabled читает ['my-company'] → профиль (снимок этого экрана он
+      // не смотрит): пишем флаг туда же, чтобы поле VIN в формах и сегмент
+      // «VIN» в Кассе переключились сразу, а не после ответа сервера.
+      const prevCompany = queryClient.getQueryData<Tenant>(['my-company']);
+      if (prevCompany) queryClient.setQueryData<Tenant>(['my-company'], { ...prevCompany, vinEnabled: next.enabled });
+      return { prev, prevCompany };
     },
     onSuccess: (res) => {
-      // Свежие настройки — в общий кэш (его читает useVinEnabled на всех
-      // экранах); профиль и /my-company подтягиваем следом: там тот же флаг.
+      // Свежие настройки — в кэш экрана; флаг — в ['my-company'] (его читает
+      // useVinEnabled на всех экранах) и в профиль через refreshUser().
       queryClient.setQueryData(VIN_SETTINGS_KEY, res.data);
+      queryClient.setQueryData<Tenant>(['my-company'], (company) =>
+        company ? { ...company, vinEnabled: res.data.enabled } : company,
+      );
       queryClient.invalidateQueries({ queryKey: ['my-company'] });
       void refreshUser();
       setReplacing(false);
@@ -1090,6 +1100,7 @@ function VinSettingsSection({ index }: { index: number }) {
     },
     onError: (err: unknown, _next, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(VIN_SETTINGS_KEY, ctx.prev);
+      if (ctx?.prevCompany) queryClient.setQueryData(['my-company'], ctx.prevCompany);
       haptic('error');
       Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Не удалось сохранить настройки VIN');
     },

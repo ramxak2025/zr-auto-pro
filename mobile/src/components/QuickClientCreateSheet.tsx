@@ -23,7 +23,7 @@
  * «Всё равно создать» для телефона нет — бэкенд дубликат по номеру не создаёт.
  * Пустое имя → дружелюбный 400.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -32,9 +32,9 @@ import { BottomSheet } from './BottomSheet';
 import RussianPlateInput from './RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from './PlateModeSwitcher';
 import DuplicateWarningDialog from './DuplicateWarningDialog';
-import VinInput from './VinInput';
+import VinInput, { type VinInputHandle } from './VinInput';
 import { useVinEnabled } from '../hooks/useVinEnabled';
-import { vinDuplicateError } from '../utils/vinUi';
+import { vinDuplicateError, vinLengthError } from '../utils/vinUi';
 import { formatVin, isValidVin } from '../../../shared/utils/vin';
 import { formatPhone } from '../../../shared/validation/phone';
 import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
@@ -93,6 +93,7 @@ export default function QuickClientCreateSheet({
   const vinEnabled = useVinEnabled();
   const [vin, setVin] = useState('');
   const [vinError, setVinError] = useState<string | null>(null);
+  const vinRef = useRef<VinInputHandle>(null);
 
   const [duplicateCar, setDuplicateCar] = useState<DuplicateCar | null>(null);
   // По чему нашли дубликат: по номеру (как раньше) или по VIN (171).
@@ -118,12 +119,15 @@ export default function QuickClientCreateSheet({
     setMakeModel('');
     setPlate(initialPlate);
     setPlateMode(initialPlateMode);
-    setVin(vinEnabled && initialVin ? initialVin : '');
+    // `vinEnabled` намеренно НЕ в зависимостях: переключение опции при
+    // открытой шторке не должно стирать уже набранную форму. Гейт по опции
+    // стоит на выходе (carVinPayload) — при выключенной VIN в запрос не попадёт.
+    setVin(initialVin ?? '');
     setVinError(null);
     setDuplicateCar(null);
     setDuplicateBy('plate');
     setSubmitting(false);
-  }, [visible, initialPlate, initialPlateMode, initialPhone, initialVin, vinEnabled]);
+  }, [visible, initialPlate, initialPlateMode, initialPhone, initialVin]);
 
   // 171 — VIN в payload машины ТОЛЬКО при включённой опции и непустом поле:
   // иначе запросы байт-в-байт прежние.
@@ -177,6 +181,9 @@ export default function QuickClientCreateSheet({
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
+      // 171 — поиск Кассы по VIN кэширует «не найдено» на 30 с: новая машина
+      // должна находиться сразу.
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       haptic('success');
       onSelectExisting(existingClientId, carRes.data.id);
     } catch (e: any) {
@@ -214,8 +221,9 @@ export default function QuickClientCreateSheet({
       }
       // 171 — VIN уникален внутри тенанта (сервер ответит 409): проверяем ДО
       // создания клиента, иначе клиент уже создан, а машина — нет. «Всё равно
-      // создать» для VIN не предлагаем — сервер дубликат не примет.
-      if (hasVin && isValidVin(vin) && !opts?.forceCar) {
+      // создать» для VIN не предлагаем — сервер дубликат не примет, поэтому
+      // forceCar (обход дубликата по ГОСНОМЕРУ) эту проверку не пропускает.
+      if (hasVin && isValidVin(vin)) {
         try {
           const res = await carsApi.lookupByVin(vin);
           if (res.data) {
@@ -244,6 +252,9 @@ export default function QuickClientCreateSheet({
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      // 171 — иначе поиск Кассы по этому VIN ещё 30 с отдаёт кэшированное
+      // «не найдено» (staleTime у ['car-vin-lookup', vin]).
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       haptic('success');
       onCreated(clientRes.data, car);
     } catch (err: any) {
@@ -314,6 +325,15 @@ export default function QuickClientCreateSheet({
   const handleSubmit = () => {
     if (!fullName.trim()) {
       Alert.alert('Ошибка', 'Укажите имя клиента');
+      return;
+    }
+    // 171 — неполный VIN сервер отклонит 400 уже ПОСЛЕ создания клиента
+    // (двухшаговый поток): клиент остался бы без машины. Блокируем здесь.
+    const vinLen = vinEnabled ? vinLengthError(vin) : null;
+    if (vinLen) {
+      haptic('warning');
+      setVinError(vinLen);
+      vinRef.current?.focus();
       return;
     }
     if (!phone.trim()) {
@@ -412,6 +432,7 @@ export default function QuickClientCreateSheet({
           <View style={styles.formField}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
             <VinInput
+              ref={vinRef}
               value={vin}
               onChangeText={(v) => {
                 setVin(v);

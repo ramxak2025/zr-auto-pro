@@ -12,7 +12,7 @@
  * на Android.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet } from '../../components/BottomSheet';
 import { Button } from '../../components/Button';
@@ -81,7 +81,9 @@ export default function ReportFilterSheet({
 
   const apply = () => {
     // Порядок — как в списке сервера, чтобы чипы и подпись PDF были стабильны.
-    const ordered = (options ?? []).map((o) => o.id).filter((id) => draft.has(id));
+    // Без справочника (ошибка загрузки) черновик уходит как есть — иначе
+    // «Показать» молча сбрасывал бы уже выбранный фильтр пустым списком.
+    const ordered = options ? options.map((o) => o.id).filter((id) => draft.has(id)) : Array.from(draft);
     onApply(ordered);
   };
 
@@ -101,6 +103,17 @@ export default function ReportFilterSheet({
           clearButtonMode="while-editing"
           accessibilityLabel={`Поиск: ${label}`}
         />
+        {/* `clearButtonMode` — только iOS; на Android свой крестик, как в SearchInput. */}
+        {Platform.OS === 'android' && search.length > 0 ? (
+          <TouchableOpacity
+            onPress={() => setSearch('')}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Очистить поиск"
+          >
+            <Ionicons name="close-circle" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {loading && !options ? (
@@ -182,11 +195,9 @@ export default function ReportFilterSheet({
       )}
 
       <View style={styles.footer}>
-        <Button
-          title={allSelected ? 'Показать все' : `Показать: ${draft.size}`}
-          onPress={apply}
-          disabled={!options && !error}
-        />
+        {/* Пока справочника нет (грузится / не загрузился) — применять нечего:
+            выбирать не из чего, а «Показать все» сбросил бы текущий фильтр. */}
+        <Button title={allSelected ? 'Показать все' : `Показать: ${draft.size}`} onPress={apply} disabled={!options} />
         {!allSelected && (
           <TouchableOpacity
             onPress={() => {

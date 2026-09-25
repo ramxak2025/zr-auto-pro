@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -35,9 +35,9 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import SourcePickerInline from '../components/SourcePickerInline';
 import ClientListRow, { CLIENT_ROW_HEIGHT } from '../components/ClientListRow';
 import CarPlateField from '../components/CarPlateField';
-import VinInput from '../components/VinInput';
+import VinInput, { type VinInputHandle } from '../components/VinInput';
 import { useVinEnabled } from '../hooks/useVinEnabled';
-import { vinDuplicateMessage } from '../utils/vinUi';
+import { vinDuplicateMessage, vinLengthError } from '../utils/vinUi';
 import { formatVin, isValidVin } from '../../../shared/utils/vin';
 import PlateResultCard, { PLATE_ROW_HEIGHT } from '../components/PlateResultCard';
 import RussianPlateInput, { type PlateMode } from '../components/RussianPlateInput';
@@ -52,6 +52,22 @@ import type { Client, Car, Check, PaginatedResponse } from '../../../shared/type
 // React.memo so FlashList recycling stays a cheap prop update.
 
 type ClientFilter = 'all' | 'regular' | 'new' | 'source' | 'noplate';
+
+/**
+ * Второй шаг двухшагового создания «клиент → авто» упал: клиент УЖЕ в базе,
+ * машина — нет. Отдельный класс, чтобы onError отличил это от отказа по
+ * самому клиенту: список надо обновить (клиент есть), а текст — объяснить,
+ * что именно не добавилось и где это исправить.
+ */
+class CarAfterClientError extends Error {
+  constructor(
+    readonly client: Client,
+    readonly cause: unknown,
+  ) {
+    super('car-after-client');
+    this.name = 'CarAfterClientError';
+  }
+}
 
 // Top-level mode of the Clients screen (queue #19.3). DEFAULT is the
 // госномер (plate) search — the owner's primary entry point is "у меня
@@ -153,6 +169,9 @@ export default function ClientsScreen() {
   // при выключенной ни поле, ни payload не меняются.
   const [carVinInput, setCarVinInput] = useState('');
   const vinEnabled = useVinEnabled();
+  // Ошибка под полем VIN (неполный номер до отправки) + фокус на поле.
+  const [carVinError, setCarVinError] = useState<string | null>(null);
+  const carVinRef = useRef<VinInputHandle>(null);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -271,15 +290,21 @@ export default function ClientsScreen() {
       // «без номеров» (a plateless car is still a real car worth tracking).
       // 171 — машина с одним VIN (без номера) — тоже настоящая машина.
       if (d.car && (d.car.plateNumber || d.car.noPlate || d.car.vin)) {
-        await carsApi.create({
-          plateNumber: d.car.noPlate ? '' : d.car.plateNumber,
-          makeModel: d.car.makeModel || '',
-          clientId: clientRes.data.id,
-          noPlate: d.car.noPlate,
-          // VIN попадает в payload только при включённой опции (submitFlow
-          // кладёт его лишь тогда) — иначе запрос байт-в-байт прежний.
-          ...(d.car.vin ? { vin: d.car.vin } : null),
-        });
+        try {
+          await carsApi.create({
+            plateNumber: d.car.noPlate ? '' : d.car.plateNumber,
+            makeModel: d.car.makeModel || '',
+            clientId: clientRes.data.id,
+            noPlate: d.car.noPlate,
+            // VIN попадает в payload только при включённой опции (submitFlow
+            // кладёт его лишь тогда) — иначе запрос байт-в-байт прежний.
+            ...(d.car.vin ? { vin: d.car.vin } : null),
+          });
+        } catch (e) {
+          // Клиент уже создан — наверх уходит ошибка с его карточкой, чтобы
+          // onError обновил список и объяснил, что машина не добавилась.
+          throw new CarAfterClientError(clientRes.data, e);
+        }
       }
       return clientRes.data;
     },
@@ -294,6 +319,9 @@ export default function ClientsScreen() {
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      // 171 — поиск Кассы по VIN держит «не найдено» 30 с: новая машина с
+      // VIN должна находиться сразу.
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       haptic('success');
       closeModal();
     },
@@ -302,7 +330,27 @@ export default function ClientsScreen() {
     // сервера; отдельная ветка — номер, занятый карточкой другого филиала
     // (161): туда навигировать некуда, карточка невидима, поэтому просто
     // объясняем, что делать.
-    onError: (err) => clientWriteError(err, 'Ошибка при создании клиента'),
+    onError: (err) => {
+      if (err instanceof CarAfterClientError) {
+        // Клиент в базе, машины нет. Список обновляем (иначе клиент «пропал»
+        // до pull-to-refresh), модалку закрываем — повторный «Создать» дал бы
+        // дубль клиента, а не машину. Добавить авто можно из карточки.
+        queryClient.invalidateQueries({ queryKey: ['clients'] });
+        queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+        queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+        closeModal();
+        haptic('warning');
+        const createdId = err.client.id;
+        const reason =
+          vinDuplicateMessage(err.cause) ?? apiErrorMessage(err.cause) ?? 'сервер отклонил данные автомобиля';
+        Alert.alert('Клиент создан, но автомобиль не добавлен', `${reason}. Добавьте авто в карточке клиента.`, [
+          { text: 'Понятно', style: 'cancel' },
+          { text: 'Открыть карточку', onPress: () => (navigation as any).navigate('ClientDetail', { id: createdId }) },
+        ]);
+        return;
+      }
+      clientWriteError(err, 'Ошибка при создании клиента');
+    },
   });
 
   const updateMutation = useMutation({
@@ -343,6 +391,7 @@ export default function ClientsScreen() {
     setCarPlate('');
     setCarMakeModel('');
     setCarVinInput('');
+    setCarVinError(null);
     setCarMode('ru');
     setCarNoPlate(false);
     setModalOpen(true);
@@ -362,6 +411,7 @@ export default function ClientsScreen() {
     setCarPlate('');
     setCarMakeModel('');
     setCarVinInput('');
+    setCarVinError(null);
     setCarMode('ru');
     setCarNoPlate(false);
     setModalOpen(true);
@@ -421,8 +471,10 @@ export default function ClientsScreen() {
       }
     }
     // 171 — VIN уникален внутри тенанта (сервер ответит 409), поэтому проверяем
-    // ДО создания клиента: иначе клиент уже создан, а машина — нет.
-    if (hasInlineCar && isValidVin(inlineVin) && !opts?.forceCar) {
+    // ДО создания клиента: иначе клиент уже создан, а машина — нет. forceCar
+    // обходит только дубликат по ГОСНОМЕРУ («Всё равно создать») — VIN-дубль
+    // сервер не примет, значит, и проверку пропускать нельзя.
+    if (hasInlineCar && isValidVin(inlineVin)) {
       try {
         const res = await carsApi.lookupByVin(inlineVin);
         const found = res.data;
@@ -491,6 +543,16 @@ export default function ClientsScreen() {
         return;
       }
       saveUpdate();
+      return;
+    }
+    // 171 — неполный VIN сервер отклонит 400 уже ПОСЛЕ создания клиента
+    // (двухшаговый поток «клиент → авто»): клиент остался бы без машины.
+    // Блокируем до любых запросов, с ошибкой под полем и фокусом на нём.
+    const vinLen = vinEnabled ? vinLengthError(carVinInput) : null;
+    if (vinLen) {
+      haptic('warning');
+      setCarVinError(vinLen);
+      carVinRef.current?.focus();
       return;
     }
     if (phoneDigits.length === 0) {
@@ -1229,10 +1291,15 @@ export default function ClientsScreen() {
               <View style={styles.formField}>
                 <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
                 <VinInput
+                  ref={carVinRef}
                   value={carVinInput}
-                  onChangeText={setCarVinInput}
+                  onChangeText={(v) => {
+                    setCarVinInput(v);
+                    setCarVinError(null);
+                  }}
                   makeModel={carMakeModel}
                   onMakeModel={setCarMakeModel}
+                  error={carVinError}
                 />
               </View>
             )}

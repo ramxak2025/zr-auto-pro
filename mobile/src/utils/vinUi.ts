@@ -36,6 +36,20 @@ export function vinCounter(vin: string): string {
   return `${vin.length}/${VIN_LENGTH}`;
 }
 
+/** Ошибка под полем VIN, когда номер начат, но не набран до конца. */
+export const VIN_INCOMPLETE_MESSAGE = 'Введите 17 символов VIN';
+
+/**
+ * Проверка ПЕРЕД отправкой формы: непустой, но неполный VIN сервер отклонит
+ * 400 — а в двухшаговых формах «клиент → авто» к этому моменту клиент уже
+ * создан и остаётся без машины. Пустое поле — легально (VIN необязателен),
+ * полные 17 символов алфавита — тоже; всё остальное — текст ошибки для поля.
+ */
+export function vinLengthError(vin: string | null | undefined): string | null {
+  if (!vin) return null;
+  return isValidVin(vin) ? null : VIN_INCOMPLETE_MESSAGE;
+}
+
 /** Подписи источников расшифровки — для настроек («Проверить») и подсказок. */
 export const VIN_SOURCE_LABELS: Record<VinDecodeSource, string> = {
   paid: 'Платный сервис',

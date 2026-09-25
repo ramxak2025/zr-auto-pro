@@ -31,7 +31,7 @@
  * Android-совместимо: моноширинный шрифт через Platform.select, клавиатура
  * `ascii-capable` (латиница без переключения раскладки) — только на iOS.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -92,25 +92,34 @@ export interface VinInputProps {
   style?: StyleProp<ViewStyle>;
 }
 
-export default function VinInput({
-  value,
-  onChangeText,
-  variant = 'form',
-  decode = true,
-  makeModel,
-  onMakeModel,
-  onDecoded,
-  error,
-  autoFocus = false,
-  placeholder,
-  editable = true,
-  returnKeyType,
-  onSubmitEditing,
-  style,
-}: VinInputProps) {
+/** Императивный доступ формы к полю: перевести фокус на VIN при ошибке валидации перед отправкой. */
+export interface VinInputHandle {
+  focus: () => void;
+}
+
+const VinInput = forwardRef<VinInputHandle, VinInputProps>(function VinInput(
+  {
+    value,
+    onChangeText,
+    variant = 'form',
+    decode = true,
+    makeModel,
+    onMakeModel,
+    onDecoded,
+    error,
+    autoFocus = false,
+    placeholder,
+    editable = true,
+    returnKeyType,
+    onSubmitEditing,
+    style,
+  },
+  ref,
+) {
   const palette = useColors();
   const isSearch = variant === 'search';
   const inputRef = useRef<TextInput>(null);
+  useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }), []);
 
   // ── Локальный буфер + кольцо своих эмитов (см. шапку файла) ────────────
   const [text, setText] = useState<string>(() => formatVin(value));
@@ -182,6 +191,11 @@ export default function VinInput({
       decodedVinRef.current = null;
       setDecoded(null);
     }
+    // Флаги загрузки/сбоя тоже относились к прежнему номеру: сбрасываем ДО
+    // ветки кэша, иначе после «сеть упала → исправил → взял из кэша» под
+    // полем висело бы предупреждение о неудачной расшифровке.
+    setDecodeFailed(false);
+    setDecoding(false);
 
     let cancelled = false;
     const apply = (res: VinDecodeResult) => {
@@ -285,9 +299,13 @@ export default function VinInput({
           importantForAutofill="no"
           textContentType="none"
           // iOS: латинская клавиатура без переключения раскладки — VIN всегда
-          // латиница. Android: обычная (кириллические двойники всё равно
-          // конвертируются в normalizeVin).
-          keyboardType={Platform.OS === 'ios' ? 'ascii-capable' : 'default'}
+          // латиница. Android: 'visible-password' — стандартный способ получить
+          // латинскую QWERTY с рядом цифр и без подсказок/автозамены (для
+          // 'default' Gboard открывает последнюю раскладку, обычно русскую, и
+          // букв D F G J L N R S U V W Z в ней просто нет). Текст при этом
+          // остаётся открытым (secureTextEntry не задан), регистр и группировку
+          // держит normalizeVin/formatVin, а автозаполнение выключено ниже.
+          keyboardType={Platform.OS === 'ios' ? 'ascii-capable' : 'visible-password'}
           autoFocus={autoFocus}
           editable={editable}
           returnKeyType={returnKeyType ?? (isSearch ? 'search' : 'done')}
@@ -333,7 +351,9 @@ export default function VinInput({
       )}
     </View>
   );
-}
+});
+
+export default VinInput;
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing[1.5] },

@@ -29,10 +29,11 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
-import VinInput from '../components/VinInput';
+import VinInput, { type VinInputHandle } from '../components/VinInput';
 import VinText from '../components/VinText';
 import { useVinEnabled } from '../hooks/useVinEnabled';
-import { carVin, vinDuplicateMessage } from '../utils/vinUi';
+import { carVin, vinDuplicateMessage, vinLengthError } from '../utils/vinUi';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import ClientCallsSection from '../components/ClientCallsSection';
 import ClientInstallmentSection from '../components/installments/ClientInstallmentSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
@@ -488,6 +489,8 @@ export default function ClientDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
       // A new car shows up in the garage list (CarsScreen) — bust it too.
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      // 171 — поиск Кассы по VIN кэширует «не найдено» на 30 с.
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       closeCarModal();
     },
     onError: (err: unknown) => {
@@ -499,7 +502,8 @@ export default function ClientDetailScreen() {
         setCarVinError(dupVin);
         return;
       }
-      Alert.alert('Ошибка', 'Ошибка при создании авто');
+      // Причина сервера (400 по VIN/номеру и т.п.), а не глухой текст.
+      Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Ошибка при создании авто');
     },
   });
 
@@ -514,6 +518,8 @@ export default function ClientDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['car-checks'] });
       queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
       queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
+      // 171 — VIN мог смениться: слот поиска Кассы по старому/новому VIN устарел.
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       closeCarModal();
     },
     onError: (err: unknown) => {
@@ -523,7 +529,7 @@ export default function ClientDetailScreen() {
         setCarVinError(dupVin);
         return;
       }
-      Alert.alert('Ошибка', 'Ошибка при обновлении авто');
+      Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Ошибка при обновлении авто');
     },
   });
 
@@ -537,6 +543,7 @@ export default function ClientDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['car-checks'] });
       queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
       queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении авто'),
   });
@@ -753,6 +760,7 @@ export default function ClientDetailScreen() {
         queryClient.invalidateQueries({ queryKey: ['client', otherOwnerId] });
       }
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       closeCarModal();
     } catch {
       // Partial failure: the DB may be in either intermediate state (only
@@ -767,6 +775,7 @@ export default function ClientDetailScreen() {
         queryClient.invalidateQueries({ queryKey: ['client', otherOwnerId] });
       }
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-vin-lookup'] });
       Alert.alert('Ошибка', 'Не удалось завершить переназначение — попробуйте снова');
     } finally {
       setCarSubmitting(false);
@@ -2059,6 +2068,7 @@ function CarFormModal({ visible, editingCar, palette, submitting, vinError, onCl
   const [vin, setVin] = useState('');
   const [localVinError, setLocalVinError] = useState<string | null>(null);
   useEffect(() => setLocalVinError(vinError ?? null), [vinError]);
+  const vinRef = useRef<VinInputHandle>(null);
 
   // Re-seed the form each time the modal opens. Prefill the mode from the
   // stored plate so a foreign plate opens in INT mode (and stays editable
@@ -2116,6 +2126,7 @@ function CarFormModal({ visible, editingCar, palette, submitting, vinError, onCl
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
           <VinInput
+            ref={vinRef}
             value={vin}
             onChangeText={(v) => {
               setVin(v);
@@ -2153,7 +2164,18 @@ function CarFormModal({ visible, editingCar, palette, submitting, vinError, onCl
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
-          onPress={() => onSubmit({ plateNumber, noPlate, makeModel, carComment, vin: vinEnabled ? vin : '' })}
+          onPress={() => {
+            // 171 — неполный VIN сервер отклонит 400: не отправляем, ошибка
+            // под полем и фокус на нём.
+            const vinLen = vinEnabled ? vinLengthError(vin) : null;
+            if (vinLen) {
+              haptic('warning');
+              setLocalVinError(vinLen);
+              vinRef.current?.focus();
+              return;
+            }
+            onSubmit({ plateNumber, noPlate, makeModel, carComment, vin: vinEnabled ? vin : '' });
+          }}
           disabled={submitting}
         >
           {submitting ? (

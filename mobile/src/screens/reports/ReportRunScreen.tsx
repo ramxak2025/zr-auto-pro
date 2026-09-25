@@ -159,6 +159,9 @@ export default function ReportRunScreen() {
   const [groupBy, setGroupBy] = useState<string | null>(def?.groupByOptions?.[0]?.value ?? null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sort, setSort] = useState<SortState | null>(null);
+  // Сортировка доп. секций — своя на каждую, по ключу секции: тап по
+  // заголовку секции не должен пересортировывать основную таблицу.
+  const [sectionSort, setSectionSort] = useState<Record<string, SortState | null>>({});
   const [exporting, setExporting] = useState(false);
   const [pinnedTotals, setPinnedTotals] = useState(false);
   const listRef = useRef<FlashListRef<RunItem>>(null);
@@ -230,6 +233,12 @@ export default function ReportRunScreen() {
 
   const sortedRows = useMemo(() => (result ? sortRows(result.rows, result.columns, sort) : []), [result, sort]);
 
+  const sortedSections = useMemo(() => {
+    const out: Record<string, ReportRow[]> = {};
+    for (const s of result?.sections ?? []) out[s.key] = sortRows(s.rows, s.columns, sectionSort[s.key] ?? null);
+    return out;
+  }, [result, sectionSort]);
+
   const items = useMemo<RunItem[]>(() => {
     if (!result) return [];
     const out: RunItem[] = [];
@@ -256,13 +265,14 @@ export default function ReportRunScreen() {
         continue;
       }
       out.push({ key: `sh-${section.key}`, type: 'section-header', section });
-      section.rows.forEach((row, i) => {
+      const sectionRows = sortedSections[section.key] ?? section.rows;
+      sectionRows.forEach((row, i) => {
         out.push({
           key: `sr-${section.key}-${String(row._id ?? i)}-${i}`,
           type: 'section-row',
           section,
           row,
-          last: i === section.rows.length - 1 && !section.totals,
+          last: i === sectionRows.length - 1 && !section.totals,
         });
       });
       if (section.totals) out.push({ key: `stl-${section.key}`, type: 'section-totals', section });
@@ -270,7 +280,7 @@ export default function ReportRunScreen() {
     if (def?.method || (result.notes?.length ?? 0) > 0) out.push({ key: 'method', type: 'method' });
     out.push({ key: 'footer', type: 'footer' });
     return out;
-  }, [result, sortedRows, def]);
+  }, [result, sortedRows, sortedSections, def]);
 
   const stickyIndex = useMemo(() => items.findIndex((i) => i.type === 'table-header'), [items]);
   const stickyHeaderIndices = useMemo(() => (stickyIndex >= 0 ? [stickyIndex] : undefined), [stickyIndex]);
@@ -317,6 +327,19 @@ export default function ReportRunScreen() {
     haptic('select');
     setSort((prev) => nextSortState(prev, key, type));
   }, []);
+
+  const handleSectionSort = useCallback((sectionKey: string, key: string, type: ReportColumnType) => {
+    haptic('select');
+    setSectionSort((prev) => ({ ...prev, [sectionKey]: nextSortState(prev[sectionKey] ?? null, key, type) }));
+  }, []);
+
+  // Колбэк на секцию — стабильный на время жизни результата: ReportHeaderRow
+  // под memo, инлайн-стрелка в renderItem ломала бы мемоизацию заголовков.
+  const sectionSortHandlers = useMemo(() => {
+    const out: Record<string, (key: string, type: ReportColumnType) => void> = {};
+    for (const s of result?.sections ?? []) out[s.key] = (key, type) => handleSectionSort(s.key, key, type);
+    return out;
+  }, [result, handleSectionSort]);
 
   const handleRowPress = useCallback(
     (row: ReportRow) => {
@@ -433,8 +456,8 @@ export default function ReportRunScreen() {
               <ReportHeaderRow
                 model={models.sections[item.section.key]}
                 palette={palette}
-                sort={null}
-                onSort={handleSort}
+                sort={sectionSort[item.section.key] ?? null}
+                onSort={sectionSortHandlers[item.section.key]}
               />
             </View>
           );
@@ -522,13 +545,39 @@ export default function ReportRunScreen() {
           return null;
       }
     },
-    [result, models, palette, sort, handleSort, handleRowPress, timeZone, surface, def, sortedRows.length],
+    [
+      result,
+      models,
+      palette,
+      sort,
+      sectionSort,
+      sectionSortHandlers,
+      handleSort,
+      handleRowPress,
+      timeZone,
+      surface,
+      def,
+      sortedRows.length,
+    ],
   );
 
-  const extraData = useMemo(() => ({ sort, mode: palette.mode, models }), [sort, palette.mode, models]);
+  const extraData = useMemo(
+    () => ({ sort, sectionSort, mode: palette.mode, models }),
+    [sort, sectionSort, palette.mode, models],
+  );
 
   // ── Управление (ListHeader) ─────────────────────────────────────────────
   const filterLabel = def?.entityFilter?.label ?? '';
+  // Сущностный фильтр есть смысл показывать, только когда есть из чего
+  // выбирать: own-scope пользователю сервер отдаёт одного его самого
+  // (options.length === 1), с одним филиалом — один филиал. Пока справочник
+  // не загружен — не рисуем (иначе кнопка мигнёт и исчезнет); не загрузился —
+  // показываем, чтобы из шторки можно было «Повторить»; выбранные чипы видны
+  // всегда, чтобы фильтр можно было снять.
+  const filterOptionsCount = filterQuery.data?.options.length;
+  const showEntityFilter =
+    !!def?.entityFilter &&
+    (selectedIds.length > 0 || (filterOptionsCount !== undefined ? filterOptionsCount > 1 : filterQuery.isError));
   const filterSummary =
     selectedIds.length === 0
       ? 'Все'
@@ -656,7 +705,7 @@ export default function ReportRunScreen() {
         </View>
       )}
 
-      {def.entityFilter && (
+      {showEntityFilter && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -856,7 +905,15 @@ export default function ReportRunScreen() {
           entering={FadeInDown.duration(160)}
           exiting={FadeOutDown.duration(120)}
           pointerEvents="box-none"
-          style={[styles.pinnedTotals, { bottom: tabBarHeight + spacing[2] }, surface.shadowElevated]}
+          style={[
+            styles.pinnedTotals,
+            { bottom: tabBarHeight + spacing[2] },
+            // Android рисует тень из `elevation` только у view с фоном: без него
+            // оверлей «Итого» висел бы без тени. Фон тот же, что у строки итога,
+            // и целиком под ней — на iOS ветка не активна.
+            Platform.OS === 'android' ? { backgroundColor: palette.bg.muted } : null,
+            surface.shadowElevated,
+          ]}
         >
           <ReportTotalsRow
             model={models.main}

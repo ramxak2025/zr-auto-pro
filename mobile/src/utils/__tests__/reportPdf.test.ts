@@ -8,7 +8,14 @@
  * критично — экранирование текста из данных (имена мастеров, комментарии).
  */
 import type { ReportResult } from '../../../../shared/types';
-import { A4_LANDSCAPE, A4_PORTRAIT, buildReportPdfHtml, isWideReport, reportPdfFileName } from '../reportPdf';
+import {
+  A4_LANDSCAPE,
+  A4_PORTRAIT,
+  buildReportPdfHtml,
+  isWideReport,
+  reportPdfFileName,
+  reportPdfFileUri,
+} from '../reportPdf';
 
 function makeResult(overrides: Partial<ReportResult> = {}): ReportResult {
   return {
@@ -227,5 +234,13 @@ describe('reportPdfFileName', () => {
   test('название + период, без символов, ломающих файловую систему', () => {
     const name = reportPdfFileName(makeResult({ title: 'По способам оплаты: нал/карта' }));
     expect(name).toBe('По способам оплаты нал карта 2026-09-01 — 2026-09-25.pdf');
+  });
+
+  test('URI в кэш-папке: имя percent-encoded, на диске декодируется в человеческое', () => {
+    const uri = reportPdfFileUri('file:///data/Caches/', makeResult());
+    expect(uri.startsWith('file:///data/Caches/')).toBe(true);
+    // Сырой кириллицы/пробелов в URI нет — иначе нативный модуль не соберёт URL.
+    expect(uri.slice('file:///data/Caches/'.length)).toMatch(/^[A-Za-z0-9%._-]+$/);
+    expect(decodeURIComponent(uri)).toBe('file:///data/Caches/Отчёт по мастерам 2026-09-01 — 2026-09-25.pdf');
   });
 });

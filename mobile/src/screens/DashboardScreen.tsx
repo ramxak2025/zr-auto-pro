@@ -458,7 +458,8 @@ function KpiStrip() {
         format: 'money',
         pickValue: (pt) => pt.revenue || 0,
         total: (d) => d.totalRevenue,
-        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+        // «Отчёты» теперь хаб-каталог; подробный финансовый отчёт — FinancialReport.
+        navTo: () => ({ stack: 'MoreTab', screen: 'FinancialReport' }),
       },
       {
         key: 'profit',
@@ -482,7 +483,8 @@ function KpiStrip() {
         format: 'money',
         pickValue: (pt) => (pt.checkCount > 0 ? pt.revenue / pt.checkCount : 0),
         total: (_d, avgValue) => avgValue,
-        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+        // «Отчёты» теперь хаб-каталог; подробный финансовый отчёт — FinancialReport.
+        navTo: () => ({ stack: 'MoreTab', screen: 'FinancialReport' }),
       },
     ];
     return canSeeProfit ? all : all.filter((t) => t.key !== 'profit');

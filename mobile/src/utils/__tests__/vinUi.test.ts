@@ -5,6 +5,7 @@
  */
 import type { VinDecodeResult } from '../../../../shared/types';
 import {
+  VIN_INCOMPLETE_MESSAGE,
   carVin,
   shouldAutofillMakeModel,
   vinCheckDigitWarning,
@@ -13,6 +14,7 @@ import {
   vinDecodeSummary,
   vinDuplicateError,
   vinDuplicateMessage,
+  vinLengthError,
   vinSourceLabel,
   vinSuggestion,
 } from '../vinUi';
@@ -36,6 +38,24 @@ describe('carVin', () => {
     expect(carVin({})).toBeNull();
     expect(carVin(null)).toBeNull();
     expect(carVin({ vin: '---' })).toBeNull();
+  });
+});
+
+describe('vinLengthError — блок отправки при неполном VIN', () => {
+  it('accepts an empty field (VIN is optional) and a full 17-char VIN', () => {
+    expect(vinLengthError('')).toBeNull();
+    expect(vinLengthError(null)).toBeNull();
+    expect(vinLengthError(undefined)).toBeNull();
+    expect(vinLengthError('XTA219010K0123456')).toBeNull();
+  });
+
+  it('rejects a started-but-unfinished VIN so the client is never created without its car', () => {
+    expect(vinLengthError('X')).toBe(VIN_INCOMPLETE_MESSAGE);
+    expect(vinLengthError('XTA219010K01')).toBe('Введите 17 символов VIN');
+    expect(vinLengthError('XTA219010K012345')).toBe(VIN_INCOMPLETE_MESSAGE);
+    // Лишний символ / запрещённые буквы — тоже не отправляем.
+    expect(vinLengthError('XTA219010K01234567')).toBe(VIN_INCOMPLETE_MESSAGE);
+    expect(vinLengthError('XTA219010K012345I')).toBe(VIN_INCOMPLETE_MESSAGE);
   });
 });
 

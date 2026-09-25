@@ -289,6 +289,44 @@ export function reportPdfFileName(result: ReportResult): string {
 }
 
 /**
+ * file:// URI файла с человеческим именем в кэш-папке приложения. Имя
+ * percent-encoded: кириллица, пробелы и тире в сыром виде — невалидный URL,
+ * а нативные модули (file-system, sharing) получают именно строку URI; на
+ * диске файл лежит под декодированным именем — его и покажет share-sheet.
+ */
+export function reportPdfFileUri(cacheDirectory: string, result: ReportResult): string {
+  return `${cacheDirectory}${encodeURIComponent(reportPdfFileName(result))}`;
+}
+
+// expo-file-system/legacy — та же поверхность и тот же ленивый require, что в
+// walletPass.ts (сабпуть без exports-map, поэтому типы описываем сами).
+type LegacyFileSystem = {
+  cacheDirectory: string | null;
+  moveAsync: (options: { from: string; to: string }) => Promise<void>;
+};
+
+/**
+ * `printToFileAsync` кладёт PDF под UUID-именем («F3A9…-….pdf») — так его и
+ * покажут «Сохранить в Файлы» и мессенджеры. Переносим файл в cacheDirectory
+ * под именем отчёта. Любой сбой (модуль не слинкован, нет папки, перенос не
+ * удался) — остаёмся на исходном URI: имя хуже, но экспорт работает.
+ */
+async function withReadableFileName(uri: string, result: ReportResult): Promise<string> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const FileSystem = require('expo-file-system/legacy') as LegacyFileSystem;
+    const dir = FileSystem?.cacheDirectory;
+    if (!dir || typeof FileSystem.moveAsync !== 'function') return uri;
+    const target = reportPdfFileUri(dir, result);
+    if (target === uri) return uri;
+    await FileSystem.moveAsync({ from: uri, to: target });
+    return target;
+  } catch {
+    return uri;
+  }
+}
+
+/**
  * Строит PDF отчёта и открывает системный share-sheet (печать, «Сохранить в
  * Файлы», отправить в мессенджер). Возвращает true, если лист открыт.
  */
@@ -310,7 +348,8 @@ export async function shareReportPdf(result: ReportResult, opts: ReportPdfOption
     const landscape = opts.landscape ?? isWideReport(result);
     const html = buildReportPdfHtml(result, { ...opts, landscape });
     const page = landscape ? A4_LANDSCAPE : A4_PORTRAIT;
-    const { uri } = await Print.printToFileAsync({ html, base64: false, width: page.width, height: page.height });
+    const printed = await Print.printToFileAsync({ html, base64: false, width: page.width, height: page.height });
+    const uri = await withReadableFileName(printed.uri, result);
     if (await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
