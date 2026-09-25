@@ -29,3 +29,6 @@ mobile/export*.plist
 # Маркетинговые ролики (/brag) — медиа, не для репо
 brag-output/
 brag-output-*/
+
+# Локальные загрузки backend при dev-прогонах (в проде — volume uploads)
+backend/uploads/
