@@ -27,6 +27,14 @@ interface MovementRow {
   comment: string | null;
 }
 
+/** Суммы движений сотрудника за период по видам. */
+interface PaidSums {
+  salary: number;
+  advance: number;
+  premium: number;
+  penalty: number;
+}
+
 /**
  * По зарплатам.
  *
@@ -42,6 +50,11 @@ interface MovementRow {
  * сходятся с секцией «Выплаты и удержания» до копейки. Разница оговорена в notes.
  *
  * ОСТАТОК = начислено всего − штрафы − выплачено всего; минус — переплата.
+ *
+ * Суммы выплат/удержаний по сотруднику — отдельным GROUP BY БЕЗ лимита
+ * (paidByUser): список движений в секции ограничен SECTION_ROW_LIMIT, и
+ * считать «Выплачено»/«Остаток» по нему нельзя — при длинном периоде старые
+ * выплаты выпадали бы из сумм.
  */
 @Injectable()
 export class SalaryBuilder implements ReportBuilder {
@@ -53,24 +66,16 @@ export class SalaryBuilder implements ReportBuilder {
   ) {}
 
   async build(ctx: ReportContext): Promise<BuiltReport> {
-    const [list, movements, users] = await Promise.all([
+    const [list, byUser, movements, users] = await Promise.all([
       this.salary.getAll(ctx.tenantId, { dateFrom: ctx.dateFrom, dateTo: ctx.dateTo }, ctx.pointId) as Promise<
         SalaryListRow[]
       >,
+      this.paidByUser(ctx),
       this.movements(ctx),
       this.users(ctx),
     ]);
 
     const selected = new Set(ctx.ids);
-    const byUser = new Map<string, { salary: number; advance: number; premium: number; penalty: number }>();
-    for (const m of movements) {
-      let b = byUser.get(m.user_id);
-      if (!b) {
-        b = { salary: 0, advance: 0, premium: 0, penalty: 0 };
-        byUser.set(m.user_id, b);
-      }
-      b[m.kind] = round2(b[m.kind] + num(m.amount));
-    }
 
     const columns: ReportColumn[] = [
       { key: 'name', title: 'Сотрудник', type: 'text' },
@@ -175,17 +180,22 @@ export class SalaryBuilder implements ReportBuilder {
         { key: 'amount', title: 'Сумма', type: 'money' },
         { key: 'comment', title: 'Комментарий', type: 'text' },
       ],
-      rows: movements
-        .filter((m) => selected.size === 0 || selected.has(m.user_id))
-        .slice(0, SECTION_ROW_LIMIT)
-        .map((m) => ({
-          _id: m.user_id,
-          date: m.at instanceof Date ? m.at.toISOString() : String(m.at),
-          name: users.get(m.user_id)?.name ?? '—',
-          kind: KIND_LABELS[m.kind],
-          amount: num(m.amount),
-          comment: m.comment ?? null,
-        })),
+      // Список усечён лимитом секции — суммы таблицы и KPI от него не зависят
+      // (paidByUser считает без лимита), поэтому усечение только помечаем.
+      ...(movements.truncated
+        ? {
+            description: `Показаны последние ${SECTION_ROW_LIMIT} операций; суммы в таблице и KPI учитывают все операции периода.`,
+            truncated: true,
+          }
+        : {}),
+      rows: movements.rows.map((m) => ({
+        _id: m.user_id,
+        date: m.at instanceof Date ? m.at.toISOString() : String(m.at),
+        name: users.get(m.user_id)?.name ?? '—',
+        kind: KIND_LABELS[m.kind],
+        amount: num(m.amount),
+        comment: m.comment ?? null,
+      })),
       emptyText: 'За период выплат, премий и штрафов не было',
     };
 
@@ -217,18 +227,15 @@ export class SalaryBuilder implements ReportBuilder {
     };
   }
 
-  /** Выплаты (принятые + легаси), премии деньгами и штрафы — по дате факта в периоде, филиал — у строки. */
-  private async movements(ctx: ReportContext): Promise<MovementRow[]> {
-    const params = baseParams(ctx);
+  /**
+   * Тело UNION'а движений — выплаты (принятые + легаси), премии деньгами и
+   * штрафы по дате факта в периоде, филиал — у строки. Общее для сумм и
+   * списка; точка кладётся в params ОДИН раз и адресуется всеми ветками.
+   */
+  private movementsUnionSql(ctx: ReportContext, params: unknown[]): string {
     const ph = pushPoint(params, ctx.pointId);
     const pt = (alias: string) => (ph ? ` AND ${alias}.point_id = ${ph}` : '');
-    const ids = (col: string) => idsFilter(col, ctx.ids, params);
-    // Один и тот же массив выбранных id может понадобиться четыре раза —
-    // кладём его один раз и адресуем повторно.
-    const idsFrag = ids('x.user_id');
-    const { rows } = await this.pool.query(
-      `SELECT x.user_id, x.kind, x.amount, x.at, x.comment FROM (
-         SELECT p.employee_id AS user_id, p.type AS kind, p.amount, p.created_at AS at, p.comment
+    return `SELECT p.employee_id AS user_id, p.type AS kind, p.amount, p.created_at AS at, p.comment
            FROM salary_payouts p
           WHERE p.tenant_id = $1 AND p.status = 'accepted' AND ${inPeriod('p.created_at')}${pt('p')}
          UNION ALL
@@ -242,14 +249,48 @@ export class SalaryBuilder implements ReportBuilder {
          UNION ALL
          SELECT pen.user_id, 'penalty', pen.amount, pen.date, pen.description
            FROM salary_penalties pen
-          WHERE pen.tenant_id = $1 AND ${inPeriod('pen.date')}${pt('pen')}
-       ) x
-       WHERE TRUE${idsFrag}
-       ORDER BY x.at DESC
-       LIMIT 5000`,
+          WHERE pen.tenant_id = $1 AND ${inPeriod('pen.date')}${pt('pen')}`;
+  }
+
+  /** Суммы движений по (сотрудник, вид) за период — БЕЗ лимита строк. */
+  private async paidByUser(ctx: ReportContext): Promise<Map<string, PaidSums>> {
+    const params = baseParams(ctx);
+    const union = this.movementsUnionSql(ctx, params);
+    const idsFrag = idsFilter('x.user_id', ctx.ids, params);
+    const { rows } = await this.pool.query(
+      `SELECT x.user_id, x.kind, COALESCE(SUM(x.amount), 0) AS total
+         FROM (${union}) x
+        WHERE TRUE${idsFrag}
+        GROUP BY x.user_id, x.kind`,
       params,
     );
-    return rows as MovementRow[];
+    const byUser = new Map<string, PaidSums>();
+    for (const r of rows as Array<{ user_id: string; kind: MovementRow['kind']; total: string }>) {
+      let b = byUser.get(r.user_id);
+      if (!b) {
+        b = { salary: 0, advance: 0, premium: 0, penalty: 0 };
+        byUser.set(r.user_id, b);
+      }
+      if (r.kind in b) b[r.kind] = round2(b[r.kind] + num(r.total));
+    }
+    return byUser;
+  }
+
+  /** Последние движения для секции — с лимитом строк секции и признаком усечения. */
+  private async movements(ctx: ReportContext): Promise<{ rows: MovementRow[]; truncated: boolean }> {
+    const params = baseParams(ctx);
+    const union = this.movementsUnionSql(ctx, params);
+    const idsFrag = idsFilter('x.user_id', ctx.ids, params);
+    const { rows } = await this.pool.query(
+      `SELECT x.user_id, x.kind, x.amount, x.at, x.comment
+         FROM (${union}) x
+        WHERE TRUE${idsFrag}
+        ORDER BY x.at DESC
+        LIMIT ${SECTION_ROW_LIMIT + 1}`,
+      params,
+    );
+    const truncated = rows.length > SECTION_ROW_LIMIT;
+    return { rows: (truncated ? rows.slice(0, SECTION_ROW_LIMIT) : rows) as MovementRow[], truncated };
   }
 
   private async users(ctx: ReportContext): Promise<Map<string, { name: string; dismissed: boolean }>> {

@@ -2,7 +2,6 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { Pool } from 'pg';
 import { PG_POOL } from '../../database.module';
 import { JwtPayload } from '../../common/decorators/current-user.decorator';
-import { userHasPermission } from '../../common/guards/permissions.guard';
 import { actorPointId, pointCacheSegment } from '../../common/point-scope';
 import { ttlCache } from '../../common/ttl-cache';
 import { getTenantTimezone, zonedDateKey } from '../../common/timezone';
@@ -15,7 +14,7 @@ import {
   REPORT_CATALOG,
   ReportDefinition,
 } from './catalog';
-import { isOwnerClass, reportAvailability } from './report-access';
+import { reportAvailability, salaryReportSelfOnly } from './report-access';
 import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext } from './report-context';
 import { daysInclusive } from './report-sql';
 import {
@@ -129,13 +128,19 @@ export class ReportBuilderService {
     }
     const pointId = actorPointId(actor);
     const tz = await getTenantTimezone(this.pool, actor.tenantID);
+    // Сотрудники — фильтр зарплатного отчёта. Охват «только свои» (без
+    // salary_view_all) не должен видеть штат вообще: в списке он один, выбор
+    // единственный (multi=false) — клиенты прячут фильтр при ≤ 1 опции.
+    const selfOnly = kind === 'employees' && salaryReportSelfOnly(actor);
     let options: ReportFilterOption[];
     switch (kind) {
       case 'masters':
         options = await this.masterOptions(actor.tenantID, pointId, tz);
         break;
       case 'employees':
-        options = await this.employeeOptions(actor.tenantID, pointId, tz);
+        options = selfOnly
+          ? await this.selfOption(actor.tenantID, actor.userID, tz)
+          : await this.employeeOptions(actor.tenantID, pointId, tz);
         break;
       case 'suppliers':
         options = await this.supplierOptions(actor.tenantID);
@@ -144,7 +149,7 @@ export class ReportBuilderService {
         options = await this.pointOptions(actor.tenantID);
         break;
     }
-    return { kind, label: FILTER_KIND_LABELS[kind], multi: true, options };
+    return { kind, label: FILTER_KIND_LABELS[kind], multi: !selfOnly, options };
   }
 
   /**
@@ -188,6 +193,17 @@ export class ReportBuilderService {
         WHERE u.tenant_id = $1 AND u.purged_at IS NULL AND u.role <> 'superadmin'${scope}
         ORDER BY (u.dismissed_at IS NOT NULL), lower(u.full_name)`,
       params,
+    );
+    return rows.map((r) => this.userOption(r, tz));
+  }
+
+  /** Только сам актор — для охвата «свои» у фильтра сотрудников. */
+  private async selfOption(tenantId: string, userId: string, tz: string): Promise<ReportFilterOption[]> {
+    const { rows } = await this.pool.query(
+      `SELECT u.id, u.full_name, u.role, u.dismissed_at
+         FROM users u
+        WHERE u.tenant_id = $1 AND u.id = $2 AND u.purged_at IS NULL`,
+      [tenantId, userId],
     );
     return rows.map((r) => this.userOption(r, tz));
   }
@@ -239,13 +255,9 @@ export class ReportBuilderService {
 
     // Зарплата с охватом «только свои» (salary.view = 'own'): человек видит
     // отчёт, но исключительно по себе — иначе право «своя зарплата» открывало
-    // бы весь зарплатный лист команды.
-    if (
-      def.id === 'salary' &&
-      !isOwnerClass(actor) &&
-      !userHasPermission(actor, 'financial_reports') &&
-      !userHasPermission(actor, 'salary_view_all')
-    ) {
+    // бы весь зарплатный лист команды. financial_reports охват НЕ расширяет
+    // (см. report-access: как у GET /salary, где нужен salary_view_all).
+    if (def.id === 'salary' && salaryReportSelfOnly(actor)) {
       ids = [actor.userID];
     }
 

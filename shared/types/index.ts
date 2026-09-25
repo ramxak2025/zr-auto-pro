@@ -1931,6 +1931,13 @@ export interface Check {
   masterId: string;
   client?: Client;
   clientId: string;
+  /**
+   * Проекция машины в GET /checks, GET /checks/:id и доске: только
+   * { id, plateNumber, makeModel, vin } — остальных полей Car здесь нет.
+   * `vin` (171) едет всегда: строка или null, в том числе при выключенной
+   * опции Tenant.vinEnabled (показывать его или нет решает клиент) — деталке
+   * чека не нужен отдельный запрос за машиной ради VIN.
+   */
   car?: Car;
   carId: string;
   mileage?: number;
@@ -5268,6 +5275,11 @@ export interface ReportSection {
   totals?: ReportRow | null;
   /** Текст пустого состояния секции. */
   emptyText?: string;
+  /**
+   * Список секции усечён лимитом строк секции (100); суммы таблицы и KPI при
+   * этом считаются по всем данным периода. Absent/false — показано всё.
+   */
+  truncated?: boolean;
 }
 
 /** Эхо применённых фильтров — для шапки PDF/Excel и заголовка экрана. */

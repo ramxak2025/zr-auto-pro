@@ -59,6 +59,8 @@ export interface ReportSection {
   rows: ReportRow[];
   totals?: ReportRow | null;
   emptyText?: string;
+  /** Список секции усечён лимитом SECTION_ROW_LIMIT (суммы отчёта при этом полные). */
+  truncated?: boolean;
 }
 
 export interface ReportAppliedFilters {

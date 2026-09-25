@@ -45,7 +45,11 @@ export class ServicesBuilder implements ReportBuilder {
               COALESCE(SUM(l.quantity - COALESCE(r.qty, 0)), 0) AS qty,
               COALESCE(SUM(l.total - COALESCE(r.amount, 0)), 0) AS revenue,
               COUNT(DISTINCT l.check_id)::int AS checks,
-              COUNT(DISTINCT l.master_id)::int AS masters
+              COUNT(DISTINCT l.master_id)::int AS masters,
+              COALESCE(SUM(SUM(l.quantity - COALESCE(r.qty, 0))) OVER (), 0) AS total_qty,
+              COALESCE(SUM(SUM(l.total - COALESCE(r.amount, 0))) OVER (), 0) AS total_revenue,
+              (SUM(COUNT(DISTINCT l.check_id)) OVER ())::int AS total_checks,
+              (COUNT(*) OVER ())::int AS total_groups
          FROM l
          LEFT JOIN ret r ON r.service_line_id = l.line_id
          LEFT JOIN services s ON s.id = l.service_id
@@ -57,14 +61,14 @@ export class ServicesBuilder implements ReportBuilder {
     const truncated = rows.length > MAIN_ROW_LIMIT;
     const data = truncated ? rows.slice(0, MAIN_ROW_LIMIT) : rows;
 
-    let totalRevenue = 0;
-    let totalQty = 0;
-    let totalChecks = 0;
-    for (const r of data) {
-      totalRevenue = round2(totalRevenue + num(r.revenue));
-      totalQty = round2(totalQty + num(r.qty));
-      totalChecks += num(r.checks);
-    }
+    // Итоги — оконные агрегаты по ВСЕМ группам периода (окно считается до
+    // LIMIT), а не сумма усечённых строк: доли сходятся в 100 %, KPI и «Итого»
+    // не худеют, когда услуг больше MAIN_ROW_LIMIT. Пустой результат — нули.
+    const first = rows[0];
+    const totalRevenue = round2(num(first?.total_revenue));
+    const totalQty = round2(num(first?.total_qty));
+    const totalChecks = num(first?.total_checks);
+    const totalGroups = num(first?.total_groups);
 
     const columns: ReportColumn[] = [
       { key: 'name', title: 'Услуга', type: 'text' },
@@ -103,7 +107,7 @@ export class ServicesBuilder implements ReportBuilder {
       kpis: [
         { key: 'revenue', title: 'Выручка по работам', value: totalRevenue, type: 'money' },
         { key: 'qty', title: 'Работ выполнено', value: totalQty, type: 'number' },
-        { key: 'distinct', title: 'Разных услуг', value: data.length, type: 'int' },
+        { key: 'distinct', title: 'Разных услуг', value: totalGroups, type: 'int' },
         { key: 'avgPrice', title: 'Средняя цена', value: avg(totalRevenue, totalQty), type: 'money' },
       ],
       columns,

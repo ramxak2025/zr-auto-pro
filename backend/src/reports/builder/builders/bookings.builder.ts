@@ -5,7 +5,7 @@ import { checkMoneyBaseWhere, checkRevenueExpr } from '../../../common/check-mon
 import { pointFilterSql } from '../../../common/point-scope';
 import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext, SECTION_ROW_LIMIT } from '../report-context';
 import { ReportColumn, ReportRow, ReportSection } from '../report-types';
-import { baseParams, inPeriod, num, pct } from '../report-sql';
+import { baseParams, inPeriod, num, pct, pushPoint } from '../report-sql';
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -14,7 +14,8 @@ const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
  * (bookings.point_id, 167). Приехали = arrived + converted; конверсия в чек
  * = converted / (все − отменённые). Таблица — по исполнителям, если хотя бы
  * у одной записи периода есть мастер (остальные — «Без исполнителя»), иначе
- * по дням недели визита. Выручка по записям — чеки, в которые записи проведены.
+ * по дням недели визита. Выручка по записям — чеки, в которые записи проведены,
+ * каждый чек ОДИН раз: две записи периода на один чек его не задваивают.
  */
 @Injectable()
 export class BookingsBuilder implements ReportBuilder {
@@ -24,7 +25,14 @@ export class BookingsBuilder implements ReportBuilder {
 
   async build(ctx: ReportContext): Promise<BuiltReport> {
     const kParams = baseParams(ctx);
-    const kPoint = pointFilterSql('b', ctx.pointId, kParams);
+    // Точка кладётся ОДИН раз: её адресуют и внешний запрос по записям, и
+    // подзапрос выручки (pointFilterSql положил бы второй параметр).
+    const kPh = pushPoint(kParams, ctx.pointId);
+    const kPoint = kPh ? ` AND b.point_id = ${kPh}` : '';
+    const kPointInner = kPh ? ` AND bb.point_id = ${kPh}` : '';
+    // Выручка — по УНИКАЛЬНЫМ чекам, в которые проведена хотя бы одна запись
+    // периода: SUM по bookings LEFT JOIN checks считал бы чек столько раз,
+    // сколько записей на него ссылается.
     const { rows: kRows } = await this.pool.query(
       `SELECT COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE b.status IN ('arrived', 'converted'))::int AS arrived,
@@ -32,9 +40,13 @@ export class BookingsBuilder implements ReportBuilder {
               COUNT(*) FILTER (WHERE b.status = 'no_show')::int AS no_show,
               COUNT(*) FILTER (WHERE b.status = 'cancelled')::int AS cancelled,
               COUNT(*) FILTER (WHERE b.master_id IS NOT NULL)::int AS with_master,
-              COALESCE(SUM(${checkRevenueExpr('ch')}), 0) AS revenue
+              (SELECT COALESCE(SUM(${checkRevenueExpr('ch')}), 0)
+                 FROM checks ch
+                WHERE ch.tenant_id = $1 AND ${checkMoneyBaseWhere('ch')}
+                  AND EXISTS (SELECT 1 FROM bookings bb
+                               WHERE bb.tenant_id = $1 AND bb.check_id = ch.id
+                                 AND ${inPeriod('bb.scheduled_at')}${kPointInner})) AS revenue
          FROM bookings b
-         LEFT JOIN checks ch ON ch.id = b.check_id AND ch.tenant_id = b.tenant_id AND ${checkMoneyBaseWhere('ch')}
         WHERE b.tenant_id = $1 AND ${inPeriod('b.scheduled_at')}${kPoint}`,
       kParams,
     );

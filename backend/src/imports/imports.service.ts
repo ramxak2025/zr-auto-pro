@@ -46,7 +46,10 @@ export interface PlannedCar {
   existsForCurrentClient?: boolean;
   conflictsWithClientId?: string | null;
   conflictsWithClientName?: string | null;
-  /** 171 — VIN (нормализованный), запишется при создании; null/absent — без VIN. */
+  /**
+   * 171 — VIN (нормализованный): запишется в новую машину либо допишется
+   * существующей машине этого клиента, у которой VIN нет; null/absent — без VIN.
+   */
   vin?: string | null;
 }
 
@@ -441,7 +444,7 @@ export class ImportsService {
 
           // Re-check by exact plate within this client (case-insensitive on the key).
           const { rows: existingCar } = await dbClient.query(
-            `SELECT id, client_id FROM cars
+            `SELECT id, client_id, vin FROM cars
              WHERE tenant_id = $1
                AND REPLACE(REPLACE(REPLACE(UPPER(plate_number), ' ', ''), '-', ''), '/', '') = $2
              LIMIT 1`,
@@ -451,7 +454,24 @@ export class ImportsService {
           if (existingCar.length > 0) {
             const owner = existingCar[0].client_id;
             if (owner === clientId) {
-              // Same client already has this plate → skip (idempotent).
+              // Same client already has this plate → the row itself is
+              // idempotent; the only thing the file can add is a VIN to a car
+              // that has none (171 — как cars.create дописывает VIN найденной
+              // по номеру машине). Занятость перепроверяется в транзакции без
+              // самой машины; уже заполненный VIN файл не трогает.
+              if (car.vin && !existingCar[0].vin) {
+                const { rows: vinTaken } = await dbClient.query(
+                  'SELECT 1 FROM cars WHERE tenant_id = $1 AND vin = $2 AND id <> $3 LIMIT 1',
+                  [tenantID, car.vin, existingCar[0].id],
+                );
+                if (vinTaken.length === 0) {
+                  await dbClient.query('UPDATE cars SET vin = $1 WHERE id = $2 AND tenant_id = $3 AND vin IS NULL', [
+                    car.vin,
+                    existingCar[0].id,
+                    tenantID,
+                  ]);
+                }
+              }
               continue;
             }
             // Belongs to someone else — surface as skipped, do not steal.
@@ -834,7 +854,7 @@ export class ImportsService {
     const plateKeys = Array.from(new Set(classified.filter((c) => c.hasPlate && c.plate.key).map((c) => c.plate.key)));
     let existingCarsByPlateKey = new Map<
       string,
-      { id: string; clientId: string; clientName: string; plateNumber: string }
+      { id: string; clientId: string; clientName: string; plateNumber: string; vin: string | null }
     >();
     if (plateKeys.length > 0) {
       const { rows: existingCars } = await this.pool.query<{
@@ -843,9 +863,11 @@ export class ImportsService {
         client_name: string | null;
         owner_point_id: string | null;
         plate_number: string;
+        vin: string | null;
         key: string;
       }>(
         `SELECT ca.id, ca.client_id, cl.full_name AS client_name, cl.point_id AS owner_point_id, ca.plate_number,
+                ca.vin,
                 REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') AS key
          FROM cars ca
          LEFT JOIN clients cl ON cl.id = ca.client_id
@@ -867,6 +889,9 @@ export class ImportsService {
                 ? r.client_name || ''
                 : '',
             plateNumber: r.plate_number,
+            // 171 — VIN существующей машины: файл дописывает VIN только машине
+            // без него (см. планирование ниже и apply).
+            vin: r.vin ?? null,
           },
         ]),
       );
@@ -971,14 +996,25 @@ export class ImportsService {
         seenPlatesInFile.set(r.plate.key, { sourceRow: r.sourceRow, phoneKey });
 
         const existingCar = existingCarsByPlateKey.get(r.plate.key);
+        const ownedByCurrentClient = !!existingCar && !!existing && existingCar.clientId === existing.id;
 
-        // 171 — VIN занят другой машиной в базе или уже встретился в файле →
-        // авто создаётся без VIN (предупреждение, не ошибка).
+        // 171 — VIN планируется ТОЛЬКО туда, где он реально запишется: в новую
+        // машину или в машину этого же клиента без VIN (как cars.create
+        // дописывает VIN найденной по номеру машине). Чужой номер (строка
+        // ниже пропускается) и машина с уже заполненным VIN файлом не меняются —
+        // и такой VIN НЕ регистрируется как «встречался в файле», иначе
+        // следующая строка с тем же VIN получала бы ложный duplicate_vin.
+        // Занят другой машиной базы или уже записан ранее в файле → авто без
+        // VIN (предупреждение, не ошибка).
         let vin = r.vin;
         if (vin) {
           const takenBy = existingCarIdByVin.get(vin);
           const seenVinRow = seenVinsInFile.get(vin);
-          if (takenBy && takenBy !== existingCar?.id) {
+          if (existingCar && !ownedByCurrentClient) {
+            vin = null;
+          } else if (ownedByCurrentClient && existingCar?.vin) {
+            vin = null;
+          } else if (takenBy && takenBy !== existingCar?.id) {
             issues.push({
               sourceRow: r.sourceRow,
               kind: 'duplicate_vin',
@@ -1008,7 +1044,7 @@ export class ImportsService {
         };
 
         if (existingCar) {
-          if (existing && existingCar.clientId === existing.id) {
+          if (ownedByCurrentClient) {
             planned.existsForCurrentClient = true;
             carsAlreadyExist++;
           } else {
