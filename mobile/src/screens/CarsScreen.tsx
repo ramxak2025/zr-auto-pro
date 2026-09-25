@@ -10,9 +10,12 @@ import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import FreshnessBadge from '../components/FreshnessBadge';
+import VinText from '../components/VinText';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { carVin } from '../utils/vinUi';
 import { normalizePlateQuery, plateMatches, looksLikePlateQuery } from '../utils/plateNormalize';
 import { haptic } from '../platform/haptics';
 import type { Car, Check } from '../../../shared/types';
@@ -35,6 +38,9 @@ export default function CarsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
+  // 171 — опция «VIN-код автомобиля»: VIN под маркой в строке и подсказка
+  // поиска (сервер при включённой опции ищет по VIN через тот же ?search=).
+  const vinEnabled = useVinEnabled();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const limit = 30;
@@ -132,6 +138,9 @@ export default function CarsScreen() {
               <Text style={[styles.makeModel, { color: palette.text.primary }]} numberOfLines={1}>
                 {item.makeModel || 'Без модели'}
               </Text>
+              {vinEnabled && carVin(item) ? (
+                <VinText vin={carVin(item)!} size={11} color={palette.text.secondary} style={styles.vinLine} />
+              ) : null}
               {item.client?.fullName ? (
                 <View style={styles.ownerRow}>
                   <Ionicons name="person-outline" size={11} color={palette.text.tertiary} />
@@ -151,7 +160,7 @@ export default function CarsScreen() {
         </View>
       );
     },
-    [expandedCarId, palette, toggleCar],
+    [expandedCarId, palette, toggleCar, vinEnabled],
   );
 
   return (
@@ -168,7 +177,7 @@ export default function CarsScreen() {
             setSearch(v);
             setPage(1);
           }}
-          placeholder="Госномер (RU/INT) или марка"
+          placeholder={vinEnabled ? 'Госномер (RU/INT), марка или VIN' : 'Госномер (RU/INT) или марка'}
         />
       </View>
 
@@ -377,6 +386,8 @@ const styles = StyleSheet.create({
   plateText: { fontSize: 14, fontWeight: '700', letterSpacing: 0.7, color: colors.gray[900] },
   info: { flex: 1, minWidth: 0 },
   makeModel: { fontSize: 15, fontWeight: '600', letterSpacing: -0.1 },
+  // 171 — VIN моноширинным под маркой (только при включённой опции).
+  vinLine: { marginTop: 2 },
   ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   ownerText: { fontSize: 12 },
 

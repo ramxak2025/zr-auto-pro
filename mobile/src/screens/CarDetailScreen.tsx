@@ -30,10 +30,13 @@ import { carsApi } from '../api/services';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import GostPlateBadge from '../components/GostPlateBadge';
+import VinText from '../components/VinText';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { carVin } from '../utils/vinUi';
 import { haptic } from '../platform/haptics';
 import type { Check } from '../../../shared/types';
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
@@ -86,6 +89,8 @@ type CarDetailParams = {
   makeModel?: string;
   plateNumber?: string;
   noPlate?: boolean;
+  /** 171 — VIN машины (из карточки клиента); показывается только при включённой опции. */
+  vin?: string | null;
 };
 
 export default function CarDetailScreen() {
@@ -97,8 +102,19 @@ export default function CarDetailScreen() {
   const tabBarHeight = useTabBarHeight();
   const canViewProfit = hasPermission('profit_view');
 
-  const { carId, clientId, clientName, makeModel, plateNumber, noPlate } = route.params as CarDetailParams;
+  const {
+    carId,
+    clientId,
+    clientName,
+    makeModel,
+    plateNumber,
+    noPlate,
+    vin: routeVin,
+  } = route.params as CarDetailParams;
   const [refreshing, setRefreshing] = useState(false);
+  // 171 — VIN под плашкой в hero: только при включённой опции и когда он есть.
+  const vinEnabled = useVinEnabled();
+  const vin = vinEnabled ? carVin({ vin: routeVin }) : null;
 
   // Car's checks — DESC by date from backend. Distinct cache slot ('full')
   // from CarsScreen's inline preview, still reachable by the broad
@@ -206,6 +222,11 @@ export default function CarDetailScreen() {
               </Text>
             </View>
           )}
+          {vin ? (
+            <View style={[styles.heroVin, { backgroundColor: palette.bg.muted }]}>
+              <VinText vin={vin} size={13} color={palette.text.primary} withLabel />
+            </View>
+          ) : null}
           {clientName ? (
             <TouchableOpacity
               style={[styles.ownerChip, { backgroundColor: palette.bg.muted }]}
@@ -438,6 +459,14 @@ const styles = StyleSheet.create({
     borderRadius: 7,
   },
   heroNoPlateText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  // 171 — VIN моноширинным под плашкой (тихая плашка, как «Без номера»).
+  heroVin: {
+    marginTop: spacing[2],
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    maxWidth: '100%',
+  },
   ownerChip: {
     flexDirection: 'row',
     alignItems: 'center',

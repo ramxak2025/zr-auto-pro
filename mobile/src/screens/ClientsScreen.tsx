@@ -35,6 +35,10 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import SourcePickerInline from '../components/SourcePickerInline';
 import ClientListRow, { CLIENT_ROW_HEIGHT } from '../components/ClientListRow';
 import CarPlateField from '../components/CarPlateField';
+import VinInput from '../components/VinInput';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { vinDuplicateMessage } from '../utils/vinUi';
+import { formatVin, isValidVin } from '../../../shared/utils/vin';
 import PlateResultCard, { PLATE_ROW_HEIGHT } from '../components/PlateResultCard';
 import RussianPlateInput, { type PlateMode } from '../components/RussianPlateInput';
 import PlateModeSwitcher from '../components/PlateModeSwitcher';
@@ -145,6 +149,10 @@ export default function ClientsScreen() {
   const [carMakeModel, setCarMakeModel] = useState('');
   const [carMode, setCarMode] = useState<PlateMode>('ru');
   const [carNoPlate, setCarNoPlate] = useState(false);
+  // 171 — VIN у inline-авто: поле есть только при включённой опции тенанта;
+  // при выключенной ни поле, ни payload не меняются.
+  const [carVinInput, setCarVinInput] = useState('');
+  const vinEnabled = useVinEnabled();
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -228,6 +236,12 @@ export default function ClientsScreen() {
    */
   const clientWriteError = useCallback((err: unknown, fallback: string) => {
     haptic('error');
+    // 171 — дубликат VIN: сервер уже назвал клиента, у которого он записан.
+    const dupVin = vinDuplicateMessage(err);
+    if (dupVin) {
+      Alert.alert('VIN уже записан', dupVin);
+      return;
+    }
     const otherPoint = otherPointPhoneConflictMessage(err);
     if (otherPoint) {
       Alert.alert('Номер занят другим филиалом', otherPoint);
@@ -245,7 +259,7 @@ export default function ClientsScreen() {
       phone: string;
       comment?: string;
       source?: string | null;
-      car?: { plateNumber: string; makeModel: string; noPlate: boolean };
+      car?: { plateNumber: string; makeModel: string; noPlate: boolean; vin?: string };
     }) => {
       const clientRes = await clientsApi.create({
         fullName: d.fullName,
@@ -255,12 +269,16 @@ export default function ClientsScreen() {
       });
       // Attach the inline car when the user either typed a plate OR ticked
       // «без номеров» (a plateless car is still a real car worth tracking).
-      if (d.car && (d.car.plateNumber || d.car.noPlate)) {
+      // 171 — машина с одним VIN (без номера) — тоже настоящая машина.
+      if (d.car && (d.car.plateNumber || d.car.noPlate || d.car.vin)) {
         await carsApi.create({
           plateNumber: d.car.noPlate ? '' : d.car.plateNumber,
           makeModel: d.car.makeModel || '',
           clientId: clientRes.data.id,
           noPlate: d.car.noPlate,
+          // VIN попадает в payload только при включённой опции (submitFlow
+          // кладёт его лишь тогда) — иначе запрос байт-в-байт прежний.
+          ...(d.car.vin ? { vin: d.car.vin } : null),
         });
       }
       return clientRes.data;
@@ -324,6 +342,7 @@ export default function ClientsScreen() {
     setFormSourceOpen(false);
     setCarPlate('');
     setCarMakeModel('');
+    setCarVinInput('');
     setCarMode('ru');
     setCarNoPlate(false);
     setModalOpen(true);
@@ -342,6 +361,7 @@ export default function ClientsScreen() {
     // creation. Clear so reopen on a different client doesn't leak.
     setCarPlate('');
     setCarMakeModel('');
+    setCarVinInput('');
     setCarMode('ru');
     setCarNoPlate(false);
     setModalOpen(true);
@@ -381,8 +401,11 @@ export default function ClientsScreen() {
   // An inline car is attached when the user typed a plate, OR ticked
   // «без номеров», OR just filled the make/model (a real car without a
   // known plate yet). Only a fully empty block is skipped.
+  // 171 — VIN учитывается только при включённой опции.
+  const inlineVin = vinEnabled ? carVinInput : '';
   const hasInlineCar =
-    !editingClient && (carNoPlate || normalizedCarPlate.length > 0 || carMakeModel.trim().length > 0);
+    !editingClient &&
+    (carNoPlate || normalizedCarPlate.length > 0 || carMakeModel.trim().length > 0 || inlineVin.length > 0);
 
   const submitFlow = async (opts?: { forceCar?: boolean }) => {
     // Duplicate check only matters when there's an actual plate to clash on.
@@ -397,12 +420,52 @@ export default function ClientsScreen() {
         // best-effort; on failure, proceed to create.
       }
     }
+    // 171 — VIN уникален внутри тенанта (сервер ответит 409), поэтому проверяем
+    // ДО создания клиента: иначе клиент уже создан, а машина — нет.
+    if (hasInlineCar && isValidVin(inlineVin) && !opts?.forceCar) {
+      try {
+        const res = await carsApi.lookupByVin(inlineVin);
+        const found = res.data;
+        if (found) {
+          haptic('warning');
+          const owner = found.client;
+          Alert.alert(
+            'VIN уже записан',
+            owner
+              ? `Автомобиль с VIN ${formatVin(inlineVin)} уже есть у клиента ${owner.fullName}.`
+              : `Автомобиль с VIN ${formatVin(inlineVin)} уже есть в базе.`,
+            owner
+              ? [
+                  { text: 'Понятно', style: 'cancel' },
+                  {
+                    text: 'Перейти к клиенту',
+                    onPress: () => {
+                      setModalOpen(false);
+                      (navigation as any).navigate('ClientDetail', { id: owner.id });
+                    },
+                  },
+                ]
+              : [{ text: 'Понятно', style: 'cancel' }],
+          );
+          return;
+        }
+      } catch {
+        // best-effort; сервер всё равно проверит и ответит 409.
+      }
+    }
     createMutation.mutate({
       fullName,
       phone,
       comment: comment || undefined,
       source: formSource,
-      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, noPlate: carNoPlate } : undefined,
+      car: hasInlineCar
+        ? {
+            plateNumber: normalizedCarPlate,
+            makeModel: carMakeModel,
+            noPlate: carNoPlate,
+            ...(inlineVin ? { vin: inlineVin } : null),
+          }
+        : undefined,
     });
   };
 
@@ -893,7 +956,8 @@ export default function ClientsScreen() {
                 // key, so a new query resets paging to page 1 automatically.
                 setSearch(v);
               }}
-              placeholder="Имя, авто или телефон"
+              // 171 — сервер при включённой опции ищет клиента и по VIN его машин.
+              placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, авто или телефон'}
             />
           </View>
 
@@ -1134,7 +1198,8 @@ export default function ClientsScreen() {
           />
         </View>
 
-        {/* Inline car block — only when creating a new client. No VIN. */}
+        {/* Inline car block — only when creating a new client. VIN (171) —
+            только при включённой опции тенанта. */}
         {!editingClient && (
           <View style={[cnStyles.inlineCarBlock, { borderTopColor: palette.border.subtle }]}>
             <View style={cnStyles.inlineCarHeader}>
@@ -1158,6 +1223,19 @@ export default function ClientsScreen() {
                 placeholderTextColor={palette.text.tertiary}
               />
             </View>
+            {/* 171 — VIN под маркой/моделью: расшифровка подставляет марку в
+                пустое поле молча, в заполненное — чипом «Заменить». */}
+            {vinEnabled && (
+              <View style={styles.formField}>
+                <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
+                <VinInput
+                  value={carVinInput}
+                  onChangeText={setCarVinInput}
+                  makeModel={carMakeModel}
+                  onMakeModel={setCarMakeModel}
+                />
+              </View>
+            )}
             <View style={styles.formField}>
               <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Госномер</Text>
               <CarPlateField

@@ -29,6 +29,10 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
+import VinInput from '../components/VinInput';
+import VinText from '../components/VinText';
+import { useVinEnabled } from '../hooks/useVinEnabled';
+import { carVin, vinDuplicateMessage } from '../utils/vinUi';
 import ClientCallsSection from '../components/ClientCallsSection';
 import ClientInstallmentSection from '../components/installments/ClientInstallmentSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
@@ -267,6 +271,10 @@ export default function ClientDetailScreen() {
     client: { id: string; fullName: string; phone: string } | null;
   } | null>(null);
   const [carSubmitting, setCarSubmitting] = useState(false);
+  // 171 — VIN: опция тенанта (поле в форме авто, VIN под плашкой в гараже) и
+  // ошибка 409 VIN_DUPLICATE, которую показываем прямо под полем VIN.
+  const vinEnabled = useVinEnabled();
+  const [carVinError, setCarVinError] = useState<string | null>(null);
 
   const { data: client, isLoading } = useQuery<Client>({
     queryKey: ['client', id],
@@ -482,7 +490,17 @@ export default function ClientDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       closeCarModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при создании авто'),
+    onError: (err: unknown) => {
+      // 171 — дубликат VIN внутри тенанта: понятный текст с именем клиента
+      // прямо под полем VIN, модалка остаётся открытой для правки.
+      const dupVin = vinDuplicateMessage(err);
+      if (dupVin) {
+        haptic('warning');
+        setCarVinError(dupVin);
+        return;
+      }
+      Alert.alert('Ошибка', 'Ошибка при создании авто');
+    },
   });
 
   const updateCarMutation = useMutation({
@@ -498,7 +516,15 @@ export default function ClientDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
       closeCarModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении авто'),
+    onError: (err: unknown) => {
+      const dupVin = vinDuplicateMessage(err);
+      if (dupVin) {
+        haptic('warning');
+        setCarVinError(dupVin);
+        return;
+      }
+      Alert.alert('Ошибка', 'Ошибка при обновлении авто');
+    },
   });
 
   const deleteCarMutation = useMutation({
@@ -608,15 +634,18 @@ export default function ClientDetailScreen() {
   const closeCarModal = () => {
     setCarModalOpen(false);
     setEditingCar(null);
+    setCarVinError(null);
   };
 
   const openAddCar = () => {
     setEditingCar(null);
+    setCarVinError(null);
     setCarModalOpen(true);
   };
 
   const openEditCar = (car: Car) => {
     setEditingCar(car);
+    setCarVinError(null);
     setCarModalOpen(true);
   };
 
@@ -636,11 +665,15 @@ export default function ClientDetailScreen() {
       comment: form?.carComment ? form.carComment : undefined,
       clientId: id,
       noPlate: form?.noPlate ?? false,
+      // 171 — VIN едет только при включённой опции (иначе payload байт-в-байт
+      // прежний); пустое поле = очистить (null), сервер хранит NULL.
+      ...(vinEnabled ? { vin: form?.vin ? form.vin : null } : null),
     };
   };
 
   const handleCarSubmit = async (values: CarFormValues) => {
     carFormRef.current = values;
+    setCarVinError(null);
     const payload = buildCarPayload();
     const effectivePlate = payload.plateNumber;
 
@@ -1271,6 +1304,7 @@ export default function ClientDetailScreen() {
               >
                 <CarCard
                   car={car}
+                  vin={vinEnabled ? carVin(car) : null}
                   palette={palette}
                   index={idx}
                   spent={cs?.spent ?? 0}
@@ -1286,6 +1320,7 @@ export default function ClientDetailScreen() {
                       makeModel: car.makeModel,
                       plateNumber: car.plateNumber,
                       noPlate: car.noPlate,
+                      vin: vinEnabled ? carVin(car) : null,
                     });
                   }}
                   onPressIn={() => prefetchCarDetail(car.id)}
@@ -1582,6 +1617,7 @@ export default function ClientDetailScreen() {
         editingCar={editingCar}
         palette={palette}
         submitting={carSubmitting || createCarMutation.isPending || updateCarMutation.isPending}
+        vinError={carVinError}
         onClose={closeCarModal}
         onSubmit={handleCarSubmit}
       />
@@ -1758,6 +1794,8 @@ const qaStyles = StyleSheet.create({
 
 interface CarCardProps {
   car: Car;
+  /** 171 — VIN для строки под плашкой; null = не показывать (опция выключена / VIN нет). */
+  vin?: string | null;
   palette: ReturnType<typeof useColors>;
   index: number;
   /** Сумма, потраченная на ЭТО авто (net of returns). */
@@ -1779,6 +1817,7 @@ interface CarCardProps {
 }
 function CarCard({
   car,
+  vin,
   palette,
   index,
   spent,
@@ -1819,6 +1858,7 @@ function CarCard({
                 <Text style={[styles.plateBadgeText, { color: palette.text.tertiary }]}>Без номера</Text>
               </View>
             )}
+            {vin ? <VinText vin={vin} size={11} color={palette.text.tertiary} style={styles.carVin} /> : null}
           </View>
         </View>
         {/* Trailing cluster: edit/delete (gated) + a chevron that signals the
@@ -1991,6 +2031,8 @@ export interface CarFormValues {
   noPlate: boolean;
   makeModel: string;
   carComment: string;
+  /** 171 — канонический VIN ('' = не задан / очистить). Всегда '' при выключенной опции. */
+  vin: string;
 }
 
 interface CarFormModalProps {
@@ -1999,34 +2041,45 @@ interface CarFormModalProps {
   editingCar: Car | null;
   palette: ReturnType<typeof useColors>;
   submitting: boolean;
+  /** 171 — ошибка сервера по VIN (409 VIN_DUPLICATE с именем клиента) — под полем VIN. */
+  vinError?: string | null;
   onClose: () => void;
   onSubmit: (values: CarFormValues) => void;
 }
 
-function CarFormModal({ visible, editingCar, palette, submitting, onClose, onSubmit }: CarFormModalProps) {
+function CarFormModal({ visible, editingCar, palette, submitting, vinError, onClose, onSubmit }: CarFormModalProps) {
   const [plateNumber, setPlateNumber] = useState('');
   const [plateMode, setPlateMode] = useState<PlateMode>('ru');
   const [noPlate, setNoPlate] = useState(false);
   const [makeModel, setMakeModel] = useState('');
   const [carComment, setCarComment] = useState('');
+  // 171 — поле VIN есть только при включённой опции тенанта. Серверная ошибка
+  // по VIN живёт до первой правки поля.
+  const vinEnabled = useVinEnabled();
+  const [vin, setVin] = useState('');
+  const [localVinError, setLocalVinError] = useState<string | null>(null);
+  useEffect(() => setLocalVinError(vinError ?? null), [vinError]);
 
   // Re-seed the form each time the modal opens. Prefill the mode from the
   // stored plate so a foreign plate opens in INT mode (and stays editable
   // as foreign instead of being re-masked).
   useEffect(() => {
     if (!visible) return;
+    setLocalVinError(null);
     if (editingCar) {
       setPlateNumber(editingCar.plateNumber);
       setPlateMode(detectPlateMode(editingCar.plateNumber));
       setNoPlate(!!editingCar.noPlate || !editingCar.plateNumber);
       setMakeModel(editingCar.makeModel);
       setCarComment(editingCar.comment || '');
+      setVin(carVin(editingCar) ?? '');
     } else {
       setPlateNumber('');
       setPlateMode('ru');
       setNoPlate(false);
       setMakeModel('');
       setCarComment('');
+      setVin('');
     }
   }, [visible, editingCar]);
 
@@ -2056,6 +2109,24 @@ function CarFormModal({ visible, editingCar, palette, submitting, onClose, onSub
           placeholderTextColor={palette.text.tertiary}
         />
       </View>
+      {/* 171 — VIN под маркой/моделью, только при включённой опции. Расшифровка
+          подставляет марку/модель в пустое поле молча, в заполненное — через
+          чип «По VIN: … · Заменить» внутри VinInput. */}
+      {vinEnabled && (
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN</Text>
+          <VinInput
+            value={vin}
+            onChangeText={(v) => {
+              setVin(v);
+              setLocalVinError(null);
+            }}
+            makeModel={makeModel}
+            onMakeModel={setMakeModel}
+            error={localVinError}
+          />
+        </View>
+      )}
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
         <TextInput
@@ -2082,7 +2153,7 @@ function CarFormModal({ visible, editingCar, palette, submitting, onClose, onSub
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
-          onPress={() => onSubmit({ plateNumber, noPlate, makeModel, carComment })}
+          onPress={() => onSubmit({ plateNumber, noPlate, makeModel, carComment, vin: vinEnabled ? vin : '' })}
           disabled={submitting}
         >
           {submitting ? (
@@ -3152,6 +3223,8 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   carPlateBadgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, color: '#0A0A0A' },
+  // 171 — VIN моноширинным под плашкой (только при включённой опции).
+  carVin: { marginTop: 4 },
   plateBadgeRow: {
     alignSelf: 'flex-start',
     paddingHorizontal: 8,

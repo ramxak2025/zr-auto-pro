@@ -16,6 +16,11 @@ interface DuplicateWarningDialogProps {
   existingSubtitle?: string;
   openExistingLabel?: string;
   existingCars?: Array<{ plateNumber: string; makeModel: string }>;
+  /**
+   * Спрятать «Всё равно создать» — когда дубликат запрещён сервером
+   * (171: VIN уникален внутри тенанта, повтор ответит 409 VIN_DUPLICATE).
+   */
+  hideCreateAnyway?: boolean;
 }
 
 /**
@@ -34,6 +39,7 @@ export default function DuplicateWarningDialog({
   existingSubtitle,
   openExistingLabel = 'Открыть существующего',
   existingCars,
+  hideCreateAnyway = false,
 }: DuplicateWarningDialogProps) {
   const palette = useColors();
   const dark = palette.mode === 'dark';
@@ -96,9 +102,11 @@ export default function DuplicateWarningDialog({
           <Text style={styles.confirmText}>{openExistingLabel}</Text>
         </TouchableOpacity>
       </View>
-      <TouchableOpacity onPress={onCreateAnyway} style={styles.createAnyway}>
-        <Text style={[styles.createAnywayText, dark && { color: palette.text.secondary }]}>Всё равно создать</Text>
-      </TouchableOpacity>
+      {!hideCreateAnyway && (
+        <TouchableOpacity onPress={onCreateAnyway} style={styles.createAnyway}>
+          <Text style={[styles.createAnywayText, dark && { color: palette.text.secondary }]}>Всё равно создать</Text>
+        </TouchableOpacity>
+      )}
     </Modal>
   );
 }

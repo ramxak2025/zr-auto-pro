@@ -36,9 +36,29 @@ interface Props {
    */
   phoneActive?: boolean;
   onPhoneSelect?: () => void;
+  /**
+   * Optional fourth segment «VIN» (171, 2026-09-25) — поиск клиента по VIN в
+   * Кассе. Рендерится ТОЛЬКО когда опция тенанта включена (родитель передаёт
+   * `onVinSelect` только при `useVinEnabled()`); без пропа переключатель
+   * байт-в-байт прежний трёхсегментный. Требует `onPhoneSelect` (Касса).
+   *
+   * Четыре сегмента на узких iPhone (SE/mini): режим `dense` — сегменты ещё
+   * уже (minWidth 56, паддинг spacing[1.5], подпись 11pt), сумма ≈ 245pt,
+   * поэтому в Кассе четырёхсегментный переключатель стоит на своей строке
+   * ПОД подписью секции, а не рядом с ней (см. CheckCreateScreen).
+   */
+  vinActive?: boolean;
+  onVinSelect?: () => void;
 }
 
-export default function PlateModeSwitcher({ value, onChange, phoneActive = false, onPhoneSelect }: Props) {
+export default function PlateModeSwitcher({
+  value,
+  onChange,
+  phoneActive = false,
+  onPhoneSelect,
+  vinActive = false,
+  onVinSelect,
+}: Props) {
   const palette = useOptionalColors();
   const dark = palette.mode === 'dark';
   // Три сегмента (Касса, RU|INT|ТЕЛ) на узких iPhone (SE/mini) не влезали в
@@ -48,27 +68,34 @@ export default function PlateModeSwitcher({ value, onChange, phoneActive = false
   // потребители (Клиенты, QuickClientCreateSheet, CarPlateField) рендерятся
   // байт-в-байт как раньше.
   const compact = !!onPhoneSelect;
+  const dense = !!onVinSelect;
+  // Пока активен телефон или VIN, плашечные сегменты RU/INT неактивны; тап по
+  // любому из них возвращает поиск по номеру (onChange уходит даже без смены
+  // самого режима плашки — родитель выходит из phone/vin-режима).
+  const plateInactive = phoneActive || vinActive;
   return (
     <View style={[styles.wrap, compact && styles.wrapCompact, dark && { backgroundColor: palette.bg.muted }]}>
       <Segment
-        active={!phoneActive && value === 'ru'}
+        active={!plateInactive && value === 'ru'}
         label="RU"
         flag="🇷🇺"
         compact={compact}
+        dense={dense}
         onPress={() => {
-          if (value !== 'ru' || phoneActive) {
+          if (value !== 'ru' || plateInactive) {
             haptic('select');
             onChange('ru');
           }
         }}
       />
       <Segment
-        active={!phoneActive && value === 'foreign'}
+        active={!plateInactive && value === 'foreign'}
         label="INT"
         icon="globe-outline"
         compact={compact}
+        dense={dense}
         onPress={() => {
-          if (value !== 'foreign' || phoneActive) {
+          if (value !== 'foreign' || plateInactive) {
             haptic('select');
             onChange('foreign');
           }
@@ -80,10 +107,26 @@ export default function PlateModeSwitcher({ value, onChange, phoneActive = false
           label="ТЕЛ"
           icon="call-outline"
           compact={compact}
+          dense={dense}
           onPress={() => {
             if (!phoneActive) {
               haptic('select');
               onPhoneSelect();
+            }
+          }}
+        />
+      )}
+      {onVinSelect && (
+        <Segment
+          active={vinActive}
+          label="VIN"
+          icon="barcode-outline"
+          compact={compact}
+          dense={dense}
+          onPress={() => {
+            if (!vinActive) {
+              haptic('select');
+              onVinSelect();
             }
           }}
         />
@@ -98,10 +141,11 @@ interface SegmentProps {
   flag?: string;
   icon?: keyof typeof Ionicons.glyphMap;
   compact?: boolean;
+  dense?: boolean;
   onPress: () => void;
 }
 
-function Segment({ active, label, flag, icon, compact = false, onPress }: SegmentProps) {
+function Segment({ active, label, flag, icon, compact = false, dense = false, onPress }: SegmentProps) {
   const palette = useOptionalColors();
   const dark = palette.mode === 'dark';
   return (
@@ -110,10 +154,14 @@ function Segment({ active, label, flag, icon, compact = false, onPress }: Segmen
       style={[
         styles.segment,
         compact && styles.segmentCompact,
+        dense && styles.segmentDense,
         active && styles.segmentActive,
         active && dark && { backgroundColor: palette.bg.card },
       ]}
       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
     >
       {flag ? (
         <Text style={[styles.flag, !active && { opacity: 0.55 }]}>{flag}</Text>
@@ -135,6 +183,7 @@ function Segment({ active, label, flag, icon, compact = false, onPress }: Segmen
       <Text
         style={[
           styles.label,
+          dense && styles.labelDense,
           active ? styles.labelActive : styles.labelInactive,
           dark && (active ? { color: palette.accent.primaryText } : { color: palette.text.tertiary }),
         ]}
@@ -174,6 +223,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[2],
     gap: 4,
     flexShrink: 1,
+  },
+  // Четырёхсегментный режим (RU|INT|ТЕЛ|VIN, 171): ещё уже, чтобы четыре
+  // сегмента (≈ 4 × 56 + отступы ≈ 245pt) влезали на iPhone SE/mini.
+  segmentDense: {
+    minWidth: 56,
+    paddingHorizontal: spacing[1.5],
+    gap: 3,
+  },
+  labelDense: {
+    fontSize: 11,
+    letterSpacing: 0.3,
   },
   segmentActive: {
     backgroundColor: colors.white,
