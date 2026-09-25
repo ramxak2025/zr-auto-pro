@@ -36,6 +36,14 @@ export class ImportRowInputDto {
   @IsOptional()
   carModel?: string | null;
 
+  /**
+   * 171 — VIN («car_vin»). Нормализуется сервером; учитывается только при
+   * включённой опции Tenant.vinEnabled, иначе молча игнорируется.
+   */
+  @IsString()
+  @IsOptional()
+  carVin?: string | null;
+
   /** Client comment («Комментарий» column) — stored on the client card. */
   @IsString()
   @IsOptional()

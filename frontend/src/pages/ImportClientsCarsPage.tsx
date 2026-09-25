@@ -169,6 +169,9 @@ const ISSUE_LABELS: Record<ImportIssueKind, string> = {
   duplicate_in_file: 'Повтор в файле',
   multiple_name_candidates: 'Несколько имён на один телефон',
   name_conflict_same_phone: 'Конфликт имени',
+  // 171 — колонка VIN (учитывается только при включённой опции «VIN-код автомобиля»).
+  invalid_vin: 'VIN не распознан',
+  duplicate_vin: 'VIN уже занят или повторяется',
 };
 
 // `duplicate_phone` is emitted by the backend for duplicate-skips — it is not
@@ -200,6 +203,8 @@ const SEVERITY: Record<ImportIssueKind, 'error' | 'warning'> = {
   duplicate_in_file: 'warning',
   multiple_name_candidates: 'warning',
   name_conflict_same_phone: 'warning',
+  invalid_vin: 'warning',
+  duplicate_vin: 'warning',
 };
 
 type Step = 'upload' | 'mapping' | 'preview' | 'done';

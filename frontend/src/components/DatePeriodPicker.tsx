@@ -1,7 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useId } from 'react';
 import { CalendarDays, ChevronDown } from 'lucide-react';
 
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
+import { cn } from '../ui/cn';
+import { controlBase } from '../ui/Input';
+import { focusRing } from '../ui/tokens';
 
 interface DatePeriodPickerProps {
   dateFrom: string;
@@ -26,6 +29,7 @@ export default function DatePeriodPicker({ dateFrom, dateTo, onChange }: DatePer
   const { today, weekStart, monthStart } = useTenantCalendar();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const id = useId();
 
   // Close on outside click
   useEffect(() => {
@@ -92,182 +96,131 @@ export default function DatePeriodPicker({ dateFrom, dateTo, onChange }: DatePer
     { key: 'month', label: 'Месяц', action: applyMonth },
   ];
 
+  const dateInputMobile = cn(controlBase, 'h-10 min-w-0 flex-1 px-3 text-sm');
+  const dateInputDesktop = cn(controlBase, 'h-8 w-[8.75rem] px-2 text-xs shadow-none');
+
   return (
     <div ref={containerRef} className="relative inline-block">
-      {/* ── Mobile trigger button ── */}
+      {/* ── Мобильный триггер ── */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="
-          md:hidden
-          inline-flex items-center gap-1.5
-          h-8 px-2.5
-          bg-white border border-gray-200 rounded-lg
-          text-xs font-medium text-gray-700
-          shadow-sm
-          active:scale-[0.97] transition-all duration-150
-        "
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className={cn(
+          'inline-flex h-9 items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-2.5 text-sm font-medium text-ink shadow-sm transition-[background-color] duration-150 active:bg-surface-2 md:hidden',
+          focusRing,
+        )}
       >
-        <CalendarDays className="h-3.5 w-3.5 text-primary-500 flex-shrink-0" />
-        <span className="truncate max-w-[7rem]">{getLabel()}</span>
+        <CalendarDays className="h-4 w-4 flex-shrink-0 text-accent" aria-hidden="true" />
+        <span className="max-w-[8rem] truncate">{getLabel()}</span>
         <ChevronDown
-          className={`h-3 w-3 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+          className={cn('h-3.5 w-3.5 text-ink-4 transition-transform duration-150', open && 'rotate-180')}
+          aria-hidden="true"
         />
       </button>
 
-      {/* ── Mobile dropdown ── */}
+      {/* ── Мобильная выпадашка ── */}
       {open && (
         <div
-          className="
-            md:hidden
-            fixed inset-x-3 top-auto z-50
-            bg-white rounded-2xl border border-gray-100
-            shadow-2xl shadow-gray-300/50
-            animate-fade-in-down
-            overflow-hidden
-          "
-          style={{ marginTop: '0.5rem' }}
+          role="dialog"
+          aria-label="Период"
+          className="fixed inset-x-3 top-auto z-50 mt-2 overflow-hidden rounded-xl border border-line bg-surface shadow-pop motion-safe:animate-pop-in md:hidden"
         >
-          {/* Quick filters */}
-          <div className="flex border-b border-gray-100">
+          <div className="flex border-b border-line">
             {filters.map(({ key, label, action }) => (
               <button
                 key={key}
                 type="button"
+                aria-pressed={activeFilter === key}
                 onClick={() => {
                   action();
                   setOpen(false);
                 }}
-                className={`
-                  flex-1 py-3 text-sm font-semibold tracking-wide
-                  transition-colors duration-150
-                  ${
-                    activeFilter === key
-                      ? 'text-primary-600 bg-primary-50'
-                      : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
-                  }
-                `}
+                className={cn(
+                  'flex-1 py-3 text-sm font-semibold transition-colors duration-150',
+                  activeFilter === key
+                    ? 'bg-accent-soft text-accent-text'
+                    : 'text-ink-2 hover:bg-surface-2 hover:text-ink',
+                )}
               >
                 {label}
               </button>
             ))}
           </div>
 
-          {/* Date inputs */}
-          <div className="px-4 pt-3 pb-4 space-y-3">
-            <div className="flex items-center gap-3">
-              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">С</label>
+          <div className="space-y-3 px-4 pb-4 pt-3">
+            <label className="flex items-center gap-3 text-xs font-semibold text-ink-3">
+              <span className="w-6 flex-shrink-0">С</span>
               <input
                 type="date"
                 value={dateFrom}
                 onChange={(e) => onChange(e.target.value, dateTo)}
-                className="
-                  flex-1 min-w-0
-                  h-10 px-3 rounded-xl
-                  border border-gray-200 bg-gray-50/80
-                  text-sm text-gray-700
-                  focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
-                  focus:outline-none focus:bg-white
-                  transition-colors
-                "
+                className={dateInputMobile}
               />
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">По</label>
+            </label>
+            <label className="flex items-center gap-3 text-xs font-semibold text-ink-3">
+              <span className="w-6 flex-shrink-0">По</span>
               <input
                 type="date"
                 value={dateTo}
                 onChange={(e) => onChange(dateFrom, e.target.value)}
-                className="
-                  flex-1 min-w-0
-                  h-10 px-3 rounded-xl
-                  border border-gray-200 bg-gray-50/80
-                  text-sm text-gray-700
-                  focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
-                  focus:outline-none focus:bg-white
-                  transition-colors
-                "
+                className={dateInputMobile}
               />
-            </div>
-
-            {/* Apply */}
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="
-                w-full h-10 mt-1
-                text-sm font-semibold
-                text-white bg-primary-600 hover:bg-primary-700
-                rounded-xl
-                transition-colors duration-150
-                active:scale-[0.98]
-              "
-            >
+            </label>
+            <button type="button" onClick={() => setOpen(false)} className="btn-primary mt-1 w-full">
               Готово
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Desktop: compact inline layout ── */}
-      <div className="hidden md:flex items-center gap-2">
-        <CalendarDays className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-
-        {/* Quick filter pills */}
-        <div className="flex items-center gap-1">
+      {/* ── Десктоп: компактная строка ── */}
+      <div className="hidden items-center gap-2 md:flex">
+        <div
+          role="group"
+          aria-label="Быстрый период"
+          className="inline-flex items-center rounded-lg bg-surface-3 p-0.5"
+        >
           {filters.map(({ key, label, action }) => (
             <button
               key={key}
               type="button"
+              aria-pressed={activeFilter === key}
               onClick={action}
-              className={`
-                h-7 px-2.5 rounded-md text-[11px] font-semibold
-                transition-all duration-150
-                ${
-                  activeFilter === key
-                    ? 'bg-primary-600 text-white shadow-sm'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
-                }
-              `}
+              className={cn(
+                'h-7 rounded-md px-2.5 text-xs font-medium transition-[background-color,color,box-shadow] duration-150',
+                focusRing,
+                activeFilter === key ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink',
+              )}
             >
               {label}
             </button>
           ))}
         </div>
 
-        {/* Separator */}
-        <div className="w-px h-4 bg-gray-200" />
+        <span className="h-5 w-px bg-line-strong" aria-hidden="true" />
 
-        {/* Compact date fields */}
         <div className="flex items-center gap-1.5">
-          <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">С</label>
+          <label htmlFor={`${id}-from`} className="text-xs font-medium text-ink-3">
+            с
+          </label>
           <input
+            id={`${id}-from`}
             type="date"
             value={dateFrom}
             onChange={(e) => onChange(e.target.value, dateTo)}
-            className="
-              h-7 w-[8.5rem] px-2 rounded-md
-              border border-gray-200 bg-white
-              text-xs text-gray-700
-              focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
-              focus:outline-none
-              transition-colors
-            "
+            className={dateInputDesktop}
           />
-          <span className="text-[10px] text-gray-300">—</span>
-          <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">По</label>
+          <label htmlFor={`${id}-to`} className="text-xs font-medium text-ink-3">
+            по
+          </label>
           <input
+            id={`${id}-to`}
             type="date"
             value={dateTo}
             onChange={(e) => onChange(dateFrom, e.target.value)}
-            className="
-              h-7 w-[8.5rem] px-2 rounded-md
-              border border-gray-200 bg-white
-              text-xs text-gray-700
-              focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
-              focus:outline-none
-              transition-colors
-            "
+            className={dateInputDesktop}
           />
         </div>
       </div>

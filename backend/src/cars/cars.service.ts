@@ -1,9 +1,11 @@
-import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { normalizePlate } from '../imports/normalize-plate';
 import { ClientsService } from '../clients/clients.service';
+import { VinService } from '../vin/vin.service';
+import { isValidVin, normalizeVin } from '../vin/vin.util';
 
 /**
  * ФИЛИАЛЫ (156/161). Своей точки у машины НЕТ и не будет: машина — это гараж
@@ -20,6 +22,8 @@ export class CarsService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private clients: ClientsService,
+    // 171 — VIN: «включена ли опция у тенанта» + единая нормализация.
+    private vin: VinService,
   ) {}
 
   /**
@@ -92,7 +96,7 @@ export class CarsService {
     const params: unknown[] = [tenantID, norm.key];
     const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorPoint, params);
     const { rows } = await this.pool.query(
-      `SELECT ca.id, ca.plate_number, ca.make_model, ca.client_id, ca.created_at,
+      `SELECT ca.id, ca.plate_number, ca.make_model, ca.vin, ca.client_id, ca.created_at,
               cl.full_name AS client_full_name, cl.phone AS client_phone
        FROM cars ca
        LEFT JOIN clients cl ON cl.id = ca.client_id
@@ -102,11 +106,41 @@ export class CarsService {
       params,
     );
     if (rows.length === 0) return null;
-    const r = rows[0];
+    return this.mapLookupRow(rows[0]);
+  }
+
+  /**
+   * 171 — Find an existing car by VIN (CarLookupResult | null). Некорректный
+   * VIN и ВЫКЛЮЧЕННАЯ опция → null, не 400: Касса в режиме поиска «VIN» дёргает
+   * ручку на каждом вводе, а при выключенной опции всё, что связано с VIN,
+   * скрыто. Видимость владельца — тем же предикатом, что lookup-by-plate (161).
+   */
+  async findByVin(tenantID: string, rawVin: string, actorPoint?: string | null) {
+    const vin = normalizeVin(rawVin);
+    if (!isValidVin(vin)) return null;
+    if (!(await this.vin.isEnabled(tenantID))) return null;
+    const params: unknown[] = [tenantID, vin];
+    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorPoint, params);
+    const { rows } = await this.pool.query(
+      `SELECT ca.id, ca.plate_number, ca.make_model, ca.vin, ca.client_id, ca.created_at,
+              cl.full_name AS client_full_name, cl.phone AS client_phone
+       FROM cars ca
+       LEFT JOIN clients cl ON cl.id = ca.client_id
+       WHERE ca.tenant_id = $1 AND ca.vin = $2${ownerWhere}
+       ORDER BY ca.created_at LIMIT 1`,
+      params,
+    );
+    if (rows.length === 0) return null;
+    return this.mapLookupRow(rows[0]);
+  }
+
+  /** Форма lookup-by-plate / lookup-by-vin (shared CarLookupResult). */
+  private mapLookupRow(r: any) {
     return {
       id: r.id as string,
       plateNumber: r.plate_number as string,
       makeModel: r.make_model as string,
+      vin: (r.vin as string | null) ?? null,
       clientId: r.client_id as string | null,
       createdAt: r.created_at as string,
       client: r.client_full_name
@@ -119,6 +153,87 @@ export class CarsService {
     };
   }
 
+  /**
+   * 171 — VIN из тела запроса → значение для записи:
+   *   undefined — поля нет ИЛИ опция у тенанта выключена (поле молча игнорируется,
+   *               как требует спека: при выключенной опции VIN не существует);
+   *   null      — очистить (vin: null | '');
+   *   string    — нормализованный валидный VIN без дубля среди ВИДИМЫХ автору
+   *               машин тенанта (чужой филиал в раздельном режиме не проверяется:
+   *               иначе 409 выдавал бы имя клиента, которого автор видеть не должен).
+   */
+  private async resolveVinForWrite(
+    tenantID: string,
+    raw: unknown,
+    excludeCarId: string | null,
+    viewerPoint: string | null,
+  ): Promise<string | null | undefined> {
+    if (raw === undefined) return undefined;
+    if (!(await this.vin.isEnabled(tenantID))) return undefined;
+    if (raw === null) return null;
+    if (typeof raw !== 'string') throw new BadRequestException({ message: 'Некорректный VIN' });
+    const vin = normalizeVin(raw);
+    if (!vin) return null;
+    if (!isValidVin(vin)) {
+      throw new BadRequestException({ message: 'Некорректный VIN: нужно 17 символов — латиница и цифры без I, O, Q' });
+    }
+    await this.assertVinUnique(tenantID, vin, excludeCarId, viewerPoint);
+    return vin;
+  }
+
+  /**
+   * Другая машина тенанта с тем же VIN → 409 { code:'VIN_DUPLICATE', carId,
+   * clientId, clientName } (контракт CreateCarRequest.vin в shared/api/types.ts).
+   * Уникальность СОЗНАТЕЛЬНО не на уровне БД (история, смена владельца).
+   */
+  private async assertVinUnique(
+    tenantID: string,
+    vin: string,
+    excludeCarId: string | null,
+    viewerPoint: string | null,
+  ): Promise<void> {
+    const params: unknown[] = [tenantID, vin];
+    let where = 'ca.tenant_id = $1 AND ca.vin = $2';
+    if (excludeCarId) {
+      params.push(excludeCarId);
+      where += ` AND ca.id <> $${params.length}`;
+    }
+    const ownerWhere = this.ownerVisibleSqlFor('ca', viewerPoint, params);
+    const { rows } = await this.pool.query(
+      `SELECT ca.id, ca.client_id, cl.full_name AS client_full_name
+         FROM cars ca
+         LEFT JOIN clients cl ON cl.id = ca.client_id
+        WHERE ${where}${ownerWhere}
+        ORDER BY ca.created_at LIMIT 1`,
+      params,
+    );
+    if (rows.length === 0) return;
+    const r = rows[0];
+    const clientName = (r.client_full_name as string | null) || null;
+    throw new ConflictException({
+      code: 'VIN_DUPLICATE',
+      carId: r.id as string,
+      clientId: (r.client_id as string | null) ?? null,
+      clientName,
+      message: clientName
+        ? `Автомобиль с таким VIN уже есть у клиента ${clientName}`
+        : 'Автомобиль с таким VIN уже есть в базе',
+    });
+  }
+
+  /**
+   * 171 — фрагмент « OR ca.vin ILIKE $n» для поиска: полное совпадение или
+   * подстрока ≥ 4 символов после normalizeVin (кириллица → латиница, регистр не
+   * важен) — ТОЛЬКО при включённой опции тенанта; иначе пустая строка и запрос
+   * дословно прежний.
+   */
+  private async vinSearchOr(tenantID: string, search: string, params: unknown[]): Promise<string> {
+    const vinFragment = normalizeVin(search);
+    if (vinFragment.length < 4 || !(await this.vin.isEnabled(tenantID))) return '';
+    params.push(`%${vinFragment}%`);
+    return ` OR ca.vin ILIKE $${params.length}`;
+  }
+
   private mapCar(row: any) {
     const car: any = {
       id: row.id,
@@ -128,6 +243,9 @@ export class CarsService {
       clientId: row.client_id,
       // 059_cars_no_plate — true for cars registered "без номера".
       noPlate: !!row.no_plate,
+      // 171 — VIN (нормализованный) или null. Едет всегда: при выключенной
+      // опции клиенты его просто не показывают.
+      vin: row.vin ?? null,
       createdAt: row.created_at,
     };
     if (row.client_full_name) {
@@ -154,12 +272,13 @@ export class CarsService {
       // Plate numbers are stored compactly (no spaces). Let the user enter
       // either form: REPLACE strips spaces from the column at match time.
       const compactSearch = search.replace(/\s+/g, '');
+      params.push(`%${compactSearch}%`, `%${search}%`);
+      const vinOr = await this.vinSearchOr(tenantID, search, params); // 171
       where += ` AND (
         REPLACE(ca.plate_number, ' ', '') ILIKE $${idx}
-        OR ca.make_model ILIKE $${idx + 1}
+        OR ca.make_model ILIKE $${idx + 1}${vinOr}
       )`;
-      params.push(`%${compactSearch}%`, `%${search}%`);
-      idx += 2;
+      idx = params.length + 1;
     }
 
     // «Без номеров» filter — applied server-side so it works across the full
@@ -247,18 +366,41 @@ export class CarsService {
     // flow where a customer's new car is attached to an already-existing client
     // (retried / double-tapped saves must not fan out into duplicate cars).
     // No-plate cars are skipped — an empty plate is not a stable identity.
+    let existing: any = null;
     if (dto.clientId && !noPlate) {
       const norm = normalizePlate(plateNumber);
       if (!norm.isEmpty && norm.key) {
-        const existing = await this.findExistingPlateForClient(tenantID, dto.clientId, norm.key);
-        if (existing) return existing;
+        existing = await this.findExistingPlateForClient(tenantID, dto.clientId, norm.key);
       }
     }
 
+    // 171 — VIN: только при включённой опции (иначе поле молча игнорируется);
+    // дубль ищется среди других машин — найденная по номеру «своя» исключается,
+    // иначе повторное сохранение той же машины с её же VIN давало бы 409.
+    const vin =
+      dto.vin === undefined
+        ? undefined
+        : await this.resolveVinForWrite(
+            tenantID,
+            dto.vin,
+            existing?.id ?? null,
+            await this.clients.separatePointFor(tenantID, actorPoint),
+          );
+
+    if (existing) {
+      // Повторное сохранение принесло VIN, которого у машины ещё нет, —
+      // дописываем в найденную карточку вместо второй строки.
+      if (vin && !existing.vin) {
+        await this.pool.query('UPDATE cars SET vin=$1 WHERE id=$2 AND tenant_id=$3', [vin, existing.id, tenantID]);
+        return { ...existing, vin };
+      }
+      return existing;
+    }
+
     const { rows } = await this.pool.query(
-      `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, no_plate)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [plateNumber, makeModel, dto.comment ?? null, dto.clientId ?? null, tenantID, noPlate],
+      `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, no_plate, vin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [plateNumber, makeModel, dto.comment ?? null, dto.clientId ?? null, tenantID, noPlate, vin ?? null],
     );
     return this.mapCar(rows[0]);
   }
@@ -338,6 +480,14 @@ export class CarsService {
     if (dto.clientId !== undefined) {
       sets.push(`client_id=$${idx++}`);
       vals.push(dto.clientId);
+    }
+    // 171 — VIN: только при включённой опции; null/'' очищает; дубль среди
+    // ДРУГИХ видимых машин тенанта → 409 VIN_DUPLICATE. Точка — та же
+    // viewerPoint, что и у остальных проверок метода.
+    const vin = await this.resolveVinForWrite(tenantID, dto.vin, id, viewerPoint);
+    if (vin !== undefined) {
+      sets.push(`vin=$${idx++}`);
+      vals.push(vin);
     }
 
     if (sets.length === 0) return this.getById(id, tenantID, actorPoint);

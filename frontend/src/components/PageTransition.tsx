@@ -11,9 +11,10 @@
  * The combination is necessary: AnimatePresence needs a key change to
  * trigger exit animation, and a unique key per route is the standard way.
  *
- * Tuned to feel "premium SaaS" — short (220 ms), subtle (4 px slide), no
- * scaling. Anything more dramatic stops feeling app-like and starts feeling
- * like a reveal sequence.
+ * Тайминги под рабочий инструмент: уход 120 мс + приход 180 мс (mode="wait"
+ * складывает их) — переход заметен, но не задерживает десятки операций в час.
+ * Сдвиг по Y отключается системной настройкой reduced-motion через
+ * <MotionConfig reducedMotion="user"> в Layout; остаётся только fade.
  */
 import { motion } from 'framer-motion';
 import { ReactNode } from 'react';
@@ -29,9 +30,8 @@ export default function PageTransition({ children, fadeOnly = false }: PageTrans
   return (
     <motion.div
       initial={{ opacity: 0, y: fadeOnly ? 0 : 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: fadeOnly ? 0 : -4 }}
-      transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
+      animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.25, 1, 0.5, 1] } }}
+      exit={{ opacity: 0, y: fadeOnly ? 0 : -2, transition: { duration: 0.12, ease: [0.4, 0, 1, 1] } }}
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
     >
       {children}

@@ -10,19 +10,18 @@ interface InlineLoaderProps {
 
 /**
  * Content-sized loading indicator for use INSIDE a page that already has its
- * chrome. The shared `LoadingSpinner` is a full-viewport route fallback (fake
- * header + fake tab bar, h-screen) and must never be nested in page content —
- * doing so paints a phantom app shell over the real frame. Use InlineLoader
- * for in-page / in-card / in-tab loading instead.
+ * chrome. The shared `LoadingSpinner` is a full-viewport route fallback and
+ * must never be nested in page content. Prefer a Skeleton that repeats the
+ * shape of the future content; InlineLoader — when the shape is unknown.
  */
 export default function InlineLoader({ label = 'Загрузка…', minHeight = 'py-16', className = '' }: InlineLoaderProps) {
   return (
     <div
-      className={`flex flex-col items-center justify-center ${minHeight} text-gray-500 ${className}`}
+      className={`flex flex-col items-center justify-center ${minHeight} text-ink-3 ${className}`}
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="h-7 w-7 animate-spin text-primary-600" aria-hidden="true" />
+      <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
       {label && <span className="mt-3 text-sm">{label}</span>}
     </div>
   );

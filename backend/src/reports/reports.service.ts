@@ -1,7 +1,8 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, HttpException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
+import { phoneSearchKey } from '../common/normalize-phone';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { actorPointId, pointCacheSegment, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
@@ -13,6 +14,7 @@ import {
   startOfDayInZone,
   startOfMonthInZone,
   startOfMonthInZoneOffset,
+  zonedDateKey,
   zonedMonthKey,
 } from '../common/timezone';
 import { previousComparableWindow } from '../common/period-compare';
@@ -41,6 +43,32 @@ export interface MarketingTrendPoint {
   returningRate: number;
   calls: number;
   reviews: number;
+}
+
+/**
+ * Звонок в форме CallsService.getCalls — ровно те поля, что нужны воронке
+ * (Mango и «Мои Звонки» приводятся к одному виду там, не здесь).
+ */
+interface FunnelCall {
+  direction: 'incoming' | 'outgoing';
+  from: string;
+  to: string;
+  status: 'answered' | 'missed';
+  date: string;
+  clientPhone?: string;
+}
+
+/** Текст ошибки провайдера телефонии для UI воронки («МоиЗвонки: …»). */
+function funnelErrorText(err: unknown): string {
+  if (err instanceof HttpException) {
+    const res = err.getResponse();
+    if (typeof res === 'string') return res;
+    const msg = (res as { message?: unknown } | null)?.message;
+    if (typeof msg === 'string') return msg;
+    if (Array.isArray(msg) && typeof msg[0] === 'string') return msg[0];
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return 'Не удалось получить звонки';
 }
 
 // Matches a calendar date `YYYY-MM-DD`. Anything else (locale-formatted,
@@ -458,96 +486,184 @@ export class ReportsService {
     };
   }
 
-  /**
-   * Call funnel report: cross-reference sms_history (which logs inbound/outbound
-   * SMS contacts stored persistently in DB) with checks to build a conversion
-   * funnel. The external "calls" log (from Moi Zvonki API) is not persisted to
-   * DB, so we use sms_history as the tenant contact proxy.
-   *
-   * For tenants without any SMS integration the query returns zeros — not an
-   * error, just an empty funnel.
-   */
+  // ── Воронка звонков ────────────────────────────────────────────────────────
+  //
+  // 2026-09-25 (правка владельца №4): воронка считается по РЕАЛЬНЫМ ЗВОНКАМ
+  // телефонии (CallsService.getCalls: Mango — таблица calls, «Мои Звонки» —
+  // live-API calls.list), а не по sms_history. Старая СМС-воронка у тенанта
+  // без рассылок всегда была нулевой, хотя телефония подключена, — это и был
+  // симптом владельца. СМС-воронка не сохраняется: у неё не было пользователей,
+  // а два смысла под одним названием — источник путаницы.
+  //
+  // Определения (звонки — ВХОДЯЩИЕ, если не сказано иное):
+  //   • totalCalls / answeredCalls — входящие за период / из них отвеченные;
+  //   • missedCalls, notCalledBack, outgoingCalls — как в summary getCalls
+  //     (там уже живёт логика «перезвонили ли»);
+  //   • uniqueCallers — уникальные номера входящих (последние 10 цифр);
+  //   • knownCallers / newCallers — из них есть / нет в базе клиентов тенанта;
+  //   • arrivedClients / createdChecks / totalRevenue — клиенты, чей номер
+  //     звонил в период, и их ПРОВЕДЁННЫЕ чеки с датой ≥ дня ПЕРВОГО звонка
+  //     этого номера в периоде и ≤ dateTo (границы дней — в поясе тенанта);
+  //     выручка — общей формулой (гарантия денег не приносит), чеки — филиала
+  //     сессии (pointFilterSql), как у остальных отчётов;
+  //   • avgCheckValue = totalRevenue / createdChecks;
+  //   • conversionRate = arrivedClients / uniqueCallers × 100 (0 без звонков);
+  //   • repeatClients — среди доехавших те, у кого чеков > 1 за всё время.
+  //
+  // Сопоставление номера с клиентом — ключ «последние 10 цифр» (phoneSearchKey
+  // в JS и то же выражение в SQL, что в поиске клиентов и функциональных
+  // индексах 104). Для реальных номеров он равен translate+right(…,10) из
+  // CallsService, а мусор вроде «anonymous» не становится «звонившим». Один
+  // SQL на весь период: номера и дни первого звонка уходят массивами через
+  // unnest($2::text[], $3::date[]), а не запросом на каждый номер.
+  //
+  // Кэш 60 с по tenant + point + период: live-API «Моих Звонков» за месяц
+  // тяжёлый, а главную открывают часто. Ключ СОЗНАТЕЛЬНО вне семейства
+  // `reports:*` — invalidateReportsForTenant чистит то семейство на КАЖДОЙ
+  // записи чека, и в загруженный день воронка дёргала бы провайдера на каждое
+  // открытие главной. Минута задержки для аналитики допустима.
+  // ────────────────────────────────────────────────────────────────────────────
+
+  private static readonly EMPTY_FUNNEL_COUNTS = {
+    totalCalls: 0,
+    uniqueCallers: 0,
+    arrivedClients: 0,
+    createdChecks: 0,
+    totalRevenue: 0,
+    avgCheckValue: 0,
+    repeatClients: 0,
+    conversionRate: 0,
+    answeredCalls: 0,
+    missedCalls: 0,
+    notCalledBack: 0,
+    outgoingCalls: 0,
+    knownCallers: 0,
+    newCallers: 0,
+  };
+
   async getCallFunnel(tenantID: string, query: { dateFrom?: string; dateTo?: string }, pointId: string | null = null) {
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+    const cacheKey = `call-funnel:${tenantID}:${pointCacheSegment(pointId)}:${dateFrom}:${dateTo}`;
+    return ttlCache.wrap(cacheKey, 60_000, () => this.computeCallFunnel(tenantID, dateFrom, dateTo, pointId));
+  }
 
-    // Contact stats from sms_history
-    const { rows: contactRows } = await this.pool.query(
-      `SELECT
-         COUNT(*) AS total_contacts,
-         COUNT(DISTINCT phone) AS unique_callers
-       FROM sms_history
-       WHERE tenant_id = $1
-         AND created_at::date BETWEEN $2::date AND $3::date`,
-      [tenantID, dateFrom, dateTo],
+  private async computeCallFunnel(tenantID: string, dateFrom: string, dateTo: string, pointId: string | null) {
+    const period = { from: dateFrom, to: dateTo };
+    const provider = await this.callsService.getTelephonyProvider(tenantID);
+    if (!provider) {
+      return { ...ReportsService.EMPTY_FUNNEL_COUNTS, period, telephony: { connected: false, provider: null } };
+    }
+
+    let calls: FunnelCall[];
+    let summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number };
+    try {
+      const res = await this.callsService.getCalls(tenantID, { dateFrom, dateTo });
+      calls = res.calls as FunnelCall[];
+      summary = res.summary;
+    } catch (err) {
+      return {
+        ...ReportsService.EMPTY_FUNNEL_COUNTS,
+        period,
+        telephony: { connected: true, provider, error: funnelErrorText(err) },
+      };
+    }
+    const telephony = { connected: true, provider };
+
+    // День ПЕРВОГО входящего звонка каждого номера — в поясе тенанта.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const incoming = calls.filter((c) => c.direction === 'incoming');
+    const firstCallDay = new Map<string, string>();
+    for (const call of incoming) {
+      const key = phoneSearchKey(call.from || call.clientPhone || '');
+      if (!key) continue;
+      const at = call.date ? new Date(call.date) : null;
+      const day = at && !Number.isNaN(at.getTime()) ? zonedDateKey(at, tz) : dateFrom;
+      const prev = firstCallDay.get(key);
+      if (!prev || day < prev) firstCallDay.set(key, day);
+    }
+
+    const uniqueCallers = firstCallDay.size;
+    const counts = {
+      totalCalls: incoming.length,
+      answeredCalls: incoming.filter((c) => c.status === 'answered').length,
+      missedCalls: summary.missed,
+      notCalledBack: summary.notCalledBack,
+      outgoingCalls: summary.outgoing,
+      uniqueCallers,
+    };
+    if (uniqueCallers === 0) return { ...ReportsService.EMPTY_FUNNEL_COUNTS, ...counts, period, telephony };
+
+    const phoneKeys = [...firstCallDay.keys()];
+    const firstDays = phoneKeys.map((k) => firstCallDay.get(k) as string);
+    const params: unknown[] = [tenantID, phoneKeys, firstDays, tz, dateTo];
+    const pointFilter = pointFilterSql('ch', pointId, params);
+    const { rows } = await this.pool.query(
+      `WITH callers AS (
+         SELECT phone_key, first_call
+           FROM unnest($2::text[], $3::date[]) AS t(phone_key, first_call)
+       ),
+       matched AS (
+         SELECT cl.id AS client_id, MIN(c.first_call) AS first_call
+           FROM callers c
+           JOIN clients cl
+             ON cl.tenant_id = $1
+            AND right(regexp_replace(cl.phone, '[^0-9]', '', 'g'), 10) = c.phone_key
+          GROUP BY cl.id
+       ),
+       known AS (
+         SELECT COUNT(DISTINCT c.phone_key) AS n
+           FROM callers c
+          WHERE EXISTS (SELECT 1 FROM clients cl
+                         WHERE cl.tenant_id = $1
+                           AND right(regexp_replace(cl.phone, '[^0-9]', '', 'g'), 10) = c.phone_key)
+       ),
+       visits AS (
+         SELECT ch.id, ch.client_id, ch.payment_method, ch.total_revenue
+           FROM matched m
+           JOIN checks ch
+             ON ch.tenant_id = $1
+            AND ch.client_id = m.client_id
+            AND ${checkMoneyBaseWhere('ch')}
+            AND ch.date >= (m.first_call::timestamp AT TIME ZONE $4::text)
+            AND ch.date <  (($5::date + INTERVAL '1 day')::timestamp AT TIME ZONE $4::text)${pointFilter}
+       ),
+       repeaters AS (
+         SELECT COUNT(*) AS n
+           FROM (SELECT ch.client_id
+                   FROM checks ch
+                  WHERE ch.tenant_id = $1
+                    AND ${checkMoneyBaseWhere('ch')}
+                    AND ch.client_id IN (SELECT DISTINCT client_id FROM visits)${pointFilter}
+                  GROUP BY ch.client_id
+                 HAVING COUNT(*) > 1) r
+       )
+       SELECT (SELECT n FROM known) AS known_callers,
+              (SELECT COUNT(DISTINCT ch.client_id) FROM visits ch) AS arrived_clients,
+              (SELECT COUNT(*) FROM visits ch) AS created_checks,
+              (SELECT COALESCE(SUM(${checkRevenueExpr('ch')}), 0) FROM visits ch) AS total_revenue,
+              (SELECT n FROM repeaters) AS repeat_clients`,
+      params,
     );
-
-    // Checks created for clients who appear in sms_history during the same period
-    // ФИЛИАЛ (156/160): «доехавшие» и их выручка — чеки ЭТОГО филиала.
-    const funnelParams: any[] = [tenantID, dateFrom, dateTo];
-    const funnelPointFilter = pointFilterSql('ch', pointId, funnelParams);
-    const { rows: checkRows } = await this.pool.query(
-      // Выручка воронки — через общий модуль формул: гарантия денег не
-      // приносит, и «доехавший по звонку клиент» не имеет права раздувать
-      // конверсию в рублях гарантийным ремонтом. Счётчики визитов и чеков
-      // гарантию СОХРАНЯЮТ (человек действительно доехал) — поэтому правило
-      // применяется выражением суммы, а не фильтром строк.
-      `SELECT
-         COUNT(DISTINCT ch.client_id) AS arrived_clients,
-         COUNT(DISTINCT ch.id) AS created_checks,
-         COALESCE(SUM(${checkRevenueExpr('ch')}), 0) AS total_revenue
-       FROM checks ch
-       JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
-       WHERE ch.tenant_id = $1
-         AND ${checkMoneyBaseWhere('ch')}
-         AND ch.date::date BETWEEN $2::date AND $3::date
-         AND cl.phone IN (
-           SELECT DISTINCT phone FROM sms_history
-           WHERE tenant_id = $1
-             AND created_at::date BETWEEN $2::date AND $3::date
-         )${funnelPointFilter}`,
-      funnelParams,
-    );
-
-    // Repeat clients (clients with more than 1 check total for this tenant)
-    const repeatParams: any[] = [tenantID];
-    const repeatPointFilter = pointFilterSql(null, pointId, repeatParams);
-    const { rows: repeatRows } = await this.pool.query(
-      `SELECT COUNT(DISTINCT client_id) AS repeat_clients
-       FROM (
-         SELECT client_id, COUNT(*) AS check_count
-         FROM checks
-         WHERE tenant_id = $1 AND is_deferred = false AND client_id IS NOT NULL
-           AND deleted_at IS NULL${repeatPointFilter}
-         GROUP BY client_id
-         HAVING COUNT(*) > 1
-       ) sub`,
-      repeatParams,
-    );
-
-    const c = contactRows[0];
-    const r = checkRows[0];
-    const rp = repeatRows[0];
-
-    const totalCalls = parseInt(c.total_contacts) || 0;
-    const uniqueCallers = parseInt(c.unique_callers) || 0;
+    const r = rows[0] ?? {};
+    const knownCallers = parseInt(r.known_callers) || 0;
     const arrivedClients = parseInt(r.arrived_clients) || 0;
     const createdChecks = parseInt(r.created_checks) || 0;
     const totalRevenue = parseFloat(r.total_revenue) || 0;
-    const avgCheckValue = createdChecks > 0 ? totalRevenue / createdChecks : 0;
-    const repeatClients = parseInt(rp.repeat_clients) || 0;
-    const conversionRate = uniqueCallers > 0 ? (arrivedClients / uniqueCallers) * 100 : 0;
+    const repeatClients = parseInt(r.repeat_clients) || 0;
 
     return {
-      totalCalls,
-      uniqueCallers,
+      ...counts,
       arrivedClients,
       createdChecks,
       totalRevenue,
-      avgCheckValue,
+      avgCheckValue: createdChecks > 0 ? Math.round((totalRevenue / createdChecks) * 100) / 100 : 0,
       repeatClients,
-      conversionRate: Math.round(conversionRate * 10) / 10,
-      period: { from: dateFrom, to: dateTo },
+      conversionRate: Math.round((arrivedClients / uniqueCallers) * 1000) / 10,
+      knownCallers,
+      newCallers: Math.max(uniqueCallers - knownCallers, 0),
+      period,
+      telephony,
     };
   }
 
@@ -2310,8 +2426,10 @@ export class ReportsService {
       const res = await this.callsService.getCalls(tenantID, { dateFrom: from, dateTo: to });
       summary = res.summary;
     } catch {
-      // No МоиЗвонки/Mango integration (or provider error) → zero call counts;
-      // the funnel below is independent (sms_history-derived) and still shows.
+      // No МоиЗвонки/Mango integration (or provider error) → zero call counts.
+      // С 2026-09-25 воронка выше считается по тем же звонкам (getCallFunnel →
+      // getCalls) и в этом случае тоже нулевая (telephony.connected=false /
+      // telephony.error) — отчёт маркетинга не падает, а показывает нули.
     }
 
     const answered = Math.max(summary.total - summary.missed, 0);

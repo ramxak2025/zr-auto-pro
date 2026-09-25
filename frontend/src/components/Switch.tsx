@@ -1,3 +1,5 @@
+import { cn } from '../ui/cn';
+
 interface SwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
@@ -6,6 +8,7 @@ interface SwitchProps {
   label: string;
   disabled?: boolean;
   id?: string;
+  size?: 'sm' | 'md';
   className?: string;
 }
 
@@ -14,7 +17,8 @@ interface SwitchProps {
  * Drop-in replacement for the hand-rolled `sr-only peer` checkbox toggles on
  * Integrations / Notifications / CompanySettings / Admin pages.
  */
-export default function Switch({ checked, onChange, label, disabled, id, className = '' }: SwitchProps) {
+export default function Switch({ checked, onChange, label, disabled, id, size = 'md', className = '' }: SwitchProps) {
+  const sm = size === 'sm';
   return (
     <button
       type="button"
@@ -24,10 +28,21 @@ export default function Switch({ checked, onChange, label, disabled, id, classNa
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${checked ? 'bg-primary-600' : 'bg-gray-300'} ${className}`}
+      className={cn(
+        'relative inline-flex flex-shrink-0 items-center rounded-full transition-colors duration-150',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        sm ? 'h-5 w-9' : 'h-6 w-11',
+        checked ? 'bg-accent' : 'bg-line-strong hover:bg-ink-4',
+        className,
+      )}
     >
       <span
-        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`}
+        className={cn(
+          'inline-block transform rounded-full bg-white shadow transition-transform duration-150',
+          sm ? 'h-4 w-4' : 'h-5 w-5',
+          checked ? (sm ? 'translate-x-[18px]' : 'translate-x-[22px]') : 'translate-x-0.5',
+        )}
         aria-hidden="true"
       />
     </button>

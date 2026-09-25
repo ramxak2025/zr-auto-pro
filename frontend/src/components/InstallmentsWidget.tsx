@@ -1,10 +1,13 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CalendarClock, AlertTriangle, ChevronRight, CreditCard } from 'lucide-react';
 import { installmentsApi } from '../api/services';
 import type { InstallmentWidget } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { Card, CardHeader } from '../ui/Card';
+import { cn } from '../ui/cn';
+import { focusRing } from '../ui/tokens';
 
 /** «YYYY-MM-DD» → «дд.мм». */
 function shortDate(d?: string | null): string {
@@ -26,14 +29,14 @@ export function dueLabel(dueInDays?: number | null): { text: string; tone: 'red'
 
 const DAYS = 7;
 
+const dueToneCls = { red: 'text-bad-text', amber: 'text-warn-text', gray: 'text-ink-3' } as const;
+
 /**
  * Dashboard card surfacing installment plans due in the next {@link DAYS} days
  * plus everything overdue. Owner/admin only — the caller is responsible for the
  * role gate; this just renders the data.
  */
 export default function InstallmentsWidget() {
-  const navigate = useNavigate();
-
   const { data, isLoading } = useQuery<InstallmentWidget>({
     queryKey: ['installments', 'widget', DAYS],
     queryFn: async () => {
@@ -54,79 +57,75 @@ export default function InstallmentsWidget() {
   const totalRemaining = data?.totalRemaining ?? 0;
 
   return (
-    <section className="card overflow-hidden">
-      <button
-        type="button"
-        onClick={() => navigate('/installments')}
-        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition-colors hover:bg-gray-50"
-      >
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-50">
-            <CreditCard className="h-5 w-5 text-violet-600" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Рассрочка</h2>
-            <p className="text-xs text-gray-500">Ближайшие и просроченные платежи</p>
-          </div>
-        </div>
-        <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-      </button>
+    <Card padding="none">
+      <Link to="/installments" className={cn('block rounded-t-xl transition-colors hover:bg-surface-2', focusRing)}>
+        <CardHeader
+          dense
+          icon={CreditCard}
+          title="Рассрочка"
+          subtitle="Ближайшие и просроченные платежи"
+          divider={false}
+          actions={<ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />}
+        />
+      </Link>
 
       {/* Summary strip */}
-      <div className="grid grid-cols-3 divide-x divide-gray-100 border-y border-gray-100 bg-gray-50/50">
-        <div className="px-3 py-2.5 text-center">
-          <p className="text-base font-bold text-red-600">{overdueCount}</p>
-          <p className="text-[11px] text-gray-500">Просрочено</p>
+      <div className="grid grid-cols-3 divide-x divide-line border-y border-line bg-surface-2">
+        <div className="px-3 py-2 text-center">
+          <p className={cn('text-base font-semibold tabular-nums', overdueCount > 0 ? 'text-bad-text' : 'text-ink')}>
+            {overdueCount}
+          </p>
+          <p className="text-2xs text-ink-3">Просрочено</p>
         </div>
-        <div className="px-3 py-2.5 text-center">
-          <p className="text-base font-bold text-amber-600">{dueSoonCount}</p>
-          <p className="text-[11px] text-gray-500">Скоро</p>
+        <div className="px-3 py-2 text-center">
+          <p className={cn('text-base font-semibold tabular-nums', dueSoonCount > 0 ? 'text-warn-text' : 'text-ink')}>
+            {dueSoonCount}
+          </p>
+          <p className="text-2xs text-ink-3">Скоро</p>
         </div>
-        <div className="px-3 py-2.5 text-center">
-          <p className="text-base font-bold text-gray-900">{formatMoney(totalRemaining)}</p>
-          <p className="text-[11px] text-gray-500">Остаток</p>
+        <div className="px-3 py-2 text-center">
+          <p className="text-base font-semibold tabular-nums text-ink">{formatMoney(totalRemaining)}</p>
+          <p className="text-2xs text-ink-3">Остаток</p>
         </div>
       </div>
 
       {items.length === 0 ? (
-        <div className="flex items-center gap-2 px-5 py-5 text-sm text-gray-400">
-          <CalendarClock className="h-4 w-4" />
+        <div className="flex items-center gap-2 px-4 py-4 text-sm text-ink-3">
+          <CalendarClock className="h-4 w-4" aria-hidden="true" />
           Нет ближайших платежей
         </div>
       ) : (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-line">
           {items.slice(0, 6).map((it) => {
             const due = dueLabel(it.dueInDays);
             return (
               <li key={it.planId}>
-                <button
-                  type="button"
-                  onClick={() => navigate('/installments')}
-                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-gray-50"
+                <Link
+                  to="/installments"
+                  className={cn('flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-2', focusRing)}
                 >
-                  <div
-                    className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
-                      it.overdue ? 'bg-red-50' : 'bg-gray-100'
-                    }`}
+                  <span
+                    className={cn(
+                      'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+                      it.overdue ? 'bg-bad-soft text-bad' : 'bg-surface-3 text-ink-3',
+                    )}
                   >
                     {it.overdue ? (
-                      <AlertTriangle className="h-4 w-4 text-red-500" />
+                      <AlertTriangle className="h-4 w-4" aria-hidden="true" />
                     ) : (
-                      <CalendarClock className="h-4 w-4 text-gray-500" />
+                      <CalendarClock className="h-4 w-4" aria-hidden="true" />
                     )}
-                  </div>
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-gray-900">{it.clientName || 'Клиент'}</p>
-                    <p
-                      className={`text-xs ${
-                        due.tone === 'red' ? 'text-red-500' : due.tone === 'amber' ? 'text-amber-600' : 'text-gray-400'
-                      }`}
-                    >
+                    <p className="truncate text-sm font-medium text-ink">{it.clientName || 'Клиент'}</p>
+                    <p className={cn('text-xs tabular-nums', dueToneCls[due.tone])}>
                       {shortDate(it.nextPaymentDate)} · {due.text}
                     </p>
                   </div>
-                  <span className="flex-shrink-0 text-sm font-bold text-gray-900">{formatMoney(it.remaining)}</span>
-                </button>
+                  <span className="flex-shrink-0 text-sm font-semibold tabular-nums text-ink">
+                    {formatMoney(it.remaining)}
+                  </span>
+                </Link>
               </li>
             );
           })}
@@ -134,14 +133,16 @@ export default function InstallmentsWidget() {
       )}
 
       {items.length > 6 && (
-        <button
-          type="button"
-          onClick={() => navigate('/installments')}
-          className="w-full border-t border-gray-100 px-5 py-3 text-center text-sm font-medium text-primary-600 transition-colors hover:bg-gray-50"
+        <Link
+          to="/installments"
+          className={cn(
+            'block rounded-b-xl border-t border-line px-4 py-2.5 text-center text-sm font-medium text-accent-text transition-colors hover:bg-surface-2',
+            focusRing,
+          )}
         >
           Все рассрочки →
-        </button>
+        </Link>
       )}
-    </section>
+    </Card>
   );
 }

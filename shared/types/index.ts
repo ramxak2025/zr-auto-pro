@@ -1558,6 +1558,12 @@ export interface Car {
   clientId: string;
   /** 059 — true for cars registered "без номера" (plateNumber is empty). */
   noPlate?: boolean;
+  /**
+   * 171 — VIN (17 символов, нормализованный сервером). Пишется только при
+   * включённой опции Tenant.vinEnabled; null/absent — не указан. UI показывает
+   * его моноширинным под маркой и ТОЛЬКО когда опция включена.
+   */
+  vin?: string | null;
   client?: Client;
   createdAt: string;
 }

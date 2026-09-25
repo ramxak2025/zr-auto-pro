@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { AlertCircle, LucideIcon } from 'lucide-react';
 import InlineLoader from './InlineLoader';
 import EmptyState from './EmptyState';
+import { Button } from '../ui/Button';
 
 interface EmptyConfig {
   icon?: LucideIcon;
@@ -57,16 +58,16 @@ export default function QueryState({
 
   if (isError) {
     return (
-      <div className={`flex flex-col items-center justify-center ${minHeight ?? 'py-16'} text-center`} role="alert">
-        <span className="mb-4 p-3 bg-red-50 rounded-full">
-          <AlertCircle className="w-8 h-8 text-red-500" aria-hidden="true" />
+      <div className={`flex flex-col items-center justify-center ${minHeight ?? 'py-14'} text-center`} role="alert">
+        <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-bad-soft">
+          <AlertCircle className="h-6 w-6 text-bad" aria-hidden="true" />
         </span>
-        <h3 className="text-lg font-medium text-gray-900 mb-1">{errorTitle}</h3>
-        <p className="text-sm text-gray-500 max-w-sm mb-4">{errorDescription}</p>
+        <h3 className="text-md font-semibold text-ink">{errorTitle}</h3>
+        <p className="mt-1 max-w-sm text-sm text-ink-3">{errorDescription}</p>
         {onRetry && (
-          <button onClick={() => onRetry()} disabled={isFetching} className="btn-secondary press-soft">
+          <Button variant="secondary" onClick={() => onRetry()} loading={isFetching} className="mt-4">
             Повторить
-          </button>
+          </Button>
         )}
       </div>
     );

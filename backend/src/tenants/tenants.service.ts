@@ -97,6 +97,9 @@ export class TenantsService {
       // 157 — часовой пояс автосервиса. Легаси-строки и запросы, которые
       // колонку не выбирают, дают undefined → Europe/Moscow (прежнее поведение).
       timezone: normalizeTimezone(row.timezone),
+      // 171 — опция «VIN-код автомобиля». Мутируется через PATCH /vin/settings
+      // (VinService), здесь только читается; legacy-строки без колонки → false.
+      vinEnabled: row.vin_enabled === true,
       suspendedAt: row.suspended_at ?? null,
       suspendedReason: row.suspended_reason ?? null,
       // 115 — индивидуальная надбавка минут голосового ввода поверх тарифа.

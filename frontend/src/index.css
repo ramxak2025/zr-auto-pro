@@ -5,6 +5,62 @@
 @layer base {
   /*
    * ═══════════════════════════════════════════════════════════════════
+   *  ТОКЕНЫ ВИЗУАЛЬНОЙ СИСТЕМЫ АДМИНКИ (docs/web-redesign/DESIGN_SYSTEM.md)
+   *  Цвета — каналами «R G B», чтобы Tailwind мог накладывать прозрачность
+   *  (`bg-accent/25`). Имена классов: bg-canvas, bg-surface(-2/-3),
+   *  border-line(-strong), text-ink(-2/-3/-4), accent(-hover/-soft/-text),
+   *  ok / warn / bad / info (+ -soft / -text), rail(-2/-text/-muted).
+   * ═══════════════════════════════════════════════════════════════════
+   */
+  :root {
+    /* Поверхности: холст чуть холоднее и темнее карточек, чтобы белые карточки
+       читались без тяжёлых теней. */
+    --c-canvas: 244 246 250;       /* #f4f6fa */
+    --c-surface: 255 255 255;      /* #ffffff */
+    --c-surface-2: 248 250 252;    /* #f8fafc — шапки таблиц, футеры карточек */
+    --c-surface-3: 241 245 249;    /* #f1f5f9 — hover строк, фон сегмент-контрола */
+    --c-line: 226 232 240;         /* #e2e8f0 — hairline */
+    --c-line-strong: 203 213 225;  /* #cbd5e1 — рамки контролов */
+    /* Текст: три рабочих уровня (все ≥ 4.5:1 на белом) + декоративный. */
+    --c-ink: 15 23 42;             /* #0f172a — заголовки, значения */
+    --c-ink-2: 71 85 105;          /* #475569 — основной текст таблиц */
+    --c-ink-3: 100 116 139;        /* #64748b — подписи, подсказки (4.8:1) */
+    --c-ink-4: 148 163 184;        /* #94a3b8 — ТОЛЬКО иконки/плейсхолдеры декоративные */
+    /* Акцент — бренд #2563eb, тот же, что в iOS-приложении и логотипе. */
+    --c-accent: 37 99 235;
+    --c-accent-hover: 29 78 216;   /* #1d4ed8 */
+    --c-accent-soft: 239 246 255;  /* #eff6ff */
+    --c-accent-soft-2: 219 234 254;/* #dbeafe */
+    --c-accent-text: 29 78 216;    /* текст на accent-soft, 5.9:1 */
+    /* Семантика — только по смыслу. */
+    --c-ok: 22 163 74;             /* #16a34a */
+    --c-ok-soft: 240 253 244;      /* #f0fdf4 */
+    --c-ok-text: 21 128 61;        /* #15803d */
+    --c-warn: 217 119 6;           /* #d97706 */
+    --c-warn-soft: 255 251 235;    /* #fffbeb */
+    --c-warn-text: 180 83 9;       /* #b45309 */
+    --c-bad: 220 38 38;            /* #dc2626 */
+    --c-bad-soft: 254 242 242;     /* #fef2f2 */
+    --c-bad-text: 185 28 28;       /* #b91c1c */
+    --c-info: 2 132 199;           /* #0284c7 */
+    --c-info-soft: 240 249 255;    /* #f0f9ff */
+    --c-info-text: 3 105 161;      /* #0369a1 */
+    /* Боковая панель — глубокий navy бренда (wordmark #19253E), не чёрный. */
+    --c-rail: 16 26 46;            /* #101a2e */
+    --c-rail-2: 24 37 67;          /* #182543 — hover/active пункта */
+    --c-rail-text: 180 191 211;    /* #b4bfd3 */
+    --c-rail-muted: 111 125 153;   /* #6f7d99 — заголовки групп */
+
+    /* Геометрия оболочки. */
+    --sidebar-w: 256px;
+    --sidebar-w-collapsed: 72px;
+    --topbar-h: 56px;
+
+    color-scheme: light;
+  }
+
+  /*
+   * ═══════════════════════════════════════════════════════════════════
    *  GLOBAL OVERFLOW PREVENTION
    *  Architecture: html → body → #root → Layout flex column
    *  The ONLY scroll container is <main> inside Layout.
@@ -19,8 +75,11 @@
   }
 
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    @apply bg-canvas text-ink antialiased;
+    /* Onest — единый шрифт лендинга и админки (self-hosted, @font-face ниже).
+       Раньше здесь стоял Inter, который нигде не грузился — фактически
+       системный шрифт. */
+    font-family: 'Onest', 'Onest Fallback', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-text-size-adjust: 100%;
     overflow-x: hidden;
     position: relative;
@@ -82,6 +141,35 @@
      overscroll-behavior contain на body обрывал цепочку прокрутки и колесом
      (ПК), и тачем (/tarify на телефоне) — #root: overflow-y auto без своего
      скролла упирался в body. PWA-обвязка больше не приоритет. */
+
+  /* Видимый фокус по умолчанию для всего интерактивного. Специфичность :where
+     нулевая — утилиты focus:outline-none / focus-visible:ring-* страниц
+     перекрывают это правило, а всё, у чего фокус-стилей нет, получает кольцо. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid rgb(var(--c-accent) / 0.7);
+    outline-offset: 2px;
+  }
+
+  /* Уважаем prefers-reduced-motion глобально: CSS-переходы и keyframe-анимации
+     схлопываются до мгновенных. Спиннеры (.animate-spin) оставляем — это
+     индикатор состояния, а не декор. framer-motion учитывает настройку через
+     <MotionConfig reducedMotion="user"> в Layout. */
+  @media (prefers-reduced-motion: reduce) {
+    *:not(.animate-spin),
+    *:not(.animate-spin)::before,
+    *:not(.animate-spin)::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Тонкие полосы прокрутки внутри оболочки приложения (не на лендинге). */
+  [data-app] * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-line-strong)) transparent;
+  }
 }
 
 /*
@@ -135,45 +223,59 @@
   to { transform: rotate(360deg); }
 }
 
+/*
+ * ═══════════════════════════════════════════════════════════════════
+ *  ОБЩИЕ КЛАССЫ (.btn / .input / .card / .table / .badge / .page-title)
+ *  Их импортируют десятки страниц — имена и назначение сохранены, вид
+ *  переведён на токены. Новый код предпочитает примитивы из src/ui/.
+ *  Плотность: контролы 36 px, строки таблиц 40 px, шапка таблицы 40 px.
+ * ═══════════════════════════════════════════════════════════════════
+ */
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3.5 py-1.5 min-h-[2.25rem] text-sm font-medium;
+    @apply transition-[background-color,border-color,color,box-shadow] duration-150;
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500 shadow-sm;
+    @apply btn bg-accent text-white shadow-sm hover:bg-accent-hover;
   }
   .btn-secondary {
-    @apply btn bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 focus:ring-primary-500;
+    @apply btn bg-surface text-ink border border-line-strong shadow-sm hover:bg-surface-2 hover:border-ink-4;
   }
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply btn bg-bad text-white shadow-sm hover:bg-bad-text;
   }
   .btn-ghost {
-    @apply btn text-gray-600 hover:bg-gray-100 hover:text-gray-900;
+    @apply btn text-ink-2 hover:bg-surface-3 hover:text-ink;
   }
   .btn-sm {
-    @apply px-3 py-1.5 text-xs;
+    @apply px-3 py-1 min-h-[2rem] text-xs rounded-md;
   }
   .btn-lg {
-    @apply px-6 py-3 text-base;
+    @apply px-5 py-2.5 min-h-[2.75rem] text-base;
   }
   .input {
-    @apply block w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20;
+    @apply block w-full rounded-lg border border-line-strong bg-surface px-3 py-1.5 min-h-[2.25rem] text-sm text-ink placeholder:text-ink-3 shadow-sm;
+    @apply transition-[border-color,box-shadow] duration-150;
+    @apply focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25;
+    @apply disabled:bg-surface-2 disabled:text-ink-3 disabled:cursor-not-allowed;
   }
   .input-error {
-    @apply border-red-500 focus:border-red-500 focus:ring-red-500/20;
+    @apply border-bad focus:border-bad focus:ring-bad/25;
   }
   .label {
-    @apply block text-sm font-medium text-gray-700 mb-1.5;
+    @apply block text-sm font-medium text-ink-2 mb-1.5;
   }
   .card {
-    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+    @apply bg-surface rounded-xl border border-line shadow-card;
   }
   /* Interactive card — hover/press feedback for clickable list rows / tiles. */
   .card-interactive {
-    @apply card cursor-pointer transition-all duration-200 ease-out;
-    @apply hover:shadow-md hover:-translate-y-0.5 hover:border-gray-300;
-    @apply active:translate-y-0 active:shadow-sm;
+    @apply card cursor-pointer transition-[border-color,box-shadow] duration-150 ease-out;
+    @apply hover:shadow-pop hover:border-line-strong;
+    @apply active:shadow-card;
   }
   /* Soft-press utility for non-card buttons (chips, list-row links). */
   .press-soft {
@@ -183,81 +285,107 @@
     @apply p-5;
   }
   .badge {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 h-[22px] text-xs font-medium;
   }
   .badge-blue {
-    @apply badge bg-blue-50 text-blue-700;
+    @apply badge bg-accent-soft text-accent-text;
   }
   .badge-green {
-    @apply badge bg-green-50 text-green-700;
+    @apply badge bg-ok-soft text-ok-text;
   }
   .badge-red {
-    @apply badge bg-red-50 text-red-700;
+    @apply badge bg-bad-soft text-bad-text;
   }
   .badge-yellow {
-    @apply badge bg-yellow-50 text-yellow-700;
+    @apply badge bg-warn-soft text-warn-text;
   }
   .badge-gray {
-    @apply badge bg-gray-100 text-gray-600;
+    @apply badge bg-surface-3 text-ink-2;
   }
   .badge-default {
-    @apply badge bg-gray-100 text-gray-700;
+    @apply badge bg-surface-3 text-ink-2;
   }
   .badge-success {
-    @apply badge bg-green-50 text-green-700;
+    @apply badge bg-ok-soft text-ok-text;
   }
   .badge-info {
-    @apply badge bg-blue-50 text-blue-700;
+    @apply badge bg-accent-soft text-accent-text;
   }
   .badge-warning {
-    @apply badge bg-yellow-50 text-yellow-700;
+    @apply badge bg-warn-soft text-warn-text;
   }
   .badge-danger {
-    @apply badge bg-red-50 text-red-700;
+    @apply badge bg-bad-soft text-bad-text;
   }
   .table-container {
-    @apply overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm;
+    @apply overflow-x-auto rounded-xl border border-line bg-surface shadow-card;
   }
+  /* border-separate: границы ячеек живут вместе с липкой шапкой при прокрутке
+     (при border-collapse граница th «уезжает» вместе с телом таблицы). */
   .table {
-    @apply w-full text-sm;
+    @apply w-full text-sm border-separate border-spacing-0;
   }
   .table th {
-    @apply bg-gray-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-200;
+    @apply h-10 bg-surface-2 px-3 text-left text-xs font-semibold text-ink-3 border-b border-line whitespace-nowrap align-middle;
   }
   .table td {
-    @apply px-4 py-3.5 text-gray-700 border-b border-gray-100;
+    @apply px-3 py-2.5 text-ink-2 border-b border-line align-middle;
   }
-  .table tr:last-child td {
+  .table th:first-child,
+  .table td:first-child {
+    @apply pl-4;
+  }
+  .table th:last-child,
+  .table td:last-child {
+    @apply pr-4;
+  }
+  .table tbody tr:last-child td {
     @apply border-b-0;
   }
-  .table tr:hover td {
-    @apply bg-gray-50/50;
+  .table tbody tr:hover td {
+    @apply bg-surface-2;
+  }
+  /* Числовые колонки: `<th className="num">` / `<td className="num">`. */
+  .table .num {
+    @apply text-right tabular-nums;
+  }
+  .table-dense th {
+    @apply h-9;
+  }
+  .table-dense td {
+    @apply py-1.5;
   }
   .stat-card {
     @apply card card-body flex flex-col;
   }
   .stat-value {
-    @apply text-2xl font-bold text-gray-900 mt-1;
+    @apply text-2xl font-semibold tabular-nums tracking-tight text-ink mt-1;
   }
   .stat-label {
-    @apply text-sm text-gray-500;
+    @apply text-sm text-ink-3;
   }
   .page-header {
-    @apply flex items-center justify-between mb-6;
+    @apply flex items-start justify-between gap-4 mb-5;
   }
   .page-title {
-    @apply text-2xl font-bold text-gray-900;
+    @apply text-title text-ink;
+  }
+  /* Единое фокус-кольцо для произвольных элементов (ссылки-строки, плитки). */
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
   }
 }
 
 @layer utilities {
   /* Скрыть полосу прокрутки у горизонтальных каруселей лендинга
      (сам скролл и scroll-snap остаются нативными, без JS). */
-  .no-scrollbar {
+  .no-scrollbar,
+  .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
-  .no-scrollbar::-webkit-scrollbar {
+  .no-scrollbar::-webkit-scrollbar,
+  .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
 }
@@ -290,10 +418,11 @@
   }
 }
 
-/* Onest — фирменный шрифт ЛЕНДИНГА (self-hosted: Google Fonts режется операторами РФ
-   в «жёсткие окна» — грузить с CDN нельзя). Variable 400–800, сабсеты по unicode-range:
-   браузер скачивает файл ТОЛЬКО при использовании font-family 'Onest', т.е. только на
-   лендинге (класс font-display на корне landing-страниц) — приложение шрифт не грузит. */
+/* Onest — фирменный шрифт лендинга И админки (self-hosted: Google Fonts режется
+   операторами РФ в «жёсткие окна» — грузить с CDN нельзя). Variable 400–800,
+   сабсеты по unicode-range: браузер скачивает только нужные файлы (кириллица +
+   латиница для русского интерфейса). Два основных сабсета предзагружаются в
+   index.html. */
 @font-face {
   font-family: 'Onest';
   font-style: normal;
@@ -329,8 +458,7 @@
 /* Метрически подогнанный fallback против CLS при swap на медленной сети:
    локальный Arial растянут под метрики Onest (ascent 970 / descent 305 /
    lineGap 0 при upm 1000, avg width 0.579em vs ~0.552 у Arial → size-adjust 105%,
-   overrides = метрика/1.05). Число строк заголовков при догрузке Onest не меняется.
-   Preload сознательно НЕ добавляем — шрифт должен грузиться только на лендинге. */
+   overrides = метрика/1.05). Число строк заголовков при догрузке Onest не меняется. */
 @font-face {
   font-family: 'Onest Fallback';
   font-style: normal;

@@ -19,5 +19,9 @@ import { TenantsModule } from '../tenants/tenants.module';
   imports: [ExpensesModule, ScheduleModule, TenantsModule],
   controllers: [SalaryController],
   providers: [SalaryService],
+  // Экспорт для конструктора отчётов (reports/builder, отчёт «По зарплатам»):
+  // начисления берутся через SalaryService.getAll — тем же расчётом, что видит
+  // мастер на своём экране, вместо второй копии формулы процента.
+  exports: [SalaryService],
 })
 export class SalaryModule {}

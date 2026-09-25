@@ -1,4 +1,5 @@
 import Modal from './Modal';
+import { Button } from '../ui/Button';
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -8,16 +9,23 @@ interface ConfirmDialogProps {
   message: string;
   confirmText?: string;
   variant?: 'danger' | 'primary';
+  /** Показывает спиннер на кнопке подтверждения, пока мутация в полёте. */
+  loading?: boolean;
 }
 
+/**
+ * Единственный санкционированный способ подтвердить необратимое действие
+ * (никаких window.confirm). variant="danger" — для удаления/сторно.
+ */
 export default function ConfirmDialog({
   isOpen,
   onClose,
   onConfirm,
   title,
   message,
-  confirmText = 'Confirm',
+  confirmText = 'Подтвердить',
   variant = 'primary',
+  loading = false,
 }: ConfirmDialogProps) {
   const handleConfirm = () => {
     onConfirm();
@@ -25,19 +33,23 @@ export default function ConfirmDialog({
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
-      <p className="text-sm text-gray-600 mb-6">{message}</p>
-      <div className="flex items-center justify-end gap-3">
-        <button onClick={onClose} className="btn-secondary">
-          Отмена
-        </button>
-        <button
-          onClick={handleConfirm}
-          className={variant === 'danger' ? 'btn-danger' : 'btn-primary'}
-        >
-          {confirmText}
-        </button>
-      </div>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={loading}>
+            Отмена
+          </Button>
+          <Button variant={variant === 'danger' ? 'danger' : 'primary'} onClick={handleConfirm} loading={loading}>
+            {confirmText}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm leading-relaxed text-ink-2">{message}</p>
     </Modal>
   );
 }
