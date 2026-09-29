@@ -42,6 +42,8 @@ import {
   productsApi,
   warrantyApi,
   warehousesApi,
+  type CheckTemplateServiceInput,
+  type CreateCheckRequest,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
@@ -67,6 +69,7 @@ import type {
 
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { expandServiceQuantities, serviceLineTotal } from '../../../shared/utils/checkLines';
 import { formatVin, isValidVin, normalizeVin } from '../../../shared/utils/vin';
 import { looksLikeRussianPlate } from '../../../shared/utils/plate';
 import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
@@ -151,8 +154,18 @@ interface ServiceLineForm {
   masterId: string;
   name: string;
   price: number;
-  quantity: number;
+  /**
+   * Только у legacy-строки старого чека («Мойка ×3», quantity > 1): значение уходит на сервер как есть,
+   * чтобы сумма чека не менялась. У новых строк поля нет — строка услуги = одна услуга.
+   */
+  quantity?: number;
 }
+
+/** Количество legacy-строки услуги (> 1) или undefined, если это обычная строка «одна услуга». */
+const legacyQuantity = (line: { quantity?: number | null }): number | undefined => {
+  const q = Number(line.quantity);
+  return Number.isFinite(q) && q > 1 ? q : undefined;
+};
 
 interface ProductLineForm {
   productId: string;
@@ -612,7 +625,8 @@ export default function CheckCreatePage() {
           masterId: s.masterId || user?.id || '',
           name: s.name,
           price: s.price,
-          quantity: s.quantity,
+          // Legacy «×3» держим как есть (сумма чека не должна меняться); у обычной строки поля нет.
+          quantity: legacyQuantity(s),
         })),
       );
     }
@@ -777,7 +791,7 @@ export default function CheckCreatePage() {
 
   // Computed totals
   const serviceTotal = useMemo(
-    () => serviceLines.reduce((sum, line) => sum + line.price * line.quantity, 0),
+    () => serviceLines.reduce((sum, line) => sum + serviceLineTotal(line), 0),
     [serviceLines],
   );
   const productTotal = useMemo(
@@ -935,7 +949,7 @@ export default function CheckCreatePage() {
 
   // Service line handlers — default masterId = current user
   const addServiceLine = () => {
-    setServiceLines((prev) => [...prev, { serviceId: '', masterId: user?.id || '', name: '', price: 0, quantity: 1 }]);
+    setServiceLines((prev) => [...prev, { serviceId: '', masterId: user?.id || '', name: '', price: 0 }]);
   };
 
   const updateServiceLine = (index: number, field: keyof ServiceLineForm, value: any) => {
@@ -1025,12 +1039,13 @@ export default function CheckCreatePage() {
   // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate).
   const applyTemplate = (template: CheckTemplate) => {
     setServiceLines(
-      template.services.map((s) => ({
+      // Старый шаблон с «×2» раскладываем в две строки; неразвёрнутые (дробное количество, > 100) остаются legacy «×N».
+      expandServiceQuantities(template.services).map((s) => ({
         serviceId: s.serviceId || '',
         masterId: user?.id || '',
         name: s.name,
         price: s.price,
-        quantity: s.quantity,
+        quantity: legacyQuantity(s),
       })),
     );
     setProductLines(
@@ -1050,12 +1065,15 @@ export default function CheckCreatePage() {
     toast.success(`Шаблон «${template.name}» применён`);
   };
 
-  // В шаблон уходят только строки с catalog-id (как на mobile).
-  const templateServices = useMemo(
+  // В шаблон уходят только строки с catalog-id (как на mobile). Количества у услуг нет: legacy «×3»
+  // из открытого старого чека раскладываем в три строки, иначе сервер сохранил бы её как одну.
+  const templateServices = useMemo<CheckTemplateServiceInput[]>(
     () =>
-      serviceLines
-        .filter((l) => !!l.serviceId)
-        .map((l) => ({ serviceId: l.serviceId, name: l.name, price: Number(l.price), quantity: Number(l.quantity) })),
+      expandServiceQuantities(serviceLines.filter((l) => !!l.serviceId)).map((l) => ({
+        serviceId: l.serviceId,
+        name: l.name,
+        price: Number(l.price),
+      })),
     [serviceLines],
   );
   const templateProducts = useMemo(
@@ -1077,14 +1095,18 @@ export default function CheckCreatePage() {
   // doSubmit — фактическое проведение чека. handleSubmit (ниже) может
   // перехватить сабмит наджимом «забыли клиента» (Round 12 #7).
   const doSubmit = () => {
-    const services: CheckServiceLine[] = serviceLines.map((l) => ({
-      serviceId: l.serviceId || undefined,
-      masterId: l.masterId || undefined,
-      name: l.name,
-      price: Number(l.price),
-      quantity: Number(l.quantity),
-      total: Number(l.price) * Number(l.quantity),
-    }));
+    // Строка услуги = одна услуга: `quantity` не шлём. Исключение — legacy-строка старого чека (> 1):
+    // её количество уходит как есть, иначе правка тихо пересчитала бы сумму чека.
+    const services: CreateCheckRequest['services'] = serviceLines.map((l) => {
+      const legacyQty = legacyQuantity(l);
+      return {
+        serviceId: l.serviceId || undefined,
+        masterId: l.masterId || undefined,
+        name: l.name,
+        price: Number(l.price),
+        ...(legacyQty ? { quantity: legacyQty } : {}),
+      };
+    });
 
     const products: CheckProductLine[] = productLines.map((l) => ({
       productId: l.productId || undefined,
@@ -1632,47 +1654,65 @@ export default function CheckCreatePage() {
               {serviceLines.length === 0 ? (
                 <p className="py-4 text-center text-sm text-ink-3">Услуг нет — добавьте первую</p>
               ) : (
-                serviceLines.map((line, index) => (
-                  <div
-                    key={index}
-                    className="grid grid-cols-1 gap-2 rounded-lg border border-line bg-surface-2/60 p-2.5 sm:grid-cols-[minmax(0,1fr)_11rem_8.5rem_auto] sm:items-center"
-                  >
-                    <ServiceCombobox
-                      services={allServices ?? []}
-                      value={line.serviceId}
-                      fallbackName={line.name}
-                      onChange={(id) => updateServiceLine(index, 'serviceId', id)}
-                      placeholder={servicesLoading ? 'Загружаем услуги…' : 'Найти услугу…'}
-                    />
-                    <Select
-                      aria-label="Мастер"
-                      placeholder="Мастер…"
-                      value={line.masterId}
-                      onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
-                      options={(masters ?? []).map((m) => ({ value: m.id, label: m.fullName }))}
-                    />
-                    <MoneyInput
-                      aria-label="Цена услуги"
-                      value={line.price}
-                      onCommit={(n) => updateServiceLine(index, 'price', n)}
-                      placeholder="0"
-                    />
-                    <div className="flex items-center justify-between gap-2 sm:justify-end">
-                      {line.quantity !== 1 && (
-                        <span className="text-xs tabular-nums text-ink-3">
-                          × {formatQty(line.quantity)} = {formatMoney(line.price * line.quantity)}
-                        </span>
-                      )}
-                      <IconButton
-                        label={`Удалить услугу${line.name ? ` «${line.name}»` : ''}`}
-                        icon={Trash2}
-                        size="sm"
-                        variant="danger"
-                        onClick={() => removeServiceLine(index)}
+                serviceLines.map((line, index) => {
+                  // Количество есть только у legacy-строки старого чека («Мойка ×3»): чип рядом с названием
+                  // и сумма строки справа. У обычной строки цена в поле и есть её сумма.
+                  const legacyQty = legacyQuantity(line);
+                  return (
+                    <div
+                      key={index}
+                      className="grid grid-cols-1 gap-2 rounded-lg border border-line bg-surface-2/60 p-2.5 sm:grid-cols-[minmax(0,1fr)_11rem_8.5rem_auto] sm:items-center"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <ServiceCombobox
+                          className="min-w-0 flex-1"
+                          services={allServices ?? []}
+                          value={line.serviceId}
+                          fallbackName={line.name}
+                          onChange={(id) => updateServiceLine(index, 'serviceId', id)}
+                          placeholder={servicesLoading ? 'Загружаем услуги…' : 'Найти услугу…'}
+                        />
+                        {legacyQty && (
+                          <Badge
+                            tone="neutral"
+                            size="sm"
+                            className="flex-shrink-0"
+                            title="Старая строка чека с количеством: сумма строки не меняется"
+                          >
+                            ×{formatQty(legacyQty)}
+                          </Badge>
+                        )}
+                      </div>
+                      <Select
+                        aria-label="Мастер"
+                        placeholder="Мастер…"
+                        value={line.masterId}
+                        onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
+                        options={(masters ?? []).map((m) => ({ value: m.id, label: m.fullName }))}
                       />
+                      <MoneyInput
+                        aria-label="Цена услуги"
+                        value={line.price}
+                        onCommit={(n) => updateServiceLine(index, 'price', n)}
+                        placeholder="0"
+                      />
+                      <div className="flex items-center justify-between gap-2 sm:justify-end">
+                        {legacyQty && (
+                          <span className="text-xs tabular-nums text-ink-3">
+                            = {formatMoney(serviceLineTotal(line))}
+                          </span>
+                        )}
+                        <IconButton
+                          label={`Удалить услугу${line.name ? ` «${line.name}»` : ''}`}
+                          icon={Trash2}
+                          size="sm"
+                          variant="danger"
+                          onClick={() => removeServiceLine(index)}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </CardBody>
           </Card>
