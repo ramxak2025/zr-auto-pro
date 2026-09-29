@@ -7,6 +7,7 @@
  * source of truth, no drift between the two screens).
  */
 import { colors } from '../../theme';
+import type { SalaryMonthDetail } from '../../../../shared/types';
 
 export const RUBLE = '₽';
 
@@ -146,4 +147,125 @@ export function getAvatarColors(name?: string): [string, string] {
 export function isCurrentMonth(d: Date): boolean {
   const now = new Date();
   return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+}
+
+// ── Месяц «за который» (правка 2026-09-30) ─────────────────────────────────────
+// Выплата и расход относятся к месяцу 'YYYY-MM', который может не совпадать с
+// месяцем даты факта: выдал в октябре за сентябрь → в отчётах это сентябрь.
+
+/** Строгая проверка ключа 'YYYY-MM' (в отличие от parseMonthKey не подменяет мусор текущим месяцем). */
+export function isMonthKey(key: unknown): key is string {
+  return typeof key === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(key);
+}
+
+/** 'YYYY-MM' → «Сентябрь 2026» (с `withYear = false` — «Сентябрь»); невалидный ключ → ''. */
+export function monthKeyLabel(key?: string | null, withYear = true): string {
+  if (!isMonthKey(key)) return '';
+  const name = MONTH_NAMES[Number(key.slice(5, 7)) - 1];
+  return withYear ? `${name} ${key.slice(0, 4)}` : name;
+}
+
+/** 'YYYY-MM' → «сентябрь» (с `withYear` — «сентябрь 2026») для бегущего текста: «за сентябрь». */
+export function monthKeyInline(key?: string | null, withYear = false): string {
+  if (!isMonthKey(key)) return '';
+  const name = MONTH_NAMES[Number(key.slice(5, 7)) - 1].toLowerCase();
+  return withYear ? `${name} ${key.slice(0, 4)}` : name;
+}
+
+/**
+ * Заголовок листа выплаты: «Выплата за сентябрь — Иван». Год добавляется, только если месяц
+ * не из текущего года (полное «Сентябрь 2026» уже стоит в строке «За какой месяц» формы),
+ * иначе заголовок с длинным именем не помещается в шапку Modal.
+ */
+export function payoutSheetTitle(monthKey: string, employeeName?: string | null, now: Date = new Date()): string {
+  const withYear = isMonthKey(monthKey) && monthKey.slice(0, 4) !== String(now.getFullYear());
+  const month = monthKeyInline(monthKey, withYear);
+  return (month ? 'Выплата за ' + month : 'Выплата') + (employeeName ? ' — ' + employeeName : '');
+}
+
+export interface MonthOption {
+  key: string;
+  label: string;
+}
+
+/**
+ * Месяцы для пикера «За какой месяц»: текущий и `count - 1` предыдущих, свежие
+ * сверху. `include` — ключи, которых может не быть в окне (открыт месяц старше
+ * года): их всегда можно выбрать и они остаются в списке.
+ */
+export function recentMonthOptions(
+  count = 13,
+  now: Date = new Date(),
+  include: ReadonlyArray<string | null | undefined> = [],
+): MonthOption[] {
+  const current = new Date(now.getFullYear(), now.getMonth(), 1);
+  const keys = new Set<string>();
+  for (let i = 0; i < count; i++) keys.add(formatMonthKey(addMonths(current, -i)));
+  for (const k of include) if (isMonthKey(k)) keys.add(k);
+  return Array.from(keys)
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+    .map((key) => ({ key, label: monthKeyLabel(key) }));
+}
+
+/** 'YYYY-MM-DD' или ISO → 'YYYY-MM' (по локальному времени устройства, как день в ленте); мусор → ''. */
+export function monthKeyOfDate(dateStr?: string | null): string {
+  if (!dateStr) return '';
+  // Чистая дата — берём префикс: new Date('2026-09-01') это UTC-полночь и в поясах западнее UTC даёт август.
+  const plain = /^(\d{4})-(\d{2})-\d{2}$/.exec(dateStr);
+  if (plain) return `${plain[1]}-${plain[2]}`;
+  const d = new Date(dateStr);
+  return Number.isNaN(d.getTime()) ? '' : formatMonthKey(d);
+}
+
+/**
+ * Бейдж расхода «за сентябрь»: только если месяц «за который» задан и не совпадает
+ * с месяцем даты. Год добавляется, когда он отличается от года даты. '' — бейдж не нужен.
+ */
+export function periodBadgeLabel(periodMonth: string | null | undefined, dateStr: string | null | undefined): string {
+  if (!isMonthKey(periodMonth)) return '';
+  const dateKey = monthKeyOfDate(dateStr);
+  if (!dateKey || dateKey === periodMonth) return '';
+  return 'за ' + monthKeyInline(periodMonth, periodMonth.slice(0, 4) !== dateKey.slice(0, 4));
+}
+
+export interface CarryOverRow {
+  month: string;
+  /** Округлённый до рубля остаток: > 0 — долг, < 0 — переплата. */
+  amount: number;
+}
+
+/**
+ * Строки блока «Не выплачено за прошлые месяцы» из `carryOver.months` (порядок
+ * контракта — свежие сверху). Остатки, округлившиеся до 0, отбрасываются.
+ * Старый backend без `carryOver` — пустой список.
+ */
+export function carryOverRows(carryOver?: SalaryMonthDetail['carryOver'] | null): CarryOverRow[] {
+  const rows: CarryOverRow[] = [];
+  for (const m of carryOver?.months ?? []) {
+    const amount = Math.round(Number(m.remaining));
+    if (isMonthKey(m.month) && Number.isFinite(amount) && amount !== 0) rows.push({ month: m.month, amount });
+  }
+  return rows;
+}
+
+/**
+ * Подсказка суммы «К выплате» по месяцам для формы выплаты: остаток открытого
+ * месяца + долги прошлых месяцев из `carryOver`. Переплата и нули — не подсказка.
+ * Для месяцев, которых здесь нет, сумма неизвестна (подсказка не показывается).
+ */
+export function buildPayoutSuggestions(
+  detail:
+    | (Pick<SalaryMonthDetail, 'remainingAmount'> & { carryOver?: SalaryMonthDetail['carryOver'] | null })
+    | null
+    | undefined,
+  openMonthKey: string,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!detail) return out;
+  for (const row of carryOverRows(detail.carryOver)) {
+    if (row.amount > 0) out[row.month] = row.amount;
+  }
+  const open = Math.round(detail.remainingAmount ?? 0);
+  if (isMonthKey(openMonthKey) && open > 0) out[openMonthKey] = open;
+  return out;
 }

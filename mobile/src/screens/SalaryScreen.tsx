@@ -54,6 +54,8 @@ import {
   formatMonthKey,
   monthBounds,
   addMonths,
+  buildPayoutSuggestions,
+  payoutSheetTitle,
 } from '../components/salary/salaryFormat';
 
 // ── Row status ─────────────────────────────────────────────────────────────
@@ -142,6 +144,8 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
   // Кнопка выдачи видна держателю salary_payouts_manage и только когда по
   // сотруднику реально есть остаток к выплате.
   const canIssue = !!onIssue && master.remainingAmount > 0.5;
+  // Долг за прошлые месяцы (сумма положительных остатков предыдущих 12 месяцев); старый backend поля не шлёт.
+  const carryOver = Math.round(master.carryOverAmount ?? 0);
 
   return (
     <TouchableOpacity
@@ -211,6 +215,15 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
         </View>
         <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
       </View>
+
+      {carryOver > 0 ? (
+        <View style={styles.rowDebtLine}>
+          <Ionicons name="time-outline" size={12} color={colors.amber[700]} />
+          <Text style={[styles.rowDebtText, { color: colors.amber[700] }]} numberOfLines={1}>
+            + долг за прошлые: {formatMoney(carryOver)}
+          </Text>
+        </View>
+      ) : null}
 
       {hasPerDay ? (
         <View style={styles.rowPerDayLine}>
@@ -420,6 +433,8 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
   // глубоком флоу). Round 17 (158): выплата фиксируется сразу — сотрудник лишь
   // получает уведомление (SalaryReceivedModal), решения от него не ждём.
   const [payoutTarget, setPayoutTarget] = useState<MasterSalary | null>(null);
+  // «За какой месяц» выплаты: по умолчанию открытый в списке, в форме меняется (долг за прошлый — платим им).
+  const [quickMonthKey, setQuickMonthKey] = useState(monthYear);
 
   // Месячная деталь цели — чтобы показать контекст по уже выданному: сколько
   // сотрудник ещё не просмотрел и остались ли НЕзафиксированные выплаты старого
@@ -450,15 +465,25 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
     return { unviewed, unsettled };
   }, [payoutTarget, targetDetail, monthYear]);
 
+  // Подсказка «К выплате» по месяцам для PayoutForm: остаток месяца списка (из строки — известен сразу)
+  // и долги прошлых месяцев из carryOver (приходят с деталью). Пока деталь чужая/не пришла — только строка.
+  const quickSuggestions = useMemo<Record<string, number>>(() => {
+    if (!payoutTarget) return {};
+    if (targetDetail && targetDetail.userId === payoutTarget.masterId && targetDetail.month === monthYear) {
+      return buildPayoutSuggestions(targetDetail, monthYear);
+    }
+    const rowRemaining = Math.round(payoutTarget.remainingAmount || 0);
+    return rowRemaining > 0 ? { [monthYear]: rowRemaining } : {};
+  }, [payoutTarget, targetDetail, monthYear]);
+
   const quickPayoutMutation = useMutation({
-    mutationFn: (vars: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string }) =>
-      salaryApi.createPayout({
-        employeeId: vars.employeeId,
-        type: vars.type,
-        amount: vars.amount,
-        comment: vars.comment,
-        periodMonth: monthYear,
-      }),
+    mutationFn: (vars: {
+      employeeId: string;
+      type: 'salary' | 'advance';
+      amount: number;
+      comment?: string;
+      periodMonth: string;
+    }) => salaryApi.createPayout(vars),
     onSuccess: () => {
       haptic('success');
       setPayoutTarget(null);
@@ -474,6 +499,7 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
         'dashboard-chart',
         'financial-report',
         'reports',
+        'report-run',
       ]) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
@@ -485,9 +511,13 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
     },
   });
 
-  const openQuickIssue = useCallback((m: MasterSalary) => {
-    setPayoutTarget(m);
-  }, []);
+  const openQuickIssue = useCallback(
+    (m: MasterSalary) => {
+      setQuickMonthKey(monthYear);
+      setPayoutTarget(m);
+    },
+    [monthYear],
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -768,25 +798,21 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
 
       {/* Round 16 #1(б) — быстрая выдача из списка: та же PayoutForm, что в
           карточке сотрудника (сумма предзаполнена «К выплате», тип — сегмент,
-          комментарий необязателен → «Выдать» в один тап). */}
+          комментарий необязателен → «Выдать» в один тап). Месяц «за который»
+          (по умолчанию открытый в списке) выбирается прямо в форме. */}
       <Modal
         visible={payoutTarget !== null}
         onClose={() => setPayoutTarget(null)}
-        title={'Выдать — ' + (payoutTarget?.masterName ?? '')}
+        title={payoutSheetTitle(quickMonthKey, payoutTarget?.masterName)}
       >
         {payoutTarget ? (
           <>
-            <View style={[styles.quickMetaRow, { backgroundColor: palette.bg.muted }]}>
-              <Ionicons name="calendar-outline" size={13} color={palette.text.tertiary} />
-              <Text style={[styles.quickMetaText, { color: palette.text.secondary }]}>
-                Выплата за {monthLabelFull(selectedMonth).toLowerCase()} — попадёт в этот месяц
-              </Text>
-            </View>
             {/* Round 17 (158) — подтверждения больше нет: вместо «ждёт
                 подтверждения» показываем, что сотрудник ещё не открыл
                 уведомление, и отдельно — незафиксированные строки старого
-                формата (их фиксируют в карточке сотрудника). */}
-            {targetHints.unsettled > 0 ? (
+                формата (их фиксируют в карточке сотрудника). Данные — по месяцу
+                списка, поэтому при выборе другого месяца в форме не показываем. */}
+            {quickMonthKey === monthYear && targetHints.unsettled > 0 ? (
               <View
                 style={[
                   styles.quickWarnRow,
@@ -800,7 +826,7 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
                 </Text>
               </View>
             ) : null}
-            {targetHints.unviewed > 0 ? (
+            {quickMonthKey === monthYear && targetHints.unviewed > 0 ? (
               <View style={[styles.quickWarnRow, { backgroundColor: palette.bg.muted }]}>
                 <Ionicons name="eye-off-outline" size={13} color={palette.text.tertiary} />
                 <Text style={[styles.quickMetaText, { color: palette.text.secondary }]}>
@@ -811,7 +837,9 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
             <PayoutForm
               palette={palette}
               initialType="salary"
-              suggestedAmount={Math.max(0, Math.round(payoutTarget.remainingAmount || 0))}
+              monthKey={quickMonthKey}
+              onMonthChange={setQuickMonthKey}
+              suggestedByMonth={quickSuggestions}
               pending={quickPayoutMutation.isPending}
               onSubmit={(vars) => quickPayoutMutation.mutate({ employeeId: payoutTarget.masterId, ...vars })}
               onCancel={() => setPayoutTarget(null)}
@@ -987,16 +1015,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
 
-  // Round 16 #1(б) — инфострока и предупреждение в модале быстрой выдачи.
-  quickMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1.5],
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[2],
-    marginBottom: spacing[3],
-  },
+  // Round 16 #1(б) — предупреждения в модале быстрой выдачи.
   quickWarnRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1035,4 +1054,13 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   rowPerDayCaption: { fontSize: 11, fontWeight: fontWeight.medium },
+
+  // «+ долг за прошлые: N» — тоже под именем, как строки смен и чипов.
+  rowDebtLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingLeft: 36 + spacing[2.5],
+  },
+  rowDebtText: { flex: 1, fontSize: 11, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
 });

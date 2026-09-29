@@ -23,8 +23,10 @@
  *     createPayout. Round 17 (158): выплата ФИКСИРУЕТСЯ СРАЗУ (расход пишется в
  *     той же транзакции), подтверждения мастером нет — он лишь получает
  *     уведомление (SalaryReceivedModal), а владелец видит «просмотрено / не
- *     просмотрено». + «Штраф» → createFine (comment MANDATORY — submit blocked
- *     while the reason is empty; fines listed with remove).
+ *     просмотрено». 2026-09-30: выплата выдаётся «за месяц» (пикер в форме, по
+ *     умолчанию открытый месяц), долги прошлых месяцев — блок «Не выплачено за
+ *     прошлые месяцы» из `carryOver`. + «Штраф» → createFine (comment MANDATORY —
+ *     submit blocked while the reason is empty; fines listed with remove).
  *   • canManagePremiums (salary_premiums_manage): «Премия» → premiums.create
  *     (cash / +% к ставке) — preserved from the old popup.
  */
@@ -52,6 +54,7 @@ import Modal from '../Modal';
 import ConfirmDialog from '../ConfirmDialog';
 import { BottomSheet } from '../BottomSheet';
 import RateByMonthSheet from '../employee/RateByMonthSheet';
+import MonthPickerField from './MonthPickerField';
 import { salaryApi } from '../../api/services';
 import { useColors } from '../../contexts/ThemeContext';
 import { useTabBarHeight } from '../../hooks/useTabBarHeight';
@@ -69,6 +72,11 @@ import {
   formatDayMonthTime,
   addMonths,
   parseMonthKey,
+  buildPayoutSuggestions,
+  carryOverRows,
+  monthKeyLabel,
+  payoutSheetTitle,
+  type CarryOverRow,
 } from './salaryFormat';
 import type {
   SalaryMonthDetail,
@@ -197,6 +205,8 @@ export default function SalaryEmployeeCard({
   // initial type is stashed when the button opens it.
   const [activeForm, setActiveForm] = useState<null | 'payout' | 'fine' | 'premium'>(null);
   const [payoutInitialType, setPayoutInitialType] = useState<'salary' | 'advance'>('salary');
+  // «За какой месяц» выплата: открытый месяц карточки или месяц долга из блока «Не выплачено за прошлые месяцы».
+  const [payoutMonthKey, setPayoutMonthKey] = useState(monthKey);
 
   // Round 15 — корректировки владельцем (153): цель действия сташится в state,
   // соответствующий Modal-форм рендерится внизу (те же правила: один за раз).
@@ -211,7 +221,7 @@ export default function SalaryEmployeeCard({
   const [fineToEdit, setFineToEdit] = useState<SalaryFine | null>(null);
 
   // ── Data ────────────────────────────────────────────────────────────────────
-  const { data, isError, isFetching, refetch } = useQuery<SalaryMonthDetail>({
+  const { data, isError, isFetching, isPlaceholderData, refetch } = useQuery<SalaryMonthDetail>({
     queryKey: ['salary-employee-month', employeeId, monthKey],
     queryFn: async () => (await salaryApi.getEmployeeMonth(employeeId, monthKey)).data,
     // SWR — keep the previous month on screen while the next one loads, so
@@ -274,6 +284,8 @@ export default function SalaryEmployeeCard({
       'financial-report',
       'tag-analytics',
       'reports',
+      // Отчёты «По зарплатам» / «Сводный» считают по месяцу «за который» — выплата двигает их цифры.
+      'report-run',
     ]) {
       queryClient.invalidateQueries({ queryKey: [key] });
     }
@@ -292,23 +304,15 @@ export default function SalaryEmployeeCard({
   );
 
   const payoutMutation = useMutation({
-    mutationFn: (vars: { type: 'salary' | 'advance'; amount: number; comment?: string }) =>
-      // 149 — карточка помесячная: выплата, выписанная с экрана июля (даже в
-      // августе), относится к июлю (periodMonth = открытый месяц) — симметрично
-      // премии (periodMonthYear ниже).
-      // Adversarial-ревью Round 14: в отличие от платежей поставщикам, здесь
-      // безусловная отправка periodMonth (в т.ч. = текущему месяцу) дневные
-      // срезы «Расходов» НЕ ломает: зеркальный расход уходит в категорию
-      // «Зарплата», которая исключена из P&L по имени, а лента расходов
-      // фильтруется по дате факта (period_month там — только бейдж). Для
-      // текущего месяца periodMonth совпадает с COALESCE-фолбэком сервера —
-      // семантика идентична отсутствию поля.
+    mutationFn: (vars: { type: 'salary' | 'advance'; amount: number; comment?: string; periodMonth: string }) =>
+      // 2026-09-30: месяц «за который» выбирается в форме и уходит ВСЕГДА явным — выданная в октябре
+      // за сентябрь выплата попадает в сентябрь в отчётах, а в ленте расходов и кассе остаётся по дате факта.
       salaryApi.createPayout({
         employeeId,
         type: vars.type,
         amount: vars.amount,
         comment: vars.comment,
-        periodMonth: monthKey,
+        periodMonth: vars.periodMonth,
       }),
     onSuccess: () => {
       setActiveForm(null);
@@ -380,9 +384,21 @@ export default function SalaryEmployeeCard({
     [removeFineMutation],
   );
 
-  const openPayout = useCallback((type: 'salary' | 'advance') => {
+  const openPayout = useCallback(
+    (type: 'salary' | 'advance') => {
+      haptic('tap');
+      setPayoutInitialType(type);
+      setPayoutMonthKey(monthKey);
+      setActiveForm('payout');
+    },
+    [monthKey],
+  );
+
+  // «Выплатить» у долга за прошлый месяц: та же форма, месяц = месяц долга, сумма = его остаток.
+  const openDebtPayout = useCallback((row: CarryOverRow) => {
     haptic('tap');
-    setPayoutInitialType(type);
+    setPayoutInitialType('salary');
+    setPayoutMonthKey(row.month);
     setActiveForm('payout');
   }, []);
 
@@ -505,7 +521,12 @@ export default function SalaryEmployeeCard({
     </View>
   );
 
-  const suggestedPayout = Math.max(0, Math.round(data?.remainingAmount ?? 0));
+  // При перелистывании месяца data — снимок соседнего (placeholderData): подсказок «К выплате» из него не строим.
+  const suggestedByMonth = useMemo(
+    () => (isPlaceholderData ? {} : buildPayoutSuggestions(data, monthKey)),
+    [data, monthKey, isPlaceholderData],
+  );
+  const debtRows = useMemo(() => carryOverRows(data?.carryOver), [data?.carryOver]);
 
   // ── Body ──────────────────────────────────────────────────────────────────────
   let body: React.ReactNode;
@@ -531,6 +552,15 @@ export default function SalaryEmployeeCard({
           >
             <Hero data={data} month={month} palette={palette} loading={isFetching && !refreshing} />
             <TotalsGrid data={data} palette={palette} />
+            {debtRows.length > 0 ? (
+              <CarryOverSection
+                rows={debtRows}
+                total={Math.round(data.carryOver?.total ?? 0)}
+                openYear={monthKey.slice(0, 4)}
+                palette={palette}
+                onPay={canManagePayouts ? openDebtPayout : undefined}
+              />
+            ) : null}
             <Breakdown data={data} palette={palette} />
             {canManageRates ? (
               <TouchableOpacity
@@ -661,15 +691,14 @@ export default function SalaryEmployeeCard({
       <Modal
         visible={activeForm === 'payout'}
         onClose={() => setActiveForm(null)}
-        title={
-          (payoutInitialType === 'salary' ? 'Выдать зарплату' : 'Выдать аванс') +
-          (employeeName ? ' — ' + employeeName : '')
-        }
+        title={payoutSheetTitle(payoutMonthKey, employeeName)}
       >
         <PayoutForm
           palette={palette}
           initialType={payoutInitialType}
-          suggestedAmount={suggestedPayout}
+          monthKey={payoutMonthKey}
+          onMonthChange={setPayoutMonthKey}
+          suggestedByMonth={suggestedByMonth}
           pending={payoutMutation.isPending}
           onSubmit={(vars) => payoutMutation.mutate(vars)}
           onCancel={() => setActiveForm(null)}
@@ -936,6 +965,73 @@ function TotalTile({
         {value}
       </Text>
     </View>
+  );
+}
+
+// ── Не выплачено за прошлые месяцы ─────────────────────────────────────────────
+
+/**
+ * Остаток по каждому из 12 месяцев до открытого (`carryOver` ответа сервера). Долг — с
+ * кнопкой «Выплатить» (форма выплаты за тот месяц), переплата — серым и без кнопки: долг она не гасит.
+ * Без `onPay` (карточка сотрудника про самого себя) блок только информирует.
+ */
+function CarryOverSection({
+  rows,
+  total,
+  openYear,
+  palette,
+  onPay,
+}: {
+  rows: CarryOverRow[];
+  total: number;
+  /** Год открытого месяца: у месяцев другого года добавляется год. */
+  openYear: string;
+  palette: SemanticPalette;
+  onPay?: (row: CarryOverRow) => void;
+}) {
+  const green = toneColors('green', palette);
+  const debtCount = rows.filter((r) => r.amount > 0).length;
+  return (
+    <Section title="Не выплачено за прошлые месяцы" icon="time-outline" palette={palette}>
+      {rows.map((row) => {
+        const debt = row.amount > 0;
+        const label = monthKeyLabel(row.month, row.month.slice(0, 4) !== openYear);
+        return (
+          <View key={row.month} style={[styles.listRow, { borderBottomColor: palette.border.subtle }]}>
+            <Text
+              style={[styles.listRowTitle, styles.flex, { color: debt ? palette.text.primary : palette.text.tertiary }]}
+              numberOfLines={1}
+            >
+              {label}
+            </Text>
+            <Text
+              style={[styles.listRowAmount, { color: debt ? colors.amber[700] : palette.text.tertiary }]}
+              numberOfLines={1}
+            >
+              {debt ? formatMoney(row.amount) : `переплата ${formatMoney(-row.amount)}`}
+            </Text>
+            {debt && onPay ? (
+              <TouchableOpacity
+                style={[styles.debtPayBtn, { backgroundColor: green.bg }]}
+                activeOpacity={0.75}
+                hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                onPress={() => onPay(row)}
+                accessibilityRole="button"
+                accessibilityLabel={`Выплатить за ${monthKeyLabel(row.month)}: ${formatMoney(row.amount)}`}
+              >
+                <Text style={[styles.debtPayText, { color: green.text }]}>Выплатить</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        );
+      })}
+      {debtCount > 1 ? (
+        <View style={styles.debtTotalRow}>
+          <Text style={[styles.listRowTitle, styles.flex, { color: palette.text.secondary }]}>Итого</Text>
+          <Text style={[styles.listRowAmount, { color: colors.amber[700] }]}>{formatMoney(total)}</Text>
+        </View>
+      ) : null}
+    </Section>
   );
 }
 
@@ -1387,28 +1483,42 @@ function Section({
  * Round 16 #1 — экспортируется: та же форма открывается и из карточки
  * сотрудника, и из быстрой кнопки «Выдать» прямо в списке SalaryScreen
  * (одна форма — ноль дрейфа между двумя входами).
+ *
+ * 2026-09-30: «За какой месяц» выбирается здесь же (`monthKey` держит родитель —
+ * ему нужен заголовок листа «Выплата за <месяц>»), `periodMonth` уходит наружу всегда.
  */
 export function PayoutForm({
   palette,
   initialType,
-  suggestedAmount,
+  monthKey,
+  onMonthChange,
+  suggestedByMonth,
   pending,
   onSubmit,
   onCancel,
 }: {
   palette: SemanticPalette;
   initialType: 'salary' | 'advance';
-  suggestedAmount: number;
+  /** «За какой месяц» выплата ('YYYY-MM'). */
+  monthKey: string;
+  onMonthChange: (key: string) => void;
+  /** «К выплате» по месяцам ('YYYY-MM' → рубли); месяца нет в карте — подсказки нет. */
+  suggestedByMonth: Record<string, number>;
   pending: boolean;
-  onSubmit: (vars: { type: 'salary' | 'advance'; amount: number; comment?: string }) => void;
+  onSubmit: (vars: { type: 'salary' | 'advance'; amount: number; comment?: string; periodMonth: string }) => void;
   onCancel: () => void;
 }) {
   const [type, setType] = useState<'salary' | 'advance'>(initialType);
-  const [amount, setAmount] = useState(suggestedAmount > 0 ? String(suggestedAmount) : '');
+  // null — сумму не правили: она следует за подсказкой выбранного месяца (в т.ч. когда подсказка пришла позже открытия).
+  const [typedAmount, setTypedAmount] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   // Round 17 (в) — форма выдачи должна помещаться на один экран: комментарий
   // нужен редко, поэтому он спрятан за ссылкой и не съедает высоту по умолчанию.
   const [showComment, setShowComment] = useState(false);
+
+  const suggestedAmount = suggestedByMonth[monthKey] ?? 0;
+  const amount = typedAmount ?? (suggestedAmount > 0 ? String(suggestedAmount) : '');
+  const notCurrentMonth = monthKey !== formatMonthKey(new Date());
 
   const submit = () => {
     const amt = parseAmount(amount);
@@ -1416,7 +1526,7 @@ export function PayoutForm({
       Alert.alert('Ошибка', 'Укажите корректную сумму');
       return;
     }
-    onSubmit({ type, amount: amt, comment: comment.trim() || undefined });
+    onSubmit({ type, amount: amt, comment: comment.trim() || undefined, periodMonth: monthKey });
   };
 
   return (
@@ -1448,13 +1558,23 @@ export function PayoutForm({
         </View>
       </FormField>
 
+      <MonthPickerField
+        palette={palette}
+        value={monthKey}
+        onChange={(key) => {
+          if (key) onMonthChange(key);
+        }}
+        hint={notCurrentMonth ? `Выдаётся сегодня, учитывается за ${monthKeyLabel(monthKey)}` : undefined}
+        style={styles.formField}
+      />
+
       <FormField label="Сумма" palette={palette}>
         <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
           <TextInput
             style={[styles.amountInput, { color: palette.text.primary }]}
             value={amount}
-            onChangeText={setAmount}
+            onChangeText={setTypedAmount}
             keyboardType="numeric"
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
@@ -1471,7 +1591,7 @@ export function PayoutForm({
               <TouchableOpacity
                 onPress={() => {
                   haptic('select');
-                  setAmount(String(suggestedAmount));
+                  setTypedAmount(null);
                 }}
                 hitSlop={8}
                 accessibilityRole="button"
@@ -2163,6 +2283,18 @@ const styles = StyleSheet.create({
   // показывать зачёркнутой, не прятать.
   struckAmount: { textDecorationLine: 'line-through' },
   removeBtn: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', marginLeft: spacing[1] },
+
+  // 2026-09-30 — «Не выплачено за прошлые месяцы»: строка долга с кнопкой «Выплатить» и итог.
+  debtPayBtn: {
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.full,
+    marginLeft: spacing[1],
+  },
+  debtPayText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
+  debtTotalRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[2] },
 
   // Round 15 п.1 — вход в пересчёт процента открытого месяца.
   rateButton: {
