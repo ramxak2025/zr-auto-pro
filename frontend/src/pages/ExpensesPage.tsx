@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import { expensesApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
-import { formatDateShort, formatMoney } from '../../../shared/utils/formatters';
+import { formatDateShort, formatDayKey, formatMoney } from '../../../shared/utils/formatters';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { Expense } from '../types';
 import DatePeriodPicker from '../components/DatePeriodPicker';
@@ -20,6 +20,7 @@ import MonthPager from '../components/reports/MonthPager';
 import { patchParams, periodLabel, readPeriod } from '../components/reports/periodParams';
 import { formatDayKeyRu } from '../components/reports/reportFormat';
 import { numericColumnSizing } from '../components/reports/tableWidths';
+import { isMonthString, monthNameLabel } from '../components/salary/salaryMonths';
 import { ErrorRow } from '../components/dashboard/shared';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -41,6 +42,17 @@ const percentFormat = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 
 function expenseDate(date: string, timeZone: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? formatDayKeyRu(date) : formatDateShort(date, timeZone);
 }
+
+/** «за сентябрь» — только если расход отнесён к месяцу, отличному от месяца оплаты (`date`). */
+function periodBadgeText(exp: Expense, timeZone: string): string | null {
+  if (!isMonthString(exp.periodMonth)) return null;
+  const paidMonth = (/^\d{4}-\d{2}-\d{2}$/.test(exp.date) ? exp.date : formatDayKey(exp.date, timeZone)).slice(0, 7);
+  if (exp.periodMonth === paidMonth) return null;
+  return `за ${monthNameLabel(exp.periodMonth, paidMonth).toLowerCase()}`;
+}
+
+/** Категория «Зарплата» — зеркало выплат (сервер ищет её по точному имени): месяц у неё задаёт сама выплата. */
+const SALARY_CATEGORY_NAME = 'Зарплата';
 
 interface CategoryTotal {
   name: string;
@@ -91,6 +103,8 @@ export default function ExpensesPage() {
     amount: '',
     description: '',
     date: today,
+    // 'YYYY-MM' или пусто: «за какой месяц» расход идёт в отчёты и прибыль.
+    periodMonth: '',
   });
 
   const categoriesQuery = useQuery({
@@ -101,6 +115,7 @@ export default function ExpensesPage() {
     },
   });
   const categories: ExpenseCategoryRow[] = categoriesQuery.data ?? [];
+  const isSalaryCategory = categories.some((c) => c.id === form.categoryId && c.name === SALARY_CATEGORY_NAME);
 
   const {
     data: expenses = [],
@@ -134,13 +149,13 @@ export default function ExpensesPage() {
   const purchaseReport = purchasesQuery.data;
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => expensesApi.create(data),
+    mutationFn: (data: Parameters<typeof expensesApi.create>[0]) => expensesApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['financial-report'] });
       toast.success('Расход добавлен');
       setModalOpen(false);
-      setForm({ categoryId: '', amount: '', description: '', date: today });
+      setForm({ categoryId: '', amount: '', description: '', date: today, periodMonth: '' });
     },
     // Расход всегда падает в филиал СЕССИИ (163) — «записать в никуда» больше
     // нельзя, отказ 400 «Выберите филиал» ушёл вместе с режимом общей сводки.
@@ -201,11 +216,18 @@ export default function ExpensesPage() {
       toast.error('Укажите сумму');
       return;
     }
+    // Браузеры без type="month" (Firefox, Safari на десктопе) отдают обычный текст.
+    if (form.periodMonth && !isSalaryCategory && !isMonthString(form.periodMonth)) {
+      toast.error('Месяц укажите в формате ГГГГ-ММ, например 2026-09');
+      return;
+    }
     createMutation.mutate({
       categoryId: form.categoryId || undefined,
       amount,
       description: form.description || undefined,
       date: form.date,
+      // Без месяца расход относится к месяцу даты; у «Зарплаты» месяц определяет выплата.
+      periodMonth: form.periodMonth && !isSalaryCategory ? form.periodMonth : undefined,
     });
   };
 
@@ -245,16 +267,27 @@ export default function ExpensesPage() {
       key: 'categoryName',
       header: 'Категория',
       sortable: true,
-      render: (exp) =>
-        exp.source === 'warranty' ? (
-          <Badge tone="warn" icon={ShieldAlert}>
-            Гарантия (убыток)
-          </Badge>
-        ) : exp.categoryName ? (
-          <Badge outline>{exp.categoryName}</Badge>
-        ) : (
-          <span className="text-ink-3">—</span>
-        ),
+      render: (exp) => {
+        const periodText = periodBadgeText(exp, timeZone);
+        return (
+          <span className="flex flex-wrap items-center gap-1">
+            {exp.source === 'warranty' ? (
+              <Badge tone="warn" icon={ShieldAlert}>
+                Гарантия (убыток)
+              </Badge>
+            ) : exp.categoryName ? (
+              <Badge outline>{exp.categoryName}</Badge>
+            ) : (
+              <span className="text-ink-3">—</span>
+            )}
+            {periodText && (
+              <Badge tone="info" title="Отчёты и прибыль относят расход к этому месяцу, лента — по дате оплаты">
+                {periodText}
+              </Badge>
+            )}
+          </span>
+        );
+      },
     },
     {
       key: 'description',
@@ -575,6 +608,24 @@ export default function ExpensesPage() {
               value={form.date}
               onChange={(e) => setForm({ ...form, date: e.target.value })}
               required
+            />
+          </Field>
+          <Field
+            label="За какой месяц"
+            htmlFor="expense-period-month"
+            hint={
+              isSalaryCategory
+                ? 'Месяц зарплатного расхода определяет сама выплата на экране «Зарплата»'
+                : 'Отчёты и прибыль отнесут расход к этому месяцу; лента — по дате оплаты'
+            }
+          >
+            <Input
+              id="expense-period-month"
+              type="month"
+              value={isSalaryCategory ? '' : form.periodMonth}
+              onChange={(e) => setForm({ ...form, periodMonth: e.target.value })}
+              placeholder="ГГГГ-ММ"
+              disabled={isSalaryCategory}
             />
           </Field>
         </form>
