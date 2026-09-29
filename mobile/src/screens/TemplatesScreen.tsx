@@ -47,6 +47,7 @@ import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
 import type { CheckTemplate, CheckTemplateFolder } from '../../../shared/types';
+import { serviceLineTotal } from '../../../shared/utils/checkLines';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Помощники домена шаблонов — экспортируются: их переиспользуют
@@ -93,7 +94,9 @@ export function flattenFolderTree(nodes: FolderNode[], depth = 0): Array<{ folde
 }
 
 export function templateTotal(t: Pick<CheckTemplate, 'services' | 'products'>): number {
-  const services = (t.services || []).reduce((sum, s) => sum + (s.price || 0) * (s.quantity || 0), 0);
+  // Услуги — Σ serviceLineTotal: у новых шаблонов quantity 1 (сумма = цена), у старых
+  // («Мойка ×2») — цена на количество, как и считал сервер. Товары считаются как раньше.
+  const services = (t.services || []).reduce((sum, s) => sum + serviceLineTotal(s), 0);
   const products = (t.products || []).reduce((sum, p) => sum + (p.sellPrice || 0) * (p.quantity || 0), 0);
   return services + products;
 }

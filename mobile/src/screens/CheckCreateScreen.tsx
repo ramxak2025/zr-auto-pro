@@ -64,6 +64,7 @@ import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { carVin, type CarWithVin } from '../utils/vinUi';
 import { isValidVin } from '../../../shared/utils/vin';
+import { expandServiceQuantities, serviceLineTotal } from '../../../shared/utils/checkLines';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -167,6 +168,18 @@ function reassignChecksWord(n: number): string {
 function parseMoneyInput(v: string): number {
   const n = parseFloat(String(v).replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * У услуги в Кассе количества нет (2026-09-30): строка = одна услуга по одной цене,
+ * `quantity` у новых строк всегда 1 и на сервер не уходит. Больше 1 оно бывает только у
+ * legacy-строки — старого чека, открытого на правку, или строки старого шаблона, которую
+ * `expandServiceQuantities` не разворачивает («Мойка ×150», «×2.5»). Такую строку показываем
+ * честно («×3» рядом с названием, сумма — `serviceLineTotal`) и при сохранении шлём её
+ * количество как есть, иначе сумма старого чека изменилась бы.
+ */
+function hasLegacyQty(line: { quantity?: number | null }): boolean {
+  return Number(line.quantity) > 1;
 }
 
 /**
@@ -1143,16 +1156,23 @@ export default function CheckCreateScreen() {
   };
 
   const applyTemplate = (template: CheckTemplate) => {
+    // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
+    // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
+    // развернуть нельзя («×150», «×2.5»), остаётся legacy-строкой и считается serviceLineTotal.
+    // Мусорное quantity (0, пусто, < 1) приводим к 1 — как сервер (`quantity || 1`).
     setServiceLines(
-      template.services.map((s) => ({
-        serviceId: s.serviceId,
-        name: s.name,
-        price: s.price,
-        quantity: s.quantity,
-        total: s.price * s.quantity,
-        masterId: defaultMasterId,
-        lineMasterId: defaultMasterId,
-      })),
+      expandServiceQuantities(template.services).map((s) => {
+        const quantity = Number(s.quantity) > 1 ? s.quantity : 1;
+        return {
+          serviceId: s.serviceId,
+          name: s.name,
+          price: s.price,
+          quantity,
+          total: serviceLineTotal({ price: s.price, quantity }),
+          masterId: defaultMasterId,
+          lineMasterId: defaultMasterId,
+        };
+      }),
     );
     setProductLines(
       template.products.map((p) => {
@@ -1194,13 +1214,14 @@ export default function CheckCreateScreen() {
     try {
       await checkTemplatesApi.create({
         name,
-        services: serviceLines
+        // Услуги шаблона — без quantity: строка = одна услуга. Legacy-строку «Мойка ×3» из
+        // старого чека разворачиваем в три строки, чтобы шаблон сохранил её честный состав.
+        services: expandServiceQuantities(serviceLines)
           .filter((l) => !!l.serviceId)
           .map((l) => ({
             serviceId: l.serviceId!,
             name: l.name,
             price: l.price,
-            quantity: l.quantity,
           })),
         products: productLines
           .filter((l) => !!l.productId)
@@ -2231,7 +2252,9 @@ export default function CheckCreateScreen() {
   // `subtotal - discount` quietly discounted services too (and allowed a
   // negative «К оплате»), so the on-screen sum diverged from what the
   // server persisted — corrupting the cash ledger reconciliation.
-  const serviceTotal = serviceLines.reduce((sum, l) => sum + l.price * l.quantity, 0);
+  // Услуги — Σ serviceLineTotal: у новых строк это просто цена, у legacy-строки («×3») — цена
+  // на её количество, ровно как считает сервер.
+  const serviceTotal = serviceLines.reduce((sum, l) => sum + serviceLineTotal(l), 0);
   const productTotal = productLines.reduce((sum, l) => sum + l.sellPrice * l.quantity, 0);
   const discountNum = parseMoneyInput(discount);
   const subtotal = serviceTotal + productTotal;
@@ -2284,6 +2307,8 @@ export default function CheckCreateScreen() {
   // /auth/me, superadmin/director байпасятся внутри hasPermission.
   const canSeeCostPrice = hasPermission('warehouse_manage');
 
+  // Одна и та же услуга дважды = две строки (каждая — отдельная работа в статистике),
+  // количества у услуг нет: quantity новой строки всегда 1.
   const addServiceLine = (service: Service) => {
     setServiceLines((prev) => [
       ...prev,
@@ -2307,7 +2332,7 @@ export default function CheckCreateScreen() {
       prev.map((line, i) => {
         if (i !== idx) return line;
         const updated = { ...line, [field]: value };
-        updated.total = updated.price * updated.quantity;
+        updated.total = serviceLineTotal(updated);
         return updated;
       }),
     );
@@ -2586,12 +2611,16 @@ export default function CheckCreateScreen() {
               ...(assigneeIds.length > 0 ? { assigneeIds } : {}),
               ...(orderLocationId ? { locationId: orderLocationId } : {}),
             }),
+        // У услуг количества нет — поле `quantity` не шлём (сервер берёт 1). Исключение —
+        // legacy-строка («Мойка ×3»: старый чек на правке или неразворачиваемая строка
+        // шаблона): её количество уходит как есть, иначе сумма строки на сервере разошлась
+        // бы с той, что видит кассир.
         services: serviceLines.map((l) => ({
           serviceId: l.serviceId,
           masterId: l.lineMasterId || l.masterId || resolvedMasterId,
           name: l.name,
           price: l.price,
-          quantity: l.quantity,
+          ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
         products: productLines.map((l) => ({
           productId: l.productId,
@@ -3903,9 +3932,28 @@ export default function CheckCreateScreen() {
                 style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
               >
                 <View style={styles.lineTop}>
-                  <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
-                    {line.name}
-                  </Text>
+                  <View style={styles.lineNameRow}>
+                    <Text
+                      style={[styles.lineName, styles.lineNameHug, { color: palette.text.primary }]}
+                      numberOfLines={1}
+                    >
+                      {line.name}
+                    </Text>
+                    {/* Legacy-строка старого чека («Мойка ×3») — серый чип рядом с названием;
+                        у новых строк количества нет, чипа тоже. */}
+                    {hasLegacyQty(line) && (
+                      <View
+                        style={[
+                          styles.legacyQtyChip,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                        ]}
+                      >
+                        <Text style={[styles.legacyQtyChipText, { color: palette.text.secondary }]}>
+                          ×{formatQty(line.quantity)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                   <TouchableOpacity
                     onPress={() => removeServiceLine(idx)}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -3941,26 +3989,13 @@ export default function CheckCreateScreen() {
                       selectTextOnFocus
                     />
                   </View>
-                  <View style={{ width: 60 }}>
-                    <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
-                    <TextInput
-                      value={String(line.quantity)}
-                      onChangeText={(v) => updateServiceLine(idx, 'quantity', parseMoneyInput(v) || 1)}
-                      style={[
-                        styles.lineInput,
-                        {
-                          backgroundColor: palette.bg.muted,
-                          borderColor: palette.border.subtle,
-                          color: palette.text.primary,
-                        },
-                      ]}
-                      keyboardType="numeric"
-                      selectTextOnFocus
-                    />
-                  </View>
-                  <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
-                    {formatMoney(line.price * line.quantity)}
-                  </Text>
+                  {/* Сумма строки отдельно показывается только у legacy-строки («×3»): у новой
+                      она равна цене и дублировала бы поле «Цена». */}
+                  {hasLegacyQty(line) && (
+                    <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
+                      {formatMoney(serviceLineTotal(line))}
+                    </Text>
+                  )}
                 </View>
               </View>
             ))}
@@ -5794,6 +5829,25 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: spacing[2],
   },
+  // Строка услуги: название + серый чип «×3» (только у legacy-строки) в одной flex-группе,
+  // чтобы чип стоял вплотную к названию, а длинное название ужималось (numberOfLines=1),
+  // не выталкивая чип и крестик за край на узком экране (iPhone SE).
+  lineNameRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    marginRight: spacing[2],
+    minWidth: 0,
+  },
+  lineNameHug: { flex: 0, flexShrink: 1, marginRight: 0 },
+  legacyQtyChip: {
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 1,
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  legacyQtyChipText: { fontSize: 11, fontWeight: fontWeight.semibold },
   lineMasterRow: {
     flexDirection: 'row',
     alignItems: 'center',
