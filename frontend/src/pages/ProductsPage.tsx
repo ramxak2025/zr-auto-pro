@@ -26,6 +26,8 @@ import {
   Banknote,
   TrendingDown,
   CalendarDays,
+  MapPin,
+  X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { productsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
@@ -33,6 +35,7 @@ import type { Product, PaginatedResponse, StockMovement, Warehouse as WarehouseR
 import type { UpdateProductRequest } from '../../../shared/api/types';
 
 import { useAuth } from '../contexts/AuthContext';
+import { useStorageCells } from '../hooks/useStorageCells';
 import {
   Button,
   Card,
@@ -63,6 +66,8 @@ import InlineError from '../components/warehouse/InlineError';
 import ProductFormModal, { type ProductFormData } from '../components/warehouse/ProductFormModal';
 import { WriteoffModal, TransferModal, InventoryModal } from '../components/warehouse/StockOperationModals';
 import ProductDetailModal from '../components/warehouse/ProductDetailModal';
+import StorageCellsDrawer from '../components/warehouse/StorageCellsDrawer';
+import AssignCellModal from '../components/warehouse/AssignCellModal';
 import { FolderTileReorderItem, type FolderInfo } from '../components/warehouse/FolderTile';
 import { GlobalInventoryForm, GlobalWriteoffForm } from '../components/warehouse/GlobalStockForms';
 import {
@@ -130,6 +135,8 @@ export default function ProductsPage() {
   const pathParam = params.get('path') ?? '';
   const activePath = useMemo(() => (pathParam ? pathParam.split('/').filter(Boolean) : []), [pathParam]);
   const whParam = params.get('wh');
+  // Фильтр «Ячейка»: id ячейки или 'none' («Без ячейки»); считается на клиенте по загруженному списку склада.
+  const cellParam = params.get('cell') ?? '';
 
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
@@ -140,6 +147,12 @@ export default function ProductsPage() {
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
   const [transferTarget, setTransferTarget] = useState<Product | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  // Ячейки хранения: шторка справа и назначение адреса (одному товару из карточки или выбранным).
+  const [cellsOpen, setCellsOpen] = useState(false);
+  const [assignCell, setAssignCell] = useState<{ productIds: string[]; warehouseId: string; product?: Product } | null>(
+    null,
+  );
 
   // Global warehouse operations
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
@@ -189,6 +202,15 @@ export default function ProductsPage() {
     [warehouses, activeWarehouseId],
   );
   const activeWarehouseKind = activeWarehouse?.kind ?? null;
+
+  // Ячейки активного склада. Пока их нет (`hasCells === false`), страница выглядит как раньше.
+  const {
+    cells: warehouseCells,
+    hasCells,
+    byId: cellsById,
+    isLoading: cellsLoading,
+    isError: cellsError,
+  } = useStorageCells(activeWarehouseId);
 
   // Сводка склада (себестоимость/продажная стоимость) — backend GET
   // /products/warehouse-stats гейтится warehouse_manage, зеркалим его же.
@@ -485,11 +507,35 @@ export default function ProductsPage() {
     return Array.from(paths).sort();
   }, [allProducts]);
 
-  const searchResults = useMemo(() => {
-    if (!searchText) return [];
+  // Фильтр по ячейке работает, только пока у склада есть ячейки (или их ещё грузим): висящий ?cell= не должен прятать товары.
+  const showingCellFilter = !!cellParam && (hasCells || cellsLoading);
+
+  // Плоский список без папок: результаты поиска и/или товары одной ячейки. Поиск идёт и по коду ячейки.
+  const flatResults = useMemo(() => {
+    if (!searchText && !showingCellFilter) return [];
     const q = searchText.toLowerCase();
-    return allProducts.filter((p) => p.name.toLowerCase().includes(q));
-  }, [searchText, allProducts]);
+    return allProducts.filter((p) => {
+      if (showingCellFilter && (cellParam === 'none' ? !!p.storageCellId : p.storageCellId !== cellParam)) return false;
+      return !q || p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
+    });
+  }, [searchText, showingCellFilter, cellParam, allProducts]);
+
+  // Код ячейки для крошки: из списка ячеек, а пока он грузится — из самих товаров.
+  const cellFilterCode = useMemo(() => {
+    if (!showingCellFilter || cellParam === 'none') return null;
+    return (
+      cellsById.get(cellParam)?.code ?? allProducts.find((p) => p.storageCellId === cellParam)?.storageCellCode ?? null
+    );
+  }, [showingCellFilter, cellParam, cellsById, allProducts]);
+  const cellFilterLabel = cellParam === 'none' ? 'Без ячейки' : cellFilterCode ? `Ячейка ${cellFilterCode}` : 'Ячейка';
+  const cellFilterOptions = useMemo(
+    () => [
+      { value: '', label: 'Все ячейки' },
+      { value: 'none', label: 'Без ячейки' },
+      ...warehouseCells.map((c) => ({ value: c.id, label: c.name ? `${c.code} · ${c.name}` : c.code })),
+    ],
+    [warehouseCells],
+  );
 
   // ---- Навигация ----
 
@@ -515,9 +561,38 @@ export default function ProductsPage() {
   );
 
   const switchWarehouse = (id: string) => {
-    setParam({ wh: id, path: null });
+    // Ячейки принадлежат складу — фильтр другого склада не переносим.
+    setParam({ wh: id, path: null, cell: null });
     exitSelectMode();
   };
+
+  const setCellFilter = useCallback(
+    (value: string) => {
+      setParam({ cell: value || null });
+      exitSelectMode();
+    },
+    [setParam, exitSelectMode],
+  );
+
+  const closeCells = useCallback(() => setCellsOpen(false), []);
+
+  // Клик по ячейке в шторке: показываем все её товары (поиск сбрасываем — он сузил бы выдачу).
+  const handleSelectCell = useCallback(
+    (id: string) => {
+      setCellsOpen(false);
+      setParam({ cell: id, q: null });
+      exitSelectMode();
+    },
+    [setParam, exitSelectMode],
+  );
+
+  const closeAssignCell = useCallback(() => setAssignCell(null), []);
+
+  // Ячейку удалили или на складе их не осталось — висящий ?cell= сбрасываем, чтобы не показывать пустой фильтр.
+  useEffect(() => {
+    if (!cellParam || !activeWarehouseId || cellsLoading || cellsError) return;
+    if (!hasCells || (cellParam !== 'none' && !cellsById.has(cellParam))) setParam({ cell: null }, { replace: true });
+  }, [cellParam, activeWarehouseId, cellsLoading, cellsError, hasCells, cellsById, setParam]);
 
   // ---- Multi-select / bulk-delete helpers ----
 
@@ -556,11 +631,24 @@ export default function ProductsPage() {
 
   // ---- Mutations ----
 
+  // Стабильная ссылка: Modal перевешивает Escape и фокус при смене onClose, а страница перерисовывается на каждый ответ запросов.
+  const closeForm = useCallback(() => {
+    setFormOpen(false);
+    setEditingProduct(null);
+  }, []);
+
+  // Адрес товара поменялся: обновляем счётчики «N товаров» у ячеек и каталог Кассы (код ячейки рядом с остатком).
+  const invalidateCellData = () => {
+    queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
+    queryClient.invalidateQueries({ queryKey: ['products-all'] });
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: ProductFormData) => productsApi.create(data),
-    onSuccess: () => {
+    onSuccess: (_res, data) => {
       toast.success('Товар создан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      if (data.storageCellId) invalidateCellData();
       closeForm();
     },
     onError: (err: any) => toast.error(serverMessage(err, 'Не удалось создать товар')),
@@ -568,9 +656,10 @@ export default function ProductsPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateProductRequest }) => productsApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       toast.success('Товар обновлён');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      if (vars.data.storageCellId !== undefined) invalidateCellData();
       closeForm();
     },
     // Показываем ПРИЧИНУ отказа: немой тост скрывал, какое поле не приняли.
@@ -702,11 +791,6 @@ export default function ProductsPage() {
     setFormOpen(true);
   }
 
-  function closeForm() {
-    setFormOpen(false);
-    setEditingProduct(null);
-  }
-
   function handleFormSubmit(data: ProductFormData) {
     if (editingProduct) {
       // PATCH — ЧАСТИЧНЫЙ: числовое поле уходит на сервер, только если его
@@ -760,7 +844,16 @@ export default function ProductsPage() {
           .trim()
           .toLowerCase(),
       );
-      const m = { name: -1, category: -1, unit: -1, sellPrice: -1, costPrice: -1, stock: -1, minStock: -1 };
+      const m = {
+        name: -1,
+        category: -1,
+        unit: -1,
+        sellPrice: -1,
+        costPrice: -1,
+        stock: -1,
+        minStock: -1,
+        storageCell: -1,
+      };
       cols.forEach((h, i) => {
         if (!h) return;
         if (/наименование|название|name/.test(h)) m.name = i;
@@ -770,6 +863,8 @@ export default function ProductsPage() {
         else if (/закуп|себестоим|cost|purchase/.test(h)) m.costPrice = i;
         else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) m.stock = i;
         else if (/мин.*остат|min.*stock/.test(h)) m.minStock = i;
+        // Последней веткой: остальные колонки распознаются как раньше. «Ячейка» — последний столбец экспорта.
+        else if (/ячейк|адрес|cell|bin/i.test(h)) m.storageCell = i;
       });
       return m;
     };
@@ -805,15 +900,20 @@ export default function ProductsPage() {
     // Числа из Excel идут в русской локали («1 250,50») — их нормализует toNumberOrZero.
     const rows: ImportRow[] = rawRows
       .slice(headerIdx + 1)
-      .map((row) => ({
-        name: col(row, colMap.name),
-        category: col(row, colMap.category),
-        costPrice: colMap.costPrice >= 0 ? toNumberOrZero(col(row, colMap.costPrice)) : 0,
-        sellPrice: colMap.sellPrice >= 0 ? toNumberOrZero(col(row, colMap.sellPrice)) : 0,
-        stock: colMap.stock >= 0 ? toNumberOrZero(col(row, colMap.stock)) : 0,
-        minStock: colMap.minStock >= 0 ? toNumberOrZero(col(row, colMap.minStock)) : 0,
-        unit: col(row, colMap.unit) || DEFAULT_UNIT,
-      }))
+      .map((row) => {
+        const storageCell = col(row, colMap.storageCell);
+        return {
+          name: col(row, colMap.name),
+          category: col(row, colMap.category),
+          costPrice: colMap.costPrice >= 0 ? toNumberOrZero(col(row, colMap.costPrice)) : 0,
+          sellPrice: colMap.sellPrice >= 0 ? toNumberOrZero(col(row, colMap.sellPrice)) : 0,
+          stock: colMap.stock >= 0 ? toNumberOrZero(col(row, colMap.stock)) : 0,
+          minStock: colMap.minStock >= 0 ? toNumberOrZero(col(row, colMap.minStock)) : 0,
+          unit: col(row, colMap.unit) || DEFAULT_UNIT,
+          // Пустая ячейка в файле — «не трогать адрес»: ключ не отправляем.
+          ...(storageCell ? { storageCell } : {}),
+        };
+      })
       .filter((r) => r.name);
 
     if (rows.length === 0) {
@@ -895,6 +995,8 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-all'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      // Сервер сам создаёт ячейки, которых ещё не было на складе, — подтягиваем их список.
+      if (importData.some((r) => r.storageCell)) queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       setImportData(null);
     } catch (err: any) {
       toast.error(serverMessage(err, err?.message || 'Ошибка импорта'));
@@ -921,10 +1023,15 @@ export default function ProductsPage() {
     });
   }
 
+  // На экране сейчас: папка/корень (товары + папки) или плоский список ячейки (только товары).
+  // Папки выбираются только ради удаления, поэтому без warehouse_delete их в выборе нет.
+  const visibleProducts = showingCellFilter ? flatResults : currentProducts;
+  const visibleFolders = showingCellFilter || !canDeleteWarehouse ? [] : subfolders;
+
   const isAllSelected =
-    currentProducts.length + subfolders.length > 0 &&
-    currentProducts.every((p) => selectedProducts.has(p.id)) &&
-    subfolders.every((f) => selectedFolders.has(f.fullPath));
+    visibleProducts.length + visibleFolders.length > 0 &&
+    visibleProducts.every((p) => selectedProducts.has(p.id)) &&
+    visibleFolders.every((f) => selectedFolders.has(f.fullPath));
 
   // Select every folder + product visible in the current view, or clear if all
   // are already selected (toggle behaviour for the select-all control).
@@ -933,10 +1040,18 @@ export default function ProductsPage() {
       setSelectedProducts(new Set());
       setSelectedFolders(new Set());
     } else {
-      setSelectedProducts(new Set(currentProducts.map((p) => p.id)));
-      setSelectedFolders(new Set(subfolders.map((f) => f.fullPath)));
+      setSelectedProducts(new Set(visibleProducts.map((p) => p.id)));
+      setSelectedFolders(new Set(visibleFolders.map((f) => f.fullPath)));
     }
   }
+
+  // Назначить ячейку можно товарам одного склада (ячейка принадлежит складу). Список страницы —
+  // одного склада, но проверяем по самим товарам: чужой склад не должен дойти до сервера.
+  const selectedCellWarehouse = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of allProducts) if (selectedProducts.has(p.id)) ids.add(p.warehouseId ?? activeWarehouseId);
+    return ids.size === 1 ? Array.from(ids)[0] : '';
+  }, [allProducts, selectedProducts, activeWarehouseId]);
 
   function confirmBulkDelete() {
     if (bulkDeleteMode === 'all') {
@@ -966,9 +1081,32 @@ export default function ProductsPage() {
 
   // ---- Navigation state ----
   const showingSearch = !!searchText;
-  const showingFolderContents = activePath.length > 0 && !searchText;
-  const showingRoot = !searchText && activePath.length === 0;
+  // Поиск и фильтр по ячейке — плоский список по всему складу, без папок.
+  const showingFlat = showingSearch || showingCellFilter;
+  const showingFolderContents = activePath.length > 0 && !showingFlat;
+  const showingRoot = !showingFlat && activePath.length === 0;
   const currentPathStr = activePath.join('/');
+  // Выбор товаров: удаление — warehouse_delete; назначение ячейки — warehouse_manage, но только там, где ячейки есть.
+  const canSelect = canDeleteWarehouse || (canManageWarehouse && hasCells);
+
+  // Тексты плоского списка: только поиск, только фильтр по ячейке или оба сразу.
+  const cellScope = cellParam === 'none' ? 'среди товаров без ячейки' : 'в выбранной ячейке';
+  const flatEmpty = showingCellFilter
+    ? showingSearch
+      ? { title: 'Товары не найдены', description: `По запросу «${searchText}» ничего нет ${cellScope}` }
+      : cellParam === 'none'
+        ? { title: 'Все товары в ячейках', description: 'На этом складе нет товаров без ячейки' }
+        : { title: 'В ячейке нет товаров', description: undefined }
+    : {
+        title: 'Товары не найдены',
+        description: `По запросу «${searchText}» ничего нет${activeWarehouse ? ` на складе «${activeWarehouse.name}»` : ''}`,
+      };
+  const flatCaption =
+    showingCellFilter && !showingSearch
+      ? cellParam === 'none'
+        ? 'Товары без ячейки'
+        : `Товары в ячейке ${cellFilterCode ?? ''}`.trim()
+      : `Результаты поиска «${searchText}»`;
 
   // Список: до прихода первого ответа — скелет; ошибка без данных (или с данными
   // ДРУГОГО склада из placeholderData) — честная ошибка, а не чужой список под
@@ -987,6 +1125,14 @@ export default function ProductsPage() {
       onSelect: () => fileInputRef.current?.click(),
     },
     { type: 'separator', key: 'sep-1' },
+    {
+      key: 'cells',
+      label: 'Ячейки хранения',
+      description: 'Адреса товаров на складе',
+      icon: MapPin,
+      disabled: !activeWarehouseId,
+      onSelect: () => setCellsOpen(true),
+    },
     { key: 'prices', label: 'Массовая корректировка цен', icon: Percent, onSelect: () => setBulkPriceOpen(true) },
     { key: 'trash', label: 'Корзина склада', icon: Trash2, onSelect: () => setTrashOpen(true) },
   ];
@@ -1086,13 +1232,30 @@ export default function ProductsPage() {
           <SearchInput
             value={searchText}
             onChange={(value) => setParam({ q: value }, { replace: true })}
-            placeholder="Поиск по названию…"
+            placeholder={hasCells ? 'Поиск по названию или ячейке…' : 'Поиск по названию…'}
             aria-label="Поиск товара"
           />
         </div>
-        {/* Выбор и «удалить весь товар»: warehouse_delete, не при поиске. Не в слоте `end`, а в потоке
-            с ml-auto — на 375 px блок переносится на свою строку, не отжимая поиск. */}
-        {canDeleteWarehouse && !showingSearch && (allProducts.length > 0 || subfolders.length > 0) && (
+        {/* Адресное хранение: фильтр и шторка появляются, только когда на складе есть ячейки. */}
+        {hasCells && (
+          <>
+            <div className="w-full sm:w-52">
+              <Select
+                aria-label="Ячейка"
+                value={cellParam}
+                onChange={(e) => setCellFilter(e.target.value)}
+                options={cellFilterOptions}
+              />
+            </div>
+            <Button variant="ghost" size="sm" icon={MapPin} title="Ячейки хранения" onClick={() => setCellsOpen(true)}>
+              Ячейки
+            </Button>
+          </>
+        )}
+        {/* Выбор и «удалить весь товар»: warehouse_delete (назначение ячейки — warehouse_manage при ячейках),
+            не при обычном поиске. Не в слоте `end`, а в потоке с ml-auto — на 375 px блок переносится на
+            свою строку, не отжимая поиск. */}
+        {canSelect && (!showingSearch || showingCellFilter) && (allProducts.length > 0 || subfolders.length > 0) && (
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Button
               variant={selectMode ? 'soft' : 'ghost'}
@@ -1103,12 +1266,12 @@ export default function ProductsPage() {
             >
               {selectMode ? 'Отменить выбор' : 'Выбрать'}
             </Button>
-            {selectMode && (currentProducts.length > 0 || subfolders.length > 0) && (
+            {selectMode && (visibleProducts.length > 0 || visibleFolders.length > 0) && (
               <Button variant="ghost" size="sm" icon={isAllSelected ? CheckSquare : Square} onClick={toggleSelectAll}>
                 {isAllSelected ? 'Снять всё' : 'Выбрать всё'}
               </Button>
             )}
-            {!selectMode && (
+            {!selectMode && canDeleteWarehouse && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -1236,6 +1399,36 @@ export default function ProductsPage() {
             </nav>
           )}
 
+          {/* Фильтр по ячейке: плоский список по всему складу, крестик возвращает к папкам */}
+          {showingCellFilter && (
+            <nav aria-label="Фильтр по ячейке" className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setCellFilter('')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-sm font-medium text-accent-text hover:underline',
+                  focusRing,
+                )}
+              >
+                <Warehouse className="h-4 w-4" aria-hidden="true" />
+                {activeWarehouse?.name ?? 'Склад'}
+              </button>
+              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
+              <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft py-0.5 pl-2.5 pr-1 text-xs font-semibold text-accent-text">
+                <MapPin className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                <span className="truncate">{cellFilterLabel}</span>
+                <button
+                  type="button"
+                  onClick={() => setCellFilter('')}
+                  aria-label="Сбросить фильтр по ячейке"
+                  className={cn('rounded-full p-0.5 hover:bg-accent/15', focusRing)}
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </span>
+            </nav>
+          )}
+
           {/* ── Папки ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="space-y-1.5">
@@ -1270,7 +1463,7 @@ export default function ProductsPage() {
                     onDelete={() =>
                       setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })
                     }
-                    selectMode={selectMode}
+                    selectMode={selectMode && canDeleteWarehouse}
                     selected={selectedFolders.has(folder.fullPath)}
                     onToggleSelect={() => toggleSelectFolder(folder.fullPath)}
                   />
@@ -1322,29 +1515,33 @@ export default function ProductsPage() {
             </Card>
           )}
 
-          {/* Результаты поиска */}
-          {showingSearch &&
-            (searchResults.length === 0 ? (
+          {/* Плоский список: результаты поиска и/или фильтр по ячейке */}
+          {showingFlat &&
+            (flatResults.length === 0 ? (
               <Card>
                 <EmptyState
                   compact
-                  icon={Package}
-                  title="Товары не найдены"
-                  description={`По запросу «${searchText}» ничего нет${activeWarehouse ? ` на складе «${activeWarehouse.name}»` : ''}`}
+                  icon={showingCellFilter && !showingSearch ? MapPin : Package}
+                  title={flatEmpty.title}
+                  description={flatEmpty.description}
                 />
               </Card>
             ) : (
               <>
                 <p className="text-sm text-ink-3">
-                  Найдено {countLabel(searchResults.length, ['товар', 'товара', 'товаров'])}
+                  {showingSearch ? 'Найдено ' : `${cellFilterLabel}: `}
+                  {countLabel(flatResults.length, ['товар', 'товара', 'товаров'])}
                 </p>
                 <ProductTable
-                  products={searchResults}
+                  products={flatResults}
                   onOpen={setDetailTarget}
                   showCost={canManageWarehouse}
                   showFolder
                   onPreviewPhoto={setPhotoPreview}
-                  caption={`Результаты поиска «${searchText}»`}
+                  selectMode={showingCellFilter && selectMode}
+                  selectedIds={selectedProducts}
+                  onToggleSelect={toggleSelect}
+                  caption={flatCaption}
                 />
               </>
             ))}
@@ -1369,15 +1566,32 @@ export default function ProductsPage() {
               </span>
             )}
           </span>
-          <div className="flex items-center gap-2">
-            {selectedProducts.size > 0 && selectedFolders.size === 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasCells && canManageWarehouse && selectedProducts.size > 0 && selectedFolders.size === 0 && (
+              <>
+                {!selectedCellWarehouse && <span className="text-xs text-ink-3">Выберите товары одного склада</span>}
+                <Button
+                  variant="secondary"
+                  icon={MapPin}
+                  disabled={!selectedCellWarehouse}
+                  onClick={() =>
+                    setAssignCell({ productIds: Array.from(selectedProducts), warehouseId: selectedCellWarehouse })
+                  }
+                >
+                  Назначить ячейку
+                </Button>
+              </>
+            )}
+            {canDeleteWarehouse && selectedProducts.size > 0 && selectedFolders.size === 0 && (
               <Button variant="secondary" icon={Move} onClick={() => setShowMoveModal(true)}>
                 Переместить
               </Button>
             )}
-            <Button variant="danger" icon={Trash2} onClick={() => setBulkDeleteMode('selection')}>
-              Удалить ({selectionCount})
-            </Button>
+            {canDeleteWarehouse && (
+              <Button variant="danger" icon={Trash2} onClick={() => setBulkDeleteMode('selection')}>
+                Удалить ({selectionCount})
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -1411,6 +1625,18 @@ export default function ProductsPage() {
             setTransferTarget(detailTarget);
             setDetailTarget(null);
           }}
+          onChangeCell={
+            hasCells && canManageWarehouse
+              ? () => {
+                  setAssignCell({
+                    productIds: [detailTarget.id],
+                    warehouseId: detailTarget.warehouseId ?? activeWarehouseId,
+                    product: detailTarget,
+                  });
+                  setDetailTarget(null);
+                }
+              : undefined
+          }
         />
       )}
 
@@ -1691,6 +1917,43 @@ export default function ProductsPage() {
         onConfirm={confirmBulkDelete}
         pending={bulkDeleteMutation.isPending}
       />
+
+      {/* Адресное хранение: назначение ячейки (пачке товаров или одному из карточки) и шторка ячеек */}
+      {assignCell && (
+        <AssignCellModal
+          isOpen
+          onClose={closeAssignCell}
+          warehouseId={assignCell.warehouseId}
+          productIds={assignCell.productIds}
+          title={assignCell.product ? 'Адрес товара' : 'Назначить ячейку'}
+          description={
+            assignCell.product
+              ? assignCell.product.name
+              : countLabel(assignCell.productIds.length, ['товар', 'товара', 'товаров'])
+          }
+          initialCellId={assignCell.product?.storageCellId ?? null}
+          currentCell={
+            assignCell.product?.storageCellId && assignCell.product.storageCellCode
+              ? {
+                  id: assignCell.product.storageCellId,
+                  code: assignCell.product.storageCellCode,
+                  name: assignCell.product.storageCellName ?? null,
+                }
+              : null
+          }
+          onDone={assignCell.product ? undefined : exitSelectMode}
+        />
+      )}
+      {activeWarehouseId && (
+        <StorageCellsDrawer
+          open={cellsOpen}
+          onClose={closeCells}
+          warehouseId={activeWarehouseId}
+          warehouseName={activeWarehouse?.name}
+          canManage={canManageWarehouse}
+          onSelectCell={handleSelectCell}
+        />
+      )}
 
       {/* Trash bin — soft-deleted products with restore / hard-delete / empty */}
       <TrashModal isOpen={trashOpen} onClose={() => setTrashOpen(false)} />
