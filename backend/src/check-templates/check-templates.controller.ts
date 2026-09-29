@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards } fro
 import { CheckTemplatesService } from './check-templates.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { CreateCheckTemplateDto, UpdateCheckTemplateDto } from './dto/check-template.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('check-templates')
@@ -44,20 +45,17 @@ export class CheckTemplatesController {
     return this.checkTemplatesService.getAll(user.tenantID, user.userID);
   }
 
+  /**
+   * Тело валидируется DTO-классом (услуги: `serviceId?`, `name`, `price ≥ 0`). `quantity` услуги
+   * принимается от старых клиентов, но сохраняется как 1 — см. normalizeTemplateServices.
+   */
   @Post()
-  create(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: { name: string; services: any[]; products: any[]; folderId?: string | null; shared?: boolean },
-  ) {
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateCheckTemplateDto) {
     return this.checkTemplatesService.create(user.tenantID, user, dto);
   }
 
   @Put(':id')
-  update(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: { name?: string; services?: any[]; products?: any[]; folderId?: string | null },
-  ) {
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateCheckTemplateDto) {
     return this.checkTemplatesService.update(id, user.tenantID, user, dto);
   }
 
