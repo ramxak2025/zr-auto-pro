@@ -312,10 +312,22 @@ export default function CheckDetailPage() {
   const serviceColumns = useMemo<DataTableColumn<CheckServiceLine>[]>(
     () => [
       { key: 'idx', header: '№', width: 48, render: (_s, i) => <span className="text-ink-3">{i + 1}</span> },
-      { key: 'name', header: 'Услуга', render: (s) => <span className="font-medium text-ink">{s.name}</span> },
+      {
+        key: 'name',
+        header: 'Услуга',
+        // Колонки «Кол-во» у услуг нет: строка = одна услуга. Количество остаётся только у legacy-строк
+        // старых чеков («Мойка ×3»): цена в колонке — за единицу, «Итого» — как в чеке.
+        render: (s) => (
+          <span className="font-medium text-ink">
+            {s.name}
+            {Number(s.quantity) > 1 && (
+              <span className="ml-1.5 font-normal tabular-nums text-ink-3">×{formatQty(s.quantity)}</span>
+            )}
+          </span>
+        ),
+      },
       { key: 'master', header: 'Мастер', hideBelow: 'md', render: (s) => s.master?.fullName ?? '—' },
       { key: 'price', header: 'Цена', numeric: true, hideBelow: 'sm', render: (s) => <Money value={s.price} /> },
-      { key: 'qty', header: 'Кол-во', numeric: true, width: 88, render: (s) => formatQty(s.quantity) },
       {
         key: 'total',
         header: 'Итого',

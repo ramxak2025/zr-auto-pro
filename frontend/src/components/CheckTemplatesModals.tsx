@@ -15,7 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { checkTemplatesApi } from '../api/services';
+import { checkTemplatesApi, type CheckTemplateServiceInput } from '../api/services';
+import { expandServiceQuantities } from '../../../shared/utils/checkLines';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
@@ -86,7 +87,9 @@ function isSharedTemplate(t: CheckTemplate): boolean {
 
 function templateSummary(t: CheckTemplate): string {
   const parts: string[] = [];
-  if (t.services.length > 0) parts.push(`услуг: ${t.services.length}`);
+  // Считаем строки так, как их получит Касса: старая строка «×2» при применении даёт две услуги.
+  const serviceCount = expandServiceQuantities(t.services).length;
+  if (serviceCount > 0) parts.push(`услуг: ${serviceCount}`);
   if (t.products.length > 0) parts.push(`товаров: ${t.products.length}`);
   return parts.join(' · ') || 'Пустой шаблон';
 }
@@ -651,8 +654,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
 interface SaveTemplateModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Уже смапленные строки формы (только с catalog-id, как на mobile). */
-  services: CheckTemplate['services'];
+  /** Уже смапленные строки формы (только с catalog-id, как на mobile). Одна строка = одна услуга, без количества. */
+  services: CheckTemplateServiceInput[];
   products: CheckTemplate['products'];
 }
 

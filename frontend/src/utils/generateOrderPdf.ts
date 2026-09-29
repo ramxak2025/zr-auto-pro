@@ -57,15 +57,20 @@ export async function generateOrderPdf(
     'font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#444;background:#f3f3f3;padding:6px 8px;border:1px solid #d4d4d4;font-weight:600';
 
   // ── Services table ──────────────────────────────────────────────────────
+  // Колонки «Кол-во» у услуг нет: строка = одна услуга по одной цене. Количество остаётся только
+  // у legacy-строк старых чеков (> 1) — «Мойка ×3» в названии; цена — за единицу, «Сумма» — как в чеке.
   const services = check.services ?? [];
+  const legacyQtySuffix = (quantity: number): string => {
+    const q = Number(quantity);
+    return Number.isFinite(q) && q > 1 ? `<span style="color:#666;white-space:nowrap">&nbsp;×${q}</span>` : '';
+  };
   const servicesHtml = services
     .map(
       (svc, i) => `
     <tr>
       <td style="${tdBase};text-align:center;width:32px;color:#777">${i + 1}</td>
-      <td style="${tdBase}">${esc(svc.name)}</td>
-      <td style="${tdBase};color:#555">${esc(svc.master?.fullName ?? '—')}</td>
-      <td style="${tdBase};text-align:center;width:56px">${svc.quantity}</td>
+      <td style="${tdBase}">${esc(svc.name)}${legacyQtySuffix(svc.quantity)}</td>
+      <td style="${tdBase};color:#555;width:150px">${esc(svc.master?.fullName ?? '—')}</td>
       <td style="${tdBase};text-align:right;width:90px;white-space:nowrap">${fmt(svc.price)}</td>
       <td style="${tdBase};text-align:right;width:100px;white-space:nowrap;font-weight:600">${fmt(svc.total)}</td>
     </tr>`,
@@ -81,7 +86,6 @@ export async function generateOrderPdf(
         <th style="${thBase};text-align:center">№</th>
         <th style="${thBase};text-align:left">Наименование</th>
         <th style="${thBase};text-align:left">Мастер</th>
-        <th style="${thBase};text-align:center">Кол-во</th>
         <th style="${thBase};text-align:right">Цена</th>
         <th style="${thBase};text-align:right">Сумма</th>
       </tr></thead>
