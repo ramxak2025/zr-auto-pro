@@ -30,6 +30,5 @@ ios/build
 # Public assets we don't format
 frontend/public/sw.js
 
-# Vendored agent skills (managed by skills CLI, hashes in skills-lock.json)
-.agents/
+# Project skills for Claude Code
 .claude/skills/
