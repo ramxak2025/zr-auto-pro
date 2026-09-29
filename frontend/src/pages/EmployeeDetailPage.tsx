@@ -236,6 +236,14 @@ export default function EmployeeDetailPage() {
                     <MiniStat label="Выручка" value={<Money value={salary.totalRevenue ?? 0} />} />
                     <MiniStat label="Чеков" value={String(salary.checkCount ?? 0)} />
                     <MiniStat label="К выплате" value={<Money value={salary.remainingAmount ?? 0} />} />
+                    {(salary.carryOverAmount ?? 0) > 0 && (
+                      <MiniStat
+                        label="Долг за прошлые месяцы"
+                        value={<Money value={salary.carryOverAmount ?? 0} />}
+                        hint="Выплата — на экране «Зарплата»"
+                        tone="warn"
+                      />
+                    )}
                     {typeof salary.serviceEarnings === 'number' && (
                       <MiniStat label="С услуг" value={<Money value={salary.serviceEarnings} />} size="sm" />
                     )}
