@@ -1984,6 +1984,12 @@ export default function CheckDetailScreen() {
               const row = returnLines[key];
               if (!row || !s.id) return null;
               const max = s.quantity;
+              // Услуги без количества (2026-09-30): у обычной строки (quantity = 1) —
+              // просто переключатель «Вернуть услугу», без степпера и «из N».
+              // Степпер и «из N» остались только у legacy-строки старого чека
+              // («Мойка ×3», quantity > 1). Что уходит на сервер — как раньше:
+              // { serviceLineId, quantity: row.qty }, у обычной строки qty = 1.
+              const isLegacyQty = Number(max) > 1;
               return (
                 <View
                   key={key}
@@ -1996,6 +2002,9 @@ export default function CheckDetailScreen() {
                     style={styles.returnLineCheckRow}
                     onPress={() => toggleReturnLine(key)}
                     activeOpacity={0.7}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: row.selected }}
+                    accessibilityLabel={isLegacyQty ? undefined : `Вернуть услугу «${s.name}»`}
                   >
                     <View
                       style={[
@@ -2010,10 +2019,12 @@ export default function CheckDetailScreen() {
                       <Text style={[styles.returnLineName, { color: palette.text.primary }]} numberOfLines={1}>
                         {s.name}
                       </Text>
-                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>Услуга · из {max}</Text>
+                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>
+                        {isLegacyQty ? `Услуга · из ${max}` : `Вернуть услугу · ${formatMoney(s.total)}`}
+                      </Text>
                     </View>
                   </TouchableOpacity>
-                  {row.selected && (
+                  {row.selected && isLegacyQty && (
                     <View style={styles.returnLineStepper}>
                       <TouchableOpacity
                         onPress={() => updateReturnLineQty(key, -1, max)}
