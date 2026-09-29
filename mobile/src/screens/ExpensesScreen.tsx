@@ -67,6 +67,8 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import MonthPickerField from '../components/salary/MonthPickerField';
+import { isMonthKey, periodBadgeLabel } from '../components/salary/salaryFormat';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -166,6 +168,9 @@ function toDateStr(d: Date): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+/** Категория-зеркало выплат (сервер ищет её по точному имени): месяц «за который» у неё задаёт сама выплата. */
+const SALARY_CATEGORY_NAME = 'Зарплата';
 
 function parseDDMMYYYY(input: string): Date | null {
   // Принимает DD.MM.YYYY (как пишет пользователь). Возвращает null
@@ -319,6 +324,8 @@ const ExpenseRow = React.memo(function ExpenseRow({
   // Производная строка «Гарантия (убыток)» — read-only: без тапа-редактирования,
   // без корзины, без approve/reject (canManage/canApprove приходят false).
   const isWarranty = item.source === 'warranty';
+  // «за сентябрь»: расход оплачен в другом месяце, чем тот, к которому его отнесли (отчёты и прибыль).
+  const periodBadge = periodBadgeLabel(item.periodMonth, item.date);
 
   return (
     <AnimatedCard
@@ -383,6 +390,12 @@ const ExpenseRow = React.memo(function ExpenseRow({
                   <Text style={[styles.pendingText, { color: colors.rose[600] }]}>Отклонён</Text>
                 </View>
               )}
+              {periodBadge ? (
+                <View style={[styles.pendingBadge, { backgroundColor: palette.accent.primarySoft }]}>
+                  <Ionicons name="calendar-outline" size={11} color={palette.accent.primaryText} />
+                  <Text style={[styles.pendingText, { color: palette.accent.primaryText }]}>{periodBadge}</Text>
+                </View>
+              ) : null}
               {item.categoryName && (
                 <View
                   style={[
@@ -595,6 +608,15 @@ export default function ExpensesScreen() {
   const [description, setDescription] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
   const [expenseDate, setExpenseDate] = useState<Date>(() => new Date());
+  // «За какой месяц» (правка 2026-09-30): необязателен, null — месяц даты оплаты. Отчёты и прибыль
+  // относят расход к нему, лента и касса остаются по дате оплаты.
+  const [periodMonth, setPeriodMonth] = useState<string | null>(null);
+  // Что было у редактируемой строки: месяц шлём, только если его сменили (иначе форма целиком не
+  // упрётся в 400 у зеркала выплаты), и признак «месяц задаёт выплата» — поле тогда только для чтения.
+  const [periodOrigin, setPeriodOrigin] = useState<{ month: string | null; locked: boolean }>({
+    month: null,
+    locked: false,
+  });
 
   // ── Period → date range ──────────────────────────────────────────────
   const dateRange = useMemo(() => {
@@ -616,6 +638,10 @@ export default function ExpensesScreen() {
     },
     placeholderData: (prev) => prev,
   });
+  // Месяц «за который» нельзя задать у зеркала выплаты (сервер на чужой месяц отвечает 400): ни у редактируемой
+  // строки категории «Зарплата», ни у нового расхода, которому выбрали эту категорию.
+  const periodLocked =
+    periodOrigin.locked || categories.some((c) => c.id === selectedCategoryId && c.name === SALARY_CATEGORY_NAME);
 
   // Список всех расходов за выбранный диапазон. createdBy фильтр живёт
   // в query-key, чтобы owner мог переключаться между employees без
@@ -713,6 +739,8 @@ export default function ExpensesScreen() {
     // (filters approved). Without busting it, approving/creating an expense
     // leaves the expanded day + its outflow subtotal stale until manual refresh.
     queryClient.invalidateQueries({ queryKey: ['cashflow-day-expenses'] });
+    // «За какой месяц» переносит расход между месяцами в отчётах «По расходам» / «Сводный».
+    queryClient.invalidateQueries({ queryKey: ['report-run'] });
   }, [queryClient]);
 
   const createMutation = useMutation({
@@ -747,7 +775,13 @@ export default function ExpensesScreen() {
       data,
     }: {
       id: string;
-      data: { categoryId?: string | null; amount: number; description?: string; date?: string };
+      data: {
+        categoryId?: string | null;
+        amount: number;
+        description?: string;
+        date?: string;
+        periodMonth?: string | null;
+      };
     }) => expensesApi.update(id, data),
     onSuccess: () => {
       invalidateExpenseDerived();
@@ -946,6 +980,8 @@ export default function ExpensesScreen() {
     setDescription('');
     setSelectedCategoryId('');
     setExpenseDate(new Date());
+    setPeriodMonth(null);
+    setPeriodOrigin({ month: null, locked: false });
   };
 
   const openCreateModal = useCallback(() => {
@@ -967,6 +1003,9 @@ export default function ExpensesScreen() {
       setDescription(item.description || '');
       setSelectedCategoryId(item.categoryId || '');
       setExpenseDate(new Date(item.date));
+      const month = isMonthKey(item.periodMonth) ? item.periodMonth : null;
+      setPeriodMonth(month);
+      setPeriodOrigin({ month, locked: item.categoryName === SALARY_CATEGORY_NAME });
       setModalOpen(true);
     },
     [isOwnerRole, user?.id],
@@ -1007,12 +1046,14 @@ export default function ExpensesScreen() {
       // должны уехать явно, а не пропасть из JSON: `categoryId: null` снимает
       // категорию («Без категории»), пустая строка описания — комментарий.
       // Отсутствие поля сервер трактует как «не трогать».
+      // Месяц «за который»: только если сменили; null снимает назначение (расход снова по дате оплаты).
+      const periodPatch = periodLocked || periodMonth === periodOrigin.month ? {} : { periodMonth };
       editMutation.mutate({
         id: editingId,
-        data: { ...payload, categoryId: selectedCategoryId || null, description },
+        data: { ...payload, categoryId: selectedCategoryId || null, description, ...periodPatch },
       });
     } else {
-      createMutation.mutate(payload);
+      createMutation.mutate(periodMonth && !periodLocked ? { ...payload, periodMonth } : payload);
     }
   };
 
@@ -1747,6 +1788,19 @@ export default function ExpensesScreen() {
             <Ionicons name="calendar-outline" size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
         </View>
+        <MonthPickerField
+          palette={palette}
+          value={periodLocked ? periodOrigin.month : periodMonth}
+          onChange={setPeriodMonth}
+          nullLabel="По дате оплаты"
+          disabled={periodLocked}
+          hint={
+            periodLocked
+              ? 'Месяц зарплатного расхода определяет сама выплата на экране «Зарплата»'
+              : 'Отчёты и прибыль отнесут расход к этому месяцу; лента — по дате оплаты'
+          }
+          style={styles.formField}
+        />
         <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
           <TouchableOpacity
             style={[styles.cancelBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
