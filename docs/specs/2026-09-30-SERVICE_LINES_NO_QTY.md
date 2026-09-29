@@ -63,6 +63,29 @@
 - `CreateCheckRequest.services[].quantity` — сделать необязательным (`quantity?: number`),
   клиенты его не шлют.
 
+**Уточнено в фазе 0 (контракт зафиксирован в `shared/`; при расхождении с текстом выше приоритет у этого списка):**
+
+- `services[].quantity?` необязателен **и в `CreateCheckRequest`, и в `UpdateCheckRequest`**. При
+  редактировании чека клиент шлёт `quantity` только у legacy-строки, у которой оно было `> 1`
+  (значение не меняется); у новых строк поле не передаётся.
+- Тело `POST/PUT /check-templates` описано отдельным типом `CheckTemplateServiceInput`
+  (`shared/api/types.ts`): `{ serviceId?, name, price, quantity? }`. `checkTemplatesApi.create` и
+  `update` принимают `services: CheckTemplateServiceInput[]`; новые клиенты `quantity` не шлют, сервер
+  поле принимает и сохраняет как `1` (§1.4).
+- Тип **ответа** `CheckTemplate.services[].quantity` остаётся `number` (у новых шаблонов `1`, у старых
+  бывает больше `1`) — клиенты применяют `expandServiceQuantities` при загрузке и открытии в редакторе.
+  Комментарий об этом добавлен над `CheckTemplate.services` в `shared/types/index.ts`.
+- `expandServiceQuantities` разворачивает строку, только если `quantity` — целое от `2` до
+  `MAX_EXPANDED_QUANTITY = 100`. Строки с `quantity > 100` и дробным `quantity` остаются legacy-строкой
+  как есть (иначе одна опечатка в шаблоне даёт тысячи строк в редакторе), у таких строк клиент
+  показывает «×N» и считает сумму `serviceLineTotal`. `total` у копий пересчитывается как
+  `round2(price)`; строка без `total` (шаблон) остаётся без `total`.
+- `serviceLineTotal(line) = round2(price × (quantity ?? 1))` — `?? 1`, тогда как сервер считает
+  `price × (quantity || 1)`; результаты расходятся только при `quantity = 0`, которого нормальные
+  данные не содержат (для `0` клиент получит `0`, сервер посчитает как `1`).
+- `shared/reports/catalog.ts`: метод «По услугам» обновлён; метод «Сводного» не менялся (в нём про
+  количество услуг ничего нет).
+
 ## 3. Web (`web-engineer`)
 
 1. **`CheckCreatePage.tsx`**: убрать вывод «× N = сумма» (L1660-1665); новая строка —

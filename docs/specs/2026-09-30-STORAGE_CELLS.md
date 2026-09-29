@@ -29,6 +29,12 @@
   (`shared/utils/storageCells.ts` → `generateCellCodes({ racks, shelves, cells, separator })`,
   пример: `racks: ['A','B'], shelves: 3, cells: 4, separator: '-'` → `A-1-1 … B-3-4`, номера
   без ведущих нулей, если `pad` не задан), сервер принимает список кодов.
+  **Уточнено в фазе 0:** лимит — `MAX_BULK_CELLS = 2000` в `shared/utils/storageCells.ts`.
+  `generateCellCodes` при сетке больше лимита **бросает `Error`** с русским текстом ДО генерации
+  и ничего не усекает; экран заранее считает размер через `countCellCodes(params)` (не бросает),
+  показывает «будет создано N» и блокирует «Создать», если N > 2000. Поле «Стеллажи» разбирает
+  `expandRacks(text)` (`A-C` → A,B,C; `1-5` → 1..5; `A, B, C` как есть; всё или ничего: если
+  токен не разобрать или стеллажей > `MAX_RACKS = 100` — `[]`, UI показывает подсказку формата).
 - Ячейка — справочник, а не документ: удаляется физически, но **только пустой** или с
   переносом товаров (`moveTo`) / отвязкой (`detach=true`). `deleted_at` не нужен.
 - Копии товара на другой склад (частичное перемещение, возврат брака, Б/У) создаются с
@@ -73,6 +79,21 @@ CREATE INDEX IF NOT EXISTS idx_products_storage_cell ON products (storage_cell_i
 | `PATCH /storage-cells/order`                            | `{ orderedIds: string[] }`                                                                                         | как у папок                                                                   |
 | `DELETE /storage-cells/:id?moveTo=<cellId>&detach=true` | если в ячейке есть товары и нет ни `moveTo`, ни `detach` → `409 { code: 'STORAGE_CELL_NOT_EMPTY', productsCount }` | `{ ok: true }`                                                                |
 
+**Уточнено в фазе 0 (контракт зафиксирован в `shared/`, backend обязан ему соответствовать):**
+
+- Маршрут `PATCH /storage-cells/order` объявить в контроллере **раньше** `PATCH /storage-cells/:id`,
+  иначе `:id` перехватит `order`. Ответ — `{ message: 'OK' }`.
+- `PATCH /storage-cells/:id`: `name: ''` или `null` снимает подпись, поле не передано — подпись не
+  меняется. Смена `code` на существующий на складе → `409 STORAGE_CELL_EXISTS`.
+- `POST /storage-cells/bulk`: сервер сам нормализует каждый код (`normalizeCellCode`), выбрасывает
+  пустые и повторы внутри списка; `skipped` — нормализованные коды, которые на складе уже были;
+  список длиннее 2000 → `400`.
+- `DELETE`: `moveTo` — ячейка **того же склада** (иначе `400 STORAGE_CELL_WRONG_WAREHOUSE`); клиенты
+  не шлют `moveTo` и `detach` вместе, оба сразу — `400`.
+- Тело ошибок ячеек описано типом `StorageCellError` (`shared/types/index.ts`): клиенты сверяют
+  `code`, а не текст `message`.
+- `POST /products/bulk-assign-cell` отвечает `{ updated: number }` (сколько товаров реально сменили адрес).
+
 `products` (`backend/src/products/`):
 
 - `mapProduct` (`products.service.ts:55-79`) → новые поля `storageCellId`, `storageCellCode`,
@@ -97,6 +118,9 @@ sc.name AS storage_cell_name`. Проекция `fields` (`common/field-filter.t
 - `exportCsv` — новая последняя колонка `Ячейка`; `importCsv` — поле `storageCell?: string`
   в элементах: ячейка ищется по коду на складе импорта, если нет — создаётся. Веб-разбор
   заголовка (`ProductsPage.tsx:757-790`) — регулярка `/ячейк|адрес|cell|bin/i`.
+  **Уточнено в фазе 0:** тело `import-csv` склада не содержит — товары импорта всегда попадают на
+  ОСНОВНОЙ склад филиала сессии (`resolveWarehouseId(tenantID, null, {}, pointId)`), ячейка ищется
+  и создаётся именно на нём. Пустая или отсутствующая `storageCell` адрес не меняет.
 - Корзина: восстановление товара адрес не трогает.
 
 ## 3. Shared
@@ -116,12 +140,17 @@ export interface StorageCell {
 ```
 
 `shared/api/types.ts`: `CreateProductRequest.storageCellId?`, `UpdateProductRequest.storageCellId?: string | null`,
-`PaginationParams` для товаров — `storageCellId?: string`.
+`ProductsQuery extends PaginationParams` (`warehouseId?`, `storageCellId?: string` — uuid ячейки или
+`'none'`) — **уточнено в фазе 0:** общий `PaginationParams` не трогаем, `productsApi.getAll(params?: ProductsQuery)`.
 `shared/api/createServices.ts`: `createStorageCellsApi` (`list(warehouseId)`, `create`,
 `bulkCreate`, `update`, `updateOrder`, `remove(id, { moveTo?, detach? })`);
 `createProductsApi.bulkAssignCell({ productIds, storageCellId })`; `importCsv` — `storageCell?`.
 `shared/utils/storageCells.ts`: `normalizeCellCode`, `generateCellCodes` (+ тест
-`mobile/src/utils/__tests__/storageCells.test.ts`, как `vin.test.ts`).
+`mobile/src/utils/__tests__/storageCells.test.ts`, как `vin.test.ts`). **Уточнено в фазе 0** —
+в файле ещё `MAX_BULK_CELLS`, `MAX_RACKS`, `countCellCodes`, `expandRacks`, `CellGridParams`
+(`racks?`, `shelves?`, `cells?`, `separator?`, `pad?`), а также типы `StorageCell`, `StorageCellError`,
+`BulkAssignCellRequest/Response`, `CreateStorageCellRequest`, `BulkCreateStorageCells*`,
+`UpdateStorageCellRequest`, `RemoveStorageCellParams` — экспорты и сигнатуры см. в самих файлах.
 Подключить фабрику в `frontend/src/api/services.ts` и `mobile/src/api/services.ts`.
 
 ## 4. Web (`web-engineer`)

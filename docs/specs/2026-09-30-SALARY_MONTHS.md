@@ -92,6 +92,33 @@ CreateExpenseRequest / UpdateExpenseRequest: periodMonth?: string | null
 expensesApi.getAll(params & { attribution?: 'date' | 'period' })
 ```
 
+**Уточнено в фазе 0 (контракт зафиксирован в `shared/`; при расхождении с текстом выше приоритет у этого списка):**
+
+- `CreateExpenseRequest` / `UpdateExpenseRequest` в `shared/api/types.ts` **раньше не существовали** —
+  `expensesApi.create` / `update` принимали инлайн-типы. Теперь типы созданы, и
+  `expensesApi.create` принимает `data: CreateExpenseRequest`. `expensesApi.update` повторяет
+  `UpdateExpenseRequest` mapped-типом `{ [K in keyof UpdateExpenseRequest]: UpdateExpenseRequest[K] }`,
+  а не именем типа: статический тест `backend/test/expenses-update.test.cjs` регэкспом ждёт литерал
+  `data: { … }` без вложенных `}`. Если агент захочет сослаться на имя типа — правит регэксп в тесте.
+- `expensesApi.getAll(params)` получает `attribution?: 'date' | 'period'`; по умолчанию (не передан) —
+  `date`: лента «Расходы», касса и «Движение денег» не меняются.
+- `periodMonth` для строк, связанных с выплатами зарплаты (§1.7): значение, **совпадающее** с текущим,
+  сервер игнорирует (клиент может слать форму целиком), **отличающееся** — `400`. Снять или сменить
+  месяц у такой строки нельзя: он определяется самой выплатой.
+- `SalaryMonthDetail.carryOver` **присутствует всегда** (нет долгов и переплат — `{ total: 0, months: [] }`);
+  `months` идут **по убыванию `month`** (ближайший к запрошенному первым), клиенту сортировать не нужно;
+  `total` — сумма **только положительных** `remaining` (переплата долг не гасит).
+- `MasterSalary.carryOverAmount` — сумма положительных остатков **предыдущих 12 месяцев**, месяцы
+  самого диапазона не входят; поле необязательное (`0` или отсутствие — долга нет).
+- `salaryApi.createPayout` **уже принимает** `periodMonth?: string` — менять его сигнатуру не нужно;
+  устаревшие комментарии над `createPayout` / `listPayouts` / `getEmployeeMonth` в
+  `createServices.ts` исправлены («фильтрует по месяцу выдачи» → «по назначенному месяцу»).
+- `shared/reports/catalog.ts`: тексты методов «По зарплатам», «По расходам» (и «По услугам», правка №4)
+  обновлены. Метод «Сводного отчёта» (`id: 'summary'`) в фазе 0 **не менялся**: его формулировка
+  («расходы — из раздела «Расходы», зарплата — начислено и выплачено за период») остаётся верной, а
+  расходы он и так считает через `expenseMembership`. `shared/` агент A3 не правит — если он решит,
+  что текст «Сводного» надо уточнить, он сообщает тим-лиду, правка идёт отдельным коммитом контракта.
+
 ## 3. Web (`web-engineer`)
 
 1. **`SalaryPage.tsx`**: форма выплаты (L1249-1305) переходит на `salaryApi.createPayout`

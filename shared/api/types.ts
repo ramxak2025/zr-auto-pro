@@ -13,6 +13,7 @@ import type {
   BroadcastButton,
   BroadcastSegment,
   NotificationCategory,
+  SubscriptionStatus,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -248,6 +249,27 @@ export interface CarsQuery extends PaginationParams {
   noPlate?: boolean;
 }
 
+/**
+ * Параметры `GET /products` (`productsApi.getAll`): пагинация/поиск + склад и
+ * адрес хранения (172, 2026-09-30, ячейки).
+ *
+ * `search` теперь ДОПОЛНИТЕЛЬНО матчит код ячейки (`A-01-03`), а не только
+ * название и штрихкод — поиск по адресу не требует отдельного параметра.
+ */
+export interface ProductsQuery extends PaginationParams {
+  /**
+   * id склада; `'all'` — все склады филиала сессии; без параметра — ОСНОВНОЙ склад
+   * филиала сессии (прежнее поведение, старые клиенты не меняются).
+   */
+  warehouseId?: string;
+  /**
+   * 172 — фильтр «содержимое ячейки»: uuid ячейки (`StorageCell.id`) или
+   * `'none'` — товары без адреса. Без параметра фильтра по ячейке нет. Сочетается
+   * с `warehouseId` (ячейка всё равно принадлежит одному складу).
+   */
+  storageCellId?: string;
+}
+
 export interface ChecksParams extends PaginationParams {
   masterId?: string;
   clientId?: string;
@@ -390,6 +412,13 @@ export interface CreateProductRequest {
   supplierId?: string;
   warehouseId?: string;
   warrantyDays?: number | null;
+  /**
+   * 172 (2026-09-30) — адрес хранения: id ячейки склада, куда кладётся товар.
+   * Ячейка обязана принадлежать тенанту и ТОМУ ЖЕ складу, что и товар (`warehouseId`
+   * из этого же запроса или основной склад филиала), иначе
+   * `400 { code: 'STORAGE_CELL_WRONG_WAREHOUSE' }`. Omit / `null` — без адреса.
+   */
+  storageCellId?: string | null;
 }
 
 export interface UpdateProductRequest {
@@ -417,6 +446,15 @@ export interface UpdateProductRequest {
   supplierId?: string;
   warehouseId?: string;
   warrantyDays?: number | null;
+  /**
+   * 172 (2026-09-30) — адрес хранения. UUID ячейки — положить товар в неё
+   * (ячейка обязана быть на том же складе, что и товар — с учётом `warehouseId` из
+   * этого же запроса; иначе `400 { code: 'STORAGE_CELL_WRONG_WAREHOUSE' }`);
+   * `null` — СНЯТЬ адрес; поле не передано — адрес не меняется. Если в запросе
+   * меняется `warehouseId`, а `storageCellId` не передан, сервер сбрасывает адрес
+   * в null (ячейка старого склада новому не принадлежит).
+   */
+  storageCellId?: string | null;
 }
 
 export interface StockUpdateRequest {
@@ -524,6 +562,77 @@ export interface BulkMoveResponse {
   movedProducts: number;
 }
 
+/**
+ * 172 (2026-09-30) — body of POST /products/bulk-assign-cell: массово положить
+ * товары в одну ячейку (или снять адрес). Транзакционно: либо все, либо ничего.
+ * Гейт `warehouse_manage`.
+ *   • productIds     → какие товары (≤ 2000); ВСЕ обязаны лежать на складе
+ *     ячейки — иначе 400 `STORAGE_CELL_WRONG_WAREHOUSE` со списком чужих id.
+ *   • storageCellId  → uuid ячейки, либо `null` — снять адрес у всех перечисленных.
+ */
+export interface BulkAssignCellRequest {
+  productIds: string[];
+  storageCellId: string | null;
+}
+
+/** Response of POST /products/bulk-assign-cell. */
+export interface BulkAssignCellResponse {
+  /** Сколько товаров изменено (у которых адрес реально сменился). */
+  updated: number;
+}
+
+// ─── Ячейки хранения (172, 2026-09-30) — /storage-cells ─────────────────────────
+// Возвращаемая сущность — `StorageCell` из ../types. Чтение — право
+// `warehouse_access`, изменение — `warehouse_manage`. Филиал ячейки определяет её
+// склад (ячейка чужого филиала недоступна, как и товар).
+
+/** POST /storage-cells — завести одну ячейку на складе. Дубль кода → 409 `STORAGE_CELL_EXISTS`. */
+export interface CreateStorageCellRequest {
+  warehouseId: string;
+  /** Сервер нормализует (`normalizeCellCode`): trim, схлопнуть пробелы, верхний регистр. */
+  code: string;
+  /** Необязательная подпись («у входа», «масла»). */
+  name?: string;
+}
+
+/**
+ * POST /storage-cells/bulk — массовое создание (сетка «стеллаж × полка × ячейка»):
+ * коды генерирует КЛИЕНТ (`generateCellCodes` из `shared/utils/storageCells`), сервер
+ * принимает готовый список.
+ */
+export interface BulkCreateStorageCellsRequest {
+  warehouseId: string;
+  /** ≤ 2000 (`MAX_BULK_CELLS`); больше — 400. Сервер нормализует каждый код и убирает дубли внутри списка. */
+  codes: string[];
+}
+
+/** Response of POST /storage-cells/bulk. */
+export interface BulkCreateStorageCellsResponse {
+  /** Сколько ячеек создано. */
+  created: number;
+  /** Нормализованные коды, которые на складе уже были, — пропущены, это НЕ ошибка. */
+  skipped: string[];
+}
+
+/** PATCH /storage-cells/:id — переименовать / подписать / переставить. Дубль кода → 409 `STORAGE_CELL_EXISTS`. */
+export interface UpdateStorageCellRequest {
+  code?: string;
+  /** Пустая строка или `null` снимают подпись; поле не передано — подпись не меняется. */
+  name?: string | null;
+  sortOrder?: number;
+}
+
+/**
+ * Query of DELETE /storage-cells/:id. Пустую ячейку удаляют без параметров. Если в ней
+ * лежат товары, нужен ровно один из двух: `moveTo` (перенести товары в другую ячейку
+ * ТОГО ЖЕ склада) или `detach: true` (снять с товаров адрес). Иначе —
+ * 409 `STORAGE_CELL_NOT_EMPTY { productsCount }`.
+ */
+export interface RemoveStorageCellParams {
+  moveTo?: string;
+  detach?: boolean;
+}
+
 export interface CreateServiceRequest {
   name: string;
   category?: string;
@@ -565,7 +674,14 @@ export interface CreateCheckRequest {
     masterId?: string;
     name: string;
     price: number;
-    quantity: number;
+    /**
+     * С 2026-09-30 у услуг в Кассе нет количества: строка = одна услуга по
+     * одной цене, клиенты поле НЕ шлют (сервер считает `quantity || 1`, старые
+     * версии приложений продолжают слать его, и их суммы не ломаются). Передавать
+     * стоит только `quantity` legacy-строки при правке СТАРОГО чека (он > 1),
+     * без изменений. У товаров (`products[].quantity`) количество остаётся.
+     */
+    quantity?: number;
   }>;
   products: Array<{
     productId?: string;
@@ -626,7 +742,8 @@ export interface UpdateCheckRequest {
     masterId?: string;
     name: string;
     price: number;
-    quantity: number;
+    /** См. `CreateCheckRequest.services[].quantity`: новые строки его не шлют (= 1); legacy-строка старого чека — как есть. */
+    quantity?: number;
   }>;
   products?: Array<{
     productId?: string;
@@ -652,6 +769,21 @@ export interface UpdateCheckRequest {
    * трогать» — частичный PATCH и старые клиенты набор не стирают.
    */
   assigneeIds?: string[];
+}
+
+/**
+ * Строка услуги в теле `POST/PUT /check-templates` (2026-09-30, «услуги без
+ * количества»). Новые клиенты `quantity` НЕ шлют: сервер принимает поле, если оно
+ * пришло, но сохраняет 1. Старые версии приложений продолжают слать число, и их
+ * запросы остаются валидными. Ответ сервера (`CheckTemplate.services[].quantity`)
+ * по-прежнему число: у новых шаблонов 1, у старых бывает больше 1 — такие строки
+ * клиент разворачивает через `expandServiceQuantities` (`shared/utils/checkLines`).
+ */
+export interface CheckTemplateServiceInput {
+  serviceId?: string;
+  name: string;
+  price: number;
+  quantity?: number;
 }
 
 export interface CreateSupplierRequest {
@@ -751,6 +883,14 @@ export interface CreateTenantRequest {
   directorName?: string;
   directorPhone?: string;
   directorPassword?: string;
+  /**
+   * 173 (2026-09-30) — сразу закрепить создаваемый автосервис за менеджером
+   * платформы (id пользователя с ролью `manager`, активного). Только суперадмин
+   * (`POST /tenants`); null / не передан — клиент владельца, «без менеджера».
+   * Менеджер сам создаёт автосервисы через `POST /manager/tenants`
+   * ({@link CreateManagerTenantRequest}), там менеджер = он сам.
+   */
+  managerId?: string | null;
 }
 
 export interface UpdateTenantRequest {
@@ -797,6 +937,17 @@ export interface ExtendSubscriptionRequest {
   until?: string;
   /** 122 — optional human note stored on the ledger row. */
   note?: string;
+  /**
+   * 173 (2026-09-30) — ТОЛЬКО для суперадмина (`POST /tenants/:id/extend`) и
+   * только при `type: 'paid'`: «Оплату получил менеджер <Имя> — учесть его долю».
+   * Если у тенанта есть менеджер (`Tenant.managerId`) и флаг true, в платёж
+   * пишется снимок доли (`managerId`, `ownerSharePercent`, `ownerShareAmount`) —
+   * как при оплате, проведённой самим менеджером. Без флага (по умолчанию) деньги
+   * считаются полученными владельцем напрямую и доля НЕ начисляется. Бесплатные
+   * продления долю не создают никогда. Менеджерский `POST /manager/tenants/:id/extend`
+   * флаг игнорирует: его платные продления всегда несут долю.
+   */
+  creditManager?: boolean;
 }
 
 /** POST /tenants/:id/assign-plan — switch the tenant to a plan (syncs price + max users). */
@@ -808,6 +959,135 @@ export interface AssignPlanRequest {
 export interface SuspendTenantRequest {
   /** Optional human note stored on the tenant + surfaced in the cabinet status. */
   reason?: string;
+}
+
+// ─── Менеджеры платформы (173, 2026-09-30) ─────────────────────────────────────
+// Возвращаемые сущности — `PlatformManager`, `PlatformManagerDetail`, `ManagerSummary`,
+// `ManagerSettlement`, `ManagerLedger` из ../types. Маршруты суперадмина —
+// `/admin/managers*` (adminManagersApi), маршруты самого менеджера — `/manager/*`
+// (managerApi).
+
+/** POST /admin/managers — завести менеджера (только суперадмин). Телефон занят → 409 `PHONE_TAKEN`. */
+export interface CreateManagerRequest {
+  fullName: string;
+  /** Логин менеджера; уникален глобально, среди всех пользователей платформы. */
+  phone: string;
+  /** ≥ 6 символов. */
+  password: string;
+  /** Доля владельца, % (0–100). Не передан — 60. */
+  ownerSharePercent?: number;
+  /** Заметка суперадмина (хранится в `users.owner_notes`). */
+  note?: string;
+}
+
+/**
+ * PATCH /admin/managers/:id — правка менеджера (только суперадмин). Передаются только
+ * изменяемые поля. Смена `ownerSharePercent` действует на БУДУЩИЕ платежи: у уже
+ * проведённых платежей доля — снимок, он не пересчитывается.
+ */
+export interface UpdateManagerRequest {
+  fullName?: string;
+  phone?: string;
+  /** Новый пароль (≥ 6 символов); в аудит не пишется. */
+  password?: string;
+  ownerSharePercent?: number;
+  /** false — менеджер не может войти; его клиенты остаются за ним. */
+  isActive?: boolean;
+  /** Заметка суперадмина; `null` или пустая строка — очистить. */
+  note?: string | null;
+}
+
+/**
+ * POST /admin/managers/:id/settlements — расчёт менеджера с владельцем
+ * (только суперадмин). `amount > 0` — менеджер передал деньги владельцу (долг
+ * уменьшается), `amount < 0` — корректировка в пользу менеджера, тогда `note`
+ * (причина) обязательна. `amount = 0` — 400.
+ */
+export interface CreateSettlementRequest {
+  amount: number;
+  note?: string;
+  /** 'YYYY-MM-DD'; не передан — сегодня. */
+  settledOn?: string;
+}
+
+/**
+ * POST /manager/tenants — менеджер заводит автосервис ЗА СЕБЯ (`manager_id` = он).
+ * Директор обязателен. Пробный доступ: `trialDays` (1..`ManagerSummary.maxFreeDays`)
+ * → бесплатная строка в журнале продлений («Пробный период (менеджер)»).
+ *
+ * Бессрочных автосервисов менеджер не создаёт (у тенанта без `subscriptionEnd` срока
+ * нет — это был бы бесплатный доступ мимо журнала и доли владельца), поэтому
+ * `trialDays` не передан ⇒ сервер сам выдаёт пробный период по умолчанию
+ * `min(14, maxFreeDays)` дней.
+ */
+export interface CreateManagerTenantRequest {
+  name: string;
+  phone?: string;
+  address?: string;
+  /** Тариф автосервиса (`plans.id`). */
+  planId: string;
+  /** Владелец автосервиса — первая учётная запись роли `director`. */
+  director: {
+    name: string;
+    phone: string;
+    /** ≥ 6 символов. */
+    password: string;
+  };
+  /**
+   * Пробный доступ, дней: 1..`platform_settings.manager_max_free_days` (по умолчанию 30);
+   * больше — 400. Не передан — `min(14, maxFreeDays)` (см. описание типа).
+   */
+  trialDays?: number;
+  /** Заметка менеджера об автосервисе (сохраняется как `subscriptionNote` тенанта). */
+  note?: string;
+}
+
+/**
+ * PATCH /admin/tenants/:tenantId/manager — передать клиента (автосервис) другому
+ * менеджеру или снять с менеджера (`null` — клиент владельца). Только суперадмин;
+ * менеджер должен быть активным пользователем роли `manager`. История платежей
+ * остаётся за тем, кто их провёл, будущие платежи — за новым.
+ */
+export interface TransferTenantManagerRequest {
+  managerId: string | null;
+}
+
+/** Response of PATCH /admin/tenants/:tenantId/manager. */
+export interface TransferTenantManagerResponse {
+  ok: true;
+  tenantId: string;
+  managerId: string | null;
+  /** ФИО нового менеджера; null, если клиента сняли с менеджера. */
+  managerName: string | null;
+}
+
+/**
+ * POST /manager/tenants/:id/reset-owner-password — менеджер сбрасывает пароль владельца
+ * своего автосервиса (самого старого активного `director` тенанта). Аудит
+ * `owner_password_reset` (пароль в него не попадает).
+ */
+export interface ResetOwnerPasswordRequest {
+  /** ≥ 6 символов. */
+  password: string;
+}
+
+/** Query of GET /manager/tenants. */
+export interface ManagerTenantsQuery {
+  /**
+   * Фильтр по состоянию подписки; не передан — все свои автосервисы. `'suspended'`
+   * главнее `'expired'` (так же, как `Tenant`-статус на сервере). Фильтр «истекает в
+   * ближайшие 7 дней» клиент делает сам по `subscriptionEnd`.
+   */
+  status?: SubscriptionStatus;
+}
+
+/**
+ * Query of GET /admin/managers/:id/ledger и GET /manager/ledger. `months` — окно лент
+ * `payments`/`settlements` в месяцах (по умолчанию 12, сервер ограничивает 1..36);
+ * `balance` в ответе всегда за всё время.
+ */
+export interface ManagerLedgerQuery {
+  months?: number;
 }
 
 /**
@@ -1120,6 +1400,44 @@ export interface ListTroubleshootingParams {
 export interface ForCarParams {
   make?: string;
   model?: string;
+}
+
+// ─── Расходы (2026-09-30: «за какой месяц») ──────────────────────────────────
+
+/**
+ * POST /expenses.
+ *
+ * `periodMonth` ('YYYY-MM') — месяц, К КОТОРОМУ относится расход («аренда за
+ * сентябрь, оплачена в октябре»). Отчёты и прибыль считают расход в этом месяце;
+ * лента «Расходы», касса и «Движение денег» — по `date` (дате оплаты). Без
+ * `periodMonth` (или `null`) расход относится к месяцу `date`.
+ */
+export interface CreateExpenseRequest {
+  categoryId?: string;
+  amount: number;
+  description?: string;
+  /** ISO 8601; по умолчанию — «сейчас». */
+  date?: string;
+  /** Формат `/^\d{4}-\d{2}$/`; `null` = месяц даты факта. */
+  periodMonth?: string | null;
+}
+
+/**
+ * PATCH /expenses/:id — передаются только изменяемые поля.
+ *
+ * `periodMonth` можно менять/снимать (`null`) ТОЛЬКО у строк, не связанных с
+ * выплатами зарплаты (не категория «Зарплата», нет привязки к
+ * `salary_payouts` / `salary_payments`): месяц зеркального расхода выплаты
+ * определяется самой выплатой. Для связанной строки значение `periodMonth`,
+ * совпадающее с текущим, сервер игнорирует, отличающееся — отвечает 400.
+ */
+export interface UpdateExpenseRequest {
+  categoryId?: string | null;
+  amount?: number;
+  description?: string;
+  date?: string;
+  /** Формат `/^\d{4}-\d{2}$/`; `null` снимает назначенный месяц. */
+  periodMonth?: string | null;
 }
 
 // ─── Записи (bookings) ───────────────────────────────────────────────────────

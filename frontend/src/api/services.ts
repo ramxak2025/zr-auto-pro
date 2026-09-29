@@ -3,6 +3,9 @@ import {
   createAuthApi,
   createVinApi,
   createReportBuilderApi,
+  createStorageCellsApi,
+  createAdminManagersApi,
+  createManagerCabinetApi,
   createUsersApi,
   createRolesApi,
   createTenantsApi,
@@ -88,6 +91,27 @@ export type {
   CreateBroadcastRequest,
   ExtendSubscriptionRequest,
   AssignPlanRequest,
+  // 2026-09-30: ячейки хранения, менеджеры платформы, расходы «за месяц»
+  ProductsQuery,
+  BulkAssignCellRequest,
+  BulkAssignCellResponse,
+  CreateStorageCellRequest,
+  BulkCreateStorageCellsRequest,
+  BulkCreateStorageCellsResponse,
+  UpdateStorageCellRequest,
+  RemoveStorageCellParams,
+  CreateManagerRequest,
+  UpdateManagerRequest,
+  CreateSettlementRequest,
+  CreateManagerTenantRequest,
+  TransferTenantManagerRequest,
+  TransferTenantManagerResponse,
+  ResetOwnerPasswordRequest,
+  ManagerTenantsQuery,
+  ManagerLedgerQuery,
+  CreateExpenseRequest,
+  UpdateExpenseRequest,
+  CheckTemplateServiceInput,
 } from '../../../shared/api/types';
 
 // --- Instantiate all API modules with the platform-specific axios instance ---
@@ -115,6 +139,12 @@ export const salaryApi = createSalaryApi(api);
 export const reportsApi = createReportsApi(api);
 /** Конструктор отчётов (2026-09-25) — раздел «Отчёты», каталог в shared/reports/catalog.ts. */
 export const reportBuilderApi = createReportBuilderApi(api);
+/** 172 — ячейки хранения на складе: справочник + массовое создание (createStorageCellsApi). */
+export const storageCellsApi = createStorageCellsApi(api);
+/** Менеджеры платформы, сторона суперадмина: учёт, расчёты, перенос клиентов (createAdminManagersApi). */
+export const adminManagersApi = createAdminManagersApi(api);
+/** Кабинет менеджера платформы (роль manager): свои клиенты, подписка, баланс (createManagerCabinetApi). */
+export const managerApi = createManagerCabinetApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);
 export const expensesApi = createExpensesApi(api);

@@ -145,6 +145,16 @@ export interface Tenant {
    * сервере из последнего платежа.
    */
   currentPeriodKind?: SubscriptionPeriodKind | null;
+  /**
+   * 173 (2026-09-30) — менеджер платформы, за которым закреплён автосервис
+   * (`tenants.manager_id`). null / отсутствует ⇒ клиент владельца платформы, «без
+   * менеджера». Приезжает с GET /tenants, GET /tenants/:id, getCabinet и
+   * GET /manager/tenants*. Менять только суперадмин
+   * (PATCH /admin/tenants/:tenantId/manager, см. {@link TransferTenantManagerRequest}).
+   */
+  managerId?: string | null;
+  /** 173 — ФИО менеджера (join users.full_name); null ⇒ нет менеджера. */
+  managerName?: string | null;
   users?: User[];
   userCount?: number;
   createdAt: string;
@@ -181,6 +191,23 @@ export interface SubscriptionPayment {
   /** id действующего суперадмина (null, если пользователь удалён). */
   createdBy: string | null;
   createdAt: string;
+  /**
+   * 173 — менеджер платформы, проведший ПЛАТНОЕ продление (или суперадмин с
+   * галочкой «оплату получил менеджер»). null — платёж владельца напрямую,
+   * бесплатное продление или строка до миграции 173.
+   */
+  managerId: string | null;
+  /** 173 — снимок доли владельца, % (0–100), на момент платежа; null ⇒ доли нет. */
+  ownerSharePercent: number | null;
+  /**
+   * 173 — доля владельца в рублях = round(amount × ownerSharePercent / 100, 2);
+   * это и есть «долг менеджера» по данному платежу. null ⇒ доли нет.
+   */
+  ownerShareAmount: number | null;
+  /** 173 — тариф на момент продления (снимок id); null для старых строк. */
+  planId: string | null;
+  /** 173 — название тарифа на момент продления (снимок); null для старых строк. */
+  planName: string | null;
 }
 
 /**
@@ -345,6 +372,13 @@ export interface PlatformSettings {
    * см. {@link VoiceUsage}. Целое ≥ 0; 0 — глобально выключить бесплатный тир.
    */
   globalFreeVoiceMinutes: number;
+  /**
+   * 173 (2026-09-30) — максимум дней ОДНОГО бесплатного (пробного) продления,
+   * которое может выдать менеджер платформы своему клиенту (по умолчанию 30).
+   * Суперадмин меняет в «Тарифы → Настройки»; на суперадмина ограничение не
+   * распространяется. Целое ≥ 1.
+   */
+  managerMaxFreeDays: number;
 }
 
 // ─── Notifications (066_notification_preferences + 067_notification_broadcasts) ─
@@ -562,6 +596,18 @@ export interface PlatformStats {
   paidExtensionsThisMonth: number;
   /** 122 — число БЕСПЛАТНЫХ продлений за текущий месяц (никогда не выручка). */
   freeExtensionsThisMonth: number;
+  /**
+   * 173 — «Долг менеджеров»: Σ положительных балансов всех менеджеров
+   * (Σ ownerShareAmount − Σ расчётов; рубли, округлено). Отрицательные балансы
+   * (переплата) в сумму не входят.
+   */
+  managersBalanceTotal: number;
+  /**
+   * 173 — платная выручка за текущий месяц, проведённая через менеджеров
+   * (Σ amount платных строк subscription_payments с manager_id IS NOT NULL;
+   * рубли, округлено). Входит в `paidRevenueThisMonth`.
+   */
+  paidByManagersThisMonth: number;
 }
 
 /**
@@ -691,7 +737,17 @@ export interface ImpersonateResponse {
   expiresIn: number;
 }
 
-/** One row of the superadmin platform audit trail (GET /admin/audit-log). */
+/**
+ * One row of the superadmin platform audit trail (GET /admin/audit-log) и журнала
+ * менеджера (GET /manager/audit-log — только его собственные действия).
+ *
+ * `action` — свободная строка (клиенты подписывают известные и показывают
+ * незнакомые как есть). Действия, добавленные 2026-09-30 (миграция 173, менеджеры):
+ * `tenant_create`, `tenant_transfer_manager` (detail `{ from, to }`),
+ * `manager_create`, `manager_update`, `manager_settlement`, `owner_password_reset`.
+ * Подписи держат клиентские словари (`frontend/src/components/admin/auditActions.ts`,
+ * `mobile/src/screens/admin/AdminMoreScreen.tsx`) — в shared общего словаря нет.
+ */
 export interface AuditLogEntry {
   id: string;
   actorName: string | null;
@@ -725,6 +781,137 @@ export interface RegistrationRequest {
   /** The tenant created on approval, or null. */
   createdTenantId: string | null;
   createdAt: string;
+}
+
+// ─── Менеджеры платформы и доля владельца (173, 2026-09-30) ──────────────────
+//
+// Менеджер — сотрудник владельца Autexa без тенанта (роль {@link UserRole.MANAGER}).
+// Он заводит автосервисы, выдаёт пробные доступы, продлевает подписки и меняет
+// тарифы своим клиентам (`tenants.manager_id`). Деньги за платные продления
+// менеджер получает сам; `ownerSharePercent` % (по умолчанию 60) каждой такой
+// оплаты записывается как ДОЛГ менеджера перед владельцем, остальное остаётся
+// менеджеру. Баланс = Σ ownerShareAmount платежей − Σ расчётов; положительный —
+// «менеджер должен». Маршруты: `/admin/managers*` (суперадмин, adminManagersApi)
+// и `/manager/*` (сам менеджер, managerApi). Все суммы — рубли (number).
+
+/**
+ * Менеджер в списке суперадмина (`GET /admin/managers`) и ответ
+ * `POST`/`PATCH /admin/managers`. Суммы «за месяц» — с начала текущего календарного
+ * месяца (так же, как `paidRevenueThisMonth` в {@link PlatformStats}), баланс — за
+ * всё время.
+ */
+export interface PlatformManager {
+  id: string;
+  fullName: string;
+  phone: string;
+  /** false ⇒ менеджер не может войти; его клиенты остаются за ним. */
+  isActive: boolean;
+  /** Доля владельца, % (0–100); по умолчанию 60. Меняется только суперадмином. */
+  ownerSharePercent: number;
+  /** Заметка суперадмина (хранится в users.owner_notes); null/absent ⇒ нет. */
+  note?: string | null;
+  /** Сколько автосервисов закреплено за менеджером (все статусы). */
+  tenantsCount: number;
+  /** Из них с активной подпиской (не истекла и не приостановлена). */
+  activeTenantsCount: number;
+  /** Σ amount ПЛАТНЫХ оплат, проведённых менеджером в этом месяце. */
+  paidThisMonth: number;
+  /** Σ доли владельца по этим оплатам за месяц. */
+  ownerShareThisMonth: number;
+  /**
+   * Баланс менеджера за всё время = Σ ownerShareAmount − Σ расчётов.
+   * > 0 — менеджер должен владельцу (красным), < 0 — переплатил / корректировка.
+   */
+  balance: number;
+  createdAt: string;
+}
+
+/**
+ * Сводка менеджера: `GET /manager/summary` (для себя) и `summary` внутри
+ * {@link PlatformManagerDetail} (для суперадмина).
+ */
+export interface ManagerSummary {
+  tenants: {
+    total: number;
+    /** Активная подписка (не истекла, не приостановлена). */
+    active: number;
+    /** Подписка истекла (и не приостановлена вручную). */
+    expired: number;
+    /** Приостановлены вручную. */
+    suspended: number;
+    /** Активные, у которых subscriptionEnd в ближайшие 7 дней. */
+    expiringIn7d: number;
+  };
+  /** Σ amount платных оплат, проведённых менеджером в этом месяце. */
+  paidThisMonth: number;
+  /** Σ доли владельца по ним (долг перед владельцем за месяц). */
+  ownerShareThisMonth: number;
+  /** Доля менеджера за месяц = paidThisMonth − ownerShareThisMonth. */
+  myShareThisMonth: number;
+  /** Σ amount платных оплат за всё время. */
+  paidTotal: number;
+  /** Σ доли владельца за всё время. */
+  ownerShareTotal: number;
+  /** Σ расчётов с владельцем за всё время (положительные — переданное, отрицательные — корректировки). */
+  settledTotal: number;
+  /** Долг владельцу = ownerShareTotal − settledTotal. > 0 — менеджер должен. */
+  balance: number;
+  /** Текущая доля владельца менеджера, % (для подписей «Моя доля 40 %» = 100 − это). */
+  ownerSharePercent: number;
+  /** Максимум дней ОДНОГО бесплатного продления у менеджера (platform_settings.manager_max_free_days). */
+  maxFreeDays: number;
+}
+
+/**
+ * Расчёт менеджера с владельцем (`manager_settlements`): сколько менеджер передал
+ * владельцу (`amount > 0`) или корректировка в пользу менеджера (`amount < 0`,
+ * причина в `note` обязательна). Создаёт и удаляет только суперадмин
+ * (подпись «внёс владелец»).
+ */
+export interface ManagerSettlement {
+  id: string;
+  managerId: string;
+  /** ≠ 0. > 0 — передано владельцу (уменьшает долг), < 0 — корректировка в пользу менеджера. */
+  amount: number;
+  note: string | null;
+  /** Дата расчёта, 'YYYY-MM-DD'. */
+  settledOn: string;
+  /** id суперадмина, внёсшего расчёт (null, если пользователь удалён). */
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/**
+ * Взаиморасчёты менеджера: `GET /admin/managers/:id/ledger` (суперадмин) и
+ * `GET /manager/ledger` (сам менеджер). `payments` — платные оплаты, проведённые
+ * ЭТИМ менеджером (со снимком доли), `settlements` — его расчёты с владельцем;
+ * обе ленты новые сверху и ограничены окном `months` (по умолчанию 12).
+ * `balance` — ВСЕГДА за всё время, окно `months` на него не влияет.
+ */
+export interface ManagerLedger {
+  payments: (SubscriptionPayment & { tenantName: string })[];
+  settlements: ManagerSettlement[];
+  balance: number;
+}
+
+/**
+ * Карточка менеджера для суперадмина: `GET /admin/managers/:id`.
+ * `tenants` — его автосервисы в той же форме {@link Tenant}, что отдаёт
+ * `GET /manager/tenants` (со `lastPayment`, `currentPeriodKind`, `userCount`).
+ */
+export interface PlatformManagerDetail extends PlatformManager {
+  summary: ManagerSummary;
+  tenants: Tenant[];
+}
+
+/**
+ * Тело 409 `POST`/`PATCH /admin/managers` при занятом телефоне (телефон уникален
+ * глобально, среди всех пользователей платформы). Остальные ошибки менеджерских
+ * маршрутов — обычный `{ message }`, клиенты показывают текст как есть.
+ */
+export interface ManagerPhoneTakenError {
+  message: string;
+  code: 'PHONE_TAKEN';
 }
 
 // Per-user section/item visibility (071/073 — SectionVisibility, ItemVisibility,
@@ -804,6 +991,13 @@ export interface User {
   /** 055 — hide everywhere: lists + cannot be selected as master on a new check. */
   hiddenEverywhere?: boolean;
   /**
+   * 173 (2026-09-30) — ТОЛЬКО у роли `manager`: доля владельца платформы, %
+   * (0–100, по умолчанию 60) от каждой платной оплаты подписки, проведённой
+   * менеджером; остаток остаётся менеджеру. У остальных ролей отсутствует/null.
+   * Отдаётся в /auth/login и /auth/me менеджера (для подписей «Моя доля 40 %»).
+   */
+  ownerSharePercent?: number | null;
+  /**
    * 065 — «Уволенные» recycle bin. NULL on an active employee. When set, the
    * user is dismissed (fired): hidden from every active list, restorable within
    * the year. The row is kept so historical checks/shifts still resolve the
@@ -826,6 +1020,14 @@ export enum UserRole {
   DIRECTOR = 'director',
   ADMIN = 'admin',
   MASTER = 'master',
+  /**
+   * 173 (2026-09-30) — менеджер платформы: сотрудник владельца Autexa БЕЗ
+   * тенанта (как суперадмин), работающий только со своими автосервисами через
+   * `/manager/*`. Не роль автосервиса: в тенант её назначить нельзя, создаёт
+   * менеджера только суперадмин (`POST /admin/managers`). Гейты подписки и
+   * фич на него не действуют, как и на суперадмина.
+   */
+  MANAGER = 'manager',
 }
 
 export interface UserPermissions {
@@ -1182,6 +1384,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
   [UserRole.SUPERADMIN]: {},
   [UserRole.DIRECTOR]: {},
   [UserRole.ADMIN]: {},
+  // Менеджер платформы (2026-09-30) не работает внутри автосервиса: у него нет тенанта и нет
+  // прав тенанта, кабинет `/manager/*` закрыт ролью, а не этой картой.
+  [UserRole.MANAGER]: {},
   [UserRole.MASTER]: {
     // Касса — a master CAN use the cash screen and see/edit their own checks.
     checks_view: true,
@@ -1594,6 +1799,19 @@ export interface Product {
   warrantyDays: number | null;
   /** EAN-13 / QR / custom barcode. Null if not set. */
   barcode?: string | null;
+  /**
+   * 172 (2026-09-30) — адрес хранения: ячейка склада, в которой лежит товар
+   * ({@link StorageCell}). Один товар — одна ячейка; ячейка принадлежит тому же
+   * складу, что и товар. null / отсутствует ⇒ «Без адреса» (у тенантов без ячеек
+   * поле всегда null и экран визуально не меняется). Отдаётся в `GET /products*`
+   * (список, карточка, низкий остаток, корзина); в проекцию `fields` нужно
+   * включать явно (`storageCellId,storageCellCode`).
+   */
+  storageCellId?: string | null;
+  /** 172 — код ячейки (`A-01-03`) — то, что печатается и произносится; null ⇒ нет адреса. */
+  storageCellCode?: string | null;
+  /** 172 — необязательная подпись ячейки («у входа», «масла»); null ⇒ нет. */
+  storageCellName?: string | null;
   createdAt: string;
 }
 
@@ -1641,6 +1859,49 @@ export interface Warehouse {
   pointName?: string | null;
 }
 
+/**
+ * 172 (2026-09-30) — ячейка хранения («адрес» на складе): `GET /storage-cells`.
+ *
+ * Ячейка принадлежит СКЛАДУ (`warehouseId`), а не филиалу напрямую: у каждого
+ * филиала три склада (main / defect / used), ячейки заводятся на каждом отдельно.
+ * Один товар лежит ровно в одной ячейке ({@link Product.storageCellId}); остаток
+ * по ячейкам не делится. Слова «место»/`location` заняты боксами
+ * `tenant_locations`, поэтому везде «ячейка».
+ *
+ * `code` — короткая строка (`A-01-03`, `Б3`, `Стеллаж 2 · Полка 4`), при
+ * создании нормализуется (`normalizeCellCode` из `shared/utils/storageCells`) и
+ * уникальна в пределах склада без учёта регистра.
+ */
+export interface StorageCell {
+  id: string;
+  warehouseId: string;
+  /** Нормализованный код: trim, схлопнутые пробелы, верхний регистр. */
+  code: string;
+  /** Необязательная подпись («у входа», «масла»). */
+  name: string | null;
+  /** Порядок в списке (drag-and-drop через `updateOrder`); при равенстве — по коду. */
+  sortOrder: number;
+  /** Сколько товаров сейчас лежит в ячейке (живые, не из корзины). */
+  productsCount: number;
+}
+
+/**
+ * 172 — тело ошибок модуля ячеек (`/storage-cells*` и `storageCellId` в
+ * `/products*`). Клиенты сверяют `code`, а не текст `message`:
+ *   • `STORAGE_CELL_EXISTS` (409) — такой код уже есть на этом складе
+ *     (`POST`/`PATCH /storage-cells`; в `bulk` дубли НЕ ошибка — они в `skipped`);
+ *   • `STORAGE_CELL_NOT_EMPTY` (409) — `DELETE /storage-cells/:id` без `moveTo` и
+ *     `detach`, а в ячейке лежат товары: `productsCount` — сколько;
+ *   • `STORAGE_CELL_WRONG_WAREHOUSE` (400) — ячейка не с того склада, что товар
+ *     (создание/правка товара, `bulk-assign-cell`, `moveTo` при удалении).
+ */
+export interface StorageCellError {
+  message: string;
+  code: 'STORAGE_CELL_EXISTS' | 'STORAGE_CELL_NOT_EMPTY' | 'STORAGE_CELL_WRONG_WAREHOUSE';
+  /** Только у `STORAGE_CELL_NOT_EMPTY`. */
+  productsCount?: number;
+}
+
 export interface WarrantyClaim {
   id: string;
   tenantId: string;
@@ -1666,6 +1927,17 @@ export interface CheckServiceLine {
   master?: { id: string; fullName: string };
   name: string;
   price: number;
+  /**
+   * Всегда 1 у новых строк: с 2026-09-30 в Кассе у услуги нет количества — строка
+   * услуги = одна услуга по одной цене (одна и та же услуга дважды = две строки),
+   * и статистика считает именно строки. Поле остаётся в типе, потому что
+   * `quantity > 1` встречается ТОЛЬКО у старых чеков и старых шаблонов (историю не
+   * правим): такие строки показываются честно («Мойка ×3», сумма как в чеке),
+   * а `total = price × quantity` у них верен. Сумма строки для legacy-режима
+   * редактирования — `serviceLineTotal` из `shared/utils/checkLines`, старые
+   * шаблоны разворачивает `expandServiceQuantities`. У товаров (CheckProductLine)
+   * количество остаётся как было.
+   */
   quantity: number;
   total: number;
 }
@@ -2969,6 +3241,14 @@ export interface MasterSalary {
   premiums?: SalaryPremium[];
   /** Penalty rows applied inside the period. */
   penalties?: SalaryPenalty[];
+  /**
+   * 2026-09-30 — «Долг за прошлые месяцы»: сумма ПОЛОЖИТЕЛЬНЫХ остатков «к
+   * выплате» этого сотрудника за 12 месяцев, предшествующих периоду запроса
+   * (месяцы самого диапазона не входят; переплаты не вычитаются). 0 или
+   * отсутствует ⇒ долга нет. Считается сервером одним запросом на весь список.
+   * Детализация по месяцам — `SalaryMonthDetail.carryOver`.
+   */
+  carryOverAmount?: number;
 }
 
 export interface ProductPromotion {
@@ -3382,6 +3662,12 @@ export interface CheckPhoto {
 export interface CheckTemplate {
   id: string;
   name: string;
+  /**
+   * С 2026-09-30 у услуг нет количества: в ОТВЕТЕ `quantity` остаётся числом — у новых
+   * шаблонов 1, у старых бывает больше 1 (такие строки разворачивает
+   * `expandServiceQuantities` из `shared/utils/checkLines`). В ТЕЛЕ запроса он необязателен —
+   * см. `CheckTemplateServiceInput` в `shared/api/types.ts`.
+   */
   services: Array<{ serviceId?: string; name: string; price: number; quantity: number }>;
   products: Array<{ productId?: string; name: string; sellPrice: number; costPrice: number; quantity: number }>;
   createdAt: string;
@@ -4448,6 +4734,22 @@ export interface SalaryMonthDetail {
   premiums: SalaryPremium[];
   /** Legacy salary_payments for the month (old immediate-expense flow). */
   payments: SalaryPayment[];
+  /**
+   * 2026-09-30 — «Не выплачено за прошлые месяцы»: остаток по каждому из 12
+   * месяцев ДО запрошенного (начислено + денежные премии + мотивация − штрафы −
+   * выплачено «за этот месяц»), только месяцы с `remaining ≠ 0`. Порядок —
+   * ПО УБЫВАНИЮ `month` (сначала ближайший к запрошенному), сервер сортирует,
+   * клиенту сортировать не нужно. Положительный `remaining` — долг («Сентябрь —
+   * 12 000 ₽ · Выплатить»), отрицательный — переплата (показывать серым
+   * «переплата 500 ₽»). `total` — сумма ПОЛОЖИТЕЛЬНЫХ остатков (переплаты долг не
+   * гасят). Нет ни долгов, ни переплат ⇒ `{ total: 0, months: [] }` (поле есть
+   * всегда). Выплата «за месяц M» создаётся через `salaryApi.createPayout` с
+   * `periodMonth: 'YYYY-MM'`.
+   */
+  carryOver: {
+    total: number;
+    months: { month: string; remaining: number }[];
+  };
 }
 
 // ───────────────────────────────────────────────────────────────────────
