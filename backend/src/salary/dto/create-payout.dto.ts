@@ -1,4 +1,5 @@
 import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsIn, MaxLength, Matches } from 'class-validator';
+import { MONTH_KEY_RE } from '../../common/period-membership';
 
 /**
  * Payout-with-confirmation (100_salary_payouts_and_fines). The owner
@@ -26,11 +27,14 @@ export class CreatePayoutDto {
   comment?: string;
 
   /**
-   * 149 — «за какой месяц» выплата ('YYYY-MM'). Помесячная карточка и P&L
-   * относят выплату к этому месяцу; отсутствует → месяц выписки (МСК),
-   * прежнее поведение.
+   * «За какой месяц» выплата ('YYYY-MM', месяц 01–12). Помесячная карточка,
+   * экран «Зарплата», отчёты («По зарплатам», «Сводный», «По расходам») и P&L
+   * относят выплату к этому месяцу; касса и «Движение денег» — по дате выдачи.
+   * С 2026-09-30 месяц ВСЕГДА записывается: не передан — сервис подставит месяц
+   * факта в часовом поясе автосервиса (в БД больше не NULL). Месяц, который ещё
+   * не наступил, сервис отклоняет (400).
    */
   @IsOptional()
-  @Matches(/^\d{4}-\d{2}$/)
+  @Matches(MONTH_KEY_RE, { message: 'periodMonth должен быть в формате YYYY-MM' })
   periodMonth?: string;
 }

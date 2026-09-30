@@ -1,4 +1,5 @@
 import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, Matches, MaxLength, IsISO8601 } from 'class-validator';
+import { MONTH_KEY_RE } from '../../common/period-membership';
 
 /**
  * Round 14 (149) — «Выплата вне программы»: выплата получателю БЕЗ аккаунта в
@@ -17,9 +18,9 @@ export class CreateOutsidePayoutDto {
   @IsPositive()
   amount!: number;
 
-  /** 'YYYY-MM' — месяц, к которому относится выплата (обязателен). */
+  /** 'YYYY-MM' (месяц 01–12) — месяц, к которому относится выплата (обязателен). */
   @IsString()
-  @Matches(/^\d{4}-\d{2}$/)
+  @Matches(MONTH_KEY_RE, { message: 'periodMonth должен быть в формате YYYY-MM' })
   periodMonth!: string;
 
   @IsOptional()
