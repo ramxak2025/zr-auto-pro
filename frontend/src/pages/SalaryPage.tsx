@@ -1482,6 +1482,7 @@ function AdminSalaryView() {
             <Input
               id="outside-month"
               type="month"
+              max={currentMonthYear}
               value={outsideForm.periodMonth}
               onChange={(e) => setOutsideForm({ ...outsideForm, periodMonth: e.target.value })}
               required
