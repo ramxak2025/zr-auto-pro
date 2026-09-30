@@ -60,8 +60,8 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     staleTime: 5 * 60 * 1000,
   });
 
-  // Superadmin bypasses every gate.
-  if (user?.role === 'superadmin') {
+  // Superadmin and platform manager bypass every gate (the manager has no tenant of their own).
+  if (user?.role === 'superadmin' || user?.role === 'manager') {
     return <>{children}</>;
   }
 

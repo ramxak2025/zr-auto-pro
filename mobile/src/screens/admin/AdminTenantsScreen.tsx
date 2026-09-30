@@ -1,18 +1,22 @@
 /**
- * AdminTenantsScreen — searchable tenant directory for the superadmin.
+ * AdminTenantsScreen — searchable tenant directory for the superadmin, and «Автосервисы»
+ * (only the manager's own clients) for a platform manager.
  *
- * Status chips (Все / Активные / Истёкшие) filter the list; tapping a row
- * pushes AdminTenantDetailScreen onto the tab's native-stack (Apple-Mail
+ * Status chips (Все / Активные / Истекают / Истёкшие / Приостановлены) filter the list;
+ * tapping a row pushes AdminTenantDetailScreen onto the tab's native-stack (Apple-Mail
  * pattern — the admin bar stays visible).
  *
- * The «+» header opens a create/edit sheet (same visual language as
- * AdminPlansScreen) so the superadmin can register a new car service without
- * leaving the app:
+ * Superadmin: a second chip row filters by manager, the row shows «Менеджер: …», and the
+ * «+» header opens a create/edit sheet (same visual language as AdminPlansScreen) so the
+ * superadmin can register a new car service without leaving the app:
  *   • Компания — название (обяз.), телефон, адрес, email, описание.
- *   • Подписка — тариф (plansApi), макс. польз., дата окончания, примечание;
- *     при редактировании — надбавка минут голоса (115, voiceMinutesExtra).
+ *   • Подписка — тариф (plansApi), менеджер (необязательно), макс. польз., дата окончания,
+ *     примечание; при редактировании — надбавка минут голоса (115, voiceMinutesExtra).
  *   • Директор — имя, телефон, пароль (опционально, только при создании).
  *   • Активен — тумблер (только при редактировании).
+ *
+ * Manager: «+» opens ManagerCreateTenantSheet (пробный доступ вместо даты окончания),
+ * данные — `managerApi.tenants()`, удаления и правки реквизитов нет.
  */
 import React from 'react';
 import {
@@ -30,7 +34,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { tenantsApi, plansApi } from '../../api/services';
+import { tenantsApi, plansApi, managerApi, adminManagersApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -40,17 +44,49 @@ import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { toLocalISODate } from '../../utils/dates';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
-import type { Tenant, Plan } from '../../../../shared/types';
+import type { Tenant, Plan, PlatformManager } from '../../../../shared/types';
 import type { CreateTenantRequest, UpdateTenantRequest } from '../../../../shared/api/types';
-import { formatMoney, isExpired, tenantStatus, periodKindChip, StatusChip, InitialAvatar } from './adminShared';
+import {
+  formatMoney,
+  isExpired,
+  daysLeft,
+  tenantRowStatus,
+  periodKindChip,
+  invalidatePlatformQueries,
+  useAdminMode,
+  StatusChip,
+  InitialAvatar,
+} from './adminShared';
+import ManagerCreateTenantSheet from './ManagerCreateTenantSheet';
 
-type FilterKey = 'all' | 'active' | 'expired';
+type FilterKey = 'all' | 'active' | 'expiring' | 'expired' | 'suspended';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'active', label: 'Активные' },
+  { key: 'expiring', label: 'Истекают' },
   { key: 'expired', label: 'Истёкшие' },
+  { key: 'suspended', label: 'Приостановлены' },
 ];
+
+/** Фильтр по менеджеру (только суперадмин): все / без менеджера / конкретный менеджер по id. */
+const MANAGER_ALL = 'all';
+const MANAGER_NONE = 'none';
+
+/** «Истекают» — подписка закончится в ближайшие 7 дней (как плашка «7 дн.» в чипе статуса). */
+const EXPIRING_DAYS = 7;
+
+/** Приостановленный автосервис живёт только в «Приостановлены»: сервер шлёт его с `isActive = false`. */
+function matchesFilter(t: Tenant, key: FilterKey): boolean {
+  if (key === 'all') return true;
+  if (key === 'suspended') return !!t.suspendedAt;
+  if (t.suspendedAt) return false;
+  if (key === 'expired') return isExpired(t.subscriptionEnd) || !t.isActive;
+  const active = t.isActive && !isExpired(t.subscriptionEnd);
+  if (key === 'active') return active;
+  const left = daysLeft(t.subscriptionEnd);
+  return active && left !== null && left <= EXPIRING_DAYS;
+}
 
 /** Editable form state. Everything is a string for controlled inputs; coerced on save. */
 interface TenantDraft {
@@ -63,6 +99,8 @@ interface TenantDraft {
   description: string;
   // Subscription
   planId: string | null;
+  /** Менеджер-владелец клиента (create only); null — клиент владельца платформы. */
+  managerId: string | null;
   maxUsers: string;
   subscriptionEnd: string; // YYYY-MM-DD
   subscriptionNote: string;
@@ -95,6 +133,7 @@ function toDraft(tenant?: Tenant): TenantDraft {
     email: tenant?.email ?? '',
     description: tenant?.description ?? '',
     planId: tenant?.planId ?? null,
+    managerId: tenant?.managerId ?? null,
     maxUsers: tenant ? String(tenant.maxUsers) : '',
     subscriptionEnd: toDateInput(tenant?.subscriptionEnd),
     subscriptionNote: tenant?.subscriptionNote ?? '',
@@ -123,23 +162,43 @@ export default function AdminTenantsScreen() {
   const surface = useIosSurface();
   const queryClient = useQueryClient();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const isManager = useAdminMode() === 'manager';
   const [search, setSearch] = React.useState('');
   const [filter, setFilter] = React.useState<FilterKey>('all');
+  const [managerFilter, setManagerFilter] = React.useState<string>(MANAGER_ALL);
   const [editing, setEditing] = React.useState<TenantDraft | null>(null);
-  const [planPickerOpen, setPlanPickerOpen] = React.useState(false);
+  const [picker, setPicker] = React.useState<'plan' | 'manager' | null>(null);
+  const [managerCreateOpen, setManagerCreateOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
-  const { data: tenants = [] } = useQuery<Tenant[]>({
-    queryKey: ['admin-tenants'],
-    queryFn: async () => (await tenantsApi.getAll()).data,
+  const {
+    data: tenants = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<Tenant[]>({
+    queryKey: isManager ? ['manager', 'tenants'] : ['admin-tenants'],
+    queryFn: async () => (isManager ? (await managerApi.tenants()).data : (await tenantsApi.getAll()).data),
   });
 
+  // Форма суперадмина: тарифы и менеджеры нужны только ей (у менеджера свой лист).
   const { data: plans = [] } = useQuery<Plan[]>({
     queryKey: ['admin-plans'],
     queryFn: async () => (await plansApi.getAll()).data,
+    enabled: !isManager,
+  });
+
+  const { data: managers = [] } = useQuery<PlatformManager[]>({
+    queryKey: ['admin-managers', 'list'],
+    queryFn: async () => (await adminManagersApi.list()).data,
+    enabled: !isManager,
   });
 
   const activePlans = React.useMemo(() => plans.filter((p) => p.isActive), [plans]);
+  const activeManagers = React.useMemo(
+    () => managers.filter((m) => m.isActive).sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru')),
+    [managers],
+  );
 
   const filtered = React.useMemo(() => {
     let list = tenants;
@@ -147,18 +206,29 @@ export default function AdminTenantsScreen() {
     if (q) {
       list = list.filter(
         (t) =>
-          t.name.toLowerCase().includes(q) || t.phone?.toLowerCase().includes(q) || t.email?.toLowerCase().includes(q),
+          t.name.toLowerCase().includes(q) ||
+          t.phone?.toLowerCase().includes(q) ||
+          t.email?.toLowerCase().includes(q) ||
+          // У менеджера все клиенты его — имя в поиске только мешало бы.
+          (!isManager && t.managerName?.toLowerCase().includes(q)),
       );
     }
-    if (filter === 'active') list = list.filter((t) => t.isActive && !isExpired(t.subscriptionEnd));
-    else if (filter === 'expired') list = list.filter((t) => isExpired(t.subscriptionEnd) || !t.isActive);
+    if (filter !== 'all') list = list.filter((t) => matchesFilter(t, filter));
+    if (managerFilter === MANAGER_NONE) list = list.filter((t) => !t.managerId);
+    else if (managerFilter !== MANAGER_ALL) list = list.filter((t) => t.managerId === managerFilter);
     return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [tenants, search, filter]);
+  }, [tenants, search, filter, managerFilter, isManager]);
 
-  const invalidate = React.useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-    queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-  }, [queryClient]);
+  const managerChips = React.useMemo(
+    () => [
+      { key: MANAGER_ALL, label: 'Все менеджеры' },
+      { key: MANAGER_NONE, label: 'Без менеджера' },
+      ...managers.map((m) => ({ key: m.id, label: m.fullName })),
+    ],
+    [managers],
+  );
+
+  const invalidate = React.useCallback(() => invalidatePlatformQueries(queryClient), [queryClient]);
 
   const saveMutation = useMutation({
     mutationFn: async (draft: TenantDraft) => {
@@ -198,6 +268,7 @@ export default function AdminTenantsScreen() {
           ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
           ...(draft.subscriptionNote.trim() ? { subscriptionNote: draft.subscriptionNote.trim() } : {}),
           ...(draft.planId ? { planId: draft.planId } : {}),
+          ...(draft.managerId ? { managerId: draft.managerId } : {}),
           ...(selectedPlan ? { monthlyPrice: selectedPlan.monthlyPrice } : {}),
           ...(Number.isFinite(maxUsers) && maxUsers > 0
             ? { maxUsers }
@@ -322,16 +393,26 @@ export default function AdminTenantsScreen() {
     return activePlans.find((p) => p.id === editing.planId)?.name ?? null;
   }, [editing?.planId, activePlans]);
 
+  const selectedManagerName = React.useMemo(() => {
+    if (!editing?.managerId) return null;
+    return managers.find((m) => m.id === editing.managerId)?.fullName ?? null;
+  }, [editing?.managerId, managers]);
+
+  let emptyText = 'Ничего не найдено';
+  if (isError && tenants.length === 0) emptyText = 'Не удалось загрузить список';
+  else if (isManager && tenants.length === 0) emptyText = 'Пока нет автосервисов. Нажмите «+», чтобы завести первый.';
+
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title="Тенанты"
+        title={isManager ? 'Автосервисы' : 'Тенанты'}
         subtitle={`${tenants.length} организаций`}
         trailing={
           <Pressable
             onPress={() => {
               haptic('tap');
-              setEditing(toDraft());
+              if (isManager) setManagerCreateOpen(true);
+              else setEditing(toDraft());
             }}
             style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
             hitSlop={6}
@@ -361,34 +442,24 @@ export default function AdminTenantsScreen() {
         </View>
 
         {/* Status filter chips */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipsRow}
-          style={styles.chipsScroll}
-        >
-          {FILTERS.map((f) => {
-            const active = filter === f.key;
-            return (
-              <Pressable
-                key={f.key}
-                onPress={() => {
-                  haptic('select');
-                  setFilter(f.key);
-                }}
-                style={[
-                  styles.chip,
-                  {
-                    backgroundColor: active ? palette.accent.primary : palette.bg.card,
-                    borderColor: active ? palette.accent.primary : palette.border.subtle,
-                  },
-                ]}
-              >
-                <Text style={[styles.chipText, { color: active ? '#fff' : palette.text.secondary }]}>{f.label}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <FilterChips
+          items={FILTERS}
+          value={filter}
+          onChange={setFilter}
+          activeColor={palette.accent.primary}
+          palette={palette}
+        />
+
+        {/* Manager filter chips — суперадмин, когда менеджеры уже заведены */}
+        {!isManager && managers.length > 0 ? (
+          <FilterChips
+            items={managerChips}
+            value={managerFilter}
+            onChange={setManagerFilter}
+            activeColor={palette.accent.primary}
+            palette={palette}
+          />
+        ) : null}
       </View>
 
       <FlatList
@@ -400,8 +471,19 @@ export default function AdminTenantsScreen() {
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           <View style={styles.emptyBlock}>
-            <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
-            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Ничего не найдено</Text>
+            {isLoading ? (
+              <ActivityIndicator color={palette.accent.primary} />
+            ) : (
+              <>
+                <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
+                <Text style={[styles.emptyText, { color: palette.text.secondary }]}>{emptyText}</Text>
+                {isError && tenants.length === 0 ? (
+                  <Pressable onPress={() => void refetch()} hitSlop={8}>
+                    <Text style={[styles.retryText, { color: palette.accent.primary }]}>Повторить</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            )}
           </View>
         }
         renderItem={({ item }) => {
@@ -423,9 +505,14 @@ export default function AdminTenantsScreen() {
                   {item.plan?.name || 'Без тарифа'} · {formatMoney(item.monthlyPrice)}/мес ·{' '}
                   {item.userCount ?? item.users?.length ?? 0} польз.
                 </Text>
+                {!isManager && item.managerName ? (
+                  <Text style={[styles.meta, { color: palette.text.secondary }]} numberOfLines={1}>
+                    Менеджер: {item.managerName}
+                  </Text>
+                ) : null}
               </View>
               <View style={styles.rowChips}>
-                <StatusChip status={tenantStatus(item, palette.mode)} />
+                <StatusChip status={tenantRowStatus(item, palette.mode)} />
                 {period ? <StatusChip status={period} /> : null}
               </View>
               <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
@@ -433,6 +520,15 @@ export default function AdminTenantsScreen() {
           );
         }}
       />
+
+      {/* Manager: new car service (name, owner, trial) */}
+      {isManager ? (
+        <ManagerCreateTenantSheet
+          visible={managerCreateOpen}
+          onClose={() => setManagerCreateOpen(false)}
+          onOpenTenant={(tenant) => navigation.navigate('AdminTenantDetail', { id: tenant.id })}
+        />
+      ) : null}
 
       {/* Create / edit sheet */}
       <Modal
@@ -531,7 +627,7 @@ export default function AdminTenantsScreen() {
                         return;
                       }
                       haptic('tap');
-                      setPlanPickerOpen(true);
+                      setPicker('plan');
                     }}
                     style={[styles.pickerRow, surface.cardCompact]}
                   >
@@ -546,6 +642,29 @@ export default function AdminTenantsScreen() {
                     <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </Pressable>
                 </View>
+                {/* Менеджер клиента — только при создании и когда есть кого выбрать */}
+                {!editing.id && activeManagers.length > 0 ? (
+                  <View style={styles.field}>
+                    <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Менеджер</Text>
+                    <Pressable
+                      onPress={() => {
+                        haptic('tap');
+                        setPicker('manager');
+                      }}
+                      style={[styles.pickerRow, surface.cardCompact]}
+                    >
+                      <Text
+                        style={[
+                          styles.pickerValue,
+                          { color: selectedManagerName ? palette.text.primary : palette.text.tertiary },
+                        ]}
+                      >
+                        {selectedManagerName ?? 'Без менеджера'}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                    </Pressable>
+                  </View>
+                ) : null}
                 <View style={styles.fieldRow}>
                   <Field label="Макс. польз." palette={palette} surface={surface} flex>
                     <TextInput
@@ -679,64 +798,160 @@ export default function AdminTenantsScreen() {
         </View>
       </Modal>
 
-      {/* Plan picker (nested over the sheet) */}
-      <Modal
-        visible={planPickerOpen}
-        transparent
-        statusBarTranslucent
-        animationType="fade"
-        onRequestClose={() => setPlanPickerOpen(false)}
-      >
-        <Pressable style={styles.pickerBackdrop} onPress={() => setPlanPickerOpen(false)}>
-          <Pressable style={[styles.pickerSheet, { backgroundColor: palette.bg.canvas }]} onPress={() => {}}>
-            <Text style={[styles.pickerTitle, { color: palette.text.primary }]}>Выберите тариф</Text>
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerList}>
-              {activePlans.map((p) => {
-                const active = editing?.planId === p.id;
-                return (
-                  <Pressable
-                    key={p.id}
-                    onPress={() => {
-                      haptic('select');
-                      setEditing((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              planId: p.id,
-                              // Auto-suggest the plan's seat limit when none typed yet.
-                              maxUsers: prev.maxUsers.trim() ? prev.maxUsers : String(p.maxUsers),
-                            }
-                          : prev,
-                      );
-                      setPlanPickerOpen(false);
-                    }}
-                    style={[styles.pickerOption, { borderBottomColor: palette.border.subtle }]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.pickerOptionName, { color: palette.text.primary }]}>{p.name}</Text>
-                      <Text style={[styles.pickerOptionMeta, { color: palette.text.tertiary }]}>
-                        {formatMoney(p.monthlyPrice)}/мес · до {p.maxUsers} польз.
-                      </Text>
-                    </View>
-                    {active ? <Ionicons name="checkmark" size={20} color={palette.accent.primary} /> : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <Pressable
-              onPress={() => {
-                haptic('select');
-                setEditing((prev) => (prev ? { ...prev, planId: null } : prev));
-                setPlanPickerOpen(false);
-              }}
-              style={styles.pickerClear}
-            >
-              <Text style={[styles.pickerClearText, { color: palette.text.secondary }]}>Без тарифа</Text>
-            </Pressable>
+      {/* Plan / manager pickers (nested over the sheet) */}
+      <OptionPickerModal
+        visible={picker === 'plan'}
+        title="Выберите тариф"
+        options={activePlans.map((p) => ({
+          id: p.id,
+          title: p.name,
+          meta: `${formatMoney(p.monthlyPrice)}/мес · до ${p.maxUsers} польз.`,
+        }))}
+        selectedId={editing?.planId ?? null}
+        clearLabel="Без тарифа"
+        onSelect={(planId) => {
+          const plan = activePlans.find((p) => p.id === planId);
+          setEditing((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  planId,
+                  // Auto-suggest the plan's seat limit when none typed yet.
+                  maxUsers: plan && !prev.maxUsers.trim() ? String(plan.maxUsers) : prev.maxUsers,
+                }
+              : prev,
+          );
+          setPicker(null);
+        }}
+        onClose={() => setPicker(null)}
+        palette={palette}
+      />
+      <OptionPickerModal
+        visible={picker === 'manager'}
+        title="Выберите менеджера"
+        options={activeManagers.map((m) => ({ id: m.id, title: m.fullName, meta: formatPhone(m.phone) }))}
+        selectedId={editing?.managerId ?? null}
+        clearLabel="Без менеджера"
+        onSelect={(managerId) => {
+          setEditing((prev) => (prev ? { ...prev, managerId } : prev));
+          setPicker(null);
+        }}
+        onClose={() => setPicker(null)}
+        palette={palette}
+      />
+    </View>
+  );
+}
+
+interface PickerOption {
+  id: string;
+  title: string;
+  meta?: string;
+}
+
+/** Центральный список выбора поверх листа (тариф / менеджер); «очистить» — `onSelect(null)`. */
+function OptionPickerModal({
+  visible,
+  title,
+  options,
+  selectedId,
+  clearLabel,
+  onSelect,
+  onClose,
+  palette,
+}: {
+  visible: boolean;
+  title: string;
+  options: PickerOption[];
+  selectedId: string | null;
+  clearLabel: string;
+  onSelect: (id: string | null) => void;
+  onClose: () => void;
+  palette: ReturnType<typeof useColors>;
+}) {
+  return (
+    <Modal visible={visible} transparent statusBarTranslucent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.pickerBackdrop} onPress={onClose}>
+        <Pressable style={[styles.pickerSheet, { backgroundColor: palette.bg.canvas }]} onPress={() => {}}>
+          <Text style={[styles.pickerTitle, { color: palette.text.primary }]}>{title}</Text>
+          <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerList}>
+            {options.map((o) => (
+              <Pressable
+                key={o.id}
+                onPress={() => {
+                  haptic('select');
+                  onSelect(o.id);
+                }}
+                style={[styles.pickerOption, { borderBottomColor: palette.border.subtle }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pickerOptionName, { color: palette.text.primary }]}>{o.title}</Text>
+                  {o.meta ? (
+                    <Text style={[styles.pickerOptionMeta, { color: palette.text.tertiary }]}>{o.meta}</Text>
+                  ) : null}
+                </View>
+                {selectedId === o.id ? <Ionicons name="checkmark" size={20} color={palette.accent.primary} /> : null}
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Pressable
+            onPress={() => {
+              haptic('select');
+              onSelect(null);
+            }}
+            style={styles.pickerClear}
+          >
+            <Text style={[styles.pickerClearText, { color: palette.text.secondary }]}>{clearLabel}</Text>
           </Pressable>
         </Pressable>
-      </Modal>
-    </View>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/** Горизонтальная строка чипов-фильтров (один и тот же вид для статуса и менеджера). */
+function FilterChips<T extends string>({
+  items,
+  value,
+  onChange,
+  activeColor,
+  palette,
+}: {
+  items: { key: T; label: string }[];
+  value: T;
+  onChange: (key: T) => void;
+  activeColor: string;
+  palette: ReturnType<typeof useColors>;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.chipsRow}
+      style={styles.chipsScroll}
+    >
+      {items.map((f) => {
+        const active = value === f.key;
+        return (
+          <Pressable
+            key={f.key}
+            onPress={() => {
+              haptic('select');
+              onChange(f.key);
+            }}
+            style={[
+              styles.chip,
+              {
+                backgroundColor: active ? activeColor : palette.bg.card,
+                borderColor: active ? activeColor : palette.border.subtle,
+              },
+            ]}
+          >
+            <Text style={[styles.chipText, { color: active ? '#fff' : palette.text.secondary }]}>{f.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
   );
 }
 
@@ -788,7 +1003,8 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: '700' },
   meta: { fontSize: 12, marginTop: 2 },
   emptyBlock: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[16], gap: spacing[2] },
-  emptyText: { fontSize: 14 },
+  emptyText: { fontSize: 14, textAlign: 'center' },
+  retryText: { fontSize: 15, fontWeight: '600' },
   // Sheet
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   sheet: {
