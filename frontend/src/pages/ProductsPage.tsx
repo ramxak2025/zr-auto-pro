@@ -349,6 +349,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       toast.success(vars.deleteContents ? 'Папка и товары удалены' : 'Папка удалена');
     },
     onError: () => toast.error('Ошибка удаления папки'),
@@ -371,6 +372,7 @@ export default function ProductsPage() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       toast.success(
         res.count > 0 ? `Папка и ${countLabel(res.count, ['товар', 'товара', 'товаров'])} удалены` : 'Папка удалена',
       );
@@ -671,6 +673,7 @@ export default function ProductsPage() {
     onSuccess: () => {
       toast.success('Товар перемещён в корзину');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       setDeleteTarget(null);
     },
     onError: () => toast.error('Не удалось удалить товар'),
@@ -773,6 +776,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       setBulkDeleteMode(null);
       exitSelectMode();
     },
