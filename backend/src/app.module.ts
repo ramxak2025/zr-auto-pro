@@ -25,6 +25,7 @@ import { CallsModule } from './calls/calls.module';
 import { EquipmentModule } from './equipment/equipment.module';
 import { ImportsModule } from './imports/imports.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
+import { StorageCellsModule } from './storage-cells/storage-cells.module';
 import { WarrantyModule } from './warranty/warranty.module';
 import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { PushModule } from './push/push.module';
@@ -79,6 +80,7 @@ import { VinModule } from './vin/vin.module';
     UploadsModule,
     WarehouseModule,
     WarehousesModule,
+    StorageCellsModule,
     WarrantyModule,
     StockMovementsModule,
     HealthModule,

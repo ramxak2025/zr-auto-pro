@@ -641,7 +641,9 @@ export class StockMovementsService {
     const stockAfter = stockBefore - qty;
     let targetProductId: string = dto.productId;
     if (stockAfter === 0) {
-      await client.query('UPDATE products SET warehouse_id=$1 WHERE id=$2 AND tenant_id=$3', [
+      // 172 — ячейка принадлежит СКЛАДУ: строка уехала на другой склад (брак / Б-У /
+      // другой филиал) — адрес прежнего склада там не существует, снимаем его.
+      await client.query('UPDATE products SET warehouse_id=$1, storage_cell_id=NULL WHERE id=$2 AND tenant_id=$3', [
         targetWarehouseId,
         dto.productId,
         tenantID,
