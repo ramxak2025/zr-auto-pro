@@ -19,6 +19,24 @@ import { cn } from '../../ui/cn';
 import { formatQty, unitLabel } from '../../utils/units';
 import { countLabel, parseNumberInput } from './format';
 
+/** Поиск по названию и по коду ячейки: кладовщик идёт по стеллажу и вводит адрес. */
+const matchesProduct = (p: Product, q: string) =>
+  p.name.toLowerCase().includes(q) || (p.storageCellCode ?? '').toLowerCase().includes(q);
+
+/** «… · A-01-03» после остатка; без ячейки не рисуется, строка выглядит как раньше. */
+function CellSuffix({ code }: { code?: string | null }) {
+  if (!code) return null;
+  return (
+    <>
+      {' · '}
+      <span className="font-mono tabular-nums">{code}</span>
+    </>
+  );
+}
+
+const searchPlaceholder = (products: Product[]) =>
+  products.some((p) => p.storageCellCode) ? 'Поиск по названию или ячейке…' : 'Поиск товара…';
+
 // ─── Отчёт после инвентаризации ──────────────────────────────────────────────
 
 export interface InventoryReportItem {
@@ -199,7 +217,7 @@ export function GlobalInventoryForm({
     }
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter((p) => p.name.toLowerCase().includes(q));
+      list = list.filter((p) => matchesProduct(p, q));
     }
     return list;
   }, [products, filterCat, search]);
@@ -251,7 +269,12 @@ export function GlobalInventoryForm({
   return (
     <div className="flex max-h-[70vh] flex-col space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row">
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара…" className="sm:flex-1" />
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder={searchPlaceholder(products)}
+          className="sm:flex-1"
+        />
         <Select
           aria-label="Папка"
           value={filterCat}
@@ -293,6 +316,7 @@ export function GlobalInventoryForm({
                   <p className="text-xs text-ink-3">
                     В системе: <span className="font-semibold tabular-nums text-ink-2">{formatQty(p.stock)}</span>{' '}
                     {unitLabel(p.unit)}
+                    <CellSuffix code={p.storageCellCode} />
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-2">
@@ -352,7 +376,7 @@ export function GlobalWriteoffForm({
     let list = products.filter((p) => !p.isBundle && p.stock > 0);
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter((p) => p.name.toLowerCase().includes(q));
+      list = list.filter((p) => matchesProduct(p, q));
     }
     return list;
   }, [products, search]);
@@ -383,7 +407,7 @@ export function GlobalWriteoffForm({
 
   return (
     <div className="flex max-h-[70vh] flex-col space-y-4">
-      <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара…" />
+      <SearchInput value={search} onChange={setSearch} placeholder={searchPlaceholder(products)} />
 
       <Field
         label="Общая причина списания"
@@ -416,6 +440,7 @@ export function GlobalWriteoffForm({
                   <p className="text-xs text-ink-3">
                     Остаток: <span className="font-semibold tabular-nums text-ink-2">{formatQty(p.stock)}</span>{' '}
                     {unitLabel(p.unit)}
+                    <CellSuffix code={p.storageCellCode} />
                   </p>
                 </div>
                 <Input
