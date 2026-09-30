@@ -753,6 +753,7 @@ export default function StorageCellsScreen() {
           },
           { text: 'Отмена', style: 'cancel' },
         ],
+        { cancelable: true },
       );
     },
     [later],
@@ -925,7 +926,12 @@ export default function StorageCellsScreen() {
         renderItem={renderCell}
         keyboardShouldPersistTaps="handled"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary[600]}
+            colors={[colors.primary[600]]}
+          />
         }
         contentContainerStyle={{
           paddingHorizontal: spacing[4],

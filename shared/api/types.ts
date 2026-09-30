@@ -1000,8 +1000,8 @@ export interface UpdateManagerRequest {
 /**
  * POST /admin/managers/:id/settlements — расчёт менеджера с владельцем
  * (только суперадмин). `amount > 0` — менеджер передал деньги владельцу (долг
- * уменьшается), `amount < 0` — корректировка в пользу менеджера, тогда `note`
- * (причина) обязательна. `amount = 0` — 400.
+ * уменьшается), `amount < 0` — корректировка (отменяет ошибочно внесённое: долг
+ * менеджера растёт), тогда `note` (причина) обязательна. `amount = 0` — 400.
  */
 export interface CreateSettlementRequest {
   amount: number;
