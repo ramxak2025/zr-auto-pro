@@ -31,6 +31,12 @@ export const PERSISTED_KEYS = [
   'products',
   'all-products-check',
   'warehouse-categories',
+  // Ячейки хранения (2026-09-30) — ['storage-cells', warehouseId]: справочник
+  // ячеек одного склада (код · подпись · сколько товаров). Не search-volatile
+  // (поиск по коду — на клиенте), склад без ячеек отсекает empty-collection
+  // guard. Персистим, чтобы пикер ячейки в форме товара и экран «Ячейки
+  // хранения» открывались мгновенно, а не с пустым списком.
+  'storage-cells',
   // Warehouses (main / defect / used) — 3-row reference list, almost
   // never changes. Persisted so the warehouse switcher renders the
   // tabs instantly on cold start instead of flashing the spinner.
@@ -342,6 +348,8 @@ export const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
   'checks-infinite': 2,
   // Записи — exactly two scopes (upcoming / past).
   bookings: 2,
+  // Ячейки хранения — слот на склад (main / defect / used) + один запасной.
+  'storage-cells': 4,
   // ── Волна C «Связь 2.0» (2026-07-21) ──────────────────────────────────
   // Id-keyed деталки — 10 последних открытых, по образцу client/check.
   product: 10,
