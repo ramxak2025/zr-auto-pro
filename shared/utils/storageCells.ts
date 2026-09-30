@@ -7,7 +7,7 @@
  *
  *   - normalizeCellCode — канонический вид кода ячейки
  *   - generateCellCodes — коды сетки «стеллажи × полки × ячейки» для POST /storage-cells/bulk
- *   - countCellCodes    — сколько кодов даст сетка (предпросмотр и проверка лимита, без генерации)
+ *   - countCellCodes    — сколько разных кодов даст сетка (предпросмотр и проверка лимита)
  *   - expandRacks       — разбор поля «Стеллажи»: «A-C» → A,B,C; «1-5» → 1..5; «A,B,C» как есть
  *   - MAX_BULK_CELLS    — лимит кодов в одном bulk-запросе
  */
@@ -89,12 +89,12 @@ function uniqueRacks(racks: readonly string[] | null | undefined): string[] {
 }
 
 /**
- * Сколько кодов даст `generateCellCodes(params)` — без генерации, за O(racks).
- * Для предпросмотра «Будет создано N ячеек» и проверки лимита (`> MAX_BULK_CELLS`) ДО
- * вызова генератора. Не бросает и не ограничивает: при абсурдных значениях вернёт
- * очень большое число или `Infinity`. Ни одной части → 0.
+ * Сколько комбинаций «стеллаж × полка × ячейка» в сетке — без генерации, за O(racks).
+ * Кодов может выйти меньше (см. `generateCellCodes`), но лимит считается по комбинациям.
+ * Не бросает и не ограничивает: при абсурдных значениях вернёт очень большое число или
+ * `Infinity`. Ни одной части → 0.
  */
-export function countCellCodes(params: CellGridParams): number {
+function countCombinations(params: CellGridParams): number {
   let total = 1;
   let parts = 0;
   const racks = uniqueRacks(params.racks).length;
@@ -116,6 +116,22 @@ export function countCellCodes(params: CellGridParams): number {
 }
 
 /**
+ * Сколько РАЗНЫХ кодов даст `generateCellCodes(params)`. Для предпросмотра «Будет
+ * создано N ячеек» и проверки лимита (`> MAX_BULK_CELLS`) ДО вызова генератора.
+ *
+ * Разных кодов может быть меньше, чем комбинаций: без разделителя и без ведущих нулей
+ * `A`·1·11 и `A`·11·1 дают один и тот же «A111». Пока комбинаций не больше
+ * `MAX_BULK_CELLS`, число точное (строятся до 2000 коротких строк). Больше лимита —
+ * возвращает число комбинаций без генерации: память не тратится даже при
+ * `shelves: 1e9`, а создать такую сетку всё равно нельзя. Не бросает. Ни одной части → 0.
+ */
+export function countCellCodes(params: CellGridParams): number {
+  const combinations = countCombinations(params);
+  if (combinations === 0 || combinations > MAX_BULK_CELLS) return combinations;
+  return buildGridCodes(params).length;
+}
+
+/**
  * Коды ячеек сетки «стеллажи × полки × ячейки» в порядке «стеллаж → полка → ячейка».
  *
  *   generateCellCodes({ racks: ['A', 'B'], shelves: 3, cells: 4, separator: '-' })
@@ -123,23 +139,30 @@ export function countCellCodes(params: CellGridParams): number {
  *
  * Номера — без ведущих нулей, пока не задан `pad`. Метки стеллажей нормализуются
  * (`normalizeCellCode`: верхний регистр, пробелы), повторы и пустые отбрасываются, так
- * что результат совпадает с тем, что сохранит сервер.
+ * что результат совпадает с тем, что сохранит сервер. Одинаковые коды разных комбинаций
+ * (без разделителя и нулей `A`·1·11 и `A`·11·1 → «A111») остаются один раз, на месте
+ * первого появления: сервер уникален по коду без учёта регистра и всё равно оставил бы
+ * одну, а число в предпросмотре должно совпасть с тем, что создастся.
  *
- * ЛИМИТ: если кодов больше `MAX_BULK_CELLS` (2000) — БРОСАЕТ `Error` с русским
+ * ЛИМИТ: если КОМБИНАЦИЙ больше `MAX_BULK_CELLS` (2000) — БРОСАЕТ `Error` с русским
  * текстом, ничего не усекая (усечение молча дало бы не ту сетку, что просил
  * пользователь). Проверяйте `countCellCodes(params) > MAX_BULK_CELLS` заранее и
  * блокируйте кнопку; `Error` — страховка. Проверка идёт ДО генерации, память не
  * расходуется даже при `shelves: 1e9`.
  */
 export function generateCellCodes(params: CellGridParams): string[] {
-  const total = countCellCodes(params);
-  if (total === 0) return [];
-  if (total > MAX_BULK_CELLS) {
+  const combinations = countCombinations(params);
+  if (combinations === 0) return [];
+  if (combinations > MAX_BULK_CELLS) {
     throw new Error(
       `Слишком много ячеек за один раз: максимум ${MAX_BULK_CELLS}. Уменьшите число стеллажей, полок или ячеек.`,
     );
   }
+  return buildGridCodes(params);
+}
 
+/** Сетка без проверки лимита; вызывать только при `countCombinations(params) <= MAX_BULK_CELLS`. */
+function buildGridCodes(params: CellGridParams): string[] {
   const separator = typeof params.separator === 'string' ? params.separator : '-';
   const pad = clampPad(params.pad);
   const racks = uniqueRacks(params.racks);
@@ -152,6 +175,7 @@ export function generateCellCodes(params: CellGridParams): string[] {
   const cellPasses = cells > 0 ? cells : 1;
 
   const out: string[] = [];
+  const seen = new Set<string>();
   for (const rack of rackList) {
     for (let shelf = 1; shelf <= shelfPasses; shelf++) {
       for (let cell = 1; cell <= cellPasses; cell++) {
@@ -159,7 +183,11 @@ export function generateCellCodes(params: CellGridParams): string[] {
         if (rack !== null) parts.push(rack);
         if (shelves > 0) parts.push(String(shelf).padStart(pad, '0'));
         if (cells > 0) parts.push(String(cell).padStart(pad, '0'));
-        out.push(normalizeCellCode(parts.join(separator)));
+        const code = normalizeCellCode(parts.join(separator));
+        const key = code.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(code);
       }
     }
   }

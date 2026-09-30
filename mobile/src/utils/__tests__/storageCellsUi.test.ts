@@ -258,6 +258,27 @@ describe('buildCellGridPreview', () => {
     expect(p.overLimit).toBe(true);
     expect(p.canCreate).toBe(false);
   });
+
+  it('«Слитно» без нулей: счётчик равен числу реальных кодов, а не комбинаций', () => {
+    const p = buildCellGridPreview({ ...base, racksText: 'A', shelves: '12', cells: '12', separator: '' });
+    expect(p.count).toBe(142);
+    expect(p.codes).toHaveLength(142);
+    expect(new Set(p.codes).size).toBe(142);
+    expect(p.canCreate).toBe(true);
+  });
+
+  it('«Слитно» с нулями: 144 разных кода', () => {
+    const p = buildCellGridPreview({
+      ...base,
+      racksText: 'A',
+      shelves: '12',
+      cells: '12',
+      separator: '',
+      padZeros: true,
+    });
+    expect(p.count).toBe(144);
+    expect(p.codes).toHaveLength(144);
+  });
 });
 
 describe('formatCodesSample', () => {

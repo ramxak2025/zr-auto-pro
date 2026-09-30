@@ -141,6 +141,52 @@ describe('generateCellCodes', () => {
     expect(() => generateCellCodes({ racks: ['A'], shelves: 1e9, cells: 1e9 })).toThrow(/Слишком много/);
     expect(() => generateCellCodes({ racks: ['A'], shelves: Infinity })).toThrow(/Слишком много/);
   });
+
+  it('слитно и без нулей одинаковые коды остаются один раз: A·1·11 и A·11·1 → A111', () => {
+    const codes = generateCellCodes({ racks: ['A'], shelves: 12, cells: 12, separator: '' });
+    // 144 комбинации, две пары совпадают: (1,11)=(11,1) и (1,12)=(11,2).
+    expect(codes).toHaveLength(142);
+    expect(new Set(codes).size).toBe(142);
+    // Порядок — по первому появлению, тот же код позже не повторяется.
+    expect(codes.slice(0, 12)).toEqual([
+      'A11',
+      'A12',
+      'A13',
+      'A14',
+      'A15',
+      'A16',
+      'A17',
+      'A18',
+      'A19',
+      'A110',
+      'A111',
+      'A112',
+    ]);
+    expect(codes.filter((c) => c === 'A111')).toHaveLength(1);
+    expect(codes.filter((c) => c === 'A112')).toHaveLength(1);
+  });
+
+  it('слитно без нулей: совпадения бывают и между стеллажами (1·11·1 и 11·1·1)', () => {
+    const codes = generateCellCodes({ racks: ['1', '11'], shelves: 11, cells: 1, separator: '' });
+    // Стеллаж «1»: 111, 121, … 1111. Стеллаж «11»: 1111 (уже был), 1121, … 11111.
+    expect(codes).toHaveLength(21);
+    expect(new Set(codes).size).toBe(21);
+  });
+
+  it('ведущие нули разводят номера — совпадений нет даже слитно', () => {
+    const codes = generateCellCodes({ racks: ['A'], shelves: 12, cells: 12, separator: '', pad: 2 });
+    expect(codes).toHaveLength(144);
+    expect(codes[0]).toBe('A0101');
+    expect(codes[143]).toBe('A1212');
+    expect(new Set(codes).size).toBe(144);
+  });
+
+  it('с разделителем совпадений нет: A-1-11 и A-11-1 — разные коды', () => {
+    const codes = generateCellCodes({ racks: ['A'], shelves: 12, cells: 12 });
+    expect(codes).toHaveLength(144);
+    expect(codes).toContain('A-1-11');
+    expect(codes).toContain('A-11-1');
+  });
 });
 
 describe('countCellCodes', () => {
@@ -162,6 +208,20 @@ describe('countCellCodes', () => {
     expect(countCellCodes({ racks: ['A'], shelves: 100000, cells: 100000 })).toBe(1e10);
     expect(countCellCodes({ racks: ['A'], shelves: Infinity })).toBeGreaterThan(MAX_BULK_CELLS);
     expect(countCellCodes({ racks: ['A'], shelves: MAX_BULK_CELLS + 1 })).toBeGreaterThan(MAX_BULK_CELLS);
+  });
+
+  it('считает разные коды, а не комбинации: слитно без нулей 12×12 → 142, а не 144', () => {
+    const params = { racks: ['A'], shelves: 12, cells: 12, separator: '' };
+    expect(countCellCodes(params)).toBe(142);
+    expect(countCellCodes(params)).toBe(generateCellCodes(params).length);
+    expect(countCellCodes({ ...params, pad: 2 })).toBe(144);
+    expect(countCellCodes({ ...params, separator: '-' })).toBe(144);
+  });
+
+  it('выше лимита отдаёт число комбинаций без генерации, а генератор бросает', () => {
+    const params = { racks: ['A'], shelves: 50, cells: 50, separator: '' };
+    expect(countCellCodes(params)).toBe(2500);
+    expect(() => generateCellCodes(params)).toThrow(/Слишком много/);
   });
 });
 
