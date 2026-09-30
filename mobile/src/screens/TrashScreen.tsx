@@ -59,6 +59,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['products-trash'] });
     queryClient.invalidateQueries({ queryKey: ['products'] });
+    queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
   };
 
   const restoreMut = useMutation({

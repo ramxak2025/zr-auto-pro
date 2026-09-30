@@ -354,6 +354,7 @@ export default function ProductDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       navigation.goBack();
     },
     onError: (err: any) => {

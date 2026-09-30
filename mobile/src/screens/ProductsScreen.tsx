@@ -909,6 +909,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       setFolderActions(null);
       setConfirmFolderDelete(null);
     },
@@ -928,6 +929,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
     },
     onError: () => {
       haptic('error');
@@ -950,6 +952,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       exitSelectMode();
       const dp = res?.data?.deletedProducts ?? 0;
       const dc = res?.data?.deletedCategories ?? 0;

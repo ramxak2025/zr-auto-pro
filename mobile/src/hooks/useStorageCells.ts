@@ -32,7 +32,9 @@ export function useStorageCells(
     queryFn: async () => toStorageCellArray((await storageCellsApi.list(warehouseId as string)).data),
     enabled: !!warehouseId && (options?.enabled ?? true),
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === (warehouseId ?? null) ? prev : undefined),
-    // Справочник меняется редко и только с этого экрана — мутации инвалидируют его сами.
+    // Счётчик `productsCount` считает только живые товары, поэтому его двигают и
+    // создание / правка / удаление / восстановление товара, а не одни мутации ячеек:
+    // каждая из них сама инвалидирует ['storage-cells'].
     staleTime: 30_000,
   });
 }
