@@ -17,9 +17,13 @@
  * NOTE: this is a constant, intentionally NOT part of the query KEY — the
  * key shape ['products', { search, limit, warehouseId }] must stay
  * byte-for-byte identical between the screen and the prefetch.
+ *
+ * storageCellId / storageCellCode — адрес хранения (ячейка) для чипа в строке
+ * списка и для фильтра по ячейке. Без них в проекции строка не знала бы своей
+ * ячейки: `?fields=` отдаёт только перечисленные ключи.
  */
 export const PRODUCT_LIST_FIELDS =
-  'id,name,stock,minStock,sellPrice,costPrice,photo,category,unit,warehouseId,supplierId,warrantyDays,barcode';
+  'id,name,stock,minStock,sellPrice,costPrice,photo,category,unit,warehouseId,supplierId,warrantyDays,barcode,storageCellId,storageCellCode';
 
 /**
  * ПОЛНЫЙ КАТАЛОГ СКЛАДА ОДНОЙ СТРАНИЦЕЙ.

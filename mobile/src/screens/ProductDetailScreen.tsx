@@ -31,7 +31,7 @@
  * Android-safe: shared RN only; haptics via the platform helper; glass
  * preview degrades through expo-blur on Android.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -61,6 +61,8 @@ import { KeyboardAwareView } from '../components/KeyboardAware';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import FolderPickerModal from '../components/FolderPickerModal';
+import StorageCellPickerModal from '../components/StorageCellPickerModal';
+import { CELL_CODE_FONT } from '../components/StorageCellChip';
 import ProductMovementHistoryModal, {
   visualFor,
   formatMovementDateTime,
@@ -68,7 +70,7 @@ import ProductMovementHistoryModal, {
 } from '../components/ProductMovementHistoryModal';
 import { DEFAULT_UNIT, UNIT_PRESETS, unitLabel } from '../utils/units';
 import { readNumericField } from '../utils/numberInput';
-import { extractApiErrorMessage } from '../utils/apiError';
+import { storageCellFailureText, withRequestedStorageCell } from '../utils/storageCellsUi';
 import { Text } from '../platform/Typography';
 import { productsApi, stockMovementsApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -77,7 +79,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
-import type { Product, StockMovement, ProductPriceHistoryEntry } from '../../../shared/types';
+import type { Product, StockMovement, ProductPriceHistoryEntry, StorageCell } from '../../../shared/types';
 // Round 12 #6/#8: `barcode` now lives on the shared contract types — the old
 // local ProductEditPayload superset-hack is gone.
 import type { UpdateProductRequest } from '../../../shared/api/types';
@@ -196,6 +198,14 @@ export default function ProductDetailScreen() {
   const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
   const [warranty, setWarranty] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  // Ячейка хранения (2026-09-30). В режиме правки выбор меняет только это локальное
+  // значение и уходит вместе с формой; из режима просмотра пикер сохраняет адрес сразу.
+  // Форма здесь инлайновая (не RNModal), поэтому пикер — обычный сиблинг FolderPickerModal.
+  const [editCell, setEditCell] = useState<{ id: string; code: string; name?: string | null } | null>(null);
+  const [cellPickerOpen, setCellPickerOpen] = useState(false);
+  // Ячейка, ушедшая в PATCH (id + код): ответ сервера может прийти без склейки с ячейкой,
+  // а карточка после смены адреса не должна на миг показывать «Не указана».
+  const savedCellRef = useRef<{ id: string; code: string; name?: string | null } | null>(null);
 
   // Theme-aware fill/border/text for the edit inputs (correct in dark mode).
   const inputThemed = useMemo(
@@ -263,6 +273,9 @@ export default function ProductDetailScreen() {
     setBarcode(p.barcode || '');
     setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
     setPhotoUri(p.photo || null);
+    setEditCell(
+      p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '', name: p.storageCellName } : null,
+    );
   }, []);
 
   // «Изменить» → enter inline edit mode (NOT the old modal). `product` can be
@@ -298,23 +311,35 @@ export default function ProductDetailScreen() {
 
   const saveMutation = useMutation({
     mutationFn: (data: UpdateProductRequest) => productsApi.update(productId, data),
-    onSuccess: (res) => {
+    onSuccess: (res, variables) => {
       haptic('success');
       // Update the detail card in place + invalidate every warehouse/picker
       // slot so the list, the cash picker and the folder tree all refresh.
-      queryClient.setQueryData(['product', productId], res.data);
+      // Ячейка: если адрес менялся, а ответ пришёл без её кода — дописываем выбранную.
+      queryClient.setQueryData(
+        ['product', productId],
+        withRequestedStorageCell(res.data, variables.storageCellId, savedCellRef.current),
+      );
+      savedCellRef.current = null;
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['product-price-history', productId] });
+      if (variables.storageCellId !== undefined) {
+        // Адрес поменялся: счётчики товаров в списке ячеек устарели, карточку дочитываем с сервера.
+        queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
+        queryClient.invalidateQueries({ queryKey: ['product', productId] });
+      }
       setEditing(false);
       setMoveOpen(false);
     },
     // Реальная причина отказа сервера вместо немого «Не удалось сохранить»:
-    // без неё владелец не видел, какое поле не приняли.
+    // без неё владелец не видел, какое поле не приняли. Отказы модуля ячеек
+    // («ячейка с другого склада») тоже получают понятный текст.
     onError: (err: unknown) => {
       haptic('error');
-      Alert.alert('Ошибка', extractApiErrorMessage(err, 'Не удалось сохранить изменения'));
+      savedCellRef.current = null;
+      Alert.alert('Ошибка', storageCellFailureText(err, 'Не удалось сохранить изменения'));
     },
   });
 
@@ -430,6 +455,13 @@ export default function ProductDetailScreen() {
     if (parsedSell !== product?.sellPrice) payload.sellPrice = parsedSell;
     if (parsedStock !== product?.stock) payload.stock = parsedStock;
     if (parsedMinStock !== product?.minStock) payload.minStock = parsedMinStock;
+    // Адрес хранения (2026-09-30) — тоже только если поменяли: uuid ячейки либо null («снять»).
+    // Не тронутое поле не уходит, чтобы форма не затирала адрес, выставленный с другого экрана.
+    const nextCellId = editCell?.id ?? null;
+    if (nextCellId !== (product?.storageCellId ?? null)) {
+      payload.storageCellId = nextCellId;
+      savedCellRef.current = editCell;
+    }
     saveMutation.mutate(payload);
   }, [
     name,
@@ -443,9 +475,26 @@ export default function ProductDetailScreen() {
     costPrice,
     canSeeCostPrice,
     photoUri,
+    editCell,
     saveMutation,
     product,
   ]);
+
+  // Выбор ячейки (2026-09-30). В режиме правки — только локальное значение (уйдёт вместе
+  // с формой), из режима просмотра — адрес сохраняется сразу отдельным PATCH, как «Перенести».
+  const handleCellSelect = useCallback(
+    (cell: StorageCell | null) => {
+      const next = cell ? { id: cell.id, code: cell.code, name: cell.name } : null;
+      if (editing) {
+        setEditCell(next);
+        return;
+      }
+      if ((next?.id ?? null) === (product?.storageCellId ?? null)) return;
+      savedCellRef.current = next;
+      saveMutation.mutate({ storageCellId: next?.id ?? null });
+    },
+    [editing, product, saveMutation],
+  );
 
   // Folder move. In edit mode the picker only updates the category field (saved
   // with the rest of the form); from read-only it commits immediately.
@@ -702,6 +751,33 @@ export default function ProductDetailScreen() {
               </EditField>
             </View>
 
+            {/* Ячейка хранения → пикер ячеек склада товара; ячейку можно создать
+                прямо в нём (склад без ячеек не упирается в отдельный экран). */}
+            <EditField label="Ячейка хранения" palette={palette}>
+              <TouchableOpacity
+                style={[styles.input, styles.inputAsButton, inputThemed]}
+                onPress={() => {
+                  haptic('tap');
+                  setCellPickerOpen(true);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  editCell?.code ? `Ячейка хранения: ${editCell.code}. Изменить` : 'Ячейка хранения не указана. Выбрать'
+                }
+              >
+                <Text
+                  variant="body"
+                  color={editCell ? palette.text.primary : palette.text.tertiary}
+                  numberOfLines={1}
+                  style={[styles.inputAsButtonValue, editCell ? { fontFamily: CELL_CODE_FONT } : null]}
+                >
+                  {editCell ? editCell.code || 'Ячейка выбрана' : 'Не указана — выбрать…'}
+                </Text>
+                <Ionicons name="file-tray-stacked-outline" size={18} color={palette.accent.primary} />
+              </TouchableOpacity>
+            </EditField>
+
             {/* Unit — чипсы-пресеты (120, дробные количества). Нестандартная
                 legacy-единица («мл», «г»…) показывается дополнительным чипом,
                 чтобы её можно было оставить, а не потерять при сохранении. */}
@@ -932,9 +1008,27 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
           ) : null}
 
-          {/* INFO card — supplier / barcode / unit / warranty */}
+          {/* INFO card — cell / supplier / barcode / unit / warranty */}
           <SectionHeader title="Информация" />
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            {/* Ячейка хранения (2026-09-30): строка есть всегда. Кладовщик с правом
+                warehouse_manage тапом открывает пикер (в нём же можно создать ячейку),
+                остальные видят адрес без шеврона. */}
+            <InfoRow
+              icon="file-tray-stacked-outline"
+              label="Ячейка хранения"
+              value={product.storageCellCode || 'Не указана'}
+              palette={palette}
+              codeFont={!!product.storageCellCode}
+              onPress={
+                canManageWarehouse
+                  ? () => {
+                      haptic('tap');
+                      setCellPickerOpen(true);
+                    }
+                  : undefined
+              }
+            />
             <InfoRow
               icon="business-outline"
               label="Поставщик"
@@ -1121,6 +1215,18 @@ export default function ProductDetailScreen() {
         busy={!editing && saveMutation.isPending}
       />
 
+      {/* Ячейка хранения — только ячейки ТОГО ЖЕ склада, что и товар (сервер отверг бы
+          чужую). В режиме правки пикер меняет поле формы, из просмотра — сохраняет адрес сразу. */}
+      <StorageCellPickerModal
+        visible={cellPickerOpen}
+        onClose={() => setCellPickerOpen(false)}
+        warehouseId={product.warehouseId}
+        selectedCellId={editing ? (editCell?.id ?? null) : (product.storageCellId ?? null)}
+        onSelect={handleCellSelect}
+        subtitle={product.name}
+        canCreate={canManageWarehouse}
+      />
+
       {/* Full movement journal — shares the cache key, so it opens instantly. */}
       <ProductMovementHistoryModal
         visible={historyOpen}
@@ -1233,15 +1339,18 @@ interface InfoRowProps {
   palette: ReturnType<typeof useColors>;
   mono?: boolean;
   last?: boolean;
+  /** Значение — код ячейки: моноширинный шрифт, как у плашки в списках. */
+  codeFont?: boolean;
+  /** Строка-кнопка (шеврон справа); без него — обычная строка «подпись — значение». */
+  onPress?: () => void;
 }
-function InfoRow({ icon, label, value, palette, mono, last }: InfoRowProps) {
-  return (
-    <View
-      style={[
-        styles.infoRow,
-        !last && { borderBottomColor: palette.border.subtle, borderBottomWidth: StyleSheet.hairlineWidth },
-      ]}
-    >
+function InfoRow({ icon, label, value, palette, mono, last, codeFont, onPress }: InfoRowProps) {
+  const rowStyle = [
+    styles.infoRow,
+    !last && { borderBottomColor: palette.border.subtle, borderBottomWidth: StyleSheet.hairlineWidth },
+  ];
+  const content = (
+    <>
       <View style={styles.infoLeft}>
         <Ionicons name={icon} size={17} color={palette.text.tertiary} />
         <Text variant="body" color={palette.text.secondary}>
@@ -1252,12 +1361,29 @@ function InfoRow({ icon, label, value, palette, mono, last }: InfoRowProps) {
         variant="bodyEmph"
         color={palette.text.primary}
         numberOfLines={1}
-        style={[styles.infoValue, mono && styles.infoValueMono]}
+        style={[styles.infoValue, mono && styles.infoValueMono, codeFont && styles.infoValueCode]}
       >
         {value}
       </Text>
-    </View>
+      {onPress ? (
+        <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} style={styles.infoChevron} />
+      ) : null}
+    </>
   );
+  if (onPress) {
+    return (
+      <TouchableOpacity
+        style={rowStyle}
+        onPress={onPress}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value}. Изменить`}
+      >
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return <View style={rowStyle}>{content}</View>;
 }
 
 interface MovementLineProps {
@@ -1372,6 +1498,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   inputAsButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  // Значение в поле-кнопке занимает всё место слева от иконки и обрезается многоточием.
+  inputAsButtonValue: { flex: 1 },
   // Чипсы единиц измерения (120, дробные количества).
   unitChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
   unitChip: {
@@ -1484,6 +1612,10 @@ const styles = StyleSheet.create({
   infoLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flexShrink: 0 },
   infoValue: { flexShrink: 1, textAlign: 'right' },
   infoValueMono: { fontVariant: ['tabular-nums'], letterSpacing: 0.5 },
+  // Код ячейки хранения — моноширинным, как плашка в списках.
+  infoValueCode: { fontFamily: CELL_CODE_FONT },
+  // Шеврон строки-кнопки: gap строки (12) минус 8 — стоит вплотную к значению.
+  infoChevron: { marginLeft: -spacing[2] },
 
   // Chart
   chartHeader: {
