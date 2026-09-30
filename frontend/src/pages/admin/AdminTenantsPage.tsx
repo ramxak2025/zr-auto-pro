@@ -29,9 +29,11 @@ import { Textarea } from '../../ui/Textarea';
 import { Toolbar } from '../../ui/Toolbar';
 import { cn } from '../../ui/cn';
 import { TenantStatusBadges, isTenantExpired } from '../../components/admin/adminUi';
+import { adminManagerKeys } from '../../components/admin/managerQueryKeys';
+import { useAdminManagers } from '../../components/admin/useAdminManagers';
 
 /*
- * Список автосервисов: плотная таблица с поиском, фильтрами по статусу/тарифу
+ * Список автосервисов: плотная таблица с поиском, фильтрами по статусу/тарифу/менеджеру
  * и клиентской пагинацией (getAll отдаёт весь список — режем на страницы на
  * клиенте). Редактор тенанта ЕДИНЫЙ и живёт только на странице «Подробнее»
  * (AdminTenantDetailPage) — здесь только просмотр, создание и удаление.
@@ -45,6 +47,7 @@ interface TenantFormData {
   email: string;
   description: string;
   planId: string;
+  managerId: string;
   subscriptionEnd: string;
   subscriptionNote: string;
   directorName: string;
@@ -59,6 +62,7 @@ const emptyForm: TenantFormData = {
   email: '',
   description: '',
   planId: '',
+  managerId: '',
   subscriptionEnd: '',
   subscriptionNote: '',
   directorName: '',
@@ -80,6 +84,9 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
 
 const userCountOf = (t: Tenant) => t.userCount ?? t.users?.length ?? 0;
 
+// Значение фильтра «Менеджер» в URL для клиентов без менеджера.
+const NO_MANAGER = 'none';
+
 export default function AdminTenantsPage() {
   const queryClient = useQueryClient();
   const uid = useId();
@@ -97,6 +104,7 @@ export default function AdminTenantsPage() {
     ? (rawStatus as StatusFilter)
     : 'all';
   const planFilter = params.get('plan') ?? '';
+  const managerFilter = params.get('manager') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
 
   const patch = (changes: Record<string, string | null>) => {
@@ -125,6 +133,10 @@ export default function AdminTenantsPage() {
     select: (res) => res.data as Plan[],
   });
 
+  const { data: managersData } = useAdminManagers();
+  const managers = useMemo(() => managersData ?? [], [managersData]);
+  const assignableManagers = managers.filter((m) => m.isActive);
+
   const tenants = useMemo(() => data ?? [], [data]);
   const activePlans = (plansData ?? []).filter((p) => p.isActive);
 
@@ -139,9 +151,11 @@ export default function AdminTenantsPage() {
       if (statusFilter === 'expired' && !isTenantExpired(t)) return false;
       if (statusFilter === 'inactive' && t.isActive) return false;
       if (planFilter && t.planId !== planFilter) return false;
+      if (managerFilter === NO_MANAGER && t.managerId) return false;
+      if (managerFilter && managerFilter !== NO_MANAGER && t.managerId !== managerFilter) return false;
       return true;
     });
-  }, [tenants, search, statusFilter, planFilter]);
+  }, [tenants, search, statusFilter, planFilter, managerFilter]);
 
   // Клампим страницу вместо useEffect-сброса: смена фильтра сразу показывает 1-ю.
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -154,6 +168,8 @@ export default function AdminTenantsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+      // Новый клиент с менеджером меняет его счётчики «Клиентов / Активных».
+      queryClient.invalidateQueries({ queryKey: adminManagerKeys.list });
       toast.success('Автосервис создан');
       closeModal();
     },
@@ -167,6 +183,7 @@ export default function AdminTenantsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+      queryClient.invalidateQueries({ queryKey: adminManagerKeys.list });
       toast.success('Автосервис удалён');
     },
     onError: (err: any) => {
@@ -209,6 +226,7 @@ export default function AdminTenantsPage() {
       email: form.email || undefined,
       description: form.description || undefined,
       planId: form.planId || null,
+      managerId: form.managerId || undefined,
       maxUsers: selectedPlan ? selectedPlan.maxUsers : 5,
       monthlyPrice: selectedPlan ? selectedPlan.monthlyPrice : 0,
       isActive: true,
@@ -266,6 +284,15 @@ export default function AdminTenantsPage() {
         ) : (
           <span className="text-ink-3">Не назначен</span>
         ),
+    },
+    {
+      key: 'manager',
+      header: 'Менеджер',
+      hideBelow: 'lg',
+      sortable: true,
+      sortValue: (t) => t.managerName ?? '',
+      render: (t) =>
+        t.managerName ? <span className="text-ink-2">{t.managerName}</span> : <span className="text-ink-3">—</span>,
     },
     {
       key: 'users',
@@ -366,6 +393,22 @@ export default function AdminTenantsPage() {
             ))}
           </Select>
         )}
+        {(managers.length > 0 || !!managerFilter) && (
+          <Select
+            aria-label="Менеджер"
+            value={managerFilter}
+            onChange={(e) => patch({ manager: e.target.value, page: null })}
+            className="w-48"
+          >
+            <option value="">Все менеджеры</option>
+            <option value={NO_MANAGER}>Без менеджера</option>
+            {managers.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.fullName}
+              </option>
+            ))}
+          </Select>
+        )}
       </Toolbar>
 
       <DataTable
@@ -394,7 +437,7 @@ export default function AdminTenantsPage() {
                 description: 'Измените поиск или фильтры.',
                 action: {
                   label: 'Сбросить фильтры',
-                  onClick: () => patch({ q: null, status: null, plan: null, page: null }),
+                  onClick: () => patch({ q: null, status: null, plan: null, manager: null, page: null }),
                 },
               }
         }
@@ -537,6 +580,27 @@ export default function AdminTenantsPage() {
             />
           ) : (
             <p className="text-sm text-ink-3">Нет доступных тарифов. Создайте тариф в разделе «Тарифы».</p>
+          )}
+
+          {assignableManagers.length > 0 && (
+            <Field
+              label="Менеджер"
+              htmlFor={`${uid}-manager`}
+              hint="Менеджер ведёт клиента и получает оплаты; доля владельца копится в его долге."
+            >
+              <Select
+                id={`${uid}-manager`}
+                value={form.managerId}
+                onChange={(e) => setForm({ ...form, managerId: e.target.value })}
+                placeholder="Без менеджера"
+              >
+                {assignableManagers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.fullName} · доля владельца {m.ownerSharePercent} %
+                  </option>
+                ))}
+              </Select>
+            </Field>
           )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
