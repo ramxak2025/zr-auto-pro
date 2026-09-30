@@ -1,16 +1,20 @@
 /**
- * AdminTenantDetailScreen — full tenant management for the superadmin.
+ * AdminTenantDetailScreen — карточка автосервиса платформы: суперадмин (`/tenants/*`)
+ * и менеджер (`/manager/tenants/*`, только свои клиенты). Режим — из AdminModeProvider.
  *
  *   • Tenant identity + subscription summary (AUTHORITATIVE status from the
  *     composed getCabinet(id): active / expired / suspended + plan + price).
  *   • «Показатели клиента» — activity metrics from cabinet.metrics (заказ-наряды
  *     30д/всего, выручка 30д/всего, последняя активность, сотрудники, товары).
  *   • Subscription actions:
- *       – Продлить (+30 / +90 / произвольно дней → extend)
+ *       – Продлить → ExtendSubscriptionSheet (платно/бесплатно; у менеджера — доля владельца)
  *       – Сменить тариф (plan picker → assignPlan, resyncs price + maxUsers)
  *       – Приостановить (suspend с причиной) / Возобновить (unsuspend) — hard
  *         gate on every tenant device, mirrored by the status chip here
  *       – Войти как владелец (impersonate → AuthContext.beginImpersonation)
+ *   • Только суперадмин: «Менеджер · Передать», филиалы и сотрудники автосервиса.
+ *   • Только менеджер: «Сбросить пароль владельца». Удаления, реквизитов, сотрудников и
+ *     филиалов у менеджера нет — сервер их ему не отдаёт.
  */
 import React from 'react';
 import {
@@ -30,9 +34,8 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { tenantsApi, plansApi, usersApi } from '../../api/services';
+import { tenantsApi, plansApi, usersApi, managerApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
-import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { KeyboardAwareView } from '../../components/KeyboardAware';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -41,6 +44,7 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, getBadgeColors } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
+import { extractApiErrorMessage } from '../../utils/apiError';
 import type {
   Tenant,
   Plan,
@@ -51,45 +55,23 @@ import type {
   TenantPoint,
 } from '../../../../shared/types';
 import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
-import type { UpdateUserRequest, ExtendSubscriptionRequest } from '../../../../shared/api/types';
+import type { UpdateUserRequest } from '../../../../shared/api/types';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
 import {
   formatMoney,
   formatFullDate,
   formatDateTime,
+  genPassword,
+  invalidatePlatformQueries,
   subscriptionStatusInfo,
   periodKindChip,
+  useAdminMode,
   StatusChip,
   InitialAvatar,
 } from './adminShared';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Extension presets — fill the «до» date under the chosen paid/free mode. */
-const EXTEND_PRESETS: { label: string; days: number }[] = [
-  { label: '+30 дней', days: 30 },
-  { label: '+90 дней', days: 90 },
-  { label: '+год', days: 365 },
-];
-
-/**
- * Backend anchors an extension on max(current end, now) — mirror that here so
- * the presets add days onto the ЖИВОЙ конец подписки, not «now», when the
- * tenant is still in-window.
- */
-function anchorFrom(subscriptionEnd?: string | null): Date {
-  const now = new Date();
-  if (!subscriptionEnd) return now;
-  const end = new Date(subscriptionEnd);
-  return Number.isNaN(end.getTime()) || end < now ? now : end;
-}
-
-/** End of the given local day (23:59:59) — natural meaning of «оплачено до …». */
-function endOfDay(d: Date): Date {
-  const c = new Date(d);
-  c.setHours(23, 59, 59, 999);
-  return c;
-}
+import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
+import TransferManagerSheet from './TransferManagerSheet';
+import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -100,6 +82,7 @@ const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
 
 const ROLE_LABELS: Record<string, string> = {
   superadmin: 'Суперадмин',
+  manager: 'Менеджер',
   director: 'Директор',
   admin: 'Админ',
   master: 'Мастер',
@@ -122,15 +105,6 @@ interface UserDraft {
   role: UserRole;
   salaryPercent: string;
   isActive: boolean;
-}
-
-// Генератор пароля для сотрудника: без неоднозначных символов (0/O, 1/l/I),
-// чтобы пароль можно было продиктовать по телефону.
-const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
-function genPassword(len = 10): string {
-  let out = '';
-  for (let i = 0; i < len; i++) out += PW_ALPHABET[Math.floor(Math.random() * PW_ALPHABET.length)];
-  return out;
 }
 
 function toUserDraft(u?: User): UserDraft {
@@ -180,15 +154,14 @@ export default function AdminTenantDetailScreen() {
   const queryClient = useQueryClient();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { beginImpersonation } = useAuth();
+  const isManager = useAdminMode() === 'manager';
 
   const [extendOpen, setExtendOpen] = React.useState(false);
-  const [extendType, setExtendType] = React.useState<'paid' | 'free'>('paid');
-  const [extendAmount, setExtendAmount] = React.useState('');
-  const [extendUntil, setExtendUntil] = React.useState<Date | null>(null);
-  const [extendDatePickerOpen, setExtendDatePickerOpen] = React.useState(false);
+  const [transferOpen, setTransferOpen] = React.useState(false);
+  const [resetPasswordOpen, setResetPasswordOpen] = React.useState(false);
   const [suspendOpen, setSuspendOpen] = React.useState(false);
   const [suspendReason, setSuspendReason] = React.useState('');
-  const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'suspend' | 'impersonate'>(null);
+  const [busy, setBusy] = React.useState<null | 'plan' | 'suspend' | 'impersonate'>(null);
   const [editingUser, setEditingUser] = React.useState<UserDraft | null>(null);
   const [savingUser, setSavingUser] = React.useState(false);
   const [pwVisible, setPwVisible] = React.useState(false);
@@ -201,8 +174,8 @@ export default function AdminTenantDetailScreen() {
     isError: tenantError,
     refetch: refetchTenant,
   } = useQuery<Tenant>({
-    queryKey: ['admin-tenant', id],
-    queryFn: async () => (await tenantsApi.getById(id)).data,
+    queryKey: isManager ? ['manager', 'tenant', id] : ['admin-tenant', id],
+    queryFn: async () => (isManager ? await managerApi.tenant(id) : await tenantsApi.getById(id)).data,
   });
 
   // Active employees of THIS tenant (embedded in getById). Defensive filter:
@@ -212,14 +185,24 @@ export default function AdminTenantDetailScreen() {
     [tenant?.users],
   );
 
+  // Сброс пароля меняет пароль САМОГО СТАРОГО активного директора — его и показываем в
+  // тексте «Поделиться». Если сервер сотрудников менеджеру не отдал, подсказки просто нет.
+  const ownerUser = React.useMemo(
+    () =>
+      tenantUsers
+        .filter((u) => u.role === UserRole.DIRECTOR && u.isActive)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0] ?? null,
+    [tenantUsers],
+  );
+
   // Composed cabinet (102): identity + AUTHORITATIVE subscription status/plan +
   // the activity metrics in one payload. Replaces the old standalone metrics
   // query — `cabinet.metrics` feeds the grid, `cabinet.subscription` drives the
   // status chip + suspend/resume action so the card mirrors what the gate
   // enforces on the tenant's own devices.
   const { data: cabinet } = useQuery<TenantCabinet>({
-    queryKey: ['admin-tenant-cabinet', id],
-    queryFn: async () => (await tenantsApi.getCabinet(id)).data,
+    queryKey: isManager ? ['manager', 'cabinet', id] : ['admin-tenant-cabinet', id],
+    queryFn: async () => (isManager ? await managerApi.cabinet(id) : await tenantsApi.getCabinet(id)).data,
   });
   const metrics = cabinet?.metrics;
   const sub = cabinet?.subscription;
@@ -234,48 +217,28 @@ export default function AdminTenantDetailScreen() {
   const { data: points = [] } = useQuery<TenantPoint[]>({
     queryKey: ['admin-tenant-points', id],
     queryFn: async () => (await tenantsApi.points.list(id)).data,
+    enabled: !isManager,
   });
 
-  const invalidate = React.useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
-    queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
-    queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-    queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-  }, [queryClient, id]);
+  const invalidate = React.useCallback(() => invalidatePlatformQueries(queryClient, id), [queryClient, id]);
 
   const invalidatePoints = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['admin-tenant-points', id] });
   }, [queryClient, id]);
 
-  const extendMutation = useMutation({
-    mutationFn: async (opts: ExtendSubscriptionRequest) => {
-      setBusy('extend');
-      await tenantsApi.extend(id, opts);
-    },
-    onSuccess: () => {
-      haptic('success');
-      setExtendOpen(false);
-      invalidate();
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось продлить подписку');
-    },
-    onSettled: () => setBusy(null),
-  });
-
   const assignPlanMutation = useMutation({
     mutationFn: async (planId: string) => {
       setBusy('plan');
-      await tenantsApi.assignPlan(id, planId);
+      if (isManager) await managerApi.assignPlan(id, { planId });
+      else await tenantsApi.assignPlan(id, planId);
     },
     onSuccess: () => {
       haptic('success');
       invalidate();
     },
-    onError: () => {
+    onError: (error) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось сменить тариф');
+      Alert.alert('Ошибка', extractApiErrorMessage(error, 'Не удалось сменить тариф'));
     },
     onSettled: () => setBusy(null),
   });
@@ -285,7 +248,9 @@ export default function AdminTenantDetailScreen() {
       setBusy('suspend');
       // status → 'suspended', is_active forced false server-side. Empty reason
       // is sent as undefined so the backend stores NULL rather than ''.
-      await tenantsApi.suspend(id, reason.trim() || undefined);
+      const trimmed = reason.trim();
+      if (isManager) await managerApi.suspend(id, trimmed ? { reason: trimmed } : undefined);
+      else await tenantsApi.suspend(id, trimmed || undefined);
     },
     onSuccess: () => {
       haptic('success');
@@ -293,9 +258,15 @@ export default function AdminTenantDetailScreen() {
       setSuspendReason('');
       invalidate();
     },
-    onError: () => {
+    onError: (error) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось приостановить тенанта');
+      Alert.alert(
+        'Ошибка',
+        extractApiErrorMessage(
+          error,
+          isManager ? 'Не удалось приостановить автосервис' : 'Не удалось приостановить тенанта',
+        ),
+      );
     },
     onSettled: () => setBusy(null),
   });
@@ -305,15 +276,16 @@ export default function AdminTenantDetailScreen() {
       setBusy('suspend');
       // Lifts the suspension (re-activate); the subscription WINDOW is untouched,
       // so an already-expired tenant returns to 'expired', not 'active'.
-      await tenantsApi.unsuspend(id);
+      if (isManager) await managerApi.unsuspend(id);
+      else await tenantsApi.unsuspend(id);
     },
     onSuccess: () => {
       haptic('success');
       invalidate();
     },
-    onError: () => {
+    onError: (error) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось возобновить работу');
+      Alert.alert('Ошибка', extractApiErrorMessage(error, 'Не удалось возобновить работу'));
     },
     onSettled: () => setBusy(null),
   });
@@ -531,53 +503,11 @@ export default function AdminTenantDetailScreen() {
     );
   }, [editingUser, deleteUserMutation]);
 
-  // Open the paid/free extend sheet — prefill the paid amount with the plan
-  // price and default the mode to whatever the CURRENT period is (paid unless
-  // the last period was explicitly free).
+  // Форма продления (сумма, тип, срок, доля владельца) — в общей шторке, одна на оба режима.
   const openExtend = React.useCallback(() => {
     haptic('tap');
-    const price = sub?.planPrice ?? tenant?.monthlyPrice ?? 0;
-    setExtendType(sub?.currentPeriodKind === 'free' ? 'free' : 'paid');
-    setExtendAmount(price > 0 ? String(Math.round(price)) : '');
-    setExtendUntil(null);
     setExtendOpen(true);
-  }, [sub?.planPrice, sub?.currentPeriodKind, tenant?.monthlyPrice]);
-
-  // Presets fill the «до» date onto the live subscription end (or now, если
-  // истекла) — same anchor the backend uses for `days`.
-  const applyExtendPreset = React.useCallback(
-    (days: number) => {
-      haptic('select');
-      const anchor = anchorFrom(sub?.subscriptionEnd ?? tenant?.subscriptionEnd);
-      setExtendUntil(endOfDay(new Date(anchor.getTime() + days * DAY_MS)));
-    },
-    [sub?.subscriptionEnd, tenant?.subscriptionEnd],
-  );
-
-  const submitExtend = React.useCallback(() => {
-    if (!extendUntil) {
-      haptic('error');
-      Alert.alert('Укажите дату', 'Выберите дату, до которой продлить подписку.');
-      return;
-    }
-    const until = endOfDay(extendUntil);
-    if (until.getTime() <= Date.now()) {
-      haptic('error');
-      Alert.alert('Неверная дата', 'Дата окончания должна быть в будущем.');
-      return;
-    }
-    if (extendType === 'paid') {
-      const amount = Math.round(Number(extendAmount.replace(',', '.')));
-      if (!Number.isFinite(amount) || amount <= 0) {
-        haptic('error');
-        Alert.alert('Укажите сумму', 'Для платного продления введите сумму больше нуля.');
-        return;
-      }
-      extendMutation.mutate({ type: 'paid', amount, until: until.toISOString() });
-    } else {
-      extendMutation.mutate({ type: 'free', until: until.toISOString() });
-    }
-  }, [extendType, extendAmount, extendUntil, extendMutation]);
+  }, []);
 
   const handleChangePlan = React.useCallback(() => {
     if (!tenant) return;
@@ -621,7 +551,7 @@ export default function AdminTenantDetailScreen() {
     Alert.alert(
       'Войти как владелец?',
       `Вы войдёте в аккаунт «${tenant.name}» как директор на 30 минут. Это действие фиксируется в журнале. ` +
-        'Чтобы вернуться в админ-панель, нужно будет выйти и заново войти под суперадмином.',
+        `Чтобы вернуться в ${isManager ? 'кабинет менеджера' : 'админ-панель'}, нужно будет выйти и заново войти под своим логином.`,
       [
         { text: 'Отмена', style: 'cancel' },
         {
@@ -630,29 +560,31 @@ export default function AdminTenantDetailScreen() {
           onPress: async () => {
             try {
               setBusy('impersonate');
-              const res = await tenantsApi.impersonate(tenant.id);
+              const res = await (isManager ? managerApi.impersonate(tenant.id) : tenantsApi.impersonate(tenant.id));
               // Swaps the stored token + user; role flips to 'director' → the
               // root navigator re-renders into the tenant's car-service tree.
               await beginImpersonation(res.data.token, res.data.user);
-            } catch {
+            } catch (error) {
               haptic('error');
-              Alert.alert('Ошибка', 'Не удалось войти как владелец');
+              Alert.alert('Ошибка', extractApiErrorMessage(error, 'Не удалось войти как владелец'));
               setBusy(null);
             }
           },
         },
       ],
     );
-  }, [tenant, beginImpersonation]);
+  }, [tenant, isManager, beginImpersonation]);
 
   if (!tenant) {
     return (
       <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Тенант" onBack={() => navigation.goBack()} />
+        <IosScreenHeader title={isManager ? 'Автосервис' : 'Тенант'} onBack={() => navigation.goBack()} />
         {tenantError && !tenantLoading ? (
           <View style={styles.stateBlock}>
             <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
-            <Text style={[styles.stateText, { color: palette.text.secondary }]}>Не удалось загрузить тенанта</Text>
+            <Text style={[styles.stateText, { color: palette.text.secondary }]}>
+              {isManager ? 'Не удалось загрузить автосервис' : 'Не удалось загрузить тенанта'}
+            </Text>
             <Pressable
               onPress={() => {
                 haptic('tap');
@@ -724,6 +656,16 @@ export default function AdminTenantDetailScreen() {
           <InfoRow label="Макс. польз." value={String(sub?.maxUsers ?? tenant.maxUsers)} palette={palette} />
           {tenant.phone ? <InfoRow label="Телефон" value={tenant.phone} palette={palette} /> : null}
           {tenant.email ? <InfoRow label="Email" value={tenant.email} palette={palette} /> : null}
+          {!isManager ? (
+            <ManagerRow
+              name={tenant.managerName}
+              palette={palette}
+              onPress={() => {
+                haptic('tap');
+                setTransferOpen(true);
+              }}
+            />
+          ) : null}
           <InfoRow label="Создан" value={formatFullDate(tenant.createdAt)} palette={palette} last />
         </View>
 
@@ -783,7 +725,6 @@ export default function AdminTenantDetailScreen() {
             icon="time-outline"
             label="Продлить подписку"
             onPress={openExtend}
-            loading={busy === 'extend'}
             palette={palette}
             surfaceCard={surface.card}
           />
@@ -804,6 +745,18 @@ export default function AdminTenantDetailScreen() {
             palette={palette}
             surfaceCard={surface.card}
           />
+          {isManager ? (
+            <ActionButton
+              icon="lock-closed-outline"
+              label="Сбросить пароль владельца"
+              onPress={() => {
+                haptic('tap');
+                setResetPasswordOpen(true);
+              }}
+              palette={palette}
+              surfaceCard={surface.card}
+            />
+          ) : null}
           {/* Impersonation — primary destructive accent. */}
           <Pressable
             onPress={handleImpersonate}
@@ -821,287 +774,186 @@ export default function AdminTenantDetailScreen() {
           </Pressable>
         </View>
 
-        {/* Points (156/160, tenant_points) — superadmin CRUD автосервисов
+        {/* Филиалы и сотрудники — только у суперадмина: менеджеру сервер их не отдаёт. */}
+        {!isManager ? (
+          <>
+            {/* Points (156/160, tenant_points) — superadmin CRUD автосервисов
             тенанта. Первым идёт ОСНОВНОЙ сервис (сам автосервис владельца, с
             его историей), дальше открытые позже филиалы; порядок задаёт сервер.
             «Удалить» здесь = архив (isActive=false); история заказ-нарядов
             автосервис сохраняет. */}
-        <View style={styles.employeesHead}>
-          <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
-            Автосервисы ({points.length})
-          </Text>
-          <Pressable
-            onPress={() => {
-              haptic('tap');
-              setEditingPoint(toPointDraft());
-            }}
-            style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
-            hitSlop={6}
-          >
-            <Ionicons name="add" size={18} color={colors.white} />
-          </Pressable>
-        </View>
-
-        {points.length === 0 ? (
-          <View style={[styles.card, surface.card, styles.emptyUsers]}>
-            <Ionicons name="location-outline" size={28} color={palette.text.tertiary} />
-            <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
-              У этого тенанта один автосервис — филиалы не заведены
-            </Text>
-          </View>
-        ) : (
-          <View style={{ gap: spacing[2.5] }}>
-            {points.map((p) => (
+            <View style={styles.employeesHead}>
+              <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
+                Автосервисы ({points.length})
+              </Text>
               <Pressable
-                key={p.id}
                 onPress={() => {
                   haptic('tap');
-                  setEditingPoint(toPointDraft(p));
+                  setEditingPoint(toPointDraft());
                 }}
-                style={[styles.userRow, surface.card]}
+                style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
+                hitSlop={6}
               >
-                <InitialAvatar name={p.name} palette={palette} size={38} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
-                    {p.name}
-                  </Text>
-                  {p.address ? (
-                    <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      {p.address}
-                    </Text>
-                  ) : null}
-                </View>
-                {/* Основной сервис подписан явно: его нельзя ни удалить, ни
-                    заархивировать, и суперадмин должен видеть это ДО того, как
-                    откроет карточку. */}
-                {p.isMain && (
-                  <View style={[styles.userBadge, { backgroundColor: palette.accent.primarySoft }]}>
-                    <Text style={[styles.userBadgeText, { color: palette.accent.primary }]}>Основной</Text>
-                  </View>
-                )}
-                {!p.isActive && (
-                  <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
-                    <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>Архив</Text>
-                  </View>
-                )}
-                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-              </Pressable>
-            ))}
-          </View>
-        )}
-
-        {/* Employees */}
-        <View style={styles.employeesHead}>
-          <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
-            Сотрудники ({tenantUsers.length})
-          </Text>
-          <Pressable
-            onPress={() => {
-              haptic('tap');
-              setPwVisible(false);
-              setEditingUser(toUserDraft());
-            }}
-            style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
-            hitSlop={6}
-          >
-            <Ionicons name="add" size={18} color={colors.white} />
-          </Pressable>
-        </View>
-
-        {tenantUsers.length === 0 ? (
-          <View style={[styles.card, surface.card, styles.emptyUsers]}>
-            <Ionicons name="people-outline" size={28} color={palette.text.tertiary} />
-            <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
-              У этого автосервиса пока нет сотрудников
-            </Text>
-          </View>
-        ) : (
-          <View style={{ gap: spacing[2.5] }}>
-            {tenantUsers.map((u) => (
-              <Pressable
-                key={u.id}
-                onPress={() => {
-                  haptic('tap');
-                  setPwVisible(false);
-                  setEditingUser(toUserDraft(u));
-                }}
-                style={[styles.userRow, surface.card]}
-              >
-                <InitialAvatar name={u.fullName} palette={palette} size={38} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
-                    {u.fullName}
-                  </Text>
-                  <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                    {ROLE_LABELS[u.role] ?? u.role}
-                    {u.phone ? ` · ${formatPhone(u.phone)}` : ''}
-                  </Text>
-                </View>
-                {!u.isActive && (
-                  <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
-                    <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>Выкл</Text>
-                  </View>
-                )}
-                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-              </Pressable>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Paid / free extend sheet */}
-      <Modal
-        visible={extendOpen}
-        transparent
-        statusBarTranslucent
-        animationType="slide"
-        onRequestClose={() => setExtendOpen(false)}
-      >
-        <View style={styles.sheetBackdrop}>
-          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
-            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={() => setExtendOpen(false)} hitSlop={8}>
-                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>Продлить подписку</Text>
-              <Pressable onPress={submitExtend} disabled={busy === 'extend'} hitSlop={8}>
-                {busy === 'extend' ? (
-                  <ActivityIndicator size="small" color={palette.accent.primary} />
-                ) : (
-                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Продлить</Text>
-                )}
+                <Ionicons name="add" size={18} color={colors.white} />
               </Pressable>
             </View>
 
-            <ScrollView
-              contentContainerStyle={styles.sheetScroll}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              {/* Current period recap */}
-              <View style={[styles.extendRecap, surface.cardCompact]}>
-                <Text style={[styles.extendRecapLabel, { color: palette.text.tertiary }]}>Сейчас действует до</Text>
-                <Text
-                  style={[styles.extendRecapValue, { color: expired ? colors.red[600] : palette.text.primary }]}
-                  numberOfLines={1}
-                >
-                  {formatFullDate(subscriptionEnd)}
+            {points.length === 0 ? (
+              <View style={[styles.card, surface.card, styles.emptyUsers]}>
+                <Ionicons name="location-outline" size={28} color={palette.text.tertiary} />
+                <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
+                  У этого тенанта один автосервис — филиалы не заведены
                 </Text>
               </View>
-
-              {/* Paid / free segmented control */}
-              <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Тип продления</Text>
-              <View style={styles.segmented}>
-                {(['paid', 'free'] as const).map((t) => {
-                  const on = extendType === t;
-                  return (
-                    <Pressable
-                      key={t}
-                      onPress={() => {
-                        haptic('select');
-                        setExtendType(t);
-                      }}
-                      style={[
-                        styles.segment,
-                        {
-                          backgroundColor: on ? palette.accent.primary : palette.bg.card,
-                          borderColor: on ? palette.accent.primary : palette.border.subtle,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name={t === 'paid' ? 'card-outline' : 'gift-outline'}
-                        size={16}
-                        color={on ? colors.white : palette.text.secondary}
-                      />
-                      <Text style={[styles.segmentText, { color: on ? colors.white : palette.text.secondary }]}>
-                        {t === 'paid' ? 'Платно' : 'Бесплатно'}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
-              {/* Amount — paid only */}
-              {extendType === 'paid' ? (
-                <>
-                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Сумма, ₽</Text>
-                  <View style={[styles.inputWrap, surface.cardCompact]}>
-                    <TextInput
-                      style={[styles.sheetInput, styles.amountInput, { color: palette.text.primary }]}
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={extendAmount}
-                      onChangeText={(v) => setExtendAmount(v.replace(/[^0-9]/g, ''))}
-                    />
-                  </View>
-                </>
-              ) : null}
-
-              {/* Until date */}
-              <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Продлить до</Text>
-              <View style={styles.presetRow}>
-                {EXTEND_PRESETS.map((p) => (
+            ) : (
+              <View style={{ gap: spacing[2.5] }}>
+                {points.map((p) => (
                   <Pressable
-                    key={p.label}
-                    onPress={() => applyExtendPreset(p.days)}
-                    style={[
-                      styles.presetChip,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                    ]}
+                    key={p.id}
+                    onPress={() => {
+                      haptic('tap');
+                      setEditingPoint(toPointDraft(p));
+                    }}
+                    style={[styles.userRow, surface.card]}
                   >
-                    <Text style={[styles.presetChipText, { color: palette.text.secondary }]}>{p.label}</Text>
+                    <InitialAvatar name={p.name} palette={palette} size={38} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {p.name}
+                      </Text>
+                      {p.address ? (
+                        <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                          {p.address}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {/* Основной сервис подписан явно: его нельзя ни удалить, ни
+                    заархивировать, и суперадмин должен видеть это ДО того, как
+                    откроет карточку. */}
+                    {p.isMain && (
+                      <View style={[styles.userBadge, { backgroundColor: palette.accent.primarySoft }]}>
+                        <Text style={[styles.userBadgeText, { color: palette.accent.primary }]}>Основной</Text>
+                      </View>
+                    )}
+                    {!p.isActive && (
+                      <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
+                        <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>
+                          Архив
+                        </Text>
+                      </View>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </Pressable>
                 ))}
               </View>
+            )}
+
+            {/* Employees */}
+            <View style={styles.employeesHead}>
+              <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
+                Сотрудники ({tenantUsers.length})
+              </Text>
               <Pressable
                 onPress={() => {
                   haptic('tap');
-                  setExtendDatePickerOpen(true);
+                  setPwVisible(false);
+                  setEditingUser(toUserDraft());
                 }}
-                style={[styles.dateRow, surface.cardCompact]}
+                style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
+                hitSlop={6}
               >
-                <Ionicons name="calendar-outline" size={18} color={palette.text.secondary} />
-                <Text style={[styles.dateValue, { color: extendUntil ? palette.text.primary : palette.text.tertiary }]}>
-                  {extendUntil ? formatFullDate(extendUntil.toISOString()) : 'Выбрать дату'}
-                </Text>
-                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                <Ionicons name="add" size={18} color={colors.white} />
               </Pressable>
+            </View>
 
-              {/* Revenue hint — free is explicitly not revenue */}
-              <View style={styles.extendHintRow}>
-                <Ionicons
-                  name={extendType === 'paid' ? 'trending-up-outline' : 'information-circle-outline'}
-                  size={15}
-                  color={extendType === 'paid' ? colors.green[600] : palette.text.tertiary}
-                />
-                <Text style={[styles.extendHintText, { color: palette.text.secondary }]}>
-                  {extendType === 'paid'
-                    ? 'Сумма попадёт в платную выручку от подписок.'
-                    : 'Бесплатное продление не учитывается как выручка.'}
+            {tenantUsers.length === 0 ? (
+              <View style={[styles.card, surface.card, styles.emptyUsers]}>
+                <Ionicons name="people-outline" size={28} color={palette.text.tertiary} />
+                <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
+                  У этого автосервиса пока нет сотрудников
                 </Text>
               </View>
+            ) : (
+              <View style={{ gap: spacing[2.5] }}>
+                {tenantUsers.map((u) => (
+                  <Pressable
+                    key={u.id}
+                    onPress={() => {
+                      haptic('tap');
+                      setPwVisible(false);
+                      setEditingUser(toUserDraft(u));
+                    }}
+                    style={[styles.userRow, surface.card]}
+                  >
+                    <InitialAvatar name={u.fullName} palette={palette} size={38} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {u.fullName}
+                      </Text>
+                      <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        {ROLE_LABELS[u.role] ?? u.role}
+                        {u.phone ? ` · ${formatPhone(u.phone)}` : ''}
+                      </Text>
+                    </View>
+                    {!u.isActive && (
+                      <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
+                        <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>
+                          Выкл
+                        </Text>
+                      </View>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </>
+        ) : null}
+      </ScrollView>
 
-              <View style={{ height: spacing[8] }} />
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Date picker for the extend sheet (sibling Modal — the proven pattern). */}
-      <DateTimePickerModal
-        visible={extendDatePickerOpen}
-        value={extendUntil ?? anchorFrom(subscriptionEnd)}
-        mode="date"
-        onConfirm={(d) => {
-          setExtendUntil(d);
-          setExtendDatePickerOpen(false);
+      {/* Продление — общая шторка суперадмина и менеджера (сумма, срок, доля владельца). */}
+      <ExtendSubscriptionSheet
+        visible={extendOpen}
+        onClose={() => setExtendOpen(false)}
+        tenant={{
+          id: tenant.id,
+          name: tenant.name,
+          subscriptionEnd,
+          monthlyPrice,
+          managerId: tenant.managerId ?? null,
+          managerName: tenant.managerName ?? null,
         }}
-        onCancel={() => setExtendDatePickerOpen(false)}
+        planPrice={monthlyPrice}
+        currentKind={sub?.currentPeriodKind ?? tenant.currentPeriodKind ?? null}
       />
 
-      {/* Suspend-with-reason modal (cross-platform — Alert.prompt is iOS-only). */}
+      {!isManager ? (
+        <TransferManagerSheet
+          visible={transferOpen}
+          onClose={() => setTransferOpen(false)}
+          tenant={{
+            id: tenant.id,
+            name: tenant.name,
+            managerId: tenant.managerId ?? null,
+            managerName: tenant.managerName ?? null,
+          }}
+        />
+      ) : (
+        <ResetOwnerPasswordSheet
+          visible={resetPasswordOpen}
+          onClose={() => setResetPasswordOpen(false)}
+          tenant={{
+            id: tenant.id,
+            name: tenant.name,
+            owner: ownerUser ? { fullName: ownerUser.fullName, phone: ownerUser.phone } : null,
+          }}
+        />
+      )}
+
+      {/* Suspend-with-reason modal (cross-platform — Alert.prompt is iOS-only).
+          RN-core <Modal> — отдельное нативное окно, поэтому вложенный KeyboardProvider
+          и KeyboardAwareView (как в Modal.tsx): иначе клавиатура закрывает кнопки. Тап по
+          фону закрывает модалку через scrim под оверлеем (оверлей — pointerEvents box-none). */}
       <Modal
         visible={suspendOpen}
         transparent
@@ -1109,44 +961,49 @@ export default function AdminTenantDetailScreen() {
         animationType="fade"
         onRequestClose={() => setSuspendOpen(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setSuspendOpen(false)}>
-          <Pressable style={[styles.modalCard, { backgroundColor: palette.bg.card }]} onPress={() => {}}>
-            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Приостановить тенанта?</Text>
-            <Text style={[styles.modalHint, { color: palette.text.secondary }]}>
-              Доступ ко всем разделам для сотрудников {tenant ? `«${tenant.name}»` : 'этого автосервиса'} будет закрыт
-              до возобновления. Причина видна только в админ-панели.
-            </Text>
-            <TextInput
-              style={[
-                styles.modalInput,
-                styles.modalInputMultiline,
-                { color: palette.text.primary, borderColor: palette.border.subtle },
-              ]}
-              placeholder="Причина (необязательно)"
-              placeholderTextColor={palette.text.tertiary}
-              value={suspendReason}
-              onChangeText={setSuspendReason}
-              multiline
-              maxLength={200}
-            />
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setSuspendOpen(false)}>
-                <Text style={[styles.modalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.modalConfirm, { backgroundColor: colors.red[600] }]}
-                disabled={busy === 'suspend'}
-                onPress={() => suspendMutation.mutate(suspendReason)}
-              >
-                {busy === 'suspend' ? (
-                  <ActivityIndicator size="small" color={colors.white} />
-                ) : (
-                  <Text style={styles.modalConfirmText}>Приостановить</Text>
-                )}
-              </Pressable>
+        <KeyboardProvider>
+          <Pressable style={[StyleSheet.absoluteFill, styles.modalScrim]} onPress={() => setSuspendOpen(false)} />
+          <KeyboardAwareView style={styles.modalBackdrop} pointerEvents="box-none">
+            <View style={[styles.modalCard, { backgroundColor: palette.bg.card }]}>
+              <Text style={[styles.modalTitle, { color: palette.text.primary }]}>
+                {isManager ? 'Приостановить автосервис?' : 'Приостановить тенанта?'}
+              </Text>
+              <Text style={[styles.modalHint, { color: palette.text.secondary }]}>
+                Доступ ко всем разделам для сотрудников «{tenant.name}» будет закрыт до возобновления.{' '}
+                {isManager ? 'Причина видна только вам и владельцу платформы.' : 'Причина видна только в админ-панели.'}
+              </Text>
+              <TextInput
+                style={[
+                  styles.modalInput,
+                  styles.modalInputMultiline,
+                  { color: palette.text.primary, borderColor: palette.border.subtle },
+                ]}
+                placeholder="Причина (необязательно)"
+                placeholderTextColor={palette.text.tertiary}
+                value={suspendReason}
+                onChangeText={setSuspendReason}
+                multiline
+                maxLength={200}
+              />
+              <View style={styles.modalActions}>
+                <Pressable style={styles.modalCancel} onPress={() => setSuspendOpen(false)}>
+                  <Text style={[styles.modalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.modalConfirm, { backgroundColor: colors.red[600] }]}
+                  disabled={busy === 'suspend'}
+                  onPress={() => suspendMutation.mutate(suspendReason)}
+                >
+                  {busy === 'suspend' ? (
+                    <ActivityIndicator size="small" color={colors.white} />
+                  ) : (
+                    <Text style={styles.modalConfirmText}>Приостановить</Text>
+                  )}
+                </Pressable>
+              </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </KeyboardAwareView>
+        </KeyboardProvider>
       </Modal>
 
       {/* Create / edit employee sheet.
@@ -1474,6 +1331,38 @@ function InfoRow({
   );
 }
 
+/** «Менеджер · Передать» — строка карточки суперадмина; вся строка нажимается и открывает выбор менеджера. */
+function ManagerRow({
+  name,
+  palette,
+  onPress,
+}: {
+  name?: string | null;
+  palette: ReturnType<typeof useColors>;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Передать автосервис другому менеджеру"
+      style={[
+        styles.infoRow,
+        { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border.subtle },
+      ]}
+    >
+      <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Менеджер</Text>
+      <Text
+        style={[styles.managerValue, { color: name ? palette.text.primary : palette.text.tertiary }]}
+        numberOfLines={1}
+      >
+        {name || 'Без менеджера'}
+      </Text>
+      <Text style={[styles.transferText, { color: palette.accent.primary }]}>Передать</Text>
+    </Pressable>
+  );
+}
+
 function MetricBox({
   value,
   label,
@@ -1551,6 +1440,8 @@ const styles = StyleSheet.create({
   },
   infoLabel: { fontSize: 14 },
   infoValue: { fontSize: 14, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
+  managerValue: { fontSize: 14, fontWeight: '600', flex: 1, textAlign: 'right' },
+  transferText: { fontSize: 14, fontWeight: '700' },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -1582,53 +1473,10 @@ const styles = StyleSheet.create({
   },
   impersonateText: { color: colors.white, fontSize: 16, fontWeight: '700' },
   periodChipRow: { flexDirection: 'row', paddingBottom: spacing[3] },
-  // Extend sheet
-  extendRecap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing[3],
-    marginBottom: spacing[1],
-  },
-  extendRecapLabel: { fontSize: 13, fontWeight: '500' },
-  extendRecapValue: { fontSize: 14, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
-  segmented: { flexDirection: 'row', gap: spacing[2] },
-  segment: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[1.5],
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  segmentText: { fontSize: 15, fontWeight: '700' },
-  amountInput: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  presetRow: { flexDirection: 'row', gap: spacing[2] },
-  presetChip: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  presetChipText: { fontSize: 13, fontWeight: '600' },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2.5],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[3.5],
-    marginTop: spacing[2],
-  },
-  dateValue: { flex: 1, fontSize: 16, fontWeight: '600' },
-  extendHintRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2], marginTop: spacing[3] },
-  extendHintText: { flex: 1, fontSize: 13, lineHeight: 18 },
   // Modal
+  modalScrim: { backgroundColor: 'rgba(0,0,0,0.4)' },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing[6],

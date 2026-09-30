@@ -875,7 +875,7 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60 * 1000,
   });
 
-  if (user?.role === 'superadmin') return <>{children}</>;
+  if (user?.role === 'superadmin' || user?.role === 'manager') return <>{children}</>;
   if (!sub || (sub.status !== 'expired' && sub.status !== 'suspended')) {
     return <>{children}</>;
   }
@@ -885,9 +885,10 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
 /**
  * MainShell — the authenticated root. Branches the navigator by role:
  *
- *   • A real superadmin (role 'superadmin', NOT impersonating) gets the
- *     dedicated platform-operator AdminShellNavigator with its «особое нижнее
- *     меню». No car-service tabs, no Касса FAB.
+ *   • A real superadmin or platform manager (role 'superadmin' / 'manager',
+ *     NOT impersonating) gets the dedicated platform-operator
+ *     AdminShellNavigator with its «особое нижнее меню». No car-service tabs,
+ *     no Касса FAB. The manager is tenant-less and sees a trimmed shell.
  *   • Everyone else — directors, masters, AND a superadmin currently
  *     impersonating a tenant owner (role becomes 'director') — gets the normal
  *     car-service TabNavigator, 100% untouched.
@@ -899,13 +900,13 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
  */
 function MainShell() {
   const { user, isImpersonating } = useAuth();
-  const isPlatformOperator = user?.role === 'superadmin' && !isImpersonating;
+  const isPlatformOperator = (user?.role === 'superadmin' || user?.role === 'manager') && !isImpersonating;
 
   // Non-operators (directors / masters / an impersonating superadmin) get the
   // car-service tree behind the SubscriptionGate — a hard block when the tenant
   // is expired/suspended. The real platform-operator AdminShell is never gated.
   const navigator = isPlatformOperator ? (
-    <AdminShellNavigator />
+    <AdminShellNavigator mode={user?.role === 'manager' ? 'manager' : 'superadmin'} />
   ) : (
     <SubscriptionGate>
       <TabNavigator />

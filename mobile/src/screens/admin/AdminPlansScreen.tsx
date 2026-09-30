@@ -8,6 +8,8 @@
  *
  *   • «Голосовой ввод — платформа» card: globalFreeVoiceMinutes (116) via
  *     adminApi.getSettings/updateSettings — parity with web AdminPlansPage.
+ *   • «Пробный доступ у менеджера» card: managerMaxFreeDays (правка №2) via the
+ *     same settings endpoint — потолок бесплатных дней, которые менеджер выдаёт сам.
  *   • List of plans (sorted by sortOrder) with subscriber counts.
  *   • Tap a plan → edit sheet (name, description, monthlyPrice, maxUsers,
  *     voiceMinutes, sortOrder, isActive, feature toggles).
@@ -36,9 +38,11 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
+import { extractApiErrorMessage } from '../../utils/apiError';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
 import type { Plan, Tenant, FeatureCatalogItem, PlatformSettings } from '../../../../shared/types';
 import { formatMoney, FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER } from './adminShared';
+import { AdminSheet, SheetHint, SheetInput } from './adminSheet';
 
 interface PlanDraft {
   id?: string;
@@ -137,6 +141,45 @@ export default function AdminPlansScreen() {
   const freeMinutesNum = parseInt(freeMinutes, 10);
   const freeMinutesDirty =
     settings != null && Number.isFinite(freeMinutesNum) && freeMinutesNum >= 0 && freeMinutesNum !== (globalFree ?? 0);
+
+  // ── Платформенная настройка (правка №2): максимум бесплатных дней, что менеджер выдаёт сам ──
+  // Правка идёт в шторке (а не в строке карточки): у шторки клавиатура не перекрывает поле.
+  const [trialLimitOpen, setTrialLimitOpen] = React.useState(false);
+  const [trialLimitDraft, setTrialLimitDraft] = React.useState('');
+  const managerMaxFreeDays = settings?.managerMaxFreeDays;
+
+  const managerLimitMutation = useMutation({
+    mutationFn: async (days: number) => (await adminApi.updateSettings({ managerMaxFreeDays: days })).data,
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
+      setTrialLimitOpen(false);
+    },
+    onError: (error) => {
+      haptic('error');
+      Alert.alert('Не удалось сохранить', extractApiErrorMessage(error, 'Попробуйте ещё раз'));
+    },
+  });
+
+  const openTrialLimit = () => {
+    if (managerMaxFreeDays === undefined) return;
+    haptic('tap');
+    setTrialLimitDraft(String(managerMaxFreeDays));
+    setTrialLimitOpen(true);
+  };
+
+  const saveTrialLimit = () => {
+    const days = parseInt(trialLimitDraft, 10);
+    if (!Number.isFinite(days) || days < 1) {
+      Alert.alert('Проверьте значение', 'Максимум дней — целое число, не меньше 1.');
+      return;
+    }
+    if (days === managerMaxFreeDays) {
+      setTrialLimitOpen(false);
+      return;
+    }
+    managerLimitMutation.mutate(days);
+  };
 
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['admin-plans'] });
@@ -285,6 +328,30 @@ export default function AdminPlansScreen() {
           </View>
         </View>
 
+        {/* Потолок бесплатных дней у менеджера: пробный период автосервиса и «Бесплатно» в продлении */}
+        <Pressable
+          onPress={openTrialLimit}
+          disabled={settings == null}
+          accessibilityRole="button"
+          style={[styles.card, surface.card]}
+        >
+          <View style={[styles.settingsHead, styles.settingsHeadCenter]}>
+            <View style={[styles.settingsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="hourglass-outline" size={18} color={palette.accent.primaryText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.settingsTitle, { color: palette.text.primary }]}>Пробный доступ у менеджера</Text>
+              <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>
+                Максимум дней бесплатного доступа, который менеджер выдаёт сам.
+              </Text>
+            </View>
+            <Text style={[styles.settingsValue, { color: palette.text.primary }]}>
+              {managerMaxFreeDays !== undefined ? `${managerMaxFreeDays} дн.` : '—'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </View>
+        </Pressable>
+
         {sorted.length === 0 ? (
           <View style={[styles.card, surface.card, styles.emptyBlock]}>
             <Ionicons name="pricetags-outline" size={40} color={palette.text.tertiary} />
@@ -352,6 +419,27 @@ export default function AdminPlansScreen() {
           })
         )}
       </ScrollView>
+
+      <AdminSheet
+        visible={trialLimitOpen}
+        title="Пробный доступ"
+        saving={managerLimitMutation.isPending}
+        onClose={() => setTrialLimitOpen(false)}
+        onSave={saveTrialLimit}
+      >
+        <SheetInput
+          label="Максимум дней"
+          value={trialLimitDraft}
+          onChangeText={(v) => setTrialLimitDraft(v.replace(/[^0-9]/g, ''))}
+          placeholder="30"
+          keyboardType="number-pad"
+          maxLength={4}
+        />
+        <SheetHint icon="information-circle-outline">
+          Столько дней менеджер может дать при создании автосервиса (пробный период) и при бесплатном продлении. Платные
+          продления этим лимитом не ограничены, уже выданные периоды не меняются.
+        </SheetHint>
+      </AdminSheet>
 
       {/* Edit / create sheet */}
       <Modal
@@ -596,6 +684,8 @@ const styles = StyleSheet.create({
   },
   settingsTitle: { fontSize: 15, fontWeight: '700' },
   settingsHint: { fontSize: 12, marginTop: 2, lineHeight: 17 },
+  settingsHeadCenter: { alignItems: 'center' },
+  settingsValue: { fontSize: 15, fontWeight: '700' },
   settingsRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   settingsInputWrap: { flex: 1 },
   settingsSaveBtn: {
