@@ -2,10 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../../../database.module';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../../common/check-money-sql';
+import { effectiveMonthMembershipSql } from '../../../common/period-membership';
 import { pointFilterSql } from '../../../common/point-scope';
 import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext } from '../report-context';
 import { ReportColumn, ReportRow, ReportSection } from '../report-types';
-import { baseParams, dayKey, expenseApproved, inPeriod, num, pct, round2 } from '../report-sql';
+import { TZ_PH, baseParams, dayKey, expenseApproved, inPeriod, num, pct, round2 } from '../report-sql';
 
 const TOP_EXPENSES = 20;
 
@@ -19,12 +20,20 @@ const TOP_EXPENSES = 20;
 const WARRANTY_LOSS = 'ch.product_cost_total + ch.service_salary_total + COALESCE(ch.product_salary_total, 0)';
 
 /**
- * По расходам — как раздел «Расходы»: одобренные расходы по ДАТЕ РАСХОДА
- * (включая категорию «Зарплата») плюс синтетическая строка «Гарантия (убыток)»
- * из гарантийных чеков — по формуле сводного отчёта (WARRANTY_LOSS), суммой
- * отдельного агрегата без лимита строк. Отнесение «за месяц»
- * (period_month) здесь НЕ применяется — это кассовый взгляд «куда ушли деньги»,
- * в отличие от сводного отчёта, где расходы отнесены к месяцу.
+ * По расходам — как раздел «Расходы»: одобренные расходы (включая категорию
+ * «Зарплата») плюс синтетическая строка «Гарантия (убыток)» из гарантийных чеков —
+ * по формуле сводного отчёта (WARRANTY_LOSS), суммой отдельного агрегата без лимита
+ * строк.
+ *
+ * ОТНЕСЕНИЕ К ПЕРИОДУ — по МЕСЯЦУ, «ЗА КОТОРЫЙ» расход (правка №3, 2026-09-30):
+ * period_month (у выплат зарплаты это месяц выплаты; у ручного расхода — «аренда за
+ * сентябрь, оплачена в октябре» стоит в сентябре). Расход без назначенного месяца — по
+ * дате оплаты. Правило — общий helper common/period-membership.ts, тот же, что у «По
+ * зарплатам» и экрана «Зарплата»; поэтому «Из них зарплата» здесь сходится с «Выплачено»
+ * из отчёта «По зарплатам». Кассовый взгляд «куда ушли деньги по дням» — лента раздела
+ * «Расходы» (attribution=date) и кассовая смена: они считают по дате оплаты и не менялись
+ * («Движение денег» после Волны G оттоков вообще не показывает — только приход).
+ * Гарантийные убытки — по дате чека (у чека месяца «за который» нет).
  */
 @Injectable()
 export class ExpensesBuilder implements ReportBuilder {
@@ -33,6 +42,9 @@ export class ExpensesBuilder implements ReportBuilder {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   async build(ctx: ReportContext): Promise<BuiltReport> {
+    // Один и тот же фрагмент отнесения к периоду — для категорий и топа: суммы
+    // «по категориям» и «Крупнейшие расходы» обязаны считаться по одним и тем же строкам.
+    const expenseInPeriod = effectiveMonthMembershipSql('e.period_month', 'e.date', ctx.dateFrom, ctx.dateTo, TZ_PH);
     const catParams = baseParams(ctx);
     const catPoint = pointFilterSql('e', ctx.pointId, catParams);
     const revParams = baseParams(ctx);
@@ -50,7 +62,7 @@ export class ExpensesBuilder implements ReportBuilder {
           `SELECT COALESCE(ec.name, 'Без категории') AS category, COUNT(*)::int AS cnt, COALESCE(SUM(e.amount), 0) AS total
            FROM expenses e
            LEFT JOIN expense_categories ec ON ec.id = e.category_id
-          WHERE e.tenant_id = $1 AND ${inPeriod('e.date')} AND ${expenseApproved('e')}${catPoint}
+          WHERE e.tenant_id = $1 AND ${expenseInPeriod} AND ${expenseApproved('e')}${catPoint}
           GROUP BY 1
           ORDER BY total DESC, category
           LIMIT ${MAIN_ROW_LIMIT + 1}`,
@@ -94,7 +106,7 @@ export class ExpensesBuilder implements ReportBuilder {
            LEFT JOIN expense_categories ec ON ec.id = e.category_id
            LEFT JOIN users u ON u.id = e.user_id
            LEFT JOIN users cu ON cu.id = e.created_by
-          WHERE e.tenant_id = $1 AND ${inPeriod('e.date')} AND ${expenseApproved('e')}${topPoint}
+          WHERE e.tenant_id = $1 AND ${expenseInPeriod} AND ${expenseApproved('e')}${topPoint}
           ORDER BY e.amount DESC, e.date DESC
           LIMIT ${TOP_EXPENSES}`,
           topParams,
@@ -164,7 +176,7 @@ export class ExpensesBuilder implements ReportBuilder {
     const top: ReportSection = {
       key: 'largest',
       title: 'Крупнейшие расходы',
-      description: `Топ-${TOP_EXPENSES} за период`,
+      description: `Топ-${TOP_EXPENSES} за период. Дата — день оплаты; расход стоит в периоде того месяца, за который назначен.`,
       columns: [
         { key: 'date', title: 'Дата', type: 'date' },
         { key: 'category', title: 'Категория', type: 'text' },
@@ -195,7 +207,8 @@ export class ExpensesBuilder implements ReportBuilder {
       sections: [top],
       truncated,
       notes: [
-        'Расходы — из раздела «Расходы» по дате расхода, только одобренные, включая выплаты зарплаты (категория «Зарплата»).',
+        'Расходы — из раздела «Расходы», только одобренные, включая выплаты зарплаты (категория «Зарплата»). По месяцу, за который расход; расход без назначенного месяца — по дате оплаты.',
+        'Выплата зарплаты относится к месяцу, за который выдана (выдана в октябре за сентябрь — в сентябре). Деньги по дате выдачи — в списке раздела «Расходы» и в кассовой смене.',
         '«Гарантия (убыток)» — запчасти, зарплата мастера и его товарная комиссия по гарантийным чекам за период; та же сумма, что в сводном отчёте.',
         'Доля от выручки — расход ÷ выручка по проведённым чекам за тот же период.',
       ],

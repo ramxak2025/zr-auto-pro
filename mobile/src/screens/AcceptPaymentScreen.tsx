@@ -54,6 +54,7 @@ import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { CHECK_MONEY_DEPENDENT_KEYS } from './CheckDetailScreen';
 import type { Check, PaymentMethod } from '../../../shared/types';
+import { serviceLineTotal } from '../../../shared/utils/checkLines';
 
 function formatMoney(v: number) {
   return (
@@ -133,7 +134,9 @@ export default function AcceptPaymentScreen() {
   }, [check]);
 
   // ── Живой пересчёт (формула Кассы: скидка — только на товары) ─────────
-  const serviceTotal = useMemo(() => (check?.services ?? []).reduce((s, l) => s + l.price * l.quantity, 0), [check]);
+  // Услуги без количества: сумма строки = цена; у legacy-строки старого чека
+  // («Мойка ×3») — цена × quantity, как её считает сервер (serviceLineTotal).
+  const serviceTotal = useMemo(() => (check?.services ?? []).reduce((s, l) => s + serviceLineTotal(l), 0), [check]);
   const productTotal = useMemo(
     () => (check?.products ?? []).reduce((s, l) => s + l.sellPrice * l.quantity, 0),
     [check],
@@ -332,9 +335,12 @@ export default function AcceptPaymentScreen() {
                 <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={2}>
                   {l.name}
                 </Text>
-                <Text style={[styles.lineQty, { color: palette.text.tertiary }]}>×{l.quantity}</Text>
+                {/* «×N» — только у legacy-строки старого чека (quantity > 1). */}
+                {Number(l.quantity) > 1 && (
+                  <Text style={[styles.lineQty, { color: palette.text.tertiary }]}>×{l.quantity}</Text>
+                )}
                 <Text style={[styles.linePrice, { color: palette.text.primary }]}>
-                  {formatMoney(l.price * l.quantity)}
+                  {formatMoney(serviceLineTotal(l))}
                 </Text>
               </View>
             ))}

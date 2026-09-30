@@ -101,9 +101,17 @@ function PickerBody({
     };
   }, [products, path]);
 
+  // Подсказка поиска по адресу — только когда на складе есть ячейки.
+  const hasCells = useMemo(() => products.some((p) => p.storageCellCode), [products]);
+
   const results = useMemo(() => {
     if (!q) return null;
-    return products.filter((p) => p.name.toLowerCase().includes(q) || (p.category ?? '').toLowerCase().includes(q));
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.category ?? '').toLowerCase().includes(q) ||
+        (p.storageCellCode ?? '').toLowerCase().includes(q),
+    );
   }, [products, q]);
 
   const pick = (p: Product) => {
@@ -140,6 +148,12 @@ function PickerBody({
             <span className="block truncate text-xs text-ink-3">
               {showFolder ? `${p.category || 'Без папки'} · ` : ''}
               Остаток: {formatQty(p.stock)} {unitLabel(p.unit)}
+              {p.storageCellCode && (
+                <>
+                  {' · '}
+                  <span className="font-mono tabular-nums">{p.storageCellCode}</span>
+                </>
+              )}
             </span>
           </span>
           <Money value={price} className="flex-shrink-0 text-sm font-medium text-ink" />
@@ -172,7 +186,12 @@ function PickerBody({
 
   return (
     <div className="space-y-3">
-      <SearchInput value={search} onChange={setSearch} placeholder="Название или папка…" aria-label="Поиск товара" />
+      <SearchInput
+        value={search}
+        onChange={setSearch}
+        placeholder={hasCells ? 'Название, папка или ячейка…' : 'Название или папка…'}
+        aria-label="Поиск товара"
+      />
 
       <QueryState
         isLoading={isLoading}

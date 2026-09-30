@@ -56,6 +56,7 @@ function lazyWithRetry<T extends ComponentType<any>>(
 // вес авторизованного UI вне главного чанка, который грузит и публичный лендинг.
 const Layout = lazyWithRetry(() => import('./components/Layout'));
 const AdminLayout = lazyWithRetry(() => import('./components/AdminLayout'));
+const ManagerLayout = lazyWithRetry(() => import('./components/ManagerLayout'));
 
 const PublicLandingLayout = lazyWithRetry(() => import('./pages/landing/PublicLandingLayout'));
 const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
@@ -121,6 +122,14 @@ const AdminPlansPage = lazyWithRetry(() => import('./pages/admin/AdminPlansPage'
 const AdminBroadcastPage = lazyWithRetry(() => import('./pages/admin/AdminBroadcastPage'));
 const AdminAuditLogPage = lazyWithRetry(() => import('./pages/admin/AdminAuditLogPage'));
 const AdminRegistrationRequestsPage = lazyWithRetry(() => import('./pages/admin/AdminRegistrationRequestsPage'));
+const AdminManagersPage = lazyWithRetry(() => import('./pages/admin/AdminManagersPage'));
+const AdminManagerDetailPage = lazyWithRetry(() => import('./pages/admin/AdminManagerDetailPage'));
+
+// Manager pages (роль «менеджер платформы»: свои автосервисы и расчёты с владельцем)
+const ManagerDashboardPage = lazyWithRetry(() => import('./pages/manager/ManagerDashboardPage'));
+const ManagerTenantsPage = lazyWithRetry(() => import('./pages/manager/ManagerTenantsPage'));
+const ManagerTenantDetailPage = lazyWithRetry(() => import('./pages/manager/ManagerTenantDetailPage'));
+const ManagerLedgerPage = lazyWithRetry(() => import('./pages/manager/ManagerLedgerPage'));
 
 // ─── Feature gate definitions (same keys as mobile) ─────────────────────────
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -184,13 +193,21 @@ function isSubscriptionExpired(subscriptionEnd?: string | null): boolean {
   return end < now;
 }
 
+/** Домашний экран роли: суперадмин и менеджер живут в своих кабинетах, остальные — в приложении автосервиса. */
+function homePathFor(role: UserRole): string {
+  if (role === UserRole.SUPERADMIN) return '/admin/dashboard';
+  if (role === UserRole.MANAGER) return '/manager/dashboard';
+  return '/dashboard';
+}
+
 export default function App() {
   const { user, loading } = useAuth();
 
   // Authoritative subscription status (102) for the hard gate. This reuses the
   // same ['subscription'] cache Layout / FeatureGate already warm, so it adds no
-  // extra network on the golden path.
-  const isBlockableRole = !!user && user.role !== UserRole.SUPERADMIN;
+  // extra network on the golden path. Суперадмин и менеджер не привязаны к тенанту —
+  // у них нет подписки, которую можно проверять.
+  const isBlockableRole = !!user && user.role !== UserRole.SUPERADMIN && user.role !== UserRole.MANAGER;
   const { data: sub } = useQuery({
     queryKey: ['subscription'],
     queryFn: () => subscriptionApi.get().then((res) => res.data),
@@ -230,12 +247,7 @@ export default function App() {
           {/* Logged-in visitors to «/» are bounced to their home BEFORE the landing
               layout (and its GSAP chunk) loads — этот роут матчится вместо
               LandingPage внутри layout ниже, так что редирект остаётся мгновенным. */}
-          {user && (
-            <Route
-              path="/"
-              element={<Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />}
-            />
-          )}
+          {user && <Route path="/" element={<Navigate to={homePathFor(user.role)} replace />} />}
 
           {/* Публичные страницы сайта под общим layout: один персистентный
               <PageTransition> даёт плавный кросс-фейд при переходах между «/»,
@@ -257,16 +269,7 @@ export default function App() {
           </Route>
 
           {/* Public: Login */}
-          <Route
-            path="/login"
-            element={
-              user ? (
-                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
-              ) : (
-                <LoginPage />
-              )
-            }
-          />
+          <Route path="/login" element={user ? <Navigate to={homePathFor(user.role)} replace /> : <LoginPage />} />
 
           {/* Public: B2B lead form «Заявка на подключение» (landing primary CTAs
               point here). NOT self-serve signup — no password, no account minted;
@@ -275,13 +278,7 @@ export default function App() {
               their home, exactly like /login. */}
           <Route
             path="/register"
-            element={
-              user ? (
-                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
-              ) : (
-                <RegisterPage />
-              )
-            }
+            element={user ? <Navigate to={homePathFor(user.role)} replace /> : <RegisterPage />}
           />
 
           {/* Protected routes */}
@@ -294,56 +291,62 @@ export default function App() {
                 <>
                   {/* Main app routes inside Layout.
                       «/» здесь больше нет — корень обслуживает публичный роут выше
-                      (лендинг для гостей, Navigate в /dashboard для залогиненных). */}
-                  <Route element={<Layout />}>
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/checks" element={<ChecksPage />} />
-                    <Route path="/work-board" element={<WorkBoardPage />} />
-                    <Route path="/checks/new" element={<CheckCreatePage />} />
-                    <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
-                    <Route path="/checks/:id" element={<CheckDetailPage />} />
-                    <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
-                    <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
-                    <Route path="/clients/import" element={gated('clients_view', <ImportClientsCarsPage />)} />
-                    <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
-                    <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
-                    <Route path="/products" element={<ProductsPage />} />
-                    <Route path="/services" element={gated('services_view', <ServicesPage />)} />
-                    <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
-                    <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
-                    <Route path="/purchase-orders" element={gated('suppliers_view', <PurchaseOrdersPage />)} />
-                    <Route path="/purchase-orders/new" element={gated('suppliers_view', <PurchaseOrderEditPage />)} />
-                    <Route
-                      path="/purchase-orders/:id/edit"
-                      element={gated('suppliers_view', <PurchaseOrderEditPage />)}
-                    />
-                    <Route path="/purchase-orders/:id" element={gated('suppliers_view', <PurchaseOrderDetailPage />)} />
-                    <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
-                    <Route path="/reports" element={gated('reports_view', <ReportsHubPage />)} />
-                    <Route path="/reports/financial" element={gated('reports_view', <FinancialReportPage />)} />
-                    <Route path="/reports/:reportId" element={gated('reports_view', <ReportRunPage />)} />
-                    <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
-                    <Route path="/cash-shift" element={<CashShiftPage />} />
-                    <Route path="/installments" element={<InstallmentsPage />} />
-                    {/* Legacy «Дебиторка» path → «Рассрочка» (keeps old bookmarks alive) */}
-                    <Route path="/debtors" element={<Navigate to="/installments" replace />} />
-                    <Route path="/expenses" element={<ExpensesPage />} />
-                    <Route path="/planning" element={<PlanningPage />} />
-                    <Route path="/users" element={gated('users_manage', <UsersPage />)} />
-                    <Route path="/employees" element={<EmployeesPage />} />
-                    <Route path="/employees/:id" element={<EmployeeDetailPage />} />
-                    <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
-                    <Route path="/more" element={<MorePage />} />
-                    <Route path="/points" element={<PointsPage />} />
-                    <Route path="/notifications" element={<NotificationSettingsPage />} />
-                    <Route path="/tariff" element={<TariffPage />} />
-                    <Route path="/marketing" element={<MarketingPage />} />
-                    <Route path="/calls" element={<CallsPage />} />
-                    <Route path="/equipment" element={<EquipmentPage />} />
-                    <Route path="/knowledge" element={<KnowledgeBasePage />} />
-                    <Route path="/company-settings" element={<CompanySettingsPage />} />
-                    <Route path="/integrations" element={<IntegrationsPage />} />
-                  </Route>
+                      (лендинг для гостей, Navigate в домашний экран роли). Менеджеру платформы
+                      экраны автосервиса не отдаём вовсе: его кабинет — ниже, /manager/*. */}
+                  {user.role !== UserRole.MANAGER && (
+                    <Route element={<Layout />}>
+                      <Route path="/dashboard" element={<DashboardPage />} />
+                      <Route path="/checks" element={<ChecksPage />} />
+                      <Route path="/work-board" element={<WorkBoardPage />} />
+                      <Route path="/checks/new" element={<CheckCreatePage />} />
+                      <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
+                      <Route path="/checks/:id" element={<CheckDetailPage />} />
+                      <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
+                      <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
+                      <Route path="/clients/import" element={gated('clients_view', <ImportClientsCarsPage />)} />
+                      <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
+                      <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
+                      <Route path="/products" element={<ProductsPage />} />
+                      <Route path="/services" element={gated('services_view', <ServicesPage />)} />
+                      <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
+                      <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
+                      <Route path="/purchase-orders" element={gated('suppliers_view', <PurchaseOrdersPage />)} />
+                      <Route path="/purchase-orders/new" element={gated('suppliers_view', <PurchaseOrderEditPage />)} />
+                      <Route
+                        path="/purchase-orders/:id/edit"
+                        element={gated('suppliers_view', <PurchaseOrderEditPage />)}
+                      />
+                      <Route
+                        path="/purchase-orders/:id"
+                        element={gated('suppliers_view', <PurchaseOrderDetailPage />)}
+                      />
+                      <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
+                      <Route path="/reports" element={gated('reports_view', <ReportsHubPage />)} />
+                      <Route path="/reports/financial" element={gated('reports_view', <FinancialReportPage />)} />
+                      <Route path="/reports/:reportId" element={gated('reports_view', <ReportRunPage />)} />
+                      <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
+                      <Route path="/cash-shift" element={<CashShiftPage />} />
+                      <Route path="/installments" element={<InstallmentsPage />} />
+                      {/* Legacy «Дебиторка» path → «Рассрочка» (keeps old bookmarks alive) */}
+                      <Route path="/debtors" element={<Navigate to="/installments" replace />} />
+                      <Route path="/expenses" element={<ExpensesPage />} />
+                      <Route path="/planning" element={<PlanningPage />} />
+                      <Route path="/users" element={gated('users_manage', <UsersPage />)} />
+                      <Route path="/employees" element={<EmployeesPage />} />
+                      <Route path="/employees/:id" element={<EmployeeDetailPage />} />
+                      <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
+                      <Route path="/more" element={<MorePage />} />
+                      <Route path="/points" element={<PointsPage />} />
+                      <Route path="/notifications" element={<NotificationSettingsPage />} />
+                      <Route path="/tariff" element={<TariffPage />} />
+                      <Route path="/marketing" element={<MarketingPage />} />
+                      <Route path="/calls" element={<CallsPage />} />
+                      <Route path="/equipment" element={<EquipmentPage />} />
+                      <Route path="/knowledge" element={<KnowledgeBasePage />} />
+                      <Route path="/company-settings" element={<CompanySettingsPage />} />
+                      <Route path="/integrations" element={<IntegrationsPage />} />
+                    </Route>
+                  )}
 
                   {/* Admin routes inside AdminLayout (superadmin only) */}
                   {user.role === UserRole.SUPERADMIN && (
@@ -352,10 +355,23 @@ export default function App() {
                       <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
                       <Route path="/admin/tenants" element={<AdminTenantsPage />} />
                       <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
+                      <Route path="/admin/managers" element={<AdminManagersPage />} />
+                      <Route path="/admin/managers/:id" element={<AdminManagerDetailPage />} />
                       <Route path="/admin/registration" element={<AdminRegistrationRequestsPage />} />
                       <Route path="/admin/plans" element={<AdminPlansPage />} />
                       <Route path="/admin/broadcast" element={<AdminBroadcastPage />} />
                       <Route path="/admin/audit-log" element={<AdminAuditLogPage />} />
+                    </Route>
+                  )}
+
+                  {/* Кабинет менеджера платформы (только роль manager): свои автосервисы и расчёты */}
+                  {user.role === UserRole.MANAGER && (
+                    <Route element={<ManagerLayout />}>
+                      <Route path="/manager" element={<Navigate to="/manager/dashboard" replace />} />
+                      <Route path="/manager/dashboard" element={<ManagerDashboardPage />} />
+                      <Route path="/manager/tenants" element={<ManagerTenantsPage />} />
+                      <Route path="/manager/tenants/:id" element={<ManagerTenantDetailPage />} />
+                      <Route path="/manager/ledger" element={<ManagerLedgerPage />} />
                     </Route>
                   )}
 

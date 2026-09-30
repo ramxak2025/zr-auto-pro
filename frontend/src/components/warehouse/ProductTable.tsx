@@ -7,6 +7,7 @@ import { focusRing } from '../../ui/tokens';
 import { Money } from '../../ui/Money';
 import { Badge } from '../../ui/Badge';
 import { formatQty, unitLabel } from '../../utils/units';
+import StorageCellBadge from './StorageCellBadge';
 
 type SortKey = 'name' | 'stock' | 'costPrice' | 'sellPrice';
 interface SortState {
@@ -188,13 +189,16 @@ export default function ProductTable({
               >
                 {p.name}
               </button>
-              {(showFolder || p.isBundle) && (
+              {(showFolder || p.isBundle || p.storageCellCode) && (
                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
                   {showFolder && <span className="truncate">{p.category || 'Без папки'}</span>}
                   {p.isBundle && (
                     <Badge tone="accent" size="sm">
                       Комплект
                     </Badge>
+                  )}
+                  {p.storageCellCode && (
+                    <StorageCellBadge code={p.storageCellCode} name={p.storageCellName} className="flex-shrink-0" />
                   )}
                 </div>
               )}

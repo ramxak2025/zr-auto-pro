@@ -65,10 +65,24 @@ test('MEDIUM: старый разворот в целые месяцы удал�
   assert.doesNotMatch(service, /premiumMonthExpr\('sp'\)\} IN \(/, 'premiumMonthExpr IN (месяцы) удалён');
 });
 
+// 2026-09-30 (правка №3): предикат «строка принадлежит месяцу» вынесен из приватного
+// SalaryService.periodMonthMembership в ОБЩИЙ common/period-membership.ts — теперь по
+// нему считают и экран «Зарплата», и отчёты («По зарплатам», «Сводный», «По расходам»).
+// Стражи остались теми же по смыслу (clamp к сегодня, пояс параметром, fallback по
+// дате факта, будущий месяц не притягивается), просто читают новый исходник. Заодно
+// фиксируем, что у сервиса не осталось собственной копии, способной разойтись с общей.
+const membershipSource = readFileSync(join(__dirname, '..', 'src', 'common', 'period-membership.ts'), 'utf8');
+
+test('salary.service использует общий helper, приватной копии предиката больше нет', () => {
+  assert.doesNotMatch(service, /private static periodMonthMembership/, 'локальная копия должна быть удалена');
+  assert.match(service, /from '\.\.\/common\/period-membership'/, 'сервис обязан импортировать общий helper');
+  assert.match(service, /effectiveMonthMembershipSql\(/, 'monthMember обязан строиться общим helper-ом');
+});
+
 test('membership: месяц-к-дате (clamp LEAST к сегодня) + fallback по дате факта', () => {
-  const idx = service.indexOf('private static periodMonthMembership');
-  assert.notEqual(idx, -1, 'helper periodMonthMembership должен существовать');
-  const body = service.slice(idx, service.indexOf('private static readonly MONTH_NAMES'));
+  const idx = membershipSource.indexOf('export function effectiveMonthMembershipSql');
+  assert.notEqual(idx, -1, 'helper effectiveMonthMembershipSql должен существовать');
+  const body = membershipSource.slice(idx, membershipSource.indexOf('export function isMonthKey'));
   // Верхняя граница покрытия clamp-ится к «сегодня» в поясе тенанта —
   // [1-е, сегодня] (веб-пресет «Месяц») списывает принятую выплату уже сейчас
   // (money-safe).
@@ -82,7 +96,7 @@ test('membership: месяц-к-дате (clamp LEAST к сегодня) + fallb
   // Строка без периода → по дате факта (местный полуинтервал periodPredicate).
   assert.match(
     body,
-    /periodPredicate\(factCol, dateFrom, dateTo, tzPh\)/,
+    /periodPredicate\(factCol, dateFrom, dateTo, tzPh, bounds\)/,
     'fallback — periodPredicate по дате факта, тем же поясом',
   );
   // Будущий месяц не притягивается: 1-е ≤ сегодня.
@@ -100,16 +114,13 @@ test(
   },
   async () => {
     const { Client } = require('pg');
+    // С 2026-09-30 живой сценарий гоняет НАСТОЯЩИЙ предикат из сборки (общий helper),
+    // а не его копию в тесте: копия могла бы «проходить» при уже разъехавшемся
+    // продакшен-SQL. Границы периода — $1/$2, пояс — литерал (в тесте он единственный).
+    const { effectiveMonthMembershipSql } = require('../dist/common/period-membership');
     const TZ = 'Europe/Moscow';
-    const periodPredicate = (col) =>
-      `${col} >= $1::date::timestamp AT TIME ZONE '${TZ}' AND ${col} < ($2::date + 1)::timestamp AT TIME ZONE '${TZ}'`;
-    const membership = (p, f) => {
-      const v = `${p} ~ '^\\d{4}-\\d{2}$'`;
-      const mf = `to_date(CASE WHEN ${v} THEN ${p} || '-01' END, 'YYYY-MM-DD')`;
-      const ml = `(${mf} + interval '1 month' - interval '1 day')::date`;
-      const t = `(now() AT TIME ZONE '${TZ}')::date`;
-      return `((${v} AND $1::date <= ${mf} AND ${mf} <= ${t} AND $2::date >= LEAST(${ml}, ${t})) OR ((${p} IS NULL OR ${p} !~ '^\\d{4}-\\d{2}$') AND ${periodPredicate(f)}))`;
-    };
+    const membership = (p, f, from, to) =>
+      effectiveMonthMembershipSql(p, f, from, to, `'${TZ}'`, { from: '$1', to: '$2' });
     const EMP = '11111111-1111-1111-1111-111111111111';
     const c = new Client({ connectionString: process.env.SALARY_LIVE_DB });
     await c.connect();
@@ -126,7 +137,7 @@ test(
         Number(
           (
             await c.query(
-              `SELECT COALESCE(SUM(amount),0) s FROM salary_payouts WHERE employee_id=$3 AND status='accepted' AND ${membership('period_month', 'created_at')}`,
+              `SELECT COALESCE(SUM(amount),0) s FROM salary_payouts WHERE employee_id=$3 AND status='accepted' AND ${membership('period_month', 'created_at', from, to)}`,
               [from, to, EMP],
             )
           ).rows[0].s,
@@ -144,7 +155,7 @@ test(
         Number(
           (
             await c.query(
-              `SELECT COALESCE(SUM(amount),0) s FROM salary_premiums WHERE user_id=$3 AND type='cash' AND ${membership('period_month_year', 'created_at')}`,
+              `SELECT COALESCE(SUM(amount),0) s FROM salary_premiums WHERE user_id=$3 AND type='cash' AND ${membership('period_month_year', 'created_at', from, to)}`,
               [from, to, EMP],
             )
           ).rows[0].s,

@@ -10,6 +10,7 @@ import {
   LogOut,
   Megaphone,
   ScrollText,
+  UserCog,
   UserPlus,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,18 +34,26 @@ interface AdminNavItem {
 const navItems: AdminNavItem[] = [
   { label: 'Главная', path: '/admin/dashboard', icon: LayoutDashboard },
   { label: 'Автосервисы', path: '/admin/tenants', icon: Building2 },
+  { label: 'Менеджеры', path: '/admin/managers', icon: UserCog },
   { label: 'Заявки', path: '/admin/registration', icon: UserPlus, pendingBadge: true },
   { label: 'Тарифы', path: '/admin/plans', icon: CreditCard },
   { label: 'Рассылка', path: '/admin/broadcast', icon: Megaphone },
   { label: 'Журнал действий', path: '/admin/audit-log', icon: ScrollText },
 ];
 
-/** Хлебные крошки: раздел (+ «Карточка» для /admin/tenants/:id). */
+// Разделы с карточкой записи: /admin/tenants/:id и /admin/managers/:id.
+const detailCrumbs: Record<string, string> = {
+  '/admin/tenants': 'Карточка автосервиса',
+  '/admin/managers': 'Карточка менеджера',
+};
+
+/** Хлебные крошки: раздел (+ «Карточка» для страниц записи). */
 function crumbsFor(pathname: string): { label: string; to?: string }[] {
   const item = navItems.find((i) => pathname === i.path || pathname.startsWith(i.path + '/'));
   if (!item) return [{ label: 'Панель платформы' }];
-  if (pathname !== item.path && item.path === '/admin/tenants') {
-    return [{ label: item.label, to: item.path }, { label: 'Карточка автосервиса' }];
+  const detail = detailCrumbs[item.path];
+  if (pathname !== item.path && detail) {
+    return [{ label: item.label, to: item.path }, { label: detail }];
   }
   return [{ label: item.label }];
 }
@@ -263,7 +272,7 @@ export default function AdminLayout() {
             </button>
           </header>
 
-          {/* Мобильные вкладки — горизонтальный скролл: шесть пунктов в ширину телефона не влезают */}
+          {/* Мобильные вкладки — горизонтальный скролл: семь пунктов в ширину телефона не влезают */}
           <nav
             aria-label="Разделы панели платформы"
             className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-surface px-2 no-scrollbar md:hidden"

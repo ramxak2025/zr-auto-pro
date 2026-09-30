@@ -14,6 +14,7 @@ import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { getTenantTimezone } from '../common/timezone';
 import { actorPointId, assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
+import { MONTH_KEY_RE, effectiveMonthMembershipSql } from '../common/period-membership';
 
 // «Привилегированный» здесь — про СЕМАНТИКУ записи (source='owner', без дневного
 // лимита и очереди утверждения), НЕ про доступ. Право вносить расходы решает
@@ -26,6 +27,15 @@ const PRIVILEGED_ROLES = new Set(['director', 'admin', 'superadmin']);
 // any non-uuid / garbage) id resolves to a clean 404 instead of a Postgres
 // "invalid input syntax for type uuid" 500 on the `WHERE id=$1` cast.
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+// Граница диапазона в режиме attribution=period — только календарный день.
+const RANGE_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Открытая граница диапазона в режиме attribution=period: «с начала времён» /
+// «до конца времён». Хелпер месяца принимает обе границы как дни, поэтому
+// отсутствующая граница подменяется днём-заглушкой, а не условием в SQL.
+const OPEN_RANGE_FROM = '1900-01-01';
+const OPEN_RANGE_TO = '2999-12-31';
 
 @Injectable()
 export class ExpensesService {
@@ -122,9 +132,20 @@ export class ExpensesService {
    * филиал связанной операции у автоматических), поэтому «Расходы» филиала А
    * больше не показывают траты филиала Б. Синтетические строки «Гарантия
    * (убыток)» режутся точкой ЧЕКА — они и есть чеки.
+   *
+   * `attribution` (2026-09-30, правка №3) — по какой дате фильтруется диапазон:
+   *   • `date` (по умолчанию) — ПО ДАТЕ ФАКТА (оплаты): так строятся лента
+   *     «Расходы» и кассовая смена — деньги в том дне, когда ушли;
+   *   • `period` — по месяцу, ЗА КОТОРЫЙ расход (`period_month`, а без него — месяц
+   *     даты): так считают отчёты. «Аренда за сентябрь, оплаченная 3 октября»
+   *     попадёт в сентябрь. Правило принадлежности месяца диапазону — общее с
+   *     экраном «Зарплата» и отчётами (common/period-membership.ts).
+   * Невалидное значение — 400, молчаливого отката к `date` нет: клиент, который
+   * просил месяц, не должен незаметно получить кассу.
    */
   async getAll(tenantID: string, query: any, actor?: JwtPayload) {
     const pointId = actorPointId(actor);
+    const attribution = this.parseAttribution(query.attribution);
     // Safety net (audit round 7, item 8): both web (ExpensesPage) and mobile
     // (ExpensesScreen) always send an explicit dateFrom/dateTo — but a bare
     // call without any range used to scan the tenant's ENTIRE expense history
@@ -145,17 +166,33 @@ export class ExpensesService {
     // синтетическими строками «Гарантия (убыток)» ниже.
     const tz = await getTenantTimezone(this.pool, tenantID);
 
-    // Границы периода — полуинтервал [from 00:00, to+1 00:00) В ПОЯСЕ ТЕНАНТА,
-    // зеркально reports.service. Раньше правый край «<= (to+1)::timestamptz»
-    // резался по TZ сервера и ВКЛЮЧАЛ ровно полночь следующего дня — расход в
-    // 00:00 попадал в оба соседних периода. Пояс уходит параметром, не склейкой.
-    if (dateFrom) {
-      where += ` AND e.date >= $${idx++}::date::timestamp AT TIME ZONE $${idx++}::text`;
-      params.push(dateFrom, tz);
-    }
-    if (dateTo) {
-      where += ` AND e.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE $${idx++}::text`;
-      params.push(dateTo, tz);
+    if (attribution === 'period') {
+      // По месяцу «за который»: обе границы — дни (отсутствующая заменяется днём-
+      // заглушкой), пояс — один плейсхолдер на весь предикат. Значения кладутся
+      // строго в порядке плейсхолдеров: from, to, tz.
+      const from = this.parseRangeDay(dateFrom, 'dateFrom') ?? OPEN_RANGE_FROM;
+      const to = this.parseRangeDay(dateTo, 'dateTo') ?? OPEN_RANGE_TO;
+      const fromPh = `$${idx++}`;
+      const toPh = `$${idx++}`;
+      const tzPh = `$${idx++}::text`;
+      params.push(from, to, tz);
+      where += ` AND ${effectiveMonthMembershipSql('e.period_month', 'e.date', from, to, tzPh, {
+        from: fromPh,
+        to: toPh,
+      })}`;
+    } else {
+      // Границы периода — полуинтервал [from 00:00, to+1 00:00) В ПОЯСЕ ТЕНАНТА,
+      // зеркально reports.service. Раньше правый край «<= (to+1)::timestamptz»
+      // резался по TZ сервера и ВКЛЮЧАЛ ровно полночь следующего дня — расход в
+      // 00:00 попадал в оба соседних периода. Пояс уходит параметром, не склейкой.
+      if (dateFrom) {
+        where += ` AND e.date >= $${idx++}::date::timestamp AT TIME ZONE $${idx++}::text`;
+        params.push(dateFrom, tz);
+      }
+      if (dateTo) {
+        where += ` AND e.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE $${idx++}::text`;
+        params.push(dateTo, tz);
+      }
     }
     if (query.createdBy) {
       where += ` AND e.created_by = $${idx++}`;
@@ -213,8 +250,9 @@ export class ExpensesService {
       creatorName: r.creator_name,
       source: r.source ?? 'owner',
       approvalStatus: r.approval_status ?? 'approved',
-      // 149 — «за какой месяц» (P&L-отнесение). Список расходов сам по-прежнему
-      // фильтруется ПО ДАТЕ ФАКТА (касса); period_month здесь — только бейдж.
+      // 149 — «за какой месяц» (P&L-отнесение). По умолчанию (attribution=date)
+      // список фильтруется ПО ДАТЕ ФАКТА (касса), и period_month здесь — бейдж;
+      // при attribution=period диапазон режется именно по этому месяцу.
       periodMonth: r.period_month ?? null,
       // 149 — внепрограммный получатель (маркетолог, уборщица) свободным именем.
       recipientName: r.recipient_name ?? null,
@@ -334,6 +372,10 @@ export class ExpensesService {
       throw new BadRequestException({ message: 'Сумма слишком велика' });
     }
     const date = dto.date || new Date().toISOString();
+    // «За какой месяц» (правка №3, 2026-09-30) — необязателен: не передан или
+    // null = месяц даты факта. Формат проверяем ДО записи: колонка защищена CHECK'ом
+    // (`^\d{4}-\d{2}$`), и мусор дал бы 500 из транзакции, а не понятный 400.
+    const periodMonth = this.parsePeriodMonth(dto.periodMonth);
 
     // Daily-limit check — only meaningful for non-privileged users; we
     // sum up all the user's expenses on the same calendar day and flip
@@ -385,8 +427,8 @@ export class ExpensesService {
     const pointId = actorPointId(actor);
 
     const { rows } = await this.pool.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, point_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, point_id, period_month)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
       [
         dto.categoryId || null,
         amount,
@@ -398,6 +440,7 @@ export class ExpensesService {
         approvalStatus,
         tenantID,
         pointId,
+        periodMonth,
       ],
     );
     const r = rows[0];
@@ -424,6 +467,8 @@ export class ExpensesService {
       createdBy: r.created_by,
       source: r.source,
       approvalStatus: r.approval_status,
+      periodMonth: r.period_month ?? null,
+      recipientName: r.recipient_name ?? null,
       createdAt: r.created_at,
     };
   }
@@ -489,8 +534,13 @@ export class ExpensesService {
    *   • `source` ('owner'/'employee') — семантика записи задаётся при создании;
    *   • `point_id` — филиал траты; перенос денег между филиалами правкой суммы
    *     не делается (для этого пришлось бы пересчитать оба филиала);
-   *   • `period_month` / `recipient_name` — поля зеркальных выплат (зарплата,
-   *     выплата вне программы), их правит свой поток, не форма расхода.
+   *   • `recipient_name` — имя получателя «выплаты вне программы», его правит
+   *     свой поток, не форма расхода;
+   *   • `period_month` у строк, СВЯЗАННЫХ С ВЫПЛАТАМИ ЗАРПЛАТЫ (категория
+   *     «Зарплата», salary_payouts.expense_id / salary_payments.expense_id): месяц
+   *     зеркального расхода определяет сама выплата. Совпадающий `periodMonth`
+   *     игнорируется, иной — 400. У остальных строк месяц «за который» правится
+   *     (`periodMonth`: 'YYYY-MM' — назначить, null — снять; правка №3, 2026-09-30).
    *
    * СТАТУС ОДОБРЕНИЯ НЕ ПОВЫШАЕТСЯ ПРАВКОЙ. Отклонённая заявка остаётся
    * отклонённой, ожидающая — ожидающей: иначе сотрудник «чинил» бы отказ
@@ -526,6 +576,12 @@ export class ExpensesService {
       }
     }
 
+    // «За какой месяц» (правка №3): формат проверяем до любых записей — мусор это
+    // 400, а не 500 от CHECK-констрейнта колонки. undefined = поле не трогаем,
+    // null = снять назначенный месяц.
+    const periodTouched = dto.periodMonth !== undefined;
+    const nextPeriod = periodTouched ? this.parsePeriodMonth(dto.periodMonth) : null;
+
     // ЗЕРКАЛЬНЫЙ РАСХОД ВЫПЛАТЫ ЗАРПЛАТЫ правкой не трогаем — ровно по той же
     // причине, по которой его нельзя удалить (см. remove ниже): его сумма и
     // дата обязаны совпадать со строкой выплаты (salary_payouts.expense_id /
@@ -533,6 +589,10 @@ export class ExpensesService {
     // 30 000, из кассы ушло 3 000» без единого следа, и сторно выплаты уже
     // нечего было бы компенсировать. Правильное действие — отменить саму
     // выплату и выдать заново.
+    //
+    // Единственное поле тела, которое такая строка «переживает», — `periodMonth`, и
+    // только СОВПАДАЮЩЕЕ с текущим (клиент отправил форму как есть): оно
+    // игнорируется. Иной месяц — 400 (см. ниже); любое другое поле — прежний отказ.
     const { rows: linked } = await this.pool.query(
       `SELECT 1 FROM salary_payouts WHERE expense_id = $1 AND tenant_id = $2
        UNION ALL
@@ -540,15 +600,39 @@ export class ExpensesService {
        LIMIT 1`,
       [id, tenantID],
     );
-    if (linked.length > 0) {
-      throw new BadRequestException({
-        message: 'Это зеркальный расход выплаты зарплаты — измените саму выплату, расход подстроится',
-      });
+    const isLinked = linked.length > 0;
+    if (isLinked) {
+      const touchesOtherFields =
+        dto.amount !== undefined ||
+        dto.categoryId !== undefined ||
+        dto.description !== undefined ||
+        dto.date !== undefined;
+      if (touchesOtherFields || !periodTouched) {
+        throw new BadRequestException({
+          message: 'Это зеркальный расход выплаты зарплаты — измените саму выплату, расход подстроится',
+        });
+      }
     }
 
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
+
+    // Месяц «за который» меняется и снимается ТОЛЬКО у строк, не связанных с
+    // выплатами: у зеркала выплаты (связь по expense_id) и у любой строки категории
+    // «Зарплата» месяц определяет сама выплата. Значение, равное текущему, — no-op.
+    if (periodTouched) {
+      const currentPeriod: string | null = current.period_month ?? null;
+      if (nextPeriod !== currentPeriod) {
+        if (isLinked || (await this.isSalaryCategory(current.category_id ?? null, tenantID))) {
+          throw new BadRequestException({
+            message: 'Месяц расхода выплаты зарплаты задаётся самой выплатой — здесь он не меняется',
+          });
+        }
+        sets.push(`period_month=$${idx++}`);
+        vals.push(nextPeriod);
+      }
+    }
 
     let nextAmount = parseFloat(current.amount) || 0;
     if (dto.amount !== undefined) {
@@ -813,6 +897,54 @@ export class ExpensesService {
       [name, tenantID],
     );
     return newCat[0].id;
+  }
+
+  /** Расход лежит в системной категории «Зарплата» (по имени, как и исключение из P&L). */
+  private async isSalaryCategory(categoryId: string | null, tenantID: string): Promise<boolean> {
+    if (!categoryId) return false;
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM expense_categories WHERE id = $1 AND tenant_id = $2 AND name = 'Зарплата' LIMIT 1`,
+      [categoryId, tenantID],
+    );
+    return rows.length > 0;
+  }
+
+  /** `attribution` списка: 'date' (по умолчанию) | 'period'. Всё остальное — 400, откат к 'date' молчаливым не бывает. */
+  private parseAttribution(raw: unknown): 'date' | 'period' {
+    if (raw === undefined || raw === null || raw === '') return 'date';
+    if (raw === 'date' || raw === 'period') return raw;
+    throw new BadRequestException({ message: 'attribution должен быть date или period' });
+  }
+
+  /**
+   * Граница диапазона в режиме attribution=period — календарный день. Хвост
+   * ISO-времени отбрасывается (так же, как `$n::date` в режиме date); нет значения
+   * → null (граница открыта). Мусор и несуществующая дата — 400: без проверки Postgres
+   * вернул бы 22007/22008, то есть 500.
+   */
+  private parseRangeDay(raw: unknown, label: string): string | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const day = typeof raw === 'string' ? raw.slice(0, 10) : '';
+    if (!RANGE_DAY_RE.test(day)) throw new BadRequestException({ message: `${label}: формат ГГГГ-ММ-ДД` });
+    const ts = Date.parse(`${day}T00:00:00Z`);
+    if (Number.isNaN(ts) || new Date(ts).toISOString().slice(0, 10) !== day) {
+      throw new BadRequestException({ message: `${label}: такой даты нет` });
+    }
+    return day;
+  }
+
+  /**
+   * «За какой месяц» расход: 'YYYY-MM' (месяц 01–12), null или отсутствие значения
+   * («по месяцу даты факта»). Любое другое значение — 400. Формат строже CHECK'а
+   * колонки (`^\d{4}-\d{2}$`): месяц 13 проходит констрейнт, но ломает разбор даты
+   * в общем предикате периода.
+   */
+  private parsePeriodMonth(raw: unknown): string | null {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string' || !MONTH_KEY_RE.test(raw)) {
+      throw new BadRequestException({ message: 'periodMonth должен быть в формате YYYY-MM или null' });
+    }
+    return raw;
   }
 
   /**

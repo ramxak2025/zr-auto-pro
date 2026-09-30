@@ -47,6 +47,7 @@ import CachedImage from '../components/CachedImage';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
+import StorageCellChip from '../components/StorageCellChip';
 import { productsApi, warehouseCategoriesApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
@@ -60,6 +61,7 @@ import {
   subscribeProductPickerSession,
 } from '../utils/productPickerSession';
 import { formatQty, unitLabel } from '../utils/units';
+import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
 import type { Product } from '../../../shared/types';
 
 /** Окно дребезга: повторный тап по ТОЙ ЖЕ строке в этом окне игнорируется
@@ -191,6 +193,10 @@ const PickerProductRow = React.memo(function PickerProductRow({
                 {'Себест.'} {formatMoney(product.costPrice)}
               </Text>
             ) : null}
+            {/* Ячейка хранения (2026-09-30): кладовщик в Кассе видит, откуда брать. Без адреса
+                плашки нет, строка выглядит как раньше; при нехватке места ужимается плашка,
+                а не цена. */}
+            <StorageCellChip code={product.storageCellCode} style={styles.productCellChip} />
           </View>
         </View>
         {cartQty > 0 ? (
@@ -385,7 +391,10 @@ export default function ProductPickerScreen() {
           (p.category && p.category.toLowerCase().includes(q)) ||
           // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode,
           // чтобы частичный/чужой код всё же находил кандидатов.
-          (p.barcode && String(p.barcode).toLowerCase().includes(q))
+          (p.barcode && String(p.barcode).toLowerCase().includes(q)) ||
+          // Ячейка хранения (2026-09-30): код адреса тоже ищется — «A-1-2» находит товар
+          // на полке (регистр и лишние пробелы не важны, как на сервере).
+          (p.storageCellCode ? cellCodeMatchesQuery(p.storageCellCode, q) : false)
         ) {
           rows.push({ type: 'product', key: p.id, product: p });
         }
@@ -953,6 +962,7 @@ const styles = StyleSheet.create({
   productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
   productSellPrice: { fontSize: 13, fontWeight: fontWeight.semibold },
   productCostPrice: { fontSize: 11 },
+  productCellChip: { flexShrink: 4 },
   productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 48, paddingLeft: spacing[1] },
   productStock: { fontSize: 16, fontWeight: '700' as const, letterSpacing: -0.3 },
   productStockLow: { color: colors.red[500] },

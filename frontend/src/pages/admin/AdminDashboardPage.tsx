@@ -12,8 +12,10 @@ import {
   Megaphone,
   ScrollText,
   TrendingUp,
+  UserCog,
   UserPlus,
   Users,
+  Wallet,
 } from 'lucide-react';
 
 import { tenantsApi, adminApi } from '../../api/services';
@@ -27,6 +29,7 @@ import { SkeletonCard } from '../../ui/Skeleton';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { ErrorRow, LinkTile } from '../../components/admin/adminUi';
+import { formatRubExact } from '../../components/admin/MoneyExact';
 import { pluralRu } from '../../components/knowledge/utils';
 
 // «1 заявка ждёт / 2 заявки ждут / 5 заявок ждут»
@@ -45,6 +48,12 @@ const QUICK_LINKS = [
     icon: Building2,
     title: 'Автосервисы',
     subtitle: 'Просмотр, создание и редактирование клиентов платформы',
+  },
+  {
+    to: '/admin/managers',
+    icon: UserCog,
+    title: 'Менеджеры',
+    subtitle: 'Клиенты менеджеров, доля владельца и расчёты',
   },
   {
     to: '/admin/plans',
@@ -121,7 +130,7 @@ export default function AdminDashboardPage() {
       <section aria-label="Показатели платформы">
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-busy="true">
-            {Array.from({ length: 8 }).map((_, i) => (
+            {Array.from({ length: 10 }).map((_, i) => (
               <SkeletonCard key={i} lines={1} className="p-4" />
             ))}
           </div>
@@ -179,6 +188,24 @@ export default function AdminDashboardPage() {
               icon={Inbox}
               tone={(pendingCount ?? 0) > 0 ? 'warn' : 'neutral'}
               to="/admin/registration"
+            />
+            {/* Положительный долг — менеджеры должны владельцу: красная плитка, отрицательный — не наш долг */}
+            <StatCard
+              compact
+              label="Долг менеджеров"
+              value={formatRubExact(stats?.managersBalanceTotal ?? 0)}
+              hint="доля владельца минус расчёты"
+              icon={UserCog}
+              tone={(stats?.managersBalanceTotal ?? 0) > 0 ? 'bad' : 'neutral'}
+              to="/admin/managers"
+            />
+            <StatCard
+              compact
+              label="Оплаты через менеджеров за месяц"
+              value={formatRubExact(stats?.paidByManagersThisMonth ?? 0)}
+              hint="платные продления, проведённые менеджерами"
+              icon={Wallet}
+              to="/admin/managers"
             />
           </div>
         )}

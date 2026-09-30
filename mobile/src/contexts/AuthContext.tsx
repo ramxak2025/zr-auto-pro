@@ -334,6 +334,8 @@ interface AuthProviderProps {
  * ZERO requests it isn't allowed to make or has no screen for.
  */
 function prefetchAfterLogin(qc: QueryClient, user: User): void {
+  // Менеджер платформы без своего автосервиса: складу/клиентам/чекам нечего греть — каждый запрос ниже был бы 403.
+  if (user.role === 'manager') return;
   // Mirror of AuthContext.hasPermission (the canonical helper): director and
   // superadmin implicitly hold every permission; admin/master fall back to
   // the explicit permissions object from /auth/me.

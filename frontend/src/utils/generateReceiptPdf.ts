@@ -26,12 +26,18 @@ export async function generateReceiptPdf(check: Check, tenant?: Partial<Tenant> 
     minute: '2-digit',
   });
 
+  // Колонки «Кол» у услуг нет: строка = одна услуга. Количество остаётся только у legacy-строк старых
+  // чеков (> 1) — «×3» после названия; цена — за единицу, «Сумма» — как в чеке. Освободившиеся 24px
+  // отданы названию (120 → 144), колонки цены и суммы — те же 50/55, что у товаров.
+  const legacyQtySuffix = (quantity: number): string => {
+    const q = Number(quantity);
+    return Number.isFinite(q) && q > 1 ? `<span style="color:#666;white-space:nowrap">&nbsp;×${q}</span>` : '';
+  };
   const servicesHtml = (check.services ?? [])
     .map(
       (svc) => `
     <tr>
-      <td style="max-width:120px;word-wrap:break-word;font-size:10px;padding:3px 1px;vertical-align:top">${esc(svc.name)}${svc.master?.fullName ? `<br><span style="font-size:8px;color:#666">${esc(svc.master.fullName)}</span>` : ''}</td>
-      <td style="text-align:center;width:24px;font-size:10px;padding:3px 1px">${svc.quantity}</td>
+      <td style="max-width:144px;word-wrap:break-word;font-size:10px;padding:3px 1px;vertical-align:top">${esc(svc.name)}${legacyQtySuffix(svc.quantity)}${svc.master?.fullName ? `<br><span style="font-size:8px;color:#666">${esc(svc.master.fullName)}</span>` : ''}</td>
       <td style="text-align:right;width:50px;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(svc.price)}</td>
       <td style="text-align:right;width:55px;font-weight:bold;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(svc.total)}</td>
     </tr>
@@ -91,7 +97,7 @@ ${
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 <div style="font-size:11px;font-weight:bold;text-align:center;letter-spacing:1px;margin:4px 0;text-transform:uppercase">Услуги</div>
 <table style="width:100%;border-collapse:collapse;margin-bottom:2px">
-<thead><tr><th style="${thStyle};text-align:left">Наименование</th><th style="${thStyle};text-align:center">Кол</th><th style="${thStyle};text-align:right">Цена</th><th style="${thStyle};text-align:right">Сумма</th></tr></thead>
+<thead><tr><th style="${thStyle};text-align:left">Наименование</th><th style="${thStyle};text-align:right">Цена</th><th style="${thStyle};text-align:right">Сумма</th></tr></thead>
 <tbody>${servicesHtml}</tbody>
 </table>`
     : ''

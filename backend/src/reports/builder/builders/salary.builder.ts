@@ -2,9 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../../../database.module';
 import { SalaryService } from '../../../salary/salary.service';
+import { effectiveMonthMembershipSql } from '../../../common/period-membership';
 import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext, SECTION_ROW_LIMIT } from '../report-context';
 import { ReportColumn, ReportRow, ReportSection } from '../report-types';
-import { baseParams, idsFilter, inPeriod, num, pushPoint, round2 } from '../report-sql';
+import { TZ_PH, baseParams, idsFilter, inPeriod, num, pushPoint, round2 } from '../report-sql';
 
 interface SalaryListRow {
   masterId: string;
@@ -43,11 +44,14 @@ interface PaidSums {
  * комиссия мастеру чека, премии деньгами, мотивация, штрафы, смены).
  * Формула процента здесь не повторяется — берутся готовые суммы.
  *
- * ВЫПЛАТЫ — по ДАТЕ ВЫДАЧИ в периоде (спека): принятые salary_payouts
- * (зарплата / аванс) + легаси salary_payments без сторно. Экран «Зарплата»
- * относит выплату с назначенным месяцем (period_month) к этому месяцу; в
- * отчёте выплата «за июль», выданная 5 августа, стоит в августе — так столбцы
- * сходятся с секцией «Выплаты и удержания» до копейки. Разница оговорена в notes.
+ * ВЫПЛАТЫ — по МЕСЯЦУ, «ЗА КОТОРЫЙ» они выданы (правка №3, 2026-09-30): принятые
+ * salary_payouts (зарплата / аванс) по COALESCE(period_month, месяц выдачи) + легаси
+ * salary_payments по month_year, без сторно; премии деньгами — по месяцу «за какой».
+ * Выплата «за сентябрь», выданная 3 октября, стоит в сентябрьском отчёте — так же, как
+ * на экране «Зарплата» (общий helper common/period-membership.ts, то же правило
+ * принадлежности периоду), поэтому «Остаток» отчёта и экрана сходятся до копейки.
+ * Дата выдачи остаётся датой строки в секции «Выплаты и удержания» (лента «Расходы» и
+ * кассовая смена считают именно по ней). Штрафы — по своей дате.
  *
  * ОСТАТОК = начислено всего − штрафы − выплачено всего; минус — переплата.
  *
@@ -67,9 +71,11 @@ export class SalaryBuilder implements ReportBuilder {
 
   async build(ctx: ReportContext): Promise<BuiltReport> {
     const [list, byUser, movements, users] = await Promise.all([
-      this.salary.getAll(ctx.tenantId, { dateFrom: ctx.dateFrom, dateTo: ctx.dateTo }, ctx.pointId) as Promise<
-        SalaryListRow[]
-      >,
+      // carryOver: false — отчёту нужны только начисления периода; «долг за прошлые
+      // месяцы» (carryOverAmount) он не показывает, лишний запрос не нужен.
+      this.salary.getAll(ctx.tenantId, { dateFrom: ctx.dateFrom, dateTo: ctx.dateTo }, ctx.pointId, {
+        carryOver: false,
+      }) as Promise<SalaryListRow[]>,
       this.paidByUser(ctx),
       this.movements(ctx),
       this.users(ctx),
@@ -180,14 +186,14 @@ export class SalaryBuilder implements ReportBuilder {
         { key: 'amount', title: 'Сумма', type: 'money' },
         { key: 'comment', title: 'Комментарий', type: 'text' },
       ],
+      // Дата строки — день выдачи, а в период выплата попадает по месяцу «за который»:
+      // без подписи выплата от 3 октября в сентябрьском отчёте выглядела бы ошибкой.
       // Список усечён лимитом секции — суммы таблицы и KPI от него не зависят
       // (paidByUser считает без лимита), поэтому усечение только помечаем.
-      ...(movements.truncated
-        ? {
-            description: `Показаны последние ${SECTION_ROW_LIMIT} операций; суммы в таблице и KPI учитывают все операции периода.`,
-            truncated: true,
-          }
-        : {}),
+      description: movements.truncated
+        ? `Дата — день выдачи; выплата стоит в периоде того месяца, за который выдана. Показаны последние ${SECTION_ROW_LIMIT} операций; суммы в таблице и KPI учитывают все операции периода.`
+        : 'Дата — день выдачи; выплата стоит в периоде того месяца, за который выдана.',
+      ...(movements.truncated ? { truncated: true } : {}),
       rows: movements.rows.map((m) => ({
         _id: m.user_id,
         date: m.at instanceof Date ? m.at.toISOString() : String(m.at),
@@ -220,7 +226,8 @@ export class SalaryBuilder implements ReportBuilder {
       truncated,
       notes: [
         'Начисления — как на экране «Зарплата»: процент с работ и товаров по проведённым чекам, премии деньгами и мотивация за период.',
-        'Выплаты, авансы, премии и штрафы — по дате выдачи в периоде. Выплата, отнесённая к другому месяцу, на экране «Зарплата» стоит в том месяце, а здесь — в дате выдачи.',
+        'Выплата относится к месяцу, за который выдана (например, выдана в октябре за сентябрь — в сентябре). Так же считает экран «Зарплата».',
+        'Штрафы — по дате штрафа; в секции «Выплаты и удержания» дата — день выдачи.',
         'Остаток = начислено всего − штрафы − выплачено всего; отрицательный остаток — переплата.',
         'Смены — отработанные дни по графику за период; «за смену» = начислено ÷ смен.',
       ],
@@ -229,23 +236,31 @@ export class SalaryBuilder implements ReportBuilder {
 
   /**
    * Тело UNION'а движений — выплаты (принятые + легаси), премии деньгами и
-   * штрафы по дате факта в периоде, филиал — у строки. Общее для сумм и
-   * списка; точка кладётся в params ОДИН раз и адресуется всеми ветками.
+   * штрафы, филиал — у строки. Общее для сумм и списка; точка кладётся в params
+   * ОДИН раз и адресуется всеми ветками.
+   *
+   * Выплаты и премии относятся к периоду по МЕСЯЦУ «за который» (helper
+   * effectiveMonthMembershipSql — то же правило, что у экрана «Зарплата»): строка
+   * без назначенного месяца (старые выплаты, legacy-мусор) — по дате факта. В
+   * колонке `at` остаётся ДАТА ВЫДАЧИ — её видит человек в секции. Штраф месячного
+   * назначения не имеет — по своей дате, как и начисления в getAll.
    */
   private movementsUnionSql(ctx: ReportContext, params: unknown[]): string {
     const ph = pushPoint(params, ctx.pointId);
     const pt = (alias: string) => (ph ? ` AND ${alias}.point_id = ${ph}` : '');
+    const member = (periodCol: string, factCol: string) =>
+      effectiveMonthMembershipSql(periodCol, factCol, ctx.dateFrom, ctx.dateTo, TZ_PH);
     return `SELECT p.employee_id AS user_id, p.type AS kind, p.amount, p.created_at AS at, p.comment
            FROM salary_payouts p
-          WHERE p.tenant_id = $1 AND p.status = 'accepted' AND ${inPeriod('p.created_at')}${pt('p')}
+          WHERE p.tenant_id = $1 AND p.status = 'accepted' AND ${member('p.period_month', 'p.created_at')}${pt('p')}
          UNION ALL
          SELECT sp.user_id, CASE WHEN sp.type = 'advance' THEN 'advance' ELSE 'salary' END, sp.amount, sp.date, sp.comment
            FROM salary_payments sp
-          WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL AND ${inPeriod('sp.date')}${pt('sp')}
+          WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL AND ${member('sp.month_year', 'sp.date')}${pt('sp')}
          UNION ALL
          SELECT pr.user_id, 'premium', COALESCE(pr.amount, 0), pr.created_at, pr.reason
            FROM salary_premiums pr
-          WHERE pr.tenant_id = $1 AND pr.type = 'cash' AND ${inPeriod('pr.created_at')}${pt('pr')}
+          WHERE pr.tenant_id = $1 AND pr.type = 'cash' AND ${member('pr.period_month_year', 'pr.created_at')}${pt('pr')}
          UNION ALL
          SELECT pen.user_id, 'penalty', pen.amount, pen.date, pen.description
            FROM salary_penalties pen

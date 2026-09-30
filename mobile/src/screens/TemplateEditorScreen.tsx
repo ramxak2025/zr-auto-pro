@@ -3,10 +3,15 @@
  * TemplatesScreen; зарегистрирован и в MoreStack, и на корневом стеке —
  * для входа из Кассы через «Управлять»).
  *
- * Состав: название + строки УСЛУГ (поиск по каталогу, цена/кол-во правятся
- * в строке) + строки ТОВАРОВ (простой серверный поиск, кол-во в строке;
- * полноэкранный ProductPicker сюда сознательно НЕ интегрируем — редактор
- * самодостаточный и простой) + папка размещения.
+ * Состав: название + строки УСЛУГ (поиск по каталогу, в строке правится
+ * только цена — у услуги нет количества) + строки ТОВАРОВ (простой серверный
+ * поиск, кол-во в строке; полноэкранный ProductPicker сюда сознательно НЕ
+ * интегрируем — редактор самодостаточный и простой) + папка размещения.
+ *
+ * Услуги без количества (2026-09-30): одна и та же услуга дважды = две
+ * строки, степпера нет. Старый шаблон со строкой «Мойка ×3» при открытии
+ * разворачивается в три строки (`expandServiceQuantities`), а при сохранении
+ * `quantity` у услуг не отправляется — сервер хранит 1.
  *
  * «Общий шаблон» — переключатель ТОЛЬКО при создании и ТОЛЬКО для
  * owner-class (director/admin/superadmin): у backend'а нет shared-флага в
@@ -43,6 +48,7 @@ import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
 import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
+import { expandServiceQuantities } from '../../../shared/utils/checkLines';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
 
 /** RU-дружественный парсер цены: запятая → точка, мусор → 0. */
@@ -51,12 +57,12 @@ function parsePrice(v: string): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+/** Строка услуги = одна услуга по одной цене; количества нет (2026-09-30). */
 interface EditorServiceLine {
   serviceId?: string;
   name: string;
   /** Строка, а не число — иначе TextInput дерётся с курсором при вводе. */
   priceText: string;
-  quantity: number;
 }
 
 interface EditorProductLine {
@@ -112,12 +118,15 @@ export default function TemplateEditorScreen() {
     if (!isEditing || hydratedRef.current || !template) return;
     hydratedRef.current = true;
     setName(template.name);
+    // Старые шаблоны бывают со строкой «×N» (степпер и «+1 при повторном
+    // добавлении»): разворачиваем в N строк по одной цене. Строка, которую
+    // развернуть нельзя (N > 100 или дробное), остаётся одной строкой с ценой —
+    // при сохранении сервер всё равно хранит у услуг quantity = 1.
     setServiceLines(
-      (template.services || []).map((s) => ({
+      expandServiceQuantities(template.services || []).map((s) => ({
         serviceId: s.serviceId,
         name: s.name,
         priceText: String(s.price ?? 0),
-        quantity: s.quantity || 1,
       })),
     );
     setProductLines(
@@ -163,17 +172,11 @@ export default function TemplateEditorScreen() {
     enabled: showProductPicker,
   });
 
+  // Повторное добавление той же услуги — НОВАЯ строка (не +1 к количеству:
+  // количества у услуг больше нет).
   const addService = (s: Service) => {
     haptic('tap');
-    setServiceLines((lines) => {
-      const idx = lines.findIndex((l) => l.serviceId === s.id);
-      if (idx >= 0) {
-        const next = [...lines];
-        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
-        return next;
-      }
-      return [...lines, { serviceId: s.id, name: s.name, priceText: String(s.defaultPrice ?? 0), quantity: 1 }];
-    });
+    setServiceLines((lines) => [...lines, { serviceId: s.id, name: s.name, priceText: String(s.defaultPrice ?? 0) }]);
   };
 
   const addProduct = (p: Product) => {
@@ -199,8 +202,9 @@ export default function TemplateEditorScreen() {
 
   // ── Итоги ───────────────────────────────────────────────────────────────────
 
+  // Σ цен строк: у услуги нет количества.
   const servicesTotal = useMemo(
-    () => serviceLines.reduce((sum, l) => sum + parsePrice(l.priceText) * l.quantity, 0),
+    () => serviceLines.reduce((sum, l) => sum + parsePrice(l.priceText), 0),
     [serviceLines],
   );
   const productsTotal = useMemo(
@@ -217,11 +221,11 @@ export default function TemplateEditorScreen() {
     if (!canSave) return;
     setSaving(true);
     try {
+      // Услуги — без quantity (сервер хранит 1); у товаров количество остаётся.
       const services = serviceLines.map((l) => ({
         serviceId: l.serviceId,
         name: l.name,
         price: parsePrice(l.priceText),
-        quantity: l.quantity,
       }));
       const products = productLines.map((l) => ({
         productId: l.productId,
@@ -500,35 +504,32 @@ export default function TemplateEditorScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+                {/* Только цена: количества у услуги нет, отдельной «суммы строки»
+                    тоже (она равна цене). */}
                 <View style={styles.lineControls}>
                   {viewOnly ? (
-                    <Text style={[styles.lineStatic, { color: palette.text.secondary }]}>
-                      {formatTemplateMoney(parsePrice(line.priceText))} × {line.quantity}
+                    <Text style={[styles.lineStatic, { color: palette.text.primary }]}>
+                      {formatTemplateMoney(parsePrice(line.priceText))}
                     </Text>
                   ) : (
-                    <>
-                      <View
-                        style={[
-                          styles.priceInputWrap,
-                          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                        ]}
-                      >
-                        <TextInput
-                          value={line.priceText}
-                          onChangeText={(t) => patchServiceLine(idx, { priceText: t })}
-                          keyboardType="decimal-pad"
-                          style={[styles.priceInput, { color: palette.text.primary }]}
-                          placeholder="0"
-                          placeholderTextColor={palette.text.tertiary}
-                        />
-                        <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>₽</Text>
-                      </View>
-                      {stepper(line.quantity, (q) => patchServiceLine(idx, { quantity: q }))}
-                    </>
+                    <View
+                      style={[
+                        styles.priceInputWrap,
+                        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                      ]}
+                    >
+                      <TextInput
+                        value={line.priceText}
+                        onChangeText={(t) => patchServiceLine(idx, { priceText: t })}
+                        keyboardType="decimal-pad"
+                        style={[styles.priceInput, { color: palette.text.primary }]}
+                        placeholder="0"
+                        placeholderTextColor={palette.text.tertiary}
+                        accessibilityLabel={`Цена услуги «${line.name}»`}
+                      />
+                      <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                    </View>
                   )}
-                  <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
-                    {formatTemplateMoney(parsePrice(line.priceText) * line.quantity)}
-                  </Text>
                 </View>
               </View>
             ))}
@@ -666,7 +667,8 @@ export default function TemplateEditorScreen() {
       </Modal>
 
       {/* Добавить услугу — остаётся открытым для мульти-добавления, в строке
-          виден бейдж ×N уже добавленного. */}
+          виден бейдж ×N: сколько строк с этой услугой уже в шаблоне (повторный
+          тап добавляет новую строку, а не количество). */}
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
         <View style={{ gap: spacing[3] }}>
           <TextInput
@@ -679,7 +681,7 @@ export default function TemplateEditorScreen() {
           />
           <View>
             {(filteredServices || []).slice(0, 80).map((s) => {
-              const inLine = serviceLines.find((l) => l.serviceId === s.id);
+              const rowsCount = serviceLines.filter((l) => l.serviceId === s.id).length;
               return (
                 <TouchableOpacity
                   key={s.id}
@@ -695,7 +697,7 @@ export default function TemplateEditorScreen() {
                       {formatTemplateMoney(s.defaultPrice ?? 0)}
                     </Text>
                   </View>
-                  {inLine ? (
+                  {rowsCount > 0 ? (
                     <View
                       style={[
                         styles.pickCountBadge,
@@ -705,7 +707,7 @@ export default function TemplateEditorScreen() {
                       <Text
                         style={[styles.pickCountText, { color: isDark ? colors.primary[300] : colors.primary[600] }]}
                       >
-                        ×{inLine.quantity}
+                        ×{rowsCount}
                       </Text>
                     </View>
                   ) : (

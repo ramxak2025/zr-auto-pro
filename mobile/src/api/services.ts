@@ -3,6 +3,9 @@ import {
   createAuthApi,
   createVinApi,
   createReportBuilderApi,
+  createStorageCellsApi,
+  createAdminManagersApi,
+  createManagerCabinetApi,
   createRegistrationApi,
   createProfileApi,
   createUsersApi,
@@ -144,6 +147,12 @@ export const planningApi = createPlanningApi(api);
 export const reportsApi = createReportsApi(api);
 /** Конструктор отчётов (2026-09-25) — раздел «Отчёты», каталог в shared/reports/catalog.ts. */
 export const reportBuilderApi = createReportBuilderApi(api);
+/** 172 — ячейки хранения на складе: справочник + массовое создание (createStorageCellsApi). */
+export const storageCellsApi = createStorageCellsApi(api);
+/** Менеджеры платформы, сторона суперадмина: учёт, расчёты, перенос клиентов (createAdminManagersApi). */
+export const adminManagersApi = createAdminManagersApi(api);
+/** Кабинет менеджера платформы (роль manager): свои клиенты, подписка, баланс (createManagerCabinetApi). */
+export const managerApi = createManagerCabinetApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);
 export const expensesApi = createExpensesApi(api);

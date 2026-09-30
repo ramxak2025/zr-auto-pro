@@ -27,10 +27,15 @@ export default function ImpersonationBanner() {
 
   const onExit = () => {
     haptic('warning');
-    Alert.alert('Выйти из аккаунта владельца?', 'Вы вернётесь на экран входа и сможете снова войти под суперадмином.', [
-      { text: 'Остаться', style: 'cancel' },
-      { text: 'Выйти', style: 'destructive', onPress: () => endImpersonation() },
-    ]);
+    // Текст без роли: под чужим аккаунтом бывает и суперадмин, и менеджер платформы.
+    Alert.alert(
+      'Выйти из аккаунта владельца?',
+      'Вы вернётесь на экран входа и сможете снова войти под своей учётной записью.',
+      [
+        { text: 'Остаться', style: 'cancel' },
+        { text: 'Выйти', style: 'destructive', onPress: () => endImpersonation() },
+      ],
+    );
   };
 
   return (

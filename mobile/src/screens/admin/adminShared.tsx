@@ -4,12 +4,26 @@
  * Broadcast / More). Keeps the screens on ONE visual language and avoids the
  * copy-paste drift the old AdminScreen monolith suffered from.
  */
-import React from 'react';
+import React, { createContext, useContext } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import type { QueryClient } from '@tanstack/react-query';
 import { Text } from '../../platform/Typography';
 import { colors, spacing, borderRadius, getBadgeColors, softTint } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
+import type { AdminShellMode } from '../../navigation/AdminTabBar';
 import type { Tenant, SubscriptionStatus, SubscriptionPeriodKind, FeatureGroup } from '../../../../shared/types';
+
+/**
+ * Режим оболочки платформы: суперадмин или менеджер (только свои автосервисы).
+ * Провайдер стоит в AdminShellNavigator — экраны читают режим отсюда, а не по
+ * роли, чтобы у всех вложенных стеков была ОДНА точка правды.
+ */
+const AdminModeContext = createContext<AdminShellMode>('superadmin');
+export const AdminModeProvider = AdminModeContext.Provider;
+export function useAdminMode(): AdminShellMode {
+  return useContext(AdminModeContext);
+}
 
 /**
  * Human labels for the feature-catalog groups (core / section / integration).
@@ -28,6 +42,60 @@ export const FEATURE_GROUP_ORDER: FeatureGroup[] = ['core', 'section', 'integrat
 export function formatMoney(value: number): string {
   const rounded = Math.round(value || 0);
   return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+}
+
+// Деньги менеджерских расчётов — чистый модуль (его проверяет jest); экраны берут их отсюда.
+export { balanceCaption, computeOwnerShare, formatMoneyExact, formatPercent, parseAmount } from './adminMoney';
+
+/** Склонение по числу: pluralRu(1, 'клиент', 'клиента', 'клиентов'), 2 → «клиента», 5 → «клиентов». */
+export function pluralRu(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n);
+  const mod100 = abs % 100;
+  const mod10 = abs % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+/** Красный «должен» / зелёный «погашено»: в тёмной теме светлее, чтобы читались на графите. */
+export function debtColor(palette: SemanticPalette): string {
+  return palette.mode === 'dark' ? colors.red[400] : colors.red[600];
+}
+export function creditColor(palette: SemanticPalette): string {
+  return palette.mode === 'dark' ? colors.green[400] : colors.green[600];
+}
+
+/** Баланс менеджера: > 0 — должен владельцу (красный), иначе обычный цвет текста. */
+export function balanceColor(balance: number, palette: SemanticPalette): string {
+  return balance >= 0.005 ? debtColor(palette) : palette.text.primary;
+}
+
+/**
+ * Всё, что меняют продление, тариф, приостановка, передача клиента и расчёты:
+ * карточка автосервиса, списки, плитки обзора, выручка, балансы менеджеров и весь
+ * кабинет менеджера (`['manager', …]`). Один список вместо копий по экранам.
+ */
+export function invalidatePlatformQueries(queryClient: QueryClient, tenantId?: string): void {
+  if (tenantId) {
+    queryClient.invalidateQueries({ queryKey: ['admin-tenant', tenantId] });
+    queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', tenantId] });
+  }
+  queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
+  queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+  queryClient.invalidateQueries({ queryKey: ['admin-subscription-revenue'] });
+  queryClient.invalidateQueries({ queryKey: ['admin-managers'] });
+  queryClient.invalidateQueries({ queryKey: ['admin-audit-log'] });
+  queryClient.invalidateQueries({ queryKey: ['manager'] });
+}
+
+// Генератор пароля: без неоднозначных символов (0/O, 1/l/I), чтобы его можно
+// было продиктовать по телефону.
+const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export function genPassword(len = 10): string {
+  let out = '';
+  for (let i = 0; i < len; i++) out += PW_ALPHABET[Math.floor(Math.random() * PW_ALPHABET.length)];
+  return out;
 }
 
 export function formatDate(d?: string | null): string {
@@ -118,6 +186,22 @@ export function tenantStatus(tenant: Tenant, mode: 'light' | 'dark' = 'light'): 
 }
 
 /**
+ * Чип статуса для строк списков: приостановленный автосервис (`suspendedAt`) сервер отдаёт
+ * с `isActive = false`, и {@link tenantStatus} назвал бы его «Отключён» — а это «Приостановлена».
+ */
+export function tenantRowStatus(tenant: Tenant, mode: 'light' | 'dark' = 'light'): StatusInfo {
+  return tenant.suspendedAt ? subscriptionStatusInfo('suspended', mode) : tenantStatus(tenant, mode);
+}
+
+/** Чип «Отключён» у менеджера, который не может войти (та же красная гамма, что у отключённого автосервиса). */
+export function inactiveStatusInfo(mode: 'light' | 'dark' = 'light'): StatusInfo {
+  const badgesDark = getBadgeColors('dark');
+  return mode === 'dark'
+    ? { bg: badgesDark.red.bg, text: badgesDark.red.text, label: 'Отключён' }
+    : { bg: colors.red[50], text: colors.red[700], label: 'Отключён' };
+}
+
+/**
  * Authoritative subscription-status chip descriptor (102). Unlike
  * {@link tenantStatus} (which derives a label from isActive + subscriptionEnd),
  * this maps the SERVER-resolved `SubscriptionStatus` straight to a chip so the
@@ -203,7 +287,63 @@ export function InitialAvatar({
   );
 }
 
+/**
+ * Плитка метрики «иконка · значение · подпись» для двухколоночных сеток обзора и
+ * кабинетов менеджеров. Значение красится `valueColor` (долг — красным).
+ */
+export function MetricTile({
+  icon,
+  tint,
+  value,
+  label,
+  valueColor,
+  surfaceCard,
+  palette,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  tint: string;
+  value: string;
+  label: string;
+  valueColor?: string;
+  surfaceCard: object;
+  palette: SemanticPalette;
+}) {
+  return (
+    <View style={[chipStyles.tile, surfaceCard]}>
+      <View style={[chipStyles.tileIcon, { backgroundColor: tint + '1A' }]}>
+        <Ionicons name={icon} size={18} color={tint} />
+      </View>
+      <Text
+        style={[chipStyles.tileValue, { color: valueColor ?? palette.text.primary }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
+      <Text style={[chipStyles.tileLabel, { color: palette.text.tertiary }]} numberOfLines={2}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 const chipStyles = StyleSheet.create({
+  tile: {
+    width: '47.5%',
+    padding: spacing[3.5],
+    gap: spacing[1],
+  },
+  tileIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[1],
+  },
+  tileValue: { fontSize: 22, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  tileLabel: { fontSize: 12, fontWeight: '500' },
   chip: {
     paddingHorizontal: spacing[2],
     paddingVertical: 3,

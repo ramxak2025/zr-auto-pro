@@ -10,7 +10,7 @@ import { Cron } from '@nestjs/schedule';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
-import { invalidateAuthUser } from '../common/auth-cache';
+import { invalidateAuthUser, isPlatformRole } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { PushService } from '../push/push.service';
 import { TenantsService } from '../tenants/tenants.service';
@@ -102,10 +102,18 @@ export class AccountService {
       throw new UnauthorizedException({ message: 'Неверный пароль' });
     }
 
-    if (row.role === 'superadmin') {
-      // Platform operator account — not a deletable tenant account.
+    // 173 — роли платформы (superadmin | manager) без тенанта: без этой ветки
+    // менеджер провалился бы в deleteOwnUser (роль «master / admin» ниже) и
+    // анонимизировал бы себя, оставив клиентов (tenants.manager_id) и расчёты с
+    // владельцем (manager_settlements) за «Удалённым пользователем», который уже
+    // не может войти и закрыть долг. Удаляет менеджера только владелец.
+    if (isPlatformRole(row.role)) {
+      // Platform operator / platform manager account — not a deletable tenant account.
       throw new ForbiddenException({
-        message: 'Аккаунт владельца платформы нельзя удалить из приложения',
+        message:
+          row.role === 'manager'
+            ? 'Аккаунт менеджера платформы удаляет только владелец'
+            : 'Аккаунт владельца платформы нельзя удалить из приложения',
       });
     }
 

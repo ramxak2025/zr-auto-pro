@@ -282,6 +282,38 @@ import type {
   ReportFilterOptions,
   ReportCatalogResponse,
 } from '../types';
+// 2026-09-30 — ячейки хранения, менеджеры платформы, расходы «за месяц»
+// (сущности — в ../types, тела и параметры запросов — в ./types).
+import type {
+  StorageCell,
+  PlatformManager,
+  PlatformManagerDetail,
+  ManagerSummary,
+  ManagerSettlement,
+  ManagerLedger,
+} from '../types';
+import type {
+  ProductsQuery,
+  BulkAssignCellRequest,
+  BulkAssignCellResponse,
+  CreateStorageCellRequest,
+  BulkCreateStorageCellsRequest,
+  BulkCreateStorageCellsResponse,
+  UpdateStorageCellRequest,
+  RemoveStorageCellParams,
+  CreateManagerRequest,
+  UpdateManagerRequest,
+  CreateSettlementRequest,
+  CreateManagerTenantRequest,
+  TransferTenantManagerRequest,
+  TransferTenantManagerResponse,
+  ResetOwnerPasswordRequest,
+  ManagerTenantsQuery,
+  ManagerLedgerQuery,
+  CreateExpenseRequest,
+  UpdateExpenseRequest,
+  CheckTemplateServiceInput,
+} from './types';
 
 export function createAuthApi(api: HttpClient) {
   return {
@@ -739,8 +771,9 @@ export function createCarsApi(api: HttpClient) {
 
 export function createProductsApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams & { warehouseId?: string }) =>
-      api.get<PaginatedResponse<Product>>('/products', { params }),
+    // ProductsQuery (2026-09-30) = PaginationParams + warehouseId + storageCellId
+    // (uuid ячейки или 'none' — товары без адреса); `search` матчит и код ячейки.
+    getAll: (params?: ProductsQuery) => api.get<PaginatedResponse<Product>>('/products', { params }),
     getLowStock: () => api.get<Product[]>('/products/low-stock'),
     getMovements: (params?: PaginationParams) => api.get<StockMovement[]>('/products/movements', { params }),
     getWarehouseStats: () =>
@@ -776,6 +809,14 @@ export function createProductsApi(api: HttpClient) {
      * '' = в корень. Гейт 'warehouse_manage'.
      */
     bulkMove: (data: BulkMoveRequest) => api.post<BulkMoveResponse>('/products/bulk-move', data),
+    /**
+     * 172 (2026-09-30) — массово положить товары в одну ячейку хранения или снять
+     * адрес (`storageCellId: null`). Транзакционно; ≤ 2000 товаров; все товары обязаны
+     * лежать на складе ячейки, иначе 400 `STORAGE_CELL_WRONG_WAREHOUSE`.
+     * Гейт 'warehouse_manage'.
+     */
+    bulkAssignCell: (data: BulkAssignCellRequest) =>
+      api.post<BulkAssignCellResponse>('/products/bulk-assign-cell', data),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here
@@ -813,6 +854,12 @@ export function createProductsApi(api: HttpClient) {
         stock?: number;
         minStock?: number;
         unit?: string;
+        /**
+         * 172 — КОД ячейки хранения (не uuid). Товары импорта попадают на ОСНОВНОЙ склад
+         * филиала сессии; ячейка ищется на нём по коду (без учёта регистра), если нет —
+         * создаётся. Пусто/не передано — адрес не меняется.
+         */
+        storageCell?: string;
       }>,
     ) =>
       api.post<{ created: number; updated: number; skipped?: number; total: number; errors?: string[] }>(
@@ -1182,7 +1229,10 @@ export function createSalaryApi(api: HttpClient) {
     /**
      * Выдать выплату — фиксируется СРАЗУ (status='accepted' + зеркальный
      * расход). `periodMonth` (149) — «за какой месяц» ('YYYY-MM'): помесячная
-     * карточка и P&L отнесут выплату к нему; absent = месяц выписки.
+     * карточка, отчёты («По зарплатам», «Сводный», «По расходам») и P&L отнесут
+     * выплату к нему, а касса и «Движение денег» — по дате выдачи. С 2026-09-30
+     * новая выплата ВСЕГДА получает месяц: не передан — сервер подставит месяц
+     * факта в часовом поясе автосервиса (в БД не NULL).
      */
     createPayout: (data: {
       employeeId: string;
@@ -1222,7 +1272,10 @@ export function createSalaryApi(api: HttpClient) {
     settlePayout: (id: string) => api.post<SalaryPayout>(`/salary/payouts/${id}/settle`),
     /**
      * List payouts + statuses. Owner sees the whole tenant; an employee is
-     * scoped to their own server-side. `monthYear` filters by issue month.
+     * scoped to their own server-side. `monthYear` ('YYYY-MM') фильтрует по
+     * НАЗНАЧЕННОМУ месяцу — «за какой месяц» выплата выдана (`periodMonth`; у
+     * старых строк без него — месяц выдачи), а не по дате выдачи: выплата,
+     * выданная в октябре за сентябрь, попадает в `monthYear=2026-09`.
      * `unviewed` (158) — только не просмотренные получателем.
      */
     listPayouts: (params?: {
@@ -1280,7 +1333,11 @@ export function createSalaryApi(api: HttpClient) {
       api.patch<SalaryFine>(`/salary/penalties/${id}`, { amount: data.amount, reason: data.comment }),
 
     // ── Per-employee monthly salary detail (full-screen card, pages months) ──
-    /** Breakdown for one employee + one month ('YYYY-MM'). Owner: any; employee: self. */
+    /**
+     * Breakdown for one employee + one month ('YYYY-MM'). Owner: any; employee: self.
+     * 2026-09-30: в ответе `carryOver` — долг/переплата за 12 предыдущих месяцев
+     * (`SalaryMonthDetail.carryOver`), чтобы «выдать за сентябрь» из карточки октября.
+     */
     getEmployeeMonth: (employeeId: string, month: string) =>
       api.get<SalaryMonthDetail>(`/salary/employee/${employeeId}/month`, { params: { month } }),
   };
@@ -1616,7 +1673,20 @@ export function createExpensesApi(api: HttpClient) {
     // `createdBy` filter narrows the listing to a single employee (used
     // by the owner's "По сотруднику" chip); `approvalStatus` filter is
     // used by the "Ожидает одобрения" review queue.
-    getAll: (params?: DateRangeParams & { createdBy?: string; approvalStatus?: 'pending' | 'approved' | 'rejected' }) =>
+    // `attribution` (2026-09-30): по какой дате фильтровать диапазон dateFrom..dateTo.
+    //   'date' (по умолчанию) — по дате факта/оплаты: так строит ленту «Расходы», кассу
+    //   и «Движение денег»; 'period' — по месяцу, ЗА КОТОРЫЙ расход (`periodMonth`, а без
+    //   него — месяц даты): так считают отчёты и прибыль («аренда за сентябрь, оплачена в
+    //   октябре» попадёт в сентябрь). Правило принадлежности месяца диапазону — то же, что
+    //   на экране «Зарплата» (месяц входит, если диапазон покрывает его от 1-го числа до
+    //   последнего дня, а для текущего месяца — до сегодняшнего дня).
+    getAll: (
+      params?: DateRangeParams & {
+        createdBy?: string;
+        approvalStatus?: 'pending' | 'approved' | 'rejected';
+        attribution?: 'date' | 'period';
+      },
+    ) =>
       api.get<
         Array<{
           id: string;
@@ -1640,8 +1710,8 @@ export function createExpensesApi(api: HttpClient) {
           createdAt: string;
         }>
       >('/expenses', { params }),
-    create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) =>
-      api.post('/expenses', data),
+    /** `periodMonth` ('YYYY-MM') — «за какой месяц» относится расход; без него — месяц `date`. */
+    create: (data: CreateExpenseRequest) => api.post('/expenses', data),
     /**
      * ПРАВКА расхода одним запросом. Раньше ручки не было, и клиент изображал
      * «Изменить» парой «удалить + создать заново» — отказ второго запроса
@@ -1649,8 +1719,11 @@ export function createExpensesApi(api: HttpClient) {
      * Передаются только изменяемые поля; `id`, автор, источник, филиал и
      * статус одобрения сервер сохраняет (статус может только уйти в 'pending',
      * если правка вывела сумму за дневной лимит сотрудника).
+     * Тело — `UpdateExpenseRequest` (в т.ч. `periodMonth`), раскрытое поэлементно в
+     * литерал: backend/test/expenses-update.test.cjs грепает исходник этой строки и
+     * ждёт `data: { … }` прямо в сигнатуре, а так тип не разъезжается с именованным.
      */
-    update: (id: string, data: { categoryId?: string | null; amount?: number; description?: string; date?: string }) =>
+    update: (id: string, data: { [K in keyof UpdateExpenseRequest]: UpdateExpenseRequest[K] }) =>
       api.patch(`/expenses/${id}`, data),
     /** Owner approves a pending expense — flips approval_status to 'approved'. Director / admin / superadmin only. */
     approve: (id: string) => api.patch(`/expenses/${id}/approve`),
@@ -1840,7 +1913,8 @@ export function createCheckTemplatesApi(api: HttpClient) {
      */
     create: (data: {
       name: string;
-      services: CheckTemplate['services'];
+      /** `quantity` необязателен (2026-09-30): новые клиенты его не шлют, сервер сохраняет 1. */
+      services: CheckTemplateServiceInput[];
       products: CheckTemplate['products'];
       folderId?: string | null;
       shared?: boolean;
@@ -1848,7 +1922,10 @@ export function createCheckTemplatesApi(api: HttpClient) {
     /** `folderId: null` moves the template back to the root (no folder). */
     update: (
       id: string,
-      data: Partial<Pick<CheckTemplate, 'name' | 'services' | 'products'>> & { folderId?: string | null },
+      data: Partial<Pick<CheckTemplate, 'name' | 'products'>> & {
+        services?: CheckTemplateServiceInput[];
+        folderId?: string | null;
+      },
     ) => api.put<CheckTemplate>(`/check-templates/${id}`, data),
     remove: (id: string) => api.delete(`/check-templates/${id}`),
     /** Personal folders of the current employee (flat list, hierarchy via parentId). */
@@ -2735,5 +2812,150 @@ export function createReportBuilderApi(api: HttpClient) {
         },
         timeout: 60_000,
       } as unknown),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  ЯЧЕЙКИ ХРАНЕНИЯ (172, 2026-09-30) — адрес товара на складе. Ячейка
+//  принадлежит складу; один товар лежит в одной ячейке (Product.storageCellId).
+//  Чтение — право warehouse_access, изменение — warehouse_manage. Коды для
+//  массового создания генерирует КЛИЕНТ (shared/utils/storageCells.ts:
+//  generateCellCodes), сервер принимает готовый список. Тело ошибок —
+//  StorageCellError (../types): 409 STORAGE_CELL_EXISTS / STORAGE_CELL_NOT_EMPTY
+//  (с productsCount), 400 STORAGE_CELL_WRONG_WAREHOUSE.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createStorageCellsApi(api: HttpClient) {
+  return {
+    /**
+     * Ячейки одного склада (склад обязателен) с `productsCount` — сколько товаров
+     * в ячейке лежит. Порядок: `sortOrder`, затем код.
+     */
+    list: (warehouseId: string) => api.get<StorageCell[]>('/storage-cells', { params: { warehouseId } }),
+    /** Одна ячейка. Код уже есть на складе (без учёта регистра) → 409 `STORAGE_CELL_EXISTS`. */
+    create: (data: CreateStorageCellRequest) => api.post<StorageCell>('/storage-cells', data),
+    /**
+     * Массовое создание списком кодов (≤ 2000, `MAX_BULK_CELLS`). Уже существующие
+     * коды пропускаются и возвращаются в `skipped` — это НЕ ошибка.
+     */
+    bulkCreate: (data: BulkCreateStorageCellsRequest) =>
+      api.post<BulkCreateStorageCellsResponse>('/storage-cells/bulk', data, { timeout: 60_000 }),
+    /** Переименовать / подписать (`name: null` снимает подпись) / переставить (`sortOrder`). */
+    update: (id: string, data: UpdateStorageCellRequest) => api.patch<StorageCell>(`/storage-cells/${id}`, data),
+    /**
+     * Сохранить порядок ячеек (как у папок склада): `orderedIds` — id в новом порядке,
+     * сервер проставляет `sortOrder`. Отвечает `{ message: 'OK' }`.
+     */
+    updateOrder: (orderedIds: string[]) => api.patch<{ message: string }>('/storage-cells/order', { orderedIds }),
+    /**
+     * Удалить ячейку. Пустую — без параметров. С товарами нужен ровно один из двух:
+     * `moveTo` (id ячейки ТОГО ЖЕ склада — товары переедут туда) или `detach: true`
+     * (у товаров снимется адрес); иначе 409 `STORAGE_CELL_NOT_EMPTY { productsCount }`.
+     */
+    remove: (id: string, opts?: RemoveStorageCellParams) => {
+      const params = new URLSearchParams();
+      if (opts?.moveTo !== undefined) params.set('moveTo', opts.moveTo);
+      if (opts?.detach) params.set('detach', 'true');
+      const qs = params.toString();
+      return api.delete<{ ok: true }>(`/storage-cells/${id}${qs ? `?${qs}` : ''}`);
+    },
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  МЕНЕДЖЕРЫ ПЛАТФОРМЫ (173, 2026-09-30). Менеджер — сотрудник владельца Autexa
+//  без тенанта (роль 'manager'): заводит автосервисы, выдаёт пробные доступы,
+//  продлевает подписки, меняет тарифы СВОИМ клиентам (tenants.manager_id).
+//  Со ВСЕХ платных оплат, проведённых менеджером, ownerSharePercent % (по
+//  умолчанию 60) записывается как его долг владельцу. Типы — секция «Менеджеры
+//  платформы» в ../types. Две фабрики: adminManagersApi — кабинет СУПЕРАДМИНА
+//  (/admin/managers*, передача клиентов), managerApi — кабинет САМОГО менеджера
+//  (/manager/*, видит только своих клиентов, чужой id → 404).
+// ───────────────────────────────────────────────────────────────────────
+
+/** Кабинет суперадмина: менеджеры, их взаиморасчёты и передача клиентов. Только `superadmin`. */
+export function createAdminManagersApi(api: HttpClient) {
+  return {
+    /** Все менеджеры платформы со сводкой (клиенты, оплаты и доля за месяц, баланс). */
+    list: () => api.get<PlatformManager[]>('/admin/managers'),
+    /** Завести менеджера. Телефон занят → 409 `PHONE_TAKEN` (`ManagerPhoneTakenError`). */
+    create: (data: CreateManagerRequest) => api.post<PlatformManager>('/admin/managers', data),
+    /** Карточка: профиль + `summary` + автосервисы менеджера (`tenants: Tenant[]`). */
+    get: (id: string) => api.get<PlatformManagerDetail>(`/admin/managers/${id}`),
+    /** Правка (доля, активность, пароль, телефон…). Доля действует на БУДУЩИЕ платежи. */
+    update: (id: string, data: UpdateManagerRequest) => api.patch<PlatformManager>(`/admin/managers/${id}`, data),
+    /**
+     * Лента платежей (со снимком доли) и расчётов менеджера + баланс. `months` —
+     * окно лент (по умолчанию 12, сервер ограничивает 1..36); `balance` — всегда за всё время.
+     */
+    ledger: (id: string, params?: ManagerLedgerQuery) =>
+      api.get<ManagerLedger>(`/admin/managers/${id}/ledger`, { params }),
+    /** Внести расчёт (`amount > 0` — менеджер передал деньги; `< 0` — корректировка, нужна причина в `note`). */
+    addSettlement: (id: string, data: CreateSettlementRequest) =>
+      api.post<ManagerSettlement>(`/admin/managers/${id}/settlements`, data),
+    /** Удалить расчёт (попадает в журнал действий). */
+    removeSettlement: (id: string, settlementId: string) =>
+      api.delete<{ ok: true }>(`/admin/managers/${id}/settlements/${settlementId}`),
+    /**
+     * Передать автосервис другому менеджеру (`managerId`) или снять с менеджера
+     * (`null` — клиент владельца). Долг по уже проведённым платежам остаётся за тем,
+     * кто их провёл.
+     */
+    transferTenant: (tenantId: string, data: TransferTenantManagerRequest) =>
+      api.patch<TransferTenantManagerResponse>(`/admin/tenants/${tenantId}/manager`, data),
+  };
+}
+
+/**
+ * Кабинет менеджера: только его автосервисы (`tenants.manager_id` = он). Роль `manager`
+ * (суперадмин тоже проходит, но UI суперадмина эти маршруты не использует). Нет:
+ * удаление автосервиса, правка реквизитов/даты подписки, тарифы, рассылки, заявки.
+ */
+export function createManagerCabinetApi(api: HttpClient) {
+  return {
+    /** Сводка: клиенты по статусам, оплаты за месяц, моя доля, долг владельцу, лимит пробного. */
+    summary: () => api.get<ManagerSummary>('/manager/summary'),
+    /**
+     * Свои автосервисы в форме `Tenant` (со `lastPayment`, `currentPeriodKind`,
+     * `userCount`). `status` — фильтр по состоянию подписки, без него — все.
+     */
+    tenants: (params?: ManagerTenantsQuery) => api.get<Tenant[]>('/manager/tenants', { params }),
+    /**
+     * Завести автосервис за собой: владелец-директор обязателен, `trialDays` ≤ `maxFreeDays`
+     * (не передан — `min(14, maxFreeDays)`). Бессрочных автосервисов менеджер не создаёт.
+     */
+    createTenant: (data: CreateManagerTenantRequest) => api.post<Tenant>('/manager/tenants', data),
+    /** Свой автосервис по id (чужой или несуществующий — 404). */
+    tenant: (id: string) => api.get<Tenant>(`/manager/tenants/${id}`),
+    /** Сводная карточка автосервиса (подписка, тариф, метрики), как `tenantsApi.getCabinet`. */
+    cabinet: (id: string) => api.get<TenantCabinet>(`/manager/tenants/${id}/cabinet`),
+    /**
+     * Продлить подписку. ТОЛЬКО объектом (старой формы «число дней» нет — она создавала
+     * бесплатную строку без типа): `{ type: 'free', days }` — пробный, `days ≤ maxFreeDays`,
+     * `until` запрещён; `{ type: 'paid', amount, days | until }` — платный, `amount > 0`
+     * обязателен, в платёж пишется доля владельца (`ownerShareAmount`).
+     */
+    extend: (id: string, data: ExtendSubscriptionRequest) => api.post<Tenant>(`/manager/tenants/${id}/extend`, data),
+    /** Сменить тариф автосервиса. */
+    assignPlan: (id: string, data: AssignPlanRequest) => api.post<Tenant>(`/manager/tenants/${id}/assign-plan`, data),
+    /** Приостановить автосервис; `reason` — необязательная пометка. */
+    suspend: (id: string, data?: SuspendTenantRequest) =>
+      api.post<Tenant>(`/manager/tenants/${id}/suspend`, data ?? {}),
+    /** Снять приостановку; `reason` — необязательная пометка для журнала. */
+    unsuspend: (id: string, data?: SuspendTenantRequest) =>
+      api.post<Tenant>(`/manager/tenants/${id}/unsuspend`, data ?? {}),
+    /** «Войти как владелец»: токен на 30 минут, действие пишется в журнал. */
+    impersonate: (id: string) => api.post<ImpersonateResponse>(`/manager/tenants/${id}/impersonate`),
+    /** Сбросить пароль владельца (самого старого активного директора) автосервиса. */
+    resetOwnerPassword: (id: string, data: ResetOwnerPasswordRequest) =>
+      api.post<{ ok: true }>(`/manager/tenants/${id}/reset-owner-password`, data),
+    /**
+     * Мои платежи (со снимком доли) и расчёты с владельцем + баланс. `months` — окно лент
+     * (по умолчанию 12, 1..36); `balance` — за всё время.
+     */
+    ledger: (params?: ManagerLedgerQuery) => api.get<ManagerLedger>('/manager/ledger', { params }),
+    /** Журнал моих действий (записи, где актор — я); `limit`/`offset` — как у `adminApi.listAuditLog`. */
+    auditLog: (params?: { limit?: number; offset?: number }) =>
+      api.get<AuditLogEntry[]>('/manager/audit-log', { params }),
   };
 }

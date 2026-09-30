@@ -1,13 +1,13 @@
 /**
- * AdminMoreScreen — the «Ещё» tab of the superadmin shell.
+ * AdminMoreScreen — the «Ещё» tab of the platform-operator shell (суперадмин и менеджер).
  *
- *   • Журнал действий (audit log) — adminApi.listAuditLog(): who did what to
- *     whom and when, with human-readable Russian action labels.
- *   • Тема (light / dark toggle — superadmin gets it too).
+ *   • Суперадмин: «Менеджеры» и «Заявки на регистрацию»; журнал действий — adminApi.listAuditLog().
+ *   • Менеджер: «Расчёты» с текущим долгом владельцу; журнал ЕГО действий — managerApi.auditLog().
+ *   • Тема (light / dark toggle — оба получают её).
  *   • Версия приложения.
  *   • Выйти (logout via AuthContext).
  *
- * The superadmin's own notifications keep working — BroadcastNotificationProvider
+ * The operator's own notifications keep working — BroadcastNotificationProvider
  * is mounted app-wide in App.tsx, above the role branch, so nothing here needs
  * to re-wire it.
  */
@@ -17,7 +17,7 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { adminApi } from '../../api/services';
+import { adminApi, managerApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -26,8 +26,8 @@ import { useColors, useThemeMode } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { AuditLogEntry, RegistrationRequest } from '../../../../shared/types';
-import { formatDateTime } from './adminShared';
+import type { AuditLogEntry, ManagerSummary, RegistrationRequest } from '../../../../shared/types';
+import { balanceCaption, balanceColor, formatDateTime, useAdminMode } from './adminShared';
 
 // Human-readable Russian labels for the platform audit actions. Keys mirror the
 // FACTUAL audit.log()/audit.logTx() calls in backend (single source of truth —
@@ -38,6 +38,8 @@ import { formatDateTime } from './adminShared';
 //   registration.service.ts  → registration_approve, registration_reject
 //   notifications.service.ts → broadcast_cancel
 //   checks.service.ts        → check_closed_edit
+//   менеджеры (173)          → tenant_create, tenant_transfer_manager, manager_create,
+//                              manager_update, manager_settlement, owner_password_reset
 // Unknown actions fall back to a humanised version of the raw key.
 const ACTION_LABELS: Record<string, string> = {
   tenant_extend: 'Продление подписки',
@@ -51,6 +53,12 @@ const ACTION_LABELS: Record<string, string> = {
   registration_reject: 'Заявка отклонена',
   broadcast_cancel: 'Рассылка отменена',
   check_closed_edit: 'Правка закрытого чека',
+  tenant_create: 'Создание автосервиса',
+  tenant_transfer_manager: 'Передача клиента менеджеру',
+  manager_create: 'Создание менеджера',
+  manager_update: 'Правка менеджера',
+  manager_settlement: 'Расчёт с менеджером',
+  owner_password_reset: 'Сброс пароля владельца',
 };
 
 function actionLabel(action: string): string {
@@ -64,6 +72,10 @@ function actionIcon(action: string): keyof typeof Ionicons.glyphMap {
   if (action.startsWith('registration')) return 'mail-open-outline';
   if (action.startsWith('broadcast')) return 'megaphone-outline';
   if (action.startsWith('check')) return 'receipt-outline';
+  if (action === 'manager_settlement') return 'cash-outline';
+  if (action.startsWith('manager')) return 'people-outline';
+  if (action === 'owner_password_reset') return 'lock-closed-outline';
+  if (action === 'tenant_transfer_manager') return 'swap-horizontal-outline';
   if (action.startsWith('tenant')) return 'business-outline';
   if (action.startsWith('plan')) return 'pricetags-outline';
   if (action.startsWith('user')) return 'person-outline';
@@ -77,30 +89,43 @@ export default function AdminMoreScreen() {
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { logout, user } = useAuth();
   const { mode, toggle } = useThemeMode();
+  const isManager = useAdminMode() === 'manager';
   const [refreshing, setRefreshing] = React.useState(false);
 
   // Pending registration requests — count badge on the «Заявки» row. Same query
   // key the Overview card + review screen use, so all three stay consistent.
+  // Заявки — суперадминский маршрут: менеджеру запрос не шлём.
   const { data: pendingRequests = [] } = useQuery<RegistrationRequest[]>({
     queryKey: ['admin-registration-requests', 'pending'],
     queryFn: async () => (await adminApi.listRegistrationRequests('pending')).data,
+    enabled: !isManager,
   });
   const pendingCount = pendingRequests.length;
+
+  // Долг владельцу на строке «Расчёты» — тот же ключ, что у обзора менеджера.
+  const { data: managerSummary, refetch: refetchSummary } = useQuery<ManagerSummary>({
+    queryKey: ['manager', 'summary'],
+    queryFn: async () => (await managerApi.summary()).data,
+    enabled: isManager,
+    placeholderData: (prev) => prev,
+  });
 
   const {
     data: log = [],
     isLoading,
     refetch,
   } = useQuery<AuditLogEntry[]>({
-    queryKey: ['admin-audit-log'],
-    queryFn: async () => (await adminApi.listAuditLog()).data,
+    // Журнал менеджера — только его действия; журнал суперадмина — вся платформа.
+    queryKey: isManager ? ['manager', 'audit-log'] : ['admin-audit-log'],
+    queryFn: async () =>
+      isManager ? (await managerApi.auditLog({ limit: 50 })).data : (await adminApi.listAuditLog()).data,
   });
 
   const onRefresh = React.useCallback(async () => {
     setRefreshing(true);
-    await refetch();
+    await Promise.all([refetch(), isManager ? refetchSummary() : Promise.resolve()]);
     setRefreshing(false);
-  }, [refetch]);
+  }, [refetch, refetchSummary, isManager]);
 
   const handleLogout = React.useCallback(() => {
     haptic('tap');
@@ -111,7 +136,7 @@ export default function AdminMoreScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Ещё" subtitle={user?.fullName ?? 'Суперадмин'} />
+      <IosScreenHeader title="Ещё" subtitle={user?.fullName ?? (isManager ? 'Менеджер' : 'Суперадмин')} />
 
       <ScrollView
         contentInset={contentInset}
@@ -149,30 +174,70 @@ export default function AdminMoreScreen() {
         </View>
 
         {/* Management */}
-        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Управление</Text>
-        <Pressable
-          onPress={() => {
-            haptic('tap');
-            // Nested navigate — the review screen lives in the Overview tab's
-            // stack (AdminShellNavigator). This switches to it and pushes the list.
-            navigation.navigate('AdminOverview', { screen: 'AdminRegistrationRequests' });
-          }}
-          style={[styles.card, surface.card, styles.navRow]}
-        >
-          <View style={[styles.settingIcon, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="mail-unread-outline" size={18} color={palette.text.primary} />
-          </View>
-          <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Заявки на регистрацию</Text>
-          {pendingCount > 0 ? (
-            <View style={[styles.navBadge, { backgroundColor: palette.accent.primary }]}>
-              <Text style={styles.navBadgeText}>{pendingCount}</Text>
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>
+          {isManager ? 'Деньги' : 'Управление'}
+        </Text>
+        {isManager ? (
+          <Pressable
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('ManagerLedger');
+            }}
+            style={[styles.card, surface.card, styles.navRow]}
+          >
+            <View style={[styles.settingIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="wallet-outline" size={18} color={palette.text.primary} />
             </View>
-          ) : null}
-          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-        </Pressable>
+            <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Расчёты</Text>
+            {managerSummary ? (
+              <Text style={[styles.settingValue, { color: balanceColor(managerSummary.balance, palette) }]}>
+                {balanceCaption(managerSummary.balance)}
+              </Text>
+            ) : null}
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </Pressable>
+        ) : (
+          <>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('AdminManagers');
+              }}
+              style={[styles.card, surface.card, styles.navRow]}
+            >
+              <View style={[styles.settingIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="people-outline" size={18} color={palette.text.primary} />
+              </View>
+              <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Менеджеры</Text>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                // Nested navigate — the review screen lives in the Overview tab's
+                // stack (AdminShellNavigator). This switches to it and pushes the list.
+                navigation.navigate('AdminOverview', { screen: 'AdminRegistrationRequests' });
+              }}
+              style={[styles.card, surface.card, styles.navRow]}
+            >
+              <View style={[styles.settingIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="mail-unread-outline" size={18} color={palette.text.primary} />
+              </View>
+              <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Заявки на регистрацию</Text>
+              {pendingCount > 0 ? (
+                <View style={[styles.navBadge, { backgroundColor: palette.accent.primary }]}>
+                  <Text style={styles.navBadgeText}>{pendingCount}</Text>
+                </View>
+              ) : null}
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            </Pressable>
+          </>
+        )}
 
         {/* Audit log */}
-        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Журнал действий</Text>
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>
+          {isManager ? 'Мои действия' : 'Журнал действий'}
+        </Text>
         <View style={[styles.card, surface.card]}>
           {isLoading ? (
             <View style={styles.emptyBlock}>

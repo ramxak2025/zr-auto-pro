@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { CreateCheckTemplateDto, UpdateCheckTemplateDto, normalizeTemplateServices } from './dto/check-template.dto';
 
 /**
  * Check templates — personal since migration 110.
@@ -17,6 +18,11 @@ import { PG_POOL } from '../database.module';
  *
  * Folders (check_template_folders) are strictly PERSONAL (user_id NOT NULL):
  * every employee manages their own tree. Общие templates stay folder-less.
+ *
+ * Услуги без количества (2026-09-30): строки `services` всегда пишутся с
+ * `quantity: 1` (normalizeTemplateServices), даже если старый клиент прислал 2–3.
+ * У `products` количество значимо и сохраняется как пришло. Уже лежащие в БД
+ * шаблоны с `quantity > 1` не правятся — клиенты разворачивают их в строки.
  */
 const OWNER_CLASS_ROLES = new Set(['superadmin', 'director', 'admin']);
 
@@ -82,11 +88,7 @@ export class CheckTemplatesService {
     return rows.map(this.mapRow);
   }
 
-  async create(
-    tenantId: string,
-    actor: TemplateActor,
-    dto: { name: string; services: any[]; products: any[]; folderId?: string | null; shared?: boolean },
-  ) {
+  async create(tenantId: string, actor: TemplateActor, dto: CreateCheckTemplateDto) {
     // Only owner-class may publish an общий template; everyone else always
     // creates a personal one (shared flag is ignored for them by design).
     const ownerId = dto.shared === true && isOwnerClass(actor) ? null : actor.userID;
@@ -104,7 +106,14 @@ export class CheckTemplatesService {
       `INSERT INTO check_templates (tenant_id, name, services, products, user_id, folder_id)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${TEMPLATE_COLS}`,
-      [tenantId, dto.name, JSON.stringify(dto.services || []), JSON.stringify(dto.products || []), ownerId, folderId],
+      [
+        tenantId,
+        dto.name,
+        JSON.stringify(normalizeTemplateServices(dto.services)),
+        JSON.stringify(dto.products || []),
+        ownerId,
+        folderId,
+      ],
     );
     return this.mapRow(rows[0]);
   }
@@ -128,12 +137,7 @@ export class CheckTemplatesService {
     return row;
   }
 
-  async update(
-    id: string,
-    tenantId: string,
-    actor: TemplateActor,
-    dto: { name?: string; services?: any[]; products?: any[]; folderId?: string | null },
-  ) {
+  async update(id: string, tenantId: string, actor: TemplateActor, dto: UpdateCheckTemplateDto) {
     const current = await this.loadForWrite(id, tenantId, actor);
 
     const sets: string[] = [];
@@ -146,7 +150,7 @@ export class CheckTemplatesService {
     }
     if (dto.services !== undefined) {
       sets.push(`services=$${idx++}`);
-      vals.push(JSON.stringify(dto.services));
+      vals.push(JSON.stringify(normalizeTemplateServices(dto.services)));
     }
     if (dto.products !== undefined) {
       sets.push(`products=$${idx++}`);

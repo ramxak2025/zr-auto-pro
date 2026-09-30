@@ -91,11 +91,17 @@ export default function ProductPickerDrawer({
     return { subfolders: sorted, currentProducts: prods };
   }, [products, activePath]);
 
+  // Подсказка поиска по адресу — только когда на складе есть ячейки.
+  const hasCells = useMemo(() => products.some((p) => p.storageCellCode), [products]);
+
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
     return products.filter(
-      (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.category && p.category.toLowerCase().includes(q)) ||
+        (p.storageCellCode && p.storageCellCode.toLowerCase().includes(q)),
     );
   }, [products, search]);
 
@@ -154,6 +160,18 @@ export default function ProductPickerDrawer({
               <span className="block truncate text-xs text-ink-3">{product.category}</span>
             )}
           </span>
+          {product.storageCellCode && (
+            <span
+              title={
+                product.storageCellName
+                  ? `Ячейка ${product.storageCellCode} — ${product.storageCellName}`
+                  : `Ячейка ${product.storageCellCode}`
+              }
+              className="max-w-[6.5rem] flex-shrink-0 truncate font-mono text-2xs tabular-nums text-ink-3"
+            >
+              {product.storageCellCode}
+            </span>
+          )}
           <Badge tone={inStock ? 'ok' : 'bad'} size="sm" className="tabular-nums">
             {inStock ? formatQtyUnit(product.stock, product.unit) : 'Нет'}
           </Badge>
@@ -190,7 +208,7 @@ export default function ProductPickerDrawer({
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Название или категория…"
+          placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
           aria-label="Поиск товара"
           leftIcon={Search}
           autoComplete="off"

@@ -40,10 +40,26 @@ export const AUTH_CACHE_TTL_MS = 30_000;
 export const NO_TENANT_ID = '00000000-0000-0000-0000-000000000000';
 
 /**
- * True when a caller has NO real tenant — i.e. a global `superadmin` browsing
- * the /admin cabinet without impersonating any tenant. Their `tenantID` is
- * either falsy (defensive) or the nil-UUID sentinel (`NO_TENANT_ID`), which is
- * a valid uuid that no real `tenants` row ever owns.
+ * Роли ПЛАТФОРМЫ — пользователи без собственного тенанта (users.tenant_id IS
+ * NULL): владелец (`superadmin`) и его сотрудники (`manager`, миграция 173).
+ *
+ * ЭТО НЕ «роли с обходом RolesGuard»: bypass в RolesGuard остаётся ТОЛЬКО у
+ * `superadmin` (менеджер проходит лишь там, где `@Roles('manager', …)` назван
+ * явно). PLATFORM_ROLES отвечает на другой вопрос — «у этой роли нет тенанта,
+ * значит тенантные записи/пробы подписки/выбор филиала к ней неприменимы».
+ */
+export const PLATFORM_ROLES: ReadonlySet<string> = new Set(['superadmin', 'manager']);
+
+/** True для роли платформы (superadmin | manager) — см. PLATFORM_ROLES. */
+export function isPlatformRole(role?: string | null): boolean {
+  return typeof role === 'string' && PLATFORM_ROLES.has(role);
+}
+
+/**
+ * True when a caller has NO real tenant — i.e. a global platform user
+ * (`superadmin` or `manager`) browsing their cabinet without impersonating any
+ * tenant. Their `tenantID` is either falsy (defensive) or the nil-UUID sentinel
+ * (`NO_TENANT_ID`), which is a valid uuid that no real `tenants` row ever owns.
  *
  * Why this is the ONE predicate every tenant-scoped write/seed path checks:
  *   • tenant-scoped SELECTs are already safe — the sentinel simply matches no
@@ -56,8 +72,8 @@ export const NO_TENANT_ID = '00000000-0000-0000-0000-000000000000';
  *     lazy-seed guards short-circuit on exactly the same condition.
  *
  * Accepts either the whole validated user or a bare tenantID string so callers
- * can use whichever they have in hand. A NON-superadmin with a real tenant is
- * never tenant-less; a superadmin acting WITHIN a tenant (real uuid tenantID,
+ * can use whichever they have in hand. A NON-platform user with a real tenant is
+ * never tenant-less; a platform user acting WITHIN a tenant (real uuid tenantID,
  * e.g. impersonation) is likewise never tenant-less — the guard must not fire.
  */
 export function isTenantLess(input: { role?: string; tenantID?: string } | string | null | undefined): boolean {
@@ -67,7 +83,7 @@ export function isTenantLess(input: { role?: string; tenantID?: string } | strin
     // lazy-seed guards that already know the caller is tenant-scoped.)
     return !input || input === NO_TENANT_ID;
   }
-  if (input.role !== 'superadmin') return false;
+  if (!isPlatformRole(input.role)) return false;
   const t = input.tenantID;
   return !t || t === NO_TENANT_ID;
 }

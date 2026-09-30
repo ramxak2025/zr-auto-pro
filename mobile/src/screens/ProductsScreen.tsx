@@ -45,6 +45,8 @@ import BulkPriceAdjustSheet from '../components/BulkPriceAdjustSheet';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
+import StorageCellChip, { CELL_CODE_FONT } from '../components/StorageCellChip';
+import StorageCellPickerModal from '../components/StorageCellPickerModal';
 import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
@@ -224,6 +226,8 @@ interface ProductRowProps {
   // гарантированно промахивал React.memo на каждом обороте переиспользования —
   // строка целиком перерисовывалась прямо во время скролла.
   hideCategory: boolean;
+  /** Открыт фильтр «ячейка X»: код у всех строк один и тот же и уже виден в плашке над списком. */
+  hideCell?: boolean;
   canSeeCostPrice: boolean;
   /** Row tap — opens the dedicated ProductDetailScreen. */
   onOpenDetail: (product: Product) => void;
@@ -257,6 +261,7 @@ interface ProductRowProps {
 const ProductRow = React.memo(function ProductRow({
   item,
   hideCategory,
+  hideCell,
   canSeeCostPrice,
   onOpenDetail,
   onOpenPhoto,
@@ -352,6 +357,10 @@ const ProductRow = React.memo(function ProductRow({
               // «на это можно нажать», а цена в строке не нажимается.
               <Text style={[styles.productSellPrice, { color: textPrimary }]}>{formatMoney(item.sellPrice)}</Text>
             )}
+            {/* Адрес хранения (2026-09-30): без ячейки компонент ничего не рисует, строка
+                прежняя. Чип стоит перед вторым слотом и сжимается первым (flexShrink
+                выше, чем у текста), цену и остаток он не сдвигает; высота не растёт. */}
+            <StorageCellChip code={hideCell ? null : item.storageCellCode} style={styles.productCellChip} />
             {/* Второй слот метастроки: в поиске — где лежит товар (иначе две
                 одинаковые «Прокладки» из разных папок неразличимы), в обычном
                 режиме — себестоимость владельцу. Ровно один, поэтому высота
@@ -464,6 +473,11 @@ export default function ProductsScreen() {
   // (та же находка, что VoiceCommentSheet в CheckDetail).
   const [formBarcode, setFormBarcode] = useState('');
   const [formScannerOpen, setFormScannerOpen] = useState(false);
+  // Ячейка хранения (2026-09-30): выбранная в форме ячейка (null — адреса нет).
+  // Выбор ячейки — тот же приём, что и сканер: StorageCellPickerModal рендерится
+  // ВНУТРИ form-Modal, отдельный state открытия.
+  const [formCell, setFormCell] = useState<{ id: string; code: string } | null>(null);
+  const [cellPickerOpen, setCellPickerOpen] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -530,7 +544,9 @@ export default function ProductsScreen() {
   // (cached/persisted); the selection lives in component state and
   // intentionally does NOT persist across mounts — owner spec.
   const [showWarehouseSwitcher, setShowWarehouseSwitcher] = useState(false);
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
+  // Экран «Ячейки хранения» открывает товары ячейки push'ем ProductsHome с
+  // `warehouseId` в параметрах — стартуем на том же складе, а не на «Основном».
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(route.params?.warehouseId ?? null);
 
   // Per-product action sheet (only on main warehouse): edit / move to
   // defect / move to used. Opened by long-press on a product row.
@@ -641,6 +657,25 @@ export default function ProductsScreen() {
   const activeWarehouseId = activeWarehouse?.id;
   const isMainWarehouse = activeWarehouse?.kind === 'main';
 
+  // Фильтр «товары одной ячейки» (2026-09-30). Приходит параметрами маршрута со
+  // страницы «Ячейки хранения» (push ProductsHome с storageCellId / storageCellCode /
+  // warehouseId). Фильтруем УЖЕ загруженный список на клиенте: склад отдаётся целиком
+  // одной страницей, ключ запроса товаров остаётся прежним — кэш и предзагрузка после
+  // логина работают как раньше. Ячейка принадлежит одному складу, поэтому после смены
+  // склада в переключателе фильтр гаснет сам (код ячейки другого склада ничего бы не нашёл).
+  const cellFilterParamId: string | undefined = route.params?.storageCellId;
+  const cellFilterParamWarehouseId: string | undefined = route.params?.warehouseId;
+  const cellFilterId =
+    cellFilterParamId &&
+    (!cellFilterParamWarehouseId || !activeWarehouseId || cellFilterParamWarehouseId === activeWarehouseId)
+      ? cellFilterParamId
+      : undefined;
+  const cellFilterCode: string | undefined = cellFilterId ? route.params?.storageCellCode : undefined;
+  const clearCellFilter = useCallback(() => {
+    haptic('tap');
+    navigation.setParams({ storageCellId: undefined, storageCellCode: undefined });
+  }, [navigation]);
+
   const { data, isLoading, isFetching, dataUpdatedAt, isError, refetch } = useQuery<PaginatedResponse<Product>>({
     // Include warehouseId in the key so each warehouse owns its own
     // cache slot — switching tabs is instant via `placeholderData` while
@@ -747,6 +782,8 @@ export default function ProductsScreen() {
       // Product picker in \u041A\u0430\u0441\u0441\u0430 reads the full list under its own key \u2014
       // keep it in sync, otherwise the picker shows stale price/stock.
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Ячейки: счётчик товаров в ячейке (productsCount) зависит от назначений.
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       closeModal();
     },
     // Показываем ПРИЧИНУ отказа сервера, а не немое «Ошибка при создании»:
@@ -763,6 +800,7 @@ export default function ProductsScreen() {
       haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       closeModal();
     },
     // Реальное сообщение сервера вместо немого «Ошибка при обновлении».
@@ -871,6 +909,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       setFolderActions(null);
       setConfirmFolderDelete(null);
     },
@@ -890,6 +929,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
     },
     onError: () => {
       haptic('error');
@@ -912,6 +952,7 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-cells'] });
       exitSelectMode();
       const dp = res?.data?.deletedProducts ?? 0;
       const dc = res?.data?.deletedCategories ?? 0;
@@ -1183,8 +1224,13 @@ export default function ProductsScreen() {
 
   // Build folder structure
   const { subfolders, currentProducts } = useMemo(() => {
-    if (search) {
-      return { subfolders: new Map<string, { count: number; hasLow: boolean }>(), currentProducts: allProducts };
+    if (search || cellFilterId) {
+      // Плоский список без папок: поиск и фильтр по ячейке (если оба — пересечение,
+      // поиск уже отработал на сервере).
+      return {
+        subfolders: new Map<string, { count: number; hasLow: boolean }>(),
+        currentProducts: cellFilterId ? allProducts.filter((p) => p.storageCellId === cellFilterId) : allProducts,
+      };
     }
 
     const subs = new Map<string, { count: number; hasLow: boolean }>();
@@ -1229,7 +1275,7 @@ export default function ProductsScreen() {
     }
 
     return { subfolders: subs, currentProducts: prods };
-  }, [allProducts, activePath, search, extraFolders]);
+  }, [allProducts, activePath, search, extraFolders, cellFilterId]);
 
   // Attach catId + sortOrder from warehouse_categories and sort by sort_order.
   const sortedFolders = useMemo(() => {
@@ -1444,6 +1490,7 @@ export default function ProductsScreen() {
     setMinStock('');
     setUnit(DEFAULT_UNIT);
     setFormBarcode('');
+    setFormCell(null);
     setPhotoUri(null);
     setModalOpen(true);
   };
@@ -1465,6 +1512,7 @@ export default function ProductsScreen() {
     // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
     setUnit(unitLabel(p.unit));
     setFormBarcode(p.barcode || '');
+    setFormCell(p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '' } : null);
     setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
     setModalOpen(true);
   }, []);
@@ -1532,6 +1580,7 @@ export default function ProductsScreen() {
     setModalOpen(false);
     setEditingProduct(null);
     setPhotoUri(null);
+    setCellPickerOpen(false);
   };
 
   const handleSubmit = async () => {
@@ -1602,12 +1651,17 @@ export default function ProductsScreen() {
       if (parsedSell !== editingProduct.sellPrice) payload.sellPrice = parsedSell;
       if (parsedStock !== editingProduct.stock) payload.stock = parsedStock;
       if (parsedMinStock !== editingProduct.minStock) payload.minStock = parsedMinStock;
+      // Ячейка хранения: PATCH принимает uuid / null (снять адрес) / отсутствие поля.
+      // Шлём только при реальной смене — как числовые поля выше.
+      const nextCellId = formCell?.id ?? null;
+      if (nextCellId !== (editingProduct.storageCellId ?? null)) payload.storageCellId = nextCellId;
       updateMutation.mutate({ id: editingProduct.id, data: payload });
     } else {
       payload.costPrice = parsedCost;
       payload.sellPrice = parsedSell;
       payload.stock = parsedStock;
       payload.minStock = parsedMinStock;
+      if (formCell) payload.storageCellId = formCell.id;
       createMutation.mutate(payload);
     }
   };
@@ -2161,7 +2215,9 @@ export default function ProductsScreen() {
         // Папку прячем, когда мы ВНУТРИ неё (она одна и та же у всех строк —
         // чистый шум), и показываем в поиске, где строки приходят из разных
         // папок и их надо различать. Раньше условие стояло наоборот.
-        hideCategory={!search}
+        // Товары ячейки лежат в разных папках — как и в поиске, папка нужна.
+        hideCategory={!search && !cellFilterId}
+        hideCell={!!cellFilterId}
         canSeeCostPrice={canSeeCostPrice}
         onOpenDetail={openDetail}
         onOpenPhoto={setFullscreenPhoto}
@@ -2200,6 +2256,7 @@ export default function ProductsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       search,
+      cellFilterId,
       canSeeCostPrice,
       openDetail,
       isMainWarehouse,
@@ -2428,6 +2485,26 @@ export default function ProductsScreen() {
         </View>
       )}
 
+      {/* Активный фильтр «ячейка X» (2026-09-30): пришли со страницы «Ячейки хранения».
+          Плашка показывает, что список сужен, и снимает фильтр одним касанием. */}
+      {cellFilterId ? (
+        <View style={styles.cellFilterRow}>
+          <TouchableOpacity
+            onPress={clearCellFilter}
+            style={[styles.cellFilterChip, { backgroundColor: palette.accent.primarySoft }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Ячейка ${cellFilterCode ?? ''}. Сбросить фильтр`}
+            hitSlop={8}
+          >
+            <Ionicons name="file-tray-stacked-outline" size={14} color={palette.accent.primary} />
+            <Text style={[styles.cellFilterChipText, { color: palette.accent.primary }]} numberOfLines={1}>
+              {`Ячейка ${cellFilterCode ?? ''}`.trim()}
+            </Text>
+            <Ionicons name="close-circle" size={16} color={palette.accent.primary} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {/* Список обрезан лимитом — говорим об этом прямо и подсказываем выход.
           Поиск на этом экране серверный, он видит весь каталог. */}
       {listTruncated && (
@@ -2436,7 +2513,9 @@ export default function ProductsScreen() {
         >
           <Ionicons name="warning-outline" size={16} color={colors.orange[600]} />
           <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
-            {`Показаны ${allProducts.length} из ${data?.total} товаров. Остальные найдутся поиском.`}
+            {cellFilterId
+              ? `Показаны ${allProducts.length} из ${data?.total} товаров, поэтому в ячейке могут быть не все. Введите код ячейки в поиск.`
+              : `Показаны ${allProducts.length} из ${data?.total} товаров. Остальные найдутся поиском.`}
           </Text>
         </View>
       )}
@@ -2471,6 +2550,18 @@ export default function ProductsScreen() {
         />
       ) : data === undefined ? (
         <ListSkeleton count={8} />
+      ) : cellFilterId && currentProducts.length === 0 ? (
+        // Ячейка есть, а товаров с этим адресом в списке нет. «Добавить товар» тут не
+        // предлагаем: адрес назначают существующему товару в его карточке.
+        <EmptyState
+          icon="cube"
+          title={search ? 'Ничего не найдено' : 'В ячейке пусто'}
+          description={
+            search
+              ? `В ячейке ${cellFilterCode ?? ''} нет товаров по запросу «${search}».`
+              : `В ячейке ${cellFilterCode ?? ''} пока нет товаров. Назначить ячейку можно в карточке товара.`
+          }
+        />
       ) : !search && sortedFolders.length === 0 && currentProducts.length === 0 ? (
         <EmptyState
           title={'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}
@@ -2716,6 +2807,38 @@ export default function ProductsScreen() {
             />
           </View>
         </View>
+        {/* Ячейка хранения (2026-09-30) — адрес товара на складе. Поле есть всегда: склад без
+            ячеек ведёт в «+ Создать ячейку» внутри пикера, отдельный экран не нужен. Пикер
+            рендерится ВНУТРИ form-Modal (сиблинг-RNModal поверх открытой модалки iOS Fabric
+            не презентует — тот же приём, что у сканера штрихкода ниже). */}
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Ячейка хранения</Text>
+          <TouchableOpacity
+            style={[styles.formInput, styles.formSelectRow, formInputThemed]}
+            onPress={() => {
+              haptic('tap');
+              setCellPickerOpen(true);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={
+              formCell ? `Ячейка хранения ${formCell.code}. Изменить` : 'Ячейка хранения не указана. Выбрать'
+            }
+          >
+            <Ionicons name="file-tray-stacked-outline" size={18} color={palette.text.tertiary} />
+            <Text
+              style={[
+                styles.formSelectValue,
+                formCell
+                  ? { color: palette.text.primary, fontFamily: CELL_CODE_FONT }
+                  : { color: palette.text.tertiary },
+              ]}
+              numberOfLines={1}
+            >
+              {formCell ? formCell.code || 'Без кода' : 'Не указана'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        </View>
         {/* \u0428\u0442\u0440\u0438\u0445\u043A\u043E\u0434 + \u043A\u0430\u043C\u0435\u0440\u0430-\u0441\u043A\u0430\u043D (round 12 #6\u0431). \u041A\u043D\u043E\u043F\u043A\u0430 \u0433\u0435\u0439\u0442\u0438\u0442\u0441\u044F
             isBarcodeScannerAvailable; \u0441\u043A\u0430\u043D\u0435\u0440 \u0436\u0438\u0432\u0451\u0442 \u0412\u041D\u0423\u0422\u0420\u0418 \u044D\u0442\u043E\u0439 \u043C\u043E\u0434\u0430\u043B\u043A\u0438 \u2014
             \u0441\u0438\u0431\u043B\u0438\u043D\u0433-RNModal \u043F\u043E\u0432\u0435\u0440\u0445 \u043E\u0442\u043A\u0440\u044B\u0442\u043E\u0439 \u043C\u043E\u0434\u0430\u043B\u043A\u0438 iOS \u043D\u0435 \u043F\u0440\u0435\u0437\u0435\u043D\u0442\u0443\u0435\u0442. */}
@@ -2761,6 +2884,17 @@ export default function ProductsScreen() {
             hint="\u041D\u0430\u0432\u0435\u0434\u0438\u0442\u0435 \u043A\u0430\u043C\u0435\u0440\u0443 \u043D\u0430 \u0448\u0442\u0440\u0438\u0445-\u043A\u043E\u0434 \u2014 \u043E\u043D \u043F\u043E\u0434\u0441\u0442\u0430\u0432\u0438\u0442\u0441\u044F \u0432 \u043F\u043E\u043B\u0435"
           />
         )}
+        {/* Вложенный выбор ячейки — презентуется от VC ЭТОЙ модалки (как сканер выше). Ячейки
+            только склада товара: ячейку чужого склада сервер отклонил бы (WRONG_WAREHOUSE). */}
+        <StorageCellPickerModal
+          visible={cellPickerOpen}
+          onClose={() => setCellPickerOpen(false)}
+          warehouseId={editingProduct?.warehouseId ?? activeWarehouseId ?? null}
+          selectedCellId={formCell?.id ?? null}
+          onSelect={(cell) => setFormCell(cell ? { id: cell.id, code: cell.code } : null)}
+          subtitle={name.trim() || undefined}
+          canCreate={canManageWarehouse}
+        />
         {editingProduct && (
           <TouchableOpacity
             style={[styles.historyLink, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
@@ -2848,6 +2982,31 @@ export default function ProductsScreen() {
               {
                 '\u041F\u0435\u0440\u0435\u0441\u0447\u0451\u0442 \u043E\u0441\u0442\u0430\u0442\u043A\u043E\u0432 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435'
               }
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        {/* Ячейки хранения (2026-09-30): справочник адресов склада — создание, сетка, переименование,
+            удаление. Пункт виден только тем, кто открывает это меню (warehouse_manage). */}
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => {
+            setShowOpsModal(false);
+            navigation.navigate('StorageCells', { warehouseId: activeWarehouseId });
+          }}
+        >
+          <View
+            style={[
+              styles.opsIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+            ]}
+          >
+            <Ionicons name="file-tray-stacked-outline" size={22} color={colors.blue[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Ячейки хранения</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              Адреса товаров: стеллажи, полки, ячейки
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
@@ -4475,6 +4634,19 @@ const styles = StyleSheet.create({
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
   searchWrap: { paddingHorizontal: spacing[4] },
+  // Плашка активного фильтра «ячейка X» под строкой поиска (2026-09-30).
+  cellFilterRow: { flexDirection: 'row', paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  cellFilterChip: {
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    minHeight: 30,
+    paddingLeft: spacing[2.5],
+    paddingRight: spacing[2],
+    borderRadius: borderRadius.full,
+  },
+  cellFilterChipText: { flexShrink: 1, fontSize: 13, fontWeight: '600' },
   // FreshnessBadge slot — right-aligned, sits just below the header.
   freshnessRow: {
     paddingHorizontal: spacing[4],
@@ -4602,6 +4774,7 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   productCostPrice: { fontSize: 13, color: colors.gray[400], flexShrink: 1, fontVariant: ['tabular-nums'] },
+  productCellChip: { flexShrink: 4 },
   productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 52, paddingLeft: spacing[1] },
   productStock: {
     fontSize: 17,
@@ -4681,6 +4854,9 @@ const styles = StyleSheet.create({
   },
   formHint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   formRowFields: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[4] },
+  // «Ячейка хранения» — поле-выбор: выглядит как formInput, тап открывает StorageCellPickerModal.
+  formSelectRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], minHeight: 42 },
+  formSelectValue: { flex: 1, fontSize: fontSize.sm },
   // «Штрихкод» + кнопка камеры-скана (round 12 #6б).
   formBarcodeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   formBarcodeScanBtn: {

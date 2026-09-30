@@ -5,9 +5,29 @@
  * тестируем вёрстку напрямую: заголовок документа, строки услуг/товаров,
  * итоги, способ оплаты, строку подписи и — критично — экранирование
  * пользовательского текста (защита от HTML-инъекции из имён/комментариев).
+ *
+ * Услуги без количества (2026-09-30): в таблице услуг нет колонки «Кол-во»
+ * (у товаров есть), а legacy-строка старого чека с quantity > 1 показывается
+ * как «Мойка ×3» в наименовании.
  */
 import { buildOrderHtml, escapeHtml } from '../orderPdf';
 import type { Check, Tenant } from '../../../../shared/types';
+
+type ServiceLine = Check['services'][number];
+
+/** Таблица услуг из готового HTML (между заголовками «Услуги» и «Товары / запчасти»). */
+function servicesSection(html: string): string {
+  const start = html.indexOf('<h3>Услуги</h3>');
+  const end = html.indexOf('<h3>Товары / запчасти</h3>');
+  return html.slice(start, end);
+}
+
+/** Таблица товаров из готового HTML (от «Товары / запчасти» до блока итогов). */
+function productsSection(html: string): string {
+  const start = html.indexOf('<h3>Товары / запчасти</h3>');
+  const end = html.indexOf('<table class="totals">');
+  return html.slice(start, end);
+}
 
 function makeCheck(overrides: Partial<Check> = {}): Check {
   return {
@@ -21,13 +41,22 @@ function makeCheck(overrides: Partial<Check> = {}): Check {
     car: { makeModel: 'Lada Priora', plateNumber: 'Х807КС198' },
     master: { fullName: 'Пётр Мастеров' },
     mileage: 123456,
+    // Одна и та же услуга дважды = две строки по 1 500 ₽ (quantity всегда 1).
     services: [
       {
         id: 's1',
         name: 'Замена масла',
         price: 1500,
-        quantity: 2,
-        total: 3000,
+        quantity: 1,
+        total: 1500,
+        master: { id: 'm-1', fullName: 'Пётр Мастеров' },
+      },
+      {
+        id: 's2',
+        name: 'Замена масла',
+        price: 1500,
+        quantity: 1,
+        total: 1500,
         master: { id: 'm-1', fullName: 'Пётр Мастеров' },
       },
     ],
@@ -141,5 +170,88 @@ describe('buildOrderHtml', () => {
     const html = buildOrderHtml(makeCheck({ services: [], products: [] }), company);
     expect(html).not.toContain('Итого услуги');
     expect(html).not.toContain('Итого товары');
+  });
+});
+
+describe('buildOrderHtml — услуги без количества', () => {
+  const legacyWash = (overrides: Partial<ServiceLine> = {}): ServiceLine =>
+    ({
+      id: 'sl-legacy',
+      name: 'Мойка',
+      price: 500,
+      quantity: 3,
+      total: 1500,
+      master: { id: 'm-1', fullName: 'Пётр Мастеров' },
+      ...overrides,
+    }) as ServiceLine;
+
+  test('в таблице услуг нет колонки «Кол-во», в таблице товаров она остаётся', () => {
+    const html = buildOrderHtml(makeCheck(), company);
+    const services = servicesSection(html);
+    const products = productsSection(html);
+    expect(services).toContain('Наименование');
+    expect(services).toContain('Мастер');
+    expect(services).toContain('Цена');
+    expect(services).toContain('Сумма');
+    expect(services).not.toContain('Кол-во');
+    expect(products).toContain('Кол-во');
+    // №, Наименование, Мастер, Цена, Сумма — пять колонок; у товаров — №, Наименование, Кол-во, Цена, Сумма.
+    expect(services.match(/<th\b/g)).toHaveLength(5);
+    expect(products.match(/<th\b/g)).toHaveLength(5);
+  });
+
+  test('итоговая строка таблицы услуг занимает четыре колонки под пять', () => {
+    const html = buildOrderHtml(makeCheck(), company);
+    expect(servicesSection(html)).toContain('<td colspan="4" class="r">Итого услуги</td>');
+    expect(productsSection(html)).toContain('<td colspan="4" class="r">Итого товары</td>');
+  });
+
+  test('строка обычной услуги — без «×N»; одна услуга дважды — две строки', () => {
+    const services = servicesSection(buildOrderHtml(makeCheck(), company));
+    expect(services).not.toMatch(/×\s*\d/);
+    expect(services.match(/Замена масла/g)).toHaveLength(2);
+    expect(services.match(/1 500 ₽/g)).toHaveLength(4); // цена и сумма в каждой из двух строк
+    // Номера строк идут подряд: 1 и 2.
+    expect(services).toContain('<td class="n">1</td>');
+    expect(services).toContain('<td class="n">2</td>');
+  });
+
+  test('legacy-строка старого чека: «Мойка ×3» в наименовании, сумма как в чеке', () => {
+    const html = buildOrderHtml(makeCheck({ services: [legacyWash()], serviceTotal: 1500 }), company);
+    const services = servicesSection(html);
+    expect(services).toContain('<td>Мойка ×3</td>');
+    expect(services).toContain('<td class="r">500 ₽</td>'); // цена за единицу
+    expect(services).toContain('<td class="r">1 500 ₽</td>'); // сумма строки — как в чеке
+    expect(services).not.toContain('Кол-во');
+  });
+
+  test('«×N» дописывается после экранированного имени — инъекция через имя не проходит', () => {
+    const html = buildOrderHtml(
+      makeCheck({ services: [legacyWash({ name: 'Мойка <b onclick=x>', quantity: 2, total: 1000 })] }),
+      company,
+    );
+    expect(html).toContain('Мойка &lt;b onclick=x&gt; ×2');
+    expect(html).not.toContain('<b onclick=x>');
+  });
+
+  test('дробное legacy-количество печатается без хвоста float, пустое / единица — без «×»', () => {
+    const fractional = servicesSection(
+      buildOrderHtml(makeCheck({ services: [legacyWash({ quantity: 2.5, total: 1250 })] }), company),
+    );
+    expect(fractional).toContain('<td>Мойка ×2.5</td>');
+
+    for (const quantity of [1, 0, null as unknown as number]) {
+      const section = servicesSection(
+        buildOrderHtml(makeCheck({ services: [legacyWash({ quantity, total: 500 })] }), company),
+      );
+      expect(section).toContain('<td>Мойка</td>');
+      expect(section).not.toContain('×');
+    }
+  });
+
+  test('товары по-прежнему показывают количество в своей колонке', () => {
+    const products = productsSection(buildOrderHtml(makeCheck(), company));
+    expect(products).toContain('<td class="r">2</td>');
+    expect(products).toContain('Масло 5W30');
   });
 });

@@ -14,6 +14,7 @@ import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, unitLabel } from '../../utils/units';
 import { toNumberOrZero } from './format';
+import StorageCellSelect from './StorageCellSelect';
 
 export interface ProductFormData {
   name: string;
@@ -30,6 +31,8 @@ export interface ProductFormData {
   bundleItems: BundleItem[];
   warrantyDays: number | null;
   warehouseId?: string;
+  /** Ячейка хранения: id — назначить, null — снять (только у существующего товара), не задано — не менять. */
+  storageCellId?: string | null;
 }
 
 interface ProductFormModalProps {
@@ -84,6 +87,16 @@ export default function ProductFormModal({
   // Round 12 #6: штрихкод — обычный текстовый input. USB-сканер печатает код
   // как клавиатура, поэтому отдельная камера-кнопка на вебе не нужна.
   const [barcode, setBarcode] = useState(product?.barcode || '');
+  const initialCellId = product?.storageCellId || '';
+  const [storageCellId, setStorageCellId] = useState(initialCellId);
+  const cellWarehouseId = product?.warehouseId || defaultWarehouseId;
+  const currentCell = useMemo(
+    () =>
+      product?.storageCellId && product.storageCellCode
+        ? { id: product.storageCellId, code: product.storageCellCode, name: product.storageCellName }
+        : null,
+    [product?.storageCellId, product?.storageCellCode, product?.storageCellName],
+  );
 
   const bundleSearchResults = useMemo(() => {
     if (!bundleSearch.trim()) return [];
@@ -139,6 +152,8 @@ export default function ProductFormModal({
       // For new products, fall back to the currently selected warehouse from
       // the page. Edits keep the product's own warehouseId untouched here.
       warehouseId: product?.warehouseId || defaultWarehouseId || undefined,
+      // Не менялась — поле не отправляем, чтобы склад без ячеек не получал лишнего.
+      storageCellId: storageCellId !== initialCellId ? storageCellId || null : undefined,
     });
   }
 
@@ -258,6 +273,15 @@ export default function ProductFormModal({
             />
           </Field>
         </div>
+
+        <StorageCellSelect
+          id="product-storage-cell"
+          warehouseId={cellWarehouseId}
+          value={storageCellId}
+          onChange={setStorageCellId}
+          canCreate={canManage}
+          currentCell={currentCell}
+        />
 
         <div className="flex items-center gap-3">
           <Switch id="product-bundle" checked={isBundle} onChange={setIsBundle} label="Комплект (набор товаров)" />

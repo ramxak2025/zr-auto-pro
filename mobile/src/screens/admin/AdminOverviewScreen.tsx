@@ -1,56 +1,119 @@
 /**
- * AdminOverviewScreen — the superadmin platform dashboard.
+ * AdminOverviewScreen — the dashboard of the platform-operator shell.
  *
+ * Суперадмин:
  *   • Hero metrics straight from getStats() (PlatformStats): MRR, ARPU,
  *     активные / истёкшие тенанты, новые за месяц, всего пользователей.
  *     These are SERVER-computed — we never re-derive MRR client-side.
+ *   • «Менеджеры»: долг менеджеров и оплаты, проведённые через менеджеров, за месяц.
  *   • «Истекают / просрочены» board: tenants whose subscription is within the
- *     next 30 days or already past, each with a one-tap «Продлить» (+30 дней).
+ *     next 30 days or already past. «Продлить» открывает ту же форму, что и карточка
+ *     автосервиса (сумма / тип / дата) — быстрого «+30 дней» без формы больше нет.
  *   • «Последние клиенты»: the 5 newest tenants.
+ *
+ * Менеджер (только свои автосервисы, managerApi):
+ *   • Плитки из сводки: клиенты, активные, истекают за 7 дней, оплаты за месяц,
+ *     «Моя доля», «Долг владельцу»; кнопка «Новый автосервис».
+ *   • «Истекают и просрочены» (до 7 дней) с той же формой продления и «Последние автосервисы».
  *
  * On the visual system — IosScreenHeader, iosCard, theme palette.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, RefreshControl, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { tenantsApi, adminApi } from '../../api/services';
+import { tenantsApi, adminApi, managerApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type {
   Tenant,
   PlatformStats,
+  ManagerSummary,
   SubscriptionRevenue,
   SubscriptionRevenuePoint,
   RegistrationRequest,
 } from '../../../../shared/types';
 import type { SemanticPalette } from '../../theme/palette';
 import {
-  formatMoney,
-  formatDate,
-  formatMonthShort,
+  balanceColor,
   daysLeft,
-  tenantStatus,
-  StatusChip,
+  formatDate,
+  formatMoney,
+  formatMoneyExact,
+  formatMonthShort,
+  formatPercent,
+  tenantRowStatus,
+  useAdminMode,
   InitialAvatar,
+  MetricTile,
+  StatusChip,
 } from './adminShared';
+import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
+import ManagerCreateTenantSheet from './ManagerCreateTenantSheet';
 
 const CHART_HEIGHT = 56;
+/** Окно «Истекают» на обзоре: у суперадмина месяц, у менеджера — неделя (как плитка «Истекает за 7 дней»). */
+const SUPERADMIN_EXPIRING_DAYS = 30;
+const MANAGER_EXPIRING_DAYS = 7;
+
+/** Активные подписки, что кончаются в ближайшие `days` дней или уже просрочены; самые срочные сверху. */
+function expiringWithin(tenants: Tenant[], days: number): Tenant[] {
+  return tenants
+    .filter((t) => {
+      if (!t.isActive) return false;
+      const left = daysLeft(t.subscriptionEnd);
+      return left !== null && left <= days;
+    })
+    .sort((a, b) => (daysLeft(a.subscriptionEnd) ?? 0) - (daysLeft(b.subscriptionEnd) ?? 0));
+}
+
+function newestFive(tenants: Tenant[]): Tenant[] {
+  return [...tenants].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5);
+}
+
+/**
+ * Форма продления для обеих ролей: строка «Продлить» открывает шторку. Цель держим в
+ * состоянии отдельно от `open`, чтобы шторка уезжала с анимацией, а не пропадала.
+ */
+function useExtendSheet() {
+  const [target, setTarget] = React.useState<Tenant | null>(null);
+  const [open, setOpen] = React.useState(false);
+  const openExtend = React.useCallback((tenant: Tenant) => {
+    haptic('tap');
+    setTarget(tenant);
+    setOpen(true);
+  }, []);
+  const sheet = (
+    <ExtendSubscriptionSheet
+      visible={open}
+      tenant={target}
+      currentKind={target?.currentPeriodKind ?? null}
+      onClose={() => setOpen(false)}
+    />
+  );
+  return { openExtend, sheet };
+}
 
 export default function AdminOverviewScreen() {
+  const mode = useAdminMode();
+  return mode === 'manager' ? <ManagerOverview /> : <SuperadminOverview />;
+}
+
+function SuperadminOverview() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const [refreshing, setRefreshing] = React.useState(false);
-  const [extendingId, setExtendingId] = React.useState<string | null>(null);
+  const { openExtend, sheet } = useExtendSheet();
 
   const { data: stats } = useQuery<PlatformStats>({
     queryKey: ['admin-stats'],
@@ -85,23 +148,6 @@ export default function AdminOverviewScreen() {
     [revenue?.monthly],
   );
 
-  const extendMutation = useMutation({
-    mutationFn: async ({ id, days }: { id: string; days: number }) => {
-      setExtendingId(id);
-      await tenantsApi.extend(id, days);
-    },
-    onSuccess: () => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
-      queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось продлить подписку');
-    },
-    onSettled: () => setExtendingId(null),
-  });
-
   const onRefresh = React.useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
@@ -114,31 +160,12 @@ export default function AdminOverviewScreen() {
   }, [queryClient]);
 
   // Истекают (next 30 days) OR уже просрочены — only active tenants matter.
-  const expiringBoard = React.useMemo(() => {
-    return tenants
-      .filter((t) => {
-        if (!t.isActive) return false;
-        const left = daysLeft(t.subscriptionEnd);
-        return left !== null && left <= 30;
-      })
-      .sort((a, b) => (daysLeft(a.subscriptionEnd) ?? 0) - (daysLeft(b.subscriptionEnd) ?? 0));
-  }, [tenants]);
+  const expiringBoard = React.useMemo(() => expiringWithin(tenants, SUPERADMIN_EXPIRING_DAYS), [tenants]);
+  const recent = React.useMemo(() => newestFive(tenants), [tenants]);
 
-  const recent = React.useMemo(
-    () => [...tenants].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5),
-    [tenants],
-  );
+  const openTenant = React.useCallback((id: string) => navigation.navigate('AdminTenantDetail', { id }), [navigation]);
 
-  const confirmExtend = React.useCallback(
-    (t: Tenant) => {
-      haptic('tap');
-      Alert.alert('Продлить подписку', `Продлить «${t.name}» на 30 дней?`, [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Продлить', onPress: () => extendMutation.mutate({ id: t.id, days: 30 }) },
-      ]);
-    },
-    [extendMutation],
-  );
+  const managersDebt = stats?.managersBalanceTotal ?? 0;
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
@@ -244,6 +271,28 @@ export default function AdminOverviewScreen() {
           />
         </View>
 
+        {/* Managers: долг перед владельцем и оплаты, что прошли через менеджеров */}
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Менеджеры</Text>
+        <View style={styles.grid}>
+          <MetricTile
+            icon="cash-outline"
+            tint={colors.red[600]}
+            value={formatMoney(managersDebt)}
+            valueColor={balanceColor(managersDebt, palette)}
+            label="Долг менеджеров"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="people-outline"
+            tint={colors.primary[600]}
+            value={formatMoney(stats?.paidByManagersThisMonth ?? 0)}
+            label="Оплаты через менеджеров за месяц"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+        </View>
+
         {/* Paid subscription revenue */}
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Платная выручка от подписок</Text>
         <View style={[surface.card, styles.revenueCard]}>
@@ -288,92 +337,280 @@ export default function AdminOverviewScreen() {
 
         {/* Expiring / lapsed board */}
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Истекают и просрочены</Text>
-        <View style={[styles.card, surface.card]}>
-          {expiringBoard.length === 0 ? (
-            <View style={styles.emptyBlock}>
-              <Ionicons name="shield-checkmark-outline" size={36} color={palette.text.tertiary} />
-              <Text style={[styles.emptyText, { color: palette.text.secondary }]}>
-                Нет подписок, требующих внимания
-              </Text>
-            </View>
-          ) : (
-            expiringBoard.map((t, i) => {
-              const left = daysLeft(t.subscriptionEnd);
-              const overdue = left !== null && left < 0;
-              return (
-                <Pressable
-                  key={t.id}
-                  onPress={() => navigation.navigate('AdminTenantDetail', { id: t.id })}
-                  style={[
-                    styles.expRow,
-                    i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border.subtle },
-                  ]}
-                >
-                  <InitialAvatar name={t.name} palette={palette} size={36} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.expName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {t.name}
-                    </Text>
-                    <Text style={[styles.expMeta, { color: overdue ? colors.red[600] : palette.text.tertiary }]}>
-                      {overdue
-                        ? `Просрочено на ${Math.abs(left!)} дн.`
-                        : left === 0
-                          ? 'Истекает сегодня'
-                          : `Осталось ${left} дн.`}
-                    </Text>
-                  </View>
-                  <Pressable
-                    onPress={() => confirmExtend(t)}
-                    disabled={extendingId === t.id}
-                    style={[styles.extendBtn, { backgroundColor: palette.accent.primary }]}
-                    hitSlop={6}
-                  >
-                    {extendingId === t.id ? (
-                      <ActivityIndicator size="small" color={colors.white} />
-                    ) : (
-                      <>
-                        <Ionicons name="add" size={14} color={colors.white} />
-                        <Text style={styles.extendBtnText}>30 дн.</Text>
-                      </>
-                    )}
-                  </Pressable>
-                </Pressable>
-              );
-            })
-          )}
-        </View>
+        <ExpiringBoard
+          items={expiringBoard}
+          emptyText="Нет подписок, требующих внимания"
+          palette={palette}
+          surfaceCard={surface.card}
+          onOpen={openTenant}
+          onExtend={openExtend}
+        />
 
         {/* Recent tenants */}
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Последние клиенты</Text>
-        <View style={[styles.card, surface.card]}>
-          {recent.length === 0 ? (
-            <View style={styles.emptyBlock}>
-              <Ionicons name="business-outline" size={36} color={palette.text.tertiary} />
-              <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Нет клиентов</Text>
-            </View>
-          ) : (
-            recent.map((t, i) => (
-              <Pressable
-                key={t.id}
-                onPress={() => navigation.navigate('AdminTenantDetail', { id: t.id })}
-                style={[
-                  styles.expRow,
-                  i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border.subtle },
-                ]}
-              >
-                <InitialAvatar name={t.name} palette={palette} size={36} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.expName, { color: palette.text.primary }]} numberOfLines={1}>
-                    {t.name}
-                  </Text>
-                  <Text style={[styles.expMeta, { color: palette.text.tertiary }]}>{formatDate(t.createdAt)}</Text>
-                </View>
-                <StatusChip status={tenantStatus(t, palette.mode)} />
-              </Pressable>
-            ))
-          )}
-        </View>
+        <RecentBoard
+          items={recent}
+          emptyText="Нет клиентов"
+          palette={palette}
+          surfaceCard={surface.card}
+          onOpen={openTenant}
+        />
       </ScrollView>
+
+      {sheet}
+    </View>
+  );
+}
+
+function ManagerOverview() {
+  const navigation = useNavigation<any>();
+  const palette = useColors();
+  const surface = useIosSurface();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const { openExtend, sheet } = useExtendSheet();
+
+  // Ключи ['manager', …] — не в persistent cache: деньги на диск не пишем.
+  const { data: summary } = useQuery<ManagerSummary>({
+    queryKey: ['manager', 'summary'],
+    queryFn: async () => (await managerApi.summary()).data,
+    placeholderData: (prev) => prev,
+  });
+
+  const { data: tenants = [] } = useQuery<Tenant[]>({
+    queryKey: ['manager', 'tenants'],
+    queryFn: async () => (await managerApi.tenants()).data,
+    placeholderData: (prev) => prev,
+  });
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['manager', 'summary'] }),
+      queryClient.invalidateQueries({ queryKey: ['manager', 'tenants'] }),
+    ]);
+    setRefreshing(false);
+  }, [queryClient]);
+
+  const expiringBoard = React.useMemo(() => expiringWithin(tenants, MANAGER_EXPIRING_DAYS), [tenants]);
+  const recent = React.useMemo(() => newestFive(tenants), [tenants]);
+
+  const openTenant = React.useCallback((id: string) => navigation.navigate('AdminTenantDetail', { id }), [navigation]);
+
+  const counts = summary?.tenants;
+  const balance = summary?.balance ?? 0;
+  // Переплата — расчётов внесено больше, чем набежало долей: показываем её отдельной подписью.
+  const overpaid = balance <= -0.005;
+  const sharePercent = summary?.ownerSharePercent;
+
+  return (
+    <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
+      <IosScreenHeader title="Обзор" subtitle={user?.fullName || 'Кабинет менеджера'} />
+
+      <ScrollView
+        contentInset={contentInset}
+        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
+        }
+      >
+        <Pressable
+          onPress={() => {
+            haptic('tap');
+            setCreateOpen(true);
+          }}
+          style={[styles.primaryBtn, { backgroundColor: palette.accent.primary }]}
+          accessibilityRole="button"
+        >
+          <Ionicons name="add" size={20} color={colors.white} />
+          <Text style={styles.primaryBtnText}>Новый автосервис</Text>
+        </Pressable>
+
+        <View style={styles.grid}>
+          <MetricTile
+            icon="business"
+            tint={colors.primary[600]}
+            value={String(counts?.total ?? tenants.length)}
+            label="Клиентов"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="checkmark-circle"
+            tint={colors.green[600]}
+            value={String(counts?.active ?? 0)}
+            label="Активных"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="alarm-outline"
+            tint={colors.orange[500]}
+            value={String(counts?.expiringIn7d ?? 0)}
+            label="Истекает за 7 дней"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="card-outline"
+            tint={colors.blue[600]}
+            value={formatMoneyExact(summary?.paidThisMonth ?? 0)}
+            label="Оплат за месяц"
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="wallet-outline"
+            tint={colors.green[600]}
+            value={formatMoneyExact(summary?.myShareThisMonth ?? 0)}
+            label={sharePercent != null ? `Моя доля · ${formatPercent(100 - sharePercent)}` : 'Моя доля'}
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+          <MetricTile
+            icon="cash-outline"
+            tint={colors.red[600]}
+            value={formatMoneyExact(Math.abs(balance))}
+            valueColor={balanceColor(balance, palette)}
+            label={overpaid ? 'Переплата владельцу' : 'Долг владельцу'}
+            surfaceCard={surface.card}
+            palette={palette}
+          />
+        </View>
+
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Истекают и просрочены</Text>
+        <ExpiringBoard
+          items={expiringBoard}
+          emptyText="Нет подписок, требующих внимания"
+          palette={palette}
+          surfaceCard={surface.card}
+          onOpen={openTenant}
+          onExtend={openExtend}
+        />
+
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Последние автосервисы</Text>
+        <RecentBoard
+          items={recent}
+          emptyText="Пока нет автосервисов. Нажмите «Новый автосервис»."
+          palette={palette}
+          surfaceCard={surface.card}
+          onOpen={openTenant}
+        />
+      </ScrollView>
+
+      <ManagerCreateTenantSheet
+        visible={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onOpenTenant={(tenant) => navigation.navigate('AdminTenantDetail', { id: tenant.id })}
+      />
+      {sheet}
+    </View>
+  );
+}
+
+/** Сколько осталось до конца подписки словами: «Осталось 3 дн.», «Истекает сегодня», «Просрочено на 2 дн.». */
+function expiryCaption(left: number | null): string {
+  if (left === null) return '';
+  if (left < 0) return `Просрочено на ${Math.abs(left)} дн.`;
+  if (left === 0) return 'Истекает сегодня';
+  return `Осталось ${left} дн.`;
+}
+
+interface BoardProps {
+  items: Tenant[];
+  emptyText: string;
+  palette: SemanticPalette;
+  surfaceCard: object;
+  onOpen: (id: string) => void;
+}
+
+function ExpiringBoard({
+  items,
+  emptyText,
+  palette,
+  surfaceCard,
+  onOpen,
+  onExtend,
+}: BoardProps & { onExtend: (t: Tenant) => void }) {
+  return (
+    <View style={[styles.card, surfaceCard]}>
+      {items.length === 0 ? (
+        <View style={styles.emptyBlock}>
+          <Ionicons name="shield-checkmark-outline" size={36} color={palette.text.tertiary} />
+          <Text style={[styles.emptyText, { color: palette.text.secondary }]}>{emptyText}</Text>
+        </View>
+      ) : (
+        items.map((t, i) => {
+          const left = daysLeft(t.subscriptionEnd);
+          const overdue = left !== null && left < 0;
+          return (
+            <Pressable
+              key={t.id}
+              onPress={() => onOpen(t.id)}
+              style={[
+                styles.expRow,
+                i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border.subtle },
+              ]}
+            >
+              <InitialAvatar name={t.name} palette={palette} size={36} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.expName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {t.name}
+                </Text>
+                <Text style={[styles.expMeta, { color: overdue ? colors.red[600] : palette.text.tertiary }]}>
+                  {expiryCaption(left)}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => onExtend(t)}
+                style={[styles.extendBtn, { backgroundColor: palette.accent.primary }]}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={`Продлить подписку «${t.name}»`}
+              >
+                <Text style={styles.extendBtnText}>Продлить</Text>
+              </Pressable>
+            </Pressable>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+function RecentBoard({ items, emptyText, palette, surfaceCard, onOpen }: BoardProps) {
+  return (
+    <View style={[styles.card, surfaceCard]}>
+      {items.length === 0 ? (
+        <View style={styles.emptyBlock}>
+          <Ionicons name="business-outline" size={36} color={palette.text.tertiary} />
+          <Text style={[styles.emptyText, { color: palette.text.secondary }]}>{emptyText}</Text>
+        </View>
+      ) : (
+        items.map((t, i) => (
+          <Pressable
+            key={t.id}
+            onPress={() => onOpen(t.id)}
+            style={[
+              styles.expRow,
+              i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border.subtle },
+            ]}
+          >
+            <InitialAvatar name={t.name} palette={palette} size={36} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.expName, { color: palette.text.primary }]} numberOfLines={1}>
+                {t.name}
+              </Text>
+              <Text style={[styles.expMeta, { color: palette.text.tertiary }]}>{formatDate(t.createdAt)}</Text>
+            </View>
+            <StatusChip status={tenantRowStatus(t, palette.mode)} />
+          </Pressable>
+        ))
+      )}
     </View>
   );
 }
@@ -406,34 +643,6 @@ function PaidRevenueChart({ points, palette }: { points: SubscriptionRevenuePoin
           </View>
         );
       })}
-    </View>
-  );
-}
-
-function MetricTile({
-  icon,
-  tint,
-  value,
-  label,
-  surfaceCard,
-  palette,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  tint: string;
-  value: string;
-  label: string;
-  surfaceCard: object;
-  palette: ReturnType<typeof useColors>;
-}) {
-  return (
-    <View style={[styles.tile, surfaceCard]}>
-      <View style={[styles.tileIcon, { backgroundColor: tint + '1A' }]}>
-        <Ionicons name={icon} size={18} color={tint} />
-      </View>
-      <Text style={[styles.tileValue, { color: palette.text.primary }]}>{value}</Text>
-      <Text style={[styles.tileLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
-        {label}
-      </Text>
     </View>
   );
 }
@@ -485,21 +694,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing[3],
   },
-  tile: {
-    width: '47.5%',
-    padding: spacing[3.5],
-    gap: spacing[1],
-  },
-  tileIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: borderRadius.lg,
+  primaryBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing[1],
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
   },
-  tileValue: { fontSize: 22, fontWeight: '800', letterSpacing: -0.5 },
-  tileLabel: { fontSize: 12, fontWeight: '500' },
+  primaryBtnText: { color: colors.white, fontSize: 16, fontWeight: '700' },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -542,16 +745,14 @@ const styles = StyleSheet.create({
   expName: { fontSize: 15, fontWeight: '600' },
   expMeta: { fontSize: 12, marginTop: 1 },
   extendBtn: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    paddingHorizontal: spacing[3],
+    justifyContent: 'center',
+    paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[2],
     borderRadius: borderRadius.full,
-    minWidth: 64,
-    justifyContent: 'center',
+    minWidth: 72,
   },
   extendBtnText: { color: colors.white, fontSize: 12, fontWeight: '700' },
   emptyBlock: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[8], gap: spacing[2] },
-  emptyText: { fontSize: 14 },
+  emptyText: { fontSize: 14, textAlign: 'center' },
 });

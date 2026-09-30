@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
 
 export class UpdateProductDto {
   @IsString()
@@ -73,4 +73,10 @@ export class UpdateProductDto {
   @IsString()
   @IsOptional()
   barcode?: string;
+
+  // 172 — не задан: адрес не трогаем (а при смене склада сбрасываем); null — снять
+  // адрес; uuid — ячейка СКЛАДА товара (проверяет сервис, иначе 400 STORAGE_CELL_WRONG_WAREHOUSE).
+  @IsOptional()
+  @IsUUID('all', { message: 'Некорректная ячейка хранения' })
+  storageCellId?: string | null;
 }

@@ -15,13 +15,13 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { format, subMonths } from 'date-fns';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDateShort, formatMoney } from '../../../shared/utils/formatters';
+import { formatDateShort, formatDayKey, formatMoney } from '../../../shared/utils/formatters';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import DatePeriodPicker from '../components/DatePeriodPicker';
@@ -33,6 +33,8 @@ import RateByMonthModal from '../components/RateByMonthModal';
 import MonthPager from '../components/reports/MonthPager';
 import { patchParams, readPeriod } from '../components/reports/periodParams';
 import { numericColumnSizing } from '../components/reports/tableWidths';
+import PayoutMonthField from '../components/salary/PayoutMonthField';
+import { monthLabel, monthNameLabel, oldestDebt, type CarryOverMonth } from '../components/salary/salaryMonths';
 import { ErrorRow, MiniStat } from '../components/dashboard/shared';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -44,13 +46,12 @@ import { Toolbar } from '../ui/Toolbar';
 import { Badge } from '../ui/Badge';
 import { Field } from '../ui/Field';
 import { Input } from '../ui/Input';
-import { Select } from '../ui/Select';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { Drawer } from '../ui/Drawer';
 import { DropdownMenu, type MenuEntry } from '../ui/DropdownMenu';
 import { SkeletonCard, SkeletonText } from '../ui/Skeleton';
 import { cn } from '../ui/cn';
-import { toneChip } from '../ui/tokens';
+import { focusRing, toneChip } from '../ui/tokens';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, SalaryFine } from '../types';
 
 /**
@@ -64,12 +65,6 @@ import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, Sal
  */
 function getCurrentMonthYear(todayKey: string): string {
   return todayKey.slice(0, 7);
-}
-
-/** Предыдущий месяц как 'yyyy-MM' — от того же дня автосервиса. */
-function getPreviousMonthYear(todayKey: string): string {
-  const [y, m] = todayKey.split('-').map(Number);
-  return format(subMonths(new Date(y || 1970, (m || 1) - 1, 1), 1), 'yyyy-MM');
 }
 
 /** Translate monthYear to human-readable Russian label */
@@ -426,6 +421,106 @@ function PayoutsHistorySection({
   );
 }
 
+// ─── Долг за прошлые месяцы ──────────────────────────────────────────────────
+
+/**
+ * Карточка месяца сотрудника нужна здесь только ради `carryOver` — остатка за каждый из 12 месяцев ДО открытого.
+ * Один ключ на блок в панели и на клик по бейджу «Долг за прошлые» в таблице.
+ */
+function employeeMonthQuery(employeeId: string, month: string) {
+  return {
+    queryKey: ['salary-employee-month', employeeId, month] as const,
+    queryFn: async () => (await salaryApi.getEmployeeMonth(employeeId, month)).data,
+  };
+}
+
+/** Бейдж «Долг за прошлые: N ₽»; с `onClick` — кнопка, открывающая выплату за самый давний долг. */
+function DebtBadge({ amount, loading, onClick }: { amount: number; loading?: boolean; onClick?: () => void }) {
+  const badge = (
+    <Badge tone="warn" size="sm">
+      Долг за прошлые: {formatMoney(amount)}
+    </Badge>
+  );
+  if (!onClick) return <span className="mt-1 block">{badge}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      aria-busy={loading || undefined}
+      title="Выплатить за прошлый месяц"
+      className={cn('mt-1 block max-w-full rounded-md', focusRing, loading && 'cursor-progress opacity-60')}
+    >
+      {badge}
+    </button>
+  );
+}
+
+/**
+ * «Не выплачено за прошлые месяцы». Плюс — долг, его выплачивают за тот месяц; минус — переплата (серым:
+ * долг других месяцев она не гасит). Нет ни долга, ни переплаты — блока нет.
+ */
+function CarryOverSection({
+  userId,
+  month,
+  canManage,
+  onPay,
+}: {
+  userId: string;
+  /** Открытый месяц страницы ('YYYY-MM'): считаются месяцы до него. */
+  month: string;
+  canManage: boolean;
+  onPay: (item: CarryOverMonth) => void;
+}) {
+  // staleTime 0: сумма уходит в форму выплаты, а устаревший долг спровоцировал бы лишнюю выплату.
+  const { data, isLoading, isPlaceholderData, isError, refetch, isFetching } = useQuery({
+    ...employeeMonthQuery(userId, month),
+    staleTime: 0,
+  });
+
+  // placeholderData: prev => prev на время загрузки подсовывает долг ДРУГОГО сотрудника — не показываем его.
+  if (isLoading || isPlaceholderData) return null;
+  // Бэкенд без carryOver (клиент и сервер выкатываются не одновременно) — как «долгов нет».
+  const months = data?.carryOver?.months ?? [];
+  if (!isError && months.length === 0) return null;
+
+  return (
+    <section>
+      <h3 className="mb-1 text-xs font-semibold text-ink-3">Не выплачено за прошлые месяцы</h3>
+      {isError ? (
+        <ErrorRow
+          message="Не удалось загрузить долг за прошлые месяцы"
+          onRetry={() => refetch()}
+          loading={isFetching}
+        />
+      ) : (
+        <ul className="divide-y divide-line">
+          {months.map((item) => {
+            const isDebt = item.remaining > 0;
+            return (
+              <li key={item.month} className="flex items-center gap-3 py-2">
+                <span className="min-w-0 flex-1 text-sm text-ink">{monthNameLabel(item.month, month)}</span>
+                {isDebt ? (
+                  <Money value={item.remaining} className="text-sm font-semibold text-warn-text" />
+                ) : (
+                  <span className="whitespace-nowrap text-sm tabular-nums text-ink-3">
+                    переплата {formatMoney(-item.remaining)}
+                  </span>
+                )}
+                {isDebt && canManage && (
+                  <Button size="sm" variant="secondary" icon={Banknote} onClick={() => onPay(item)}>
+                    Выплатить
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ─── Round 15 (153) — штрафы сотрудника за выбранный период ──────────────────
 
 function FinesHistorySection({
@@ -462,12 +557,10 @@ function FinesHistorySection({
 
   if (!canManage) return null;
   // Период списка = период страницы (штрафы вне периода не путают итоги).
-  // Round 15 review-fix (п.7): f.date — timestamptz; slice(0,10) брал UTC-день,
-  // и штраф, выписанный 00:00–03:00 МСК первого числа, выпадал из периода
-  // (сервер режет границы МОСКОВСКИМИ днями). Сравниваем локальный календарный
-  // день (пользователи продукта — RU/МСК), как границы dateFrom/dateTo.
+  // f.date — timestamptz: календарный день берём в поясе автосервиса (сервер режет границы им же), а не
+  // по часам браузера и не UTC-срезом slice(0,10) — иначе штраф у границы месяца выпадает из своего периода.
   const list = (fines || []).filter((f) => {
-    const d = format(new Date(f.date), 'yyyy-MM-dd');
+    const d = formatDayKey(f.date, timeZone);
     return d >= dateFrom && d <= dateTo;
   });
 
@@ -650,6 +743,8 @@ function AdminSalaryView() {
   // Payment dialog
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payForm, setPayForm] = useState<PaymentFormState>(() => emptyPaymentForm(currentMonthYear));
+  // Сотрудник, чьи месяцы долга подгружаются после клика по бейджу «Долг за прошлые».
+  const [debtLoadingId, setDebtLoadingId] = useState<string | null>(null);
 
   // 149 — «Выплата вне программы»: получатель без аккаунта (маркетолог,
   // уборщица) — свободное имя + сумма + месяц отнесения.
@@ -713,17 +808,19 @@ function AdminSalaryView() {
   const totalPaid = masters.reduce((s, m) => s + (m.paidAmount || 0), 0);
   const totalRemaining = masters.reduce((s, m) => s + (m.remainingAmount ?? m.totalEarnings), 0);
 
-  // ── Create payment mutation ────────────────────────────────────────────
+  // ── Create payout mutation ─────────────────────────────────────────────
+  // Деньги уходят из кассы сегодня, а `periodMonth` решает, за какой месяц выплату
+  // видят зарплата и отчёты. Старый POST /salary/payments отсюда больше не зовём.
 
-  const createPaymentMutation = useMutation({
+  const createPayoutMutation = useMutation({
     mutationFn: (data: {
-      userId: string;
-      amount: number;
-      monthYear: string;
+      employeeId: string;
       type: 'salary' | 'advance';
+      amount: number;
       comment?: string;
-    }) => salaryApi.createPayment(data),
-    onSuccess: (res: any) => {
+      periodMonth: string;
+    }) => salaryApi.createPayout(data),
+    onSuccess: (res: any, vars) => {
       // SW-офлайн-очередь: 202 {queued:true} — сервер выплату ещё НЕ видел.
       // Честный тост без «Выплата проведена»; модал закрываем, чтобы не
       // спровоцировать повторную (уже задублированную) выплату.
@@ -733,14 +830,13 @@ function AdminSalaryView() {
         setPayForm(emptyPaymentForm(currentMonthYear));
         return;
       }
-      queryClient.invalidateQueries({ queryKey: ['salary-all'] });
-      queryClient.invalidateQueries({ queryKey: ['salary-payments'] });
-      // Выплата — расход из кассы: движение денег, смена, дашборд, отчёт.
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
-      queryClient.invalidateQueries({ queryKey: ['cash-shift'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
-      toast.success('Выплата проведена');
+      // Выплата — расход из кассы (движение денег, смена, дашборд, отчёты) и новая строка в истории месяца.
+      invalidateMoney();
+      toast.success(
+        vars.periodMonth === currentMonthYear
+          ? 'Выплата проведена'
+          : `Выплата проведена и учтена за ${monthLabel(vars.periodMonth)}`,
+      );
       setPayModalOpen(false);
       setPayForm(emptyPaymentForm(currentMonthYear));
     },
@@ -776,6 +872,7 @@ function AdminSalaryView() {
   function invalidateMoney() {
     for (const key of [
       'salary-all',
+      'salary-employee-month',
       'salary-payments',
       'salary-payouts',
       'salary-fines',
@@ -940,16 +1037,44 @@ function AdminSalaryView() {
   // «Остаток» не гас, и его можно было выплатить второй раз.
   const periodMonthYear = dateFrom.slice(0, 7);
 
-  function openPayModal(master: MasterSalary) {
+  // `debt` — остаток одного прошлого месяца: форма открывается за него и на его сумму.
+  function openPayModal(master: MasterSalary, debt?: CarryOverMonth) {
     setPayForm({
       userId: master.masterId,
       userName: master.masterName,
-      amount: String(Math.max(0, Math.round(master.remainingAmount ?? master.totalEarnings))),
-      monthYear: periodMonthYear,
+      amount: String(
+        debt ? Math.round(debt.remaining) : Math.max(0, Math.round(master.remainingAmount ?? master.totalEarnings)),
+      ),
+      monthYear: debt ? debt.month : periodMonthYear,
       type: 'salary',
       comment: '',
     });
     setPayModalOpen(true);
+  }
+
+  // Список зарплат отдаёт лишь сумму долга, а месяцы — карточка месяца: грузим по клику и свежими данными,
+  // чтобы предвыбрать САМЫЙ ДАВНИЙ месяц с долгом (с него и гасят).
+  async function openDebtPayModal(master: MasterSalary) {
+    if (debtLoadingId) return;
+    setDebtLoadingId(master.masterId);
+    try {
+      const detail = await queryClient.fetchQuery({
+        ...employeeMonthQuery(master.masterId, periodMonthYear),
+        staleTime: 0,
+      });
+      const oldest = oldestDebt(detail.carryOver?.months ?? []);
+      if (oldest) {
+        openPayModal(master, oldest);
+      } else {
+        // Долг успели закрыть (другой вкладкой/сотрудником) — обновляем список, чтобы бейдж пропал.
+        toast('Долга за прошлые месяцы уже нет');
+        queryClient.invalidateQueries({ queryKey: ['salary-all'] });
+      }
+    } catch (err) {
+      toast.error(apiErrorMessage(err) ?? 'Не удалось загрузить долг за прошлые месяцы');
+    } finally {
+      setDebtLoadingId(null);
+    }
   }
 
   function handlePaySubmit(e: React.FormEvent) {
@@ -959,12 +1084,12 @@ function AdminSalaryView() {
       toast.error('Укажите сумму');
       return;
     }
-    createPaymentMutation.mutate({
-      userId: payForm.userId,
-      amount,
-      monthYear: payForm.monthYear,
+    createPayoutMutation.mutate({
+      employeeId: payForm.userId,
       type: payForm.type,
+      amount,
       comment: payForm.comment || undefined,
+      periodMonth: payForm.monthYear,
     });
   }
 
@@ -972,14 +1097,6 @@ function AdminSalaryView() {
     setHistoryTarget(master);
     setHistoryOpen(true);
   }
-
-  // ── Month options for the selector ─────────────────────────────────────
-  // Месяц выбранного периода — первым (он и предвыбран), текущий/прошлый —
-  // как быстрые альтернативы; Set убирает дубли, когда период = текущий месяц.
-
-  const monthOptions = Array.from(new Set([periodMonthYear, currentMonthYear, getPreviousMonthYear(tenantToday)])).map(
-    (value) => ({ value, label: formatMonthYear(value) }),
-  );
 
   const rowMenu = (m: MasterSalary): MenuEntry[] => {
     const items: MenuEntry[] = [];
@@ -1005,6 +1122,14 @@ function AdminSalaryView() {
         <span className="block min-w-0">
           <span className="block truncate font-medium text-ink">{m.masterName}</span>
           <span className="block text-xs text-ink-3 md:hidden">Ставка {m.salaryPercent}%</span>
+          {(m.carryOverAmount ?? 0) > 0 && (
+            <DebtBadge
+              amount={m.carryOverAmount ?? 0}
+              // Без права выплат бейдж только информирует: месяцы долга видны в панели «Выплаты и штрафы».
+              onClick={canPayout ? () => openDebtPayModal(m) : undefined}
+              loading={debtLoadingId === m.masterId}
+            />
+          )}
         </span>
       ),
       footer: 'Итого',
@@ -1205,6 +1330,12 @@ function AdminSalaryView() {
       >
         {historyTarget && (
           <div className="space-y-6">
+            <CarryOverSection
+              userId={historyTarget.masterId}
+              month={periodMonthYear}
+              canManage={canPayout}
+              onPay={(item) => openPayModal(historyTarget, item)}
+            />
             <section>
               <h3 className="mb-1 text-xs font-semibold text-ink-3">Выплаты за {formatMonthYear(periodMonthYear)}</h3>
               <PayoutsHistorySection
@@ -1257,7 +1388,7 @@ function AdminSalaryView() {
             <Button variant="secondary" onClick={() => setPayModalOpen(false)}>
               Отмена
             </Button>
-            <Button type="submit" form="salary-pay-form" icon={Banknote} loading={createPaymentMutation.isPending}>
+            <Button type="submit" form="salary-pay-form" icon={Banknote} loading={createPayoutMutation.isPending}>
               Выплатить
             </Button>
           </>
@@ -1284,14 +1415,12 @@ function AdminSalaryView() {
               rightSlot={<span className="text-sm">₽</span>}
             />
           </Field>
-          <Field label="Месяц" htmlFor="pay-month">
-            <Select
-              id="pay-month"
-              options={monthOptions}
-              value={payForm.monthYear}
-              onChange={(e) => setPayForm({ ...payForm, monthYear: e.target.value })}
-            />
-          </Field>
+          <PayoutMonthField
+            id="pay-month"
+            value={payForm.monthYear}
+            currentMonth={currentMonthYear}
+            onChange={(monthYear) => setPayForm({ ...payForm, monthYear })}
+          />
           <Field label="Комментарий" htmlFor="pay-comment">
             <Input
               id="pay-comment"
@@ -1299,6 +1428,7 @@ function AdminSalaryView() {
               value={payForm.comment}
               onChange={(e) => setPayForm({ ...payForm, comment: e.target.value })}
               placeholder="Необязательно"
+              maxLength={500}
             />
           </Field>
         </form>
@@ -1352,6 +1482,7 @@ function AdminSalaryView() {
             <Input
               id="outside-month"
               type="month"
+              max={currentMonthYear}
               value={outsideForm.periodMonth}
               onChange={(e) => setOutsideForm({ ...outsideForm, periodMonth: e.target.value })}
               required

@@ -25,6 +25,7 @@ import { CallsModule } from './calls/calls.module';
 import { EquipmentModule } from './equipment/equipment.module';
 import { ImportsModule } from './imports/imports.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
+import { StorageCellsModule } from './storage-cells/storage-cells.module';
 import { WarrantyModule } from './warranty/warranty.module';
 import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { PushModule } from './push/push.module';
@@ -57,6 +58,7 @@ import { RegistrationModule } from './registration/registration.module';
 import { PlanningModule } from './planning/planning.module';
 import { PointsModule } from './points/points.module';
 import { VinModule } from './vin/vin.module';
+import { PlatformManagersModule } from './platform-managers/platform-managers.module';
 
 @Module({
   imports: [
@@ -79,6 +81,7 @@ import { VinModule } from './vin/vin.module';
     UploadsModule,
     WarehouseModule,
     WarehousesModule,
+    StorageCellsModule,
     WarrantyModule,
     StockMovementsModule,
     HealthModule,
@@ -117,6 +120,7 @@ import { VinModule } from './vin/vin.module';
     PlanningModule,
     PointsModule,
     VinModule,
+    PlatformManagersModule,
   ],
   providers: [MigrationRunner],
 })

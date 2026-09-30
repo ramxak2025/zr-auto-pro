@@ -10,6 +10,7 @@ import {
   formatPhone,
   normalizePhone,
   isValidPhone,
+  isCompletePhone,
   phoneSearchKey,
   phoneSearchVariants,
 } from '../../../../shared/validation/phone';
@@ -115,6 +116,33 @@ describe('isValidPhone', () => {
     // 10-digit form is permitted by `isValidPhone` (formatPhone still
     // needs the leading 7/8 to render the mask).
     expect(isValidPhone('9001234567')).toBe(true);
+  });
+});
+
+describe('isCompletePhone', () => {
+  it('accepts a full masked number and its raw forms', () => {
+    expect(isCompletePhone('+7 (900) 123-45-67')).toBe(true);
+    expect(isCompletePhone('79001234567')).toBe(true);
+    expect(isCompletePhone('+79001234567')).toBe(true);
+  });
+
+  it('treats a leading 8 as +7', () => {
+    expect(isCompletePhone('89001234567')).toBe(true);
+  });
+
+  it('rejects a number without the last digit (10 digits after the mask prefix)', () => {
+    expect(isCompletePhone('+7 (900) 123-45-6')).toBe(false);
+    expect(isValidPhone('+7 (900) 123-45-6')).toBe(true);
+  });
+
+  it('rejects a national 10-digit number the mask renders as «+9 …»', () => {
+    expect(isCompletePhone(formatPhone('9001234567'))).toBe(false);
+  });
+
+  it('rejects empty, partial and foreign-length input', () => {
+    expect(isCompletePhone('')).toBe(false);
+    expect(isCompletePhone('+7 (900)')).toBe(false);
+    expect(isCompletePhone('+380501234567')).toBe(false);
   });
 });
 

@@ -160,7 +160,7 @@ export class SummaryBuilder implements ReportBuilder {
     const notes = [
       'Выручка и прибыль — по проведённым чекам; гарантийные чеки денег не приносят, возвраты уже вычтены из выручки в периоде продажи.',
       'Расходы — одобренные, без категории «Зарплата»; расход «за месяц» входит, только если период покрывает этот месяц целиком.',
-      'Зарплата начислено = процент с работ и товаров по чекам + премии деньгами + мотивация. Выплачено — по дате выдачи.',
+      'Зарплата начислено = процент с работ и товаров по чекам + премии деньгами + мотивация. Выплачено — по месяцу, за который выдана выплата.',
       'Долги (нам должны / мы должны) — на сегодня и по всей компании: клиенты и поставщики общие для сети.',
       '% к прошлому периоду — сравнение с предыдущим периодом той же длины.',
     ];
@@ -305,20 +305,44 @@ export class SummaryBuilder implements ReportBuilder {
     };
   }
 
+  /**
+   * Та же семантика, что у отчёта «По услугам» (services.builder.ts): «Оказано» —
+   * число СТРОК услуг (правка №4, 2026-09-30), а не SUM(quantity): строка «Мойка ×3»
+   * из истории — одна услуга с выручкой её total. Полностью возвращённая строка не в
+   * счёт, у частично возвращённой из выручки вычтен возврат (раньше здесь возвраты
+   * не учитывались вовсе — расходились с «По услугам»).
+   */
   private async topServices(ctx: ReportContext): Promise<ReportSection> {
     const params = baseParams(ctx);
     const point = pointFilterSql('ch', ctx.pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT COALESCE(s.name, MIN(sl.name)) AS name,
-              COALESCE(SUM(sl.quantity), 0) AS qty,
-              COALESCE(SUM(sl.total), 0) AS revenue
-         FROM checks ch
-         JOIN check_service_lines sl ON sl.check_id = ch.id
-         LEFT JOIN services s ON s.id = sl.service_id
-        WHERE ch.tenant_id = $1 AND ${inPeriod('ch.date')} AND ${checkMoneyBaseWhere('ch')}
-          AND ch.payment_method IS DISTINCT FROM 'warranty'
-          AND NOT (ch.is_returned = true AND ch.return_scope = 'full')${point}
-        GROUP BY COALESCE(sl.service_id::text, 'name:' || lower(sl.name)), s.name
+      `WITH base AS (
+         SELECT sl.id AS line_id, sl.service_id, sl.name, sl.quantity, sl.total
+           FROM checks ch
+           JOIN check_service_lines sl ON sl.check_id = ch.id
+          WHERE ch.tenant_id = $1 AND ${inPeriod('ch.date')} AND ${checkMoneyBaseWhere('ch')}
+            AND ch.payment_method IS DISTINCT FROM 'warranty'
+            AND NOT (ch.is_returned = true AND ch.return_scope = 'full')${point}
+       ),
+       ret AS (
+         SELECT rl.service_line_id, SUM(rl.quantity) AS qty, SUM(rl.amount) AS amount
+           FROM check_return_lines rl
+           JOIN check_returns cr ON cr.id = rl.return_id AND cr.tenant_id = $1
+          WHERE rl.service_line_id IN (SELECT line_id FROM base)
+          GROUP BY rl.service_line_id
+       ),
+       l AS (
+         SELECT b.service_id, b.name, b.total, COALESCE(r.amount, 0) AS returned_amount
+           FROM base b
+           LEFT JOIN ret r ON r.service_line_id = b.line_id
+          WHERE COALESCE(r.qty, 0) < COALESCE(NULLIF(b.quantity, 0), 1)
+       )
+       SELECT COALESCE(s.name, MIN(l.name)) AS name,
+              COUNT(*)::int AS qty,
+              COALESCE(SUM(l.total - l.returned_amount), 0) AS revenue
+         FROM l
+         LEFT JOIN services s ON s.id = l.service_id
+        GROUP BY COALESCE(l.service_id::text, 'name:' || lower(l.name)), s.name
         ORDER BY revenue DESC, name
         LIMIT 5`,
       params,
@@ -328,7 +352,7 @@ export class SummaryBuilder implements ReportBuilder {
       title: 'Топ-5 услуг',
       columns: [
         { key: 'name', title: 'Услуга', type: 'text' },
-        { key: 'qty', title: 'Кол-во', type: 'number' },
+        { key: 'qty', title: 'Оказано', type: 'number' },
         { key: 'revenue', title: 'Выручка', type: 'money' },
       ],
       rows: rows.map((r) => ({ name: String(r.name ?? '—'), qty: num(r.qty), revenue: num(r.revenue) })),

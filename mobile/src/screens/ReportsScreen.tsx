@@ -522,9 +522,12 @@ export default function ReportsScreen() {
 
   // Расходы по категориям — реальные expense rows за период.
   // Категории жёстко в коде нет, нужно сгруппировать по categoryName.
+  // attribution: 'period' — по месяцу «за который» расход (как отчёт «По расходам»); 'period' в ключе, чтобы
+  // слот с прежней привязкой по дате оплаты, сохранённый на диске, не показался данными нового вида.
   const expensesQuery = useQuery({
-    queryKey: ['expenses', 'by-period', range.from, range.to],
-    queryFn: async () => (await expensesApi.getAll({ dateFrom: range.from, dateTo: range.to })).data,
+    queryKey: ['expenses', 'by-period', range.from, range.to, 'period'],
+    queryFn: async () =>
+      (await expensesApi.getAll({ dateFrom: range.from, dateTo: range.to, attribution: 'period' })).data,
     enabled: canView,
     placeholderData: (prev) => prev,
     staleTime: 60_000,
@@ -1251,14 +1254,12 @@ export default function ReportsScreen() {
                   <Text style={[styles.cardTitle, { color: palette.text.tertiary, paddingBottom: spacing[1] }]}>
                     РАСХОДЫ ПО КАТЕГОРИЯМ
                   </Text>
-                  {/* Round 15 #3 — честная сноска: эта секция — лента expenses
-                      ПО ДАТЕ ОПЛАТЫ (контракт expenses.getAll фильтрует только
-                      по дате факта). Прибыль месяца выше считает иначе: выплата
-                      «за месяц» (period_month) отнесена к назначенному месяцу,
-                      зарплатная категория и неодобренные расходы исключены —
-                      поэтому суммы могут законно расходиться с финотчётом. */}
+                  {/* Расходы по месяцу «за который» (attribution: 'period'), как отчёт «По расходам»: выплата
+                      «за сентябрь», выданная в октябре, здесь сентябрьская. Лента «Расходы» и касса — по дате
+                      оплаты. Прибыль выше исключает зарплатную категорию и неодобренные расходы, поэтому суммы
+                      могут законно расходиться с финотчётом. */}
                   <Text style={[styles.expSectionNote, { color: palette.text.tertiary }]}>
-                    По дате оплаты. В прибыли месяца выплаты «за месяц» учтены по назначенному месяцу.
+                    По месяцу, за который расход. Лента «Расходы» и касса — по дате оплаты.
                   </Text>
                   {expensesByCategory.slice(0, 5).map((row, idx) => {
                     const total = expensesByCategory.reduce((s, r) => s + r.amount, 0);
@@ -2288,7 +2289,7 @@ function buildReportHtml({
 
   ${
     expenses.length > 0
-      ? `<div class="section-title">Расходы по категориям (по дате оплаты)</div>
+      ? `<div class="section-title">Расходы по категориям (по месяцу, за который расход)</div>
   <table>
     <thead><tr><th>Категория</th><th class="num">Доля</th><th class="num">Сумма</th></tr></thead>
     <tbody>
@@ -2346,7 +2347,7 @@ function buildTableHtml({
   </table>
   ${
     expenses.length > 0
-      ? `<div class="section-title">Расходы по категориям (по дате оплаты)</div>
+      ? `<div class="section-title">Расходы по категориям (по месяцу, за который расход)</div>
   <table>
     <thead><tr><th>Категория</th><th class="num">Сумма</th></tr></thead>
     <tbody>

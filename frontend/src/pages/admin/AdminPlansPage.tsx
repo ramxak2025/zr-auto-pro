@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  UserCog,
   Users,
   X,
 } from 'lucide-react';
@@ -73,6 +74,7 @@ export default function AdminPlansPage() {
   const [form, setForm] = useState<PlanFormData>({ ...emptyForm });
   const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null);
   const [freeMinutes, setFreeMinutes] = useState('');
+  const [managerFreeDays, setManagerFreeDays] = useState('');
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['plans'],
@@ -117,6 +119,11 @@ export default function AdminPlansPage() {
   useEffect(() => {
     if (settings) setFreeMinutes(String(settings.globalFreeVoiceMinutes ?? 0));
   }, [settings?.globalFreeVoiceMinutes]);
+
+  const savedManagerFreeDays = settings?.managerMaxFreeDays;
+  useEffect(() => {
+    if (savedManagerFreeDays != null) setManagerFreeDays(String(savedManagerFreeDays));
+  }, [savedManagerFreeDays]);
 
   const createMutation = useMutation({
     mutationFn: (payload: any) => plansApi.create(payload),
@@ -168,6 +175,16 @@ export default function AdminPlansPage() {
 
   const settingsMutation = useMutation({
     mutationFn: (globalFreeVoiceMinutes: number) => adminApi.updateSettings({ globalFreeVoiceMinutes }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
+      toast.success('Настройки платформы сохранены');
+    },
+    onError: () => toast.error('Не удалось сохранить настройки'),
+  });
+
+  // Лимит бесплатных (пробных) дней менеджера читает сервер при каждом его бесплатном продлении.
+  const managerFreeDaysMutation = useMutation({
+    mutationFn: (managerMaxFreeDays: number) => adminApi.updateSettings({ managerMaxFreeDays }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
       toast.success('Настройки платформы сохранены');
@@ -254,6 +271,20 @@ export default function AdminPlansPage() {
     settingsMutation.mutate(Math.round(freeMinutesNum));
   };
 
+  const managerFreeDaysNum = Number(managerFreeDays);
+  const managerFreeDaysValid =
+    managerFreeDays.trim() !== '' && Number.isInteger(managerFreeDaysNum) && managerFreeDaysNum >= 1;
+  const managerFreeDaysDirty =
+    !!settings && managerFreeDaysValid && managerFreeDaysNum !== (settings.managerMaxFreeDays ?? 0);
+
+  const saveManagerFreeDays = () => {
+    if (!managerFreeDaysValid) {
+      toast.error('Введите целое число не меньше 1');
+      return;
+    }
+    managerFreeDaysMutation.mutate(managerFreeDaysNum);
+  };
+
   const deleteSubscribers = deleteTarget ? (subscribersByPlan.get(deleteTarget.id) ?? 0) : 0;
 
   return (
@@ -310,6 +341,62 @@ export default function AdminPlansPage() {
                 onClick={saveFreeMinutes}
                 disabled={!freeMinutesDirty}
                 loading={settingsMutation.isPending}
+              >
+                Сохранить
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Платформенная настройка: сколько дней пробного доступа менеджер может выдать за одно продление */}
+      <Card padding="none">
+        <CardHeader
+          icon={UserCog}
+          title="Менеджеры — пробный доступ"
+          subtitle="Предел бесплатного продления, которое менеджер платформы делает сам"
+          divider={false}
+        />
+        <div className="px-5 pb-5">
+          <p className="mb-4 max-w-[70ch] text-sm text-ink-2">
+            Действует на каждое бесплатное продление и на пробный период при создании автосервиса менеджером. Платные
+            продления менеджер ограничивает только суммой оплаты.
+          </p>
+          {settingsError ? (
+            <QueryState
+              isLoading={false}
+              isError
+              onRetry={refetchSettings}
+              isFetching={settingsFetching}
+              errorTitle="Не удалось загрузить настройки платформы"
+              minHeight="py-6"
+            >
+              {null}
+            </QueryState>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3">
+              <Field
+                label="Максимум дней пробного доступа у менеджера"
+                htmlFor={`${uid}-mgr-free-days`}
+                className="w-full sm:w-80"
+                error={managerFreeDays && !managerFreeDaysValid ? 'Введите целое число не меньше 1.' : undefined}
+              >
+                <Input
+                  id={`${uid}-mgr-free-days`}
+                  inputMode="numeric"
+                  className="tabular-nums"
+                  value={managerFreeDays}
+                  onChange={(e) => setManagerFreeDays(digitsOnly(e.target.value))}
+                  disabled={!settings}
+                  invalid={!!managerFreeDays && !managerFreeDaysValid}
+                  rightSlot={<span className="text-xs">дн.</span>}
+                />
+              </Field>
+              <Button
+                variant="secondary"
+                onClick={saveManagerFreeDays}
+                disabled={!managerFreeDaysDirty}
+                loading={managerFreeDaysMutation.isPending}
               >
                 Сохранить
               </Button>

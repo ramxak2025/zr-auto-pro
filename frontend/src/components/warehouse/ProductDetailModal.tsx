@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeftRight, ClipboardCheck, Package, PackageMinus, Pencil, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  ClipboardCheck,
+  MapPin,
+  Package,
+  PackageMinus,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
 import type { Product } from '../../types';
 import { productsApi } from '../../api/services';
 import Modal from '../Modal';
@@ -14,6 +23,7 @@ import { cn } from '../../ui/cn';
 import type { Tone } from '../../ui/tokens';
 import { formatQty, unitLabel } from '../../utils/units';
 import { formatDayTime } from './format';
+import StorageCellBadge from './StorageCellBadge';
 
 type DetailTab = 'info' | 'movements' | 'prices';
 
@@ -39,6 +49,8 @@ interface ProductDetailModalProps {
   onDelete: () => void;
   onTransfer?: () => void;
   canTransfer?: boolean;
+  /** Сменить адрес товара; страница передаёт, только когда на складе есть ячейки. */
+  onChangeCell?: () => void;
   /** Owner-class or warehouse_manage. Gates cost-price + all manage actions. */
   canManage?: boolean;
 }
@@ -66,6 +78,7 @@ export default function ProductDetailModal({
   onDelete,
   onTransfer,
   canTransfer,
+  onChangeCell,
   canManage,
 }: ProductDetailModalProps) {
   // Non-managers can only ever see the Info tab (cost + price history leak
@@ -136,6 +149,9 @@ export default function ProductDetailModal({
                 {product.category && <Badge outline>{product.category}</Badge>}
                 {product.isBundle && <Badge tone="accent">Комплект</Badge>}
                 {product.barcode && <Badge tone="neutral">Штрихкод {product.barcode}</Badge>}
+                {product.storageCellCode && (
+                  <StorageCellBadge code={product.storageCellCode} name={product.storageCellName} size="md" withLabel />
+                )}
                 {isLow && (
                   <Badge tone="bad" icon={AlertTriangle}>
                     Ниже минимума
@@ -195,6 +211,11 @@ export default function ProductDetailModal({
                   Инвентаризация
                 </Button>
               </div>
+              {onChangeCell && (
+                <Button variant="secondary" fullWidth icon={MapPin} onClick={onChangeCell}>
+                  {product.storageCellId ? 'Изменить адрес' : 'Назначить ячейку'}
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 fullWidth

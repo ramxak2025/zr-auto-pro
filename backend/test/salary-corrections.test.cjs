@@ -167,6 +167,24 @@ test('createPayment связывает выплату с расходом (expen
   assert.match(service, /UPDATE salary_payments SET expense_id = \$1 WHERE id = \$2/);
 });
 
+test('createPayment (legacy): зеркальный расход несёт period_month = month_year выплаты', () => {
+  // Правка №3 (2026-09-30): отчёт «По расходам» считает расход в месяце «за который»,
+  // «По зарплатам» и экран «Зарплата» — выплату по month_year. Зеркало без period_month
+  // попало бы в месяц факта и разошлось бы с самой выплатой; касса (лента расходов,
+  // смена) по-прежнему идёт по date = моменту выдачи.
+  const body = service.slice(service.indexOf('async createPayment'), service.indexOf('async createPremium'));
+  assert.match(
+    body,
+    /INSERT INTO expenses \(category_id, amount, description, date, user_id, tenant_id, point_id, period_month\)/,
+    'INSERT зеркального расхода обязан включать period_month',
+  );
+  assert.match(
+    body,
+    /\[categoryId, dto\.amount, description, payment\.date, createdBy, tenantID, pointId, dto\.monthYear\]/,
+    'значение — month_year самой выплаты: платёж и его расход не могут оказаться в разных месяцах',
+  );
+});
+
 test('updatePenalty: правка штрафа с аудитом before/after', () => {
   const body = service.slice(service.indexOf('async updatePenalty'), service.indexOf('private mapPayout'));
   assert.match(body, /FOR UPDATE OF pen/);

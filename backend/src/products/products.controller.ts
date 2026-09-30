@@ -12,6 +12,7 @@ import { actorPointId } from '../common/point-scope';
 import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
+import { BulkAssignCellDto } from './dto/bulk-assign-cell.dto';
 
 // ROLE-ONLY (консолидация 2026-07). Reads stay open to every authenticated user
 // (a master needs to browse products to build a check) — but the service STRIPS
@@ -103,6 +104,14 @@ export class ProductsController {
   @Post('bulk-move')
   bulkMove(@CurrentUser() user: JwtPayload, @Body() dto: BulkMoveDto) {
     return this.productsService.bulkMove(user.tenantID, dto, actorPointId(user));
+  }
+
+  // 172 — массово положить товары в ячейку хранения (или снять адрес). Тот же
+  // 'warehouse_manage', что у PATCH /products/:id. Литеральный путь — раньше `:id`.
+  @RequirePermission('warehouse_manage')
+  @Post('bulk-assign-cell')
+  bulkAssignCell(@CurrentUser() user: JwtPayload, @Body() dto: BulkAssignCellDto) {
+    return this.productsService.bulkAssignCell(user.tenantID, dto, actorPointId(user));
   }
 
   // ── Trash bin ──────────────────────────────────────────────────────────

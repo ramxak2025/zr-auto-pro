@@ -14,8 +14,14 @@
 //  экранируются `escapeHtml` перед вставкой в HTML — иначе символы < > & " '
 //  ломают разметку PDF или открывают HTML-инъекцию. Числа/даты форматируем
 //  сами — их экранировать не нужно.
+//
+//  Услуги без количества (2026-09-30): в таблице услуг НЕТ колонки «Кол-во» —
+//  строка услуги = одна услуга по одной цене. У товаров колонка остаётся.
+//  Legacy-строка старого чека с quantity > 1 показывается честно: «Мойка ×3»
+//  в наименовании, сумма — как в чеке (`total`).
 // ═══════════════════════════════════════════════════════════════════════════
 import type { Check, Tenant } from '../../../shared/types';
+import { formatQty } from './units';
 
 const PAYMENT_LABELS: Record<string, string> = {
   cash: 'Наличные',
@@ -94,6 +100,11 @@ export function buildOrderHtml(check: Check, company?: Tenant | null): string {
   const infoRow = (label: string, value: string) =>
     value ? `<tr><td class="k">${label}</td><td class="v">${value}</td></tr>` : '';
 
+  // Наименование услуги: имя экранируем, «×N» дописываем только у legacy-строки
+  // (quantity > 1). У обычной строки количества нет — только имя.
+  const serviceNameHtml = (s: (typeof services)[number]) =>
+    `${escapeHtml(s.name)}${Number(s.quantity) > 1 ? ` ×${formatQty(Number(s.quantity))}` : ''}`;
+
   const servicesTable =
     services.length > 0
       ? `
@@ -101,23 +112,22 @@ export function buildOrderHtml(check: Check, company?: Tenant | null): string {
       <table class="lines">
         <thead><tr>
           <th class="n">№</th><th>Наименование</th><th>Мастер</th>
-          <th class="r">Кол-во</th><th class="r">Цена</th><th class="r">Сумма</th>
+          <th class="r">Цена</th><th class="r">Сумма</th>
         </tr></thead>
         <tbody>
           ${services
             .map(
               (s, i) => `<tr>
               <td class="n">${i + 1}</td>
-              <td>${escapeHtml(s.name)}</td>
+              <td>${serviceNameHtml(s)}</td>
               <td>${s.master?.fullName ? escapeHtml(s.master.fullName) : '—'}</td>
-              <td class="r">${s.quantity}</td>
               <td class="r">${formatMoney(s.price)}</td>
               <td class="r">${formatMoney(s.total)}</td>
             </tr>`,
             )
             .join('')}
         </tbody>
-        <tfoot><tr><td colspan="5" class="r">Итого услуги</td><td class="r b">${formatMoney(check.serviceTotal)}</td></tr></tfoot>
+        <tfoot><tr><td colspan="4" class="r">Итого услуги</td><td class="r b">${formatMoney(check.serviceTotal)}</td></tr></tfoot>
       </table>`
       : '';
 

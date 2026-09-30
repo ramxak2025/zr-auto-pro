@@ -299,6 +299,8 @@ export interface ImportRow {
   stock: number;
   minStock: number;
   unit: string;
+  /** Код ячейки из колонки «Ячейка»/«Адрес»; сервер найдёт ячейку склада или создаст её. */
+  storageCell?: string;
 }
 
 export function ImportPreviewModal({
@@ -313,6 +315,8 @@ export function ImportPreviewModal({
   importing: boolean;
 }) {
   const shown = (rows ?? []).slice(0, 50);
+  // Колонка появляется, только если в файле есть адреса: без них таблица выглядит как раньше.
+  const hasCells = (rows ?? []).some((r) => r.storageCell);
   return (
     <Modal
       isOpen={!!rows}
@@ -338,6 +342,7 @@ export function ImportPreviewModal({
             {countLabel(rows?.length ?? 0, ['товар', 'товара', 'товаров'])}
           </span>
           . Товары с совпадающими названиями будут обновлены.
+          {hasCells && ' Ячейки, которых ещё нет на складе, будут созданы.'}
         </p>
         <div className="table-container max-h-80 overflow-auto">
           <table className="table table-dense min-w-[640px]">
@@ -350,6 +355,11 @@ export function ImportPreviewModal({
                 <th scope="col" className="sticky top-0 z-10 w-40">
                   Папка
                 </th>
+                {hasCells && (
+                  <th scope="col" className="sticky top-0 z-10 w-28">
+                    Ячейка
+                  </th>
+                )}
                 <th scope="col" className="sticky top-0 z-10 w-16">
                   Ед.
                 </th>
@@ -369,6 +379,7 @@ export function ImportPreviewModal({
                 <tr key={idx}>
                   <td className="font-medium text-ink">{item.name}</td>
                   <td className="text-ink-3">{item.category || '—'}</td>
+                  {hasCells && <td className="font-mono text-xs tabular-nums text-ink-2">{item.storageCell || '—'}</td>}
                   <td className="text-ink-3">{unitLabel(item.unit) !== DEFAULT_UNIT ? unitLabel(item.unit) : '—'}</td>
                   <td className="num">{item.sellPrice || 0}</td>
                   <td className="num">{item.costPrice || 0}</td>

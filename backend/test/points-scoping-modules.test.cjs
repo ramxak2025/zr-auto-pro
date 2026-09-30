@@ -392,10 +392,14 @@ test('расходы режутся филиалом, включая произ�
 
 test('все восемь путей создания расхода проставляют точку', () => {
   const inserts = [
-    ['expenses.create (ручной)', expenses, /VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10\) RETURNING \*/],
+    // 2026-09-30 (правка №3): в конец списка колонок добавлен period_month — «за какой месяц»;
+    // point_id по-прежнему ОБЯЗАТЕЛЕН (10-й параметр), новый параметр — 11-й.
+    ['expenses.create (ручной)', expenses, /point_id, period_month\)\n\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11\) RETURNING \*/],
     ['expenses.recordSalaryExpense', expenses, /'owner', 'approved', \$6, \$7, \$8\)\n\s+RETURNING id, amount, date/],
     ['expenses.recordOutsideProgramPayout', expenses, /'owner', 'approved', \$6, \$7, \$8, \$9\)/],
-    ['salary.createPayment (легаси)', salary, /INSERT INTO expenses \([^)]*point_id\)\n\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7\)/],
+    // 2026-09-30 (правка №3): зеркальный расход легаси-платежа получает period_month = month_year ($8);
+    // point_id (7-й параметр) остаётся на месте.
+    ['salary.createPayment (легаси)', salary, /INSERT INTO expenses \([^)]*point_id, period_month\)\n\s+VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)/],
     ['products.updateStock (списание)', read('src/products/products.service.ts'), /INSERT INTO expenses \([^)]*point_id\)\n\s+VALUES \(\$1, \$2, \$3, now\(\), \$4, \$5, \$6\)/],
     ['stock-movements.applyWriteoff', read('src/stock-movements/stock-movements.service.ts'), /INSERT INTO expenses \([^)]*point_id\)\n\s+VALUES \(\$1,\$2,\$3,now\(\),\$4,\$5,\$6\)/],
     ['equipment.createStorageItem', read('src/equipment/equipment.service.ts'), /storage_item_id, point_id\)\n\s+VALUES \(\$1, \$2, \$3, now\(\), \$4, \$4, 'owner', 'approved', \$5, \$6, \$7\)/],

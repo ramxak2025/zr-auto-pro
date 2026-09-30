@@ -157,11 +157,15 @@ export function ErrorRow({
   );
 }
 
-/** Статус автосервиса: Активна / Отключена (+ Истекла, когда срок вышел, а флаг ещё активен). */
+/** Статус автосервиса: Активна / Приостановлена / Отключена (+ Истекла, когда срок вышел, а флаг ещё активен). */
 export function TenantStatusBadges({ tenant, size = 'md' }: { tenant: Tenant; size?: 'sm' | 'md' }) {
   return (
     <span className="flex flex-wrap items-center gap-1">
-      {tenant.isActive ? (
+      {tenant.suspendedAt ? (
+        <Badge tone="bad" dot size={size}>
+          Приостановлена
+        </Badge>
+      ) : tenant.isActive ? (
         <Badge tone="ok" dot size={size}>
           Активна
         </Badge>

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
 
 export class CreateProductDto {
   @IsString()
@@ -61,4 +61,9 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   barcode?: string;
+
+  // 172 — адрес хранения: uuid ячейки СКЛАДА товара (проверяет сервис); null/не задан — без адреса.
+  @IsOptional()
+  @IsUUID('all', { message: 'Некорректная ячейка хранения' })
+  storageCellId?: string | null;
 }
