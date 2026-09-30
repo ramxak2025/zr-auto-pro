@@ -1,22 +1,16 @@
 import { useId, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Activity,
-  Banknote,
   Building2,
   CalendarDays,
   CalendarPlus,
   ChevronDown,
-  ClipboardList,
-  Clock,
   CreditCard,
-  Gift,
   Info,
   LogIn,
   Mail,
   MapPin,
-  Package,
   PauseCircle,
   Pencil,
   Phone,
@@ -24,17 +18,15 @@ import {
   Plus,
   StickyNote,
   Trash2,
+  UserCog,
   Users,
-  Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO, isPast, formatDistanceToNow, addDays, addYears } from 'date-fns';
+import { format, parseISO, isPast } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { tenantsApi, usersApi, plansApi } from '../../api/services';
-import type { ExtendSubscriptionRequest } from '../../api/services';
-import { useAuth } from '../../contexts/AuthContext';
-import { Tenant, User, UserRole, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
+import { tenantsApi, usersApi } from '../../api/services';
+import { Tenant, User, UserRole, TenantCabinet, SubscriptionStatus } from '../../types';
 import { formatMoney, roleLabels } from '../../../../shared/utils/formatters';
 import { formatPhone } from '../../../../shared/validation/phone';
 import PageHeader from '../../components/PageHeader';
@@ -44,7 +36,6 @@ import QueryState from '../../components/QueryState';
 import Switch from '../../components/Switch';
 import EmptyState from '../../components/EmptyState';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
-import { writeSessionToken } from '../../utils/sessionToken';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Card, CardHeader } from '../../ui/Card';
@@ -53,29 +44,20 @@ import { DropdownMenu, type MenuEntry } from '../../ui/DropdownMenu';
 import { Field } from '../../ui/Field';
 import { IconButton } from '../../ui/IconButton';
 import { Input } from '../../ui/Input';
-import { SegmentedControl } from '../../ui/SegmentedControl';
 import { Select } from '../../ui/Select';
 import { Skeleton } from '../../ui/Skeleton';
 import { Textarea } from '../../ui/Textarea';
 import { cn } from '../../ui/cn';
 import { focusRing, type Tone } from '../../ui/tokens';
-import {
-  ErrorRow,
-  InfoRow,
-  MiniStat,
-  TenantStatusBadges,
-  ToggleChip,
-  formatDateRu,
-} from '../../components/admin/adminUi';
-
-// Quick-fill presets — each computes the new "until" date from the anchor
-// (current end if still in the future, otherwise today). They only set the
-// date; the paid/free mode is chosen separately above.
-const EXTEND_PRESETS: { label: string; add: (d: Date) => Date }[] = [
-  { label: '+30 дней', add: (d) => addDays(d, 30) },
-  { label: '+90 дней', add: (d) => addDays(d, 90) },
-  { label: '+год', add: (d) => addYears(d, 1) },
-];
+import { InfoRow, TenantStatusBadges, formatDateRu } from '../../components/admin/adminUi';
+import AssignPlanModal from '../../components/admin/AssignPlanModal';
+import ExtendModal from '../../components/admin/ExtendModal';
+import TenantSubscriptionCard from '../../components/admin/TenantSubscriptionCard';
+import TransferManagerModal from '../../components/admin/TransferManagerModal';
+import { ImpersonateDialog, SuspendModal, UnsuspendDialog } from '../../components/admin/TenantLifecycleDialogs';
+import { useAdminManagers } from '../../components/admin/useAdminManagers';
+import { useTenantSubscriptionActions } from '../../components/admin/useTenantSubscriptionActions';
+import { useTransferTenantManager } from '../../components/admin/useTransferTenantManager';
 
 // Роль — метка, не статус: владелец — акцент, остальные нейтральны.
 const roleTone: Record<string, Tone> = {
@@ -130,21 +112,16 @@ export default function AdminTenantDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { refreshUser } = useAuth();
   const uid = useId();
 
-  // Subscription management modals
+  // Диалоги подписки: сама форма живёт внутри общих компонентов, здесь только флаги открытия.
   const [extendModalOpen, setExtendModalOpen] = useState(false);
-  const [extendMode, setExtendMode] = useState<'paid' | 'free'>('paid');
-  const [extendAmount, setExtendAmount] = useState('');
-  const [extendUntil, setExtendUntil] = useState(''); // YYYY-MM-DD
   const [planModalOpen, setPlanModalOpen] = useState(false);
-  const [selectedPlanId, setSelectedPlanId] = useState('');
   const [impersonateConfirm, setImpersonateConfirm] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
 
   // Suspend / unsuspend (102)
   const [suspendModalOpen, setSuspendModalOpen] = useState(false);
-  const [suspendReason, setSuspendReason] = useState('');
   const [unsuspendConfirm, setUnsuspendConfirm] = useState(false);
 
   // Tenant edit modal
@@ -197,15 +174,11 @@ export default function AdminTenantDetailPage() {
     staleTime: 60_000,
   });
 
-  const metrics = cabinet?.metrics;
   const subStatus = cabinet?.subscription;
 
-  // Active plans for the assign-plan picker.
-  const { data: plans } = useQuery({
-    queryKey: ['plans'],
-    queryFn: () => plansApi.getAll(),
-    select: (res) => (res.data as Plan[]).filter((p) => p.isActive),
-  });
+  // Ставка менеджера автосервиса — для галочки «Оплату получил менеджер» в «Продлить».
+  const { data: managers } = useAdminManagers(!!tenant?.managerId);
+  const tenantManager = tenant?.managerId ? managers?.find((m) => m.id === tenant.managerId) : undefined;
 
   // Defensive: hide dismissed/purged employees from the active tenant list even
   // if a stale cache snapshot carries them (backend already excludes them).
@@ -226,89 +199,15 @@ export default function AdminTenantDetailPage() {
     },
   });
 
-  // ── Subscription management ──
-  const invalidateTenant = () => {
-    queryClient.invalidateQueries({ queryKey: ['tenant', id] });
-    queryClient.invalidateQueries({ queryKey: ['tenant-cabinet', id] });
-    queryClient.invalidateQueries({ queryKey: ['tenants'] });
-    queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-  };
-
-  const extendMutation = useMutation({
-    mutationFn: (opts: ExtendSubscriptionRequest) => tenantsApi.extend(id!, opts),
-    onSuccess: (_res, opts) => {
-      invalidateTenant();
-      toast.success(opts.type === 'paid' ? 'Подписка продлена (оплачено)' : 'Подписка продлена (бесплатно)');
-      setExtendModalOpen(false);
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось продлить подписку');
-    },
-  });
-
-  const assignPlanMutation = useMutation({
-    mutationFn: (planId: string) => tenantsApi.assignPlan(id!, planId),
-    onSuccess: () => {
-      invalidateTenant();
-      toast.success('Тариф назначен');
-      setPlanModalOpen(false);
-      setSelectedPlanId('');
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось назначить тариф');
-    },
-  });
-
-  const impersonateMutation = useMutation({
-    mutationFn: () => tenantsApi.impersonate(id!),
-    onSuccess: async (res) => {
-      const { token } = res.data;
-      // Swap the session to the tenant owner: clear superadmin cache so none of
-      // the platform-level data bleeds into the impersonated session, then write
-      // the short-lived director token and reload into the tenant's app.
-      await queryClient.cancelQueries().catch(() => {});
-      queryClient.clear();
-      // Через writeSessionToken, а не напрямую в localStorage: вкладка обязана
-      // запомнить, каким токеном она теперь живёт (167). Иначе собственный
-      // заслон «сессия обновлена в другой вкладке» принял бы этот вход за
-      // чужой и заблокировал бы запросы ровно той вкладке, которая его сделала.
-      writeSessionToken(token);
-      await refreshUser();
-      toast.success('Вход выполнен от имени владельца');
-      window.location.href = '/dashboard';
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось войти как владелец');
-    },
-  });
-
-  // ── Suspend / unsuspend (102) ──
-  // Suspend forces is_active=false server-side → every employee hits the hard
-  // gate; the subscription window itself is untouched, so unsuspend simply
-  // restores access.
-  const suspendMutation = useMutation({
-    mutationFn: (reason: string | undefined) => tenantsApi.suspend(id!, reason),
-    onSuccess: () => {
-      invalidateTenant();
-      toast.success('Автосервис приостановлен');
-      setSuspendModalOpen(false);
-      setSuspendReason('');
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось приостановить');
-    },
-  });
-
-  const unsuspendMutation = useMutation({
-    mutationFn: () => tenantsApi.unsuspend(id!),
-    onSuccess: () => {
-      invalidateTenant();
-      toast.success('Работа автосервиса возобновлена');
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Не удалось возобновить');
-    },
-  });
+  // ── Управление подпиской: мутации общие с кабинетом менеджера (components/admin) ──
+  const {
+    extend: extendMutation,
+    assignPlan: assignPlanMutation,
+    impersonate: impersonateMutation,
+    suspend: suspendMutation,
+    unsuspend: unsuspendMutation,
+  } = useTenantSubscriptionActions(id, 'superadmin');
+  const transferMutation = useTransferTenantManager();
 
   const createUserMutation = useMutation({
     mutationFn: (data: any) => usersApi.create(data),
@@ -362,49 +261,6 @@ export default function AdminTenantDetailPage() {
       subscriptionNote: tenant.subscriptionNote || '',
     });
     setTenantModalOpen(true);
-  };
-
-  const openPlanModal = () => {
-    setSelectedPlanId(tenant?.planId || '');
-    setPlanModalOpen(true);
-  };
-
-  // Anchor for date math: the current end if it's still in the future,
-  // otherwise today (a lapsed subscription restarts from now).
-  const extendAnchor = (): Date => {
-    const end = tenant?.subscriptionEnd ? parseISO(tenant.subscriptionEnd) : null;
-    return end && !isPast(end) ? end : new Date();
-  };
-
-  const openExtendModal = () => {
-    setExtendMode('paid');
-    // Pre-fill amount with the plan price (a sensible default the operator can edit).
-    setExtendAmount(subStatus?.planPrice ? String(subStatus.planPrice) : '');
-    setExtendUntil(format(addDays(extendAnchor(), 30), 'yyyy-MM-dd'));
-    setExtendModalOpen(true);
-  };
-
-  // Presets only fill the until-date under the chosen paid/free mode.
-  const applyExtendPreset = (add: (d: Date) => Date) => {
-    setExtendUntil(format(add(extendAnchor()), 'yyyy-MM-dd'));
-  };
-
-  const handleExtendSubmit = () => {
-    const todayStr = format(new Date(), 'yyyy-MM-dd');
-    if (!extendUntil || extendUntil <= todayStr) {
-      toast.error('Укажите дату окончания в будущем');
-      return;
-    }
-    if (extendMode === 'paid') {
-      const amount = Number(extendAmount);
-      if (!Number.isFinite(amount) || amount <= 0) {
-        toast.error('Введите сумму больше 0');
-        return;
-      }
-      extendMutation.mutate({ type: 'paid', amount: Math.round(amount), until: extendUntil });
-    } else {
-      extendMutation.mutate({ type: 'free', until: extendUntil });
-    }
   };
 
   const handleTenantSubmit = (e: React.FormEvent) => {
@@ -553,13 +409,6 @@ export default function AdminTenantDetailPage() {
   // status; fall back to the tenant's own suspendedAt marker until it resolves.
   const isSuspended = subStatus ? subStatus.status === 'suspended' : !!tenant.suspendedAt;
 
-  // Extend-modal derived validation (paid → amount>0 + future date; free → future date).
-  const extendTodayStr = format(new Date(), 'yyyy-MM-dd');
-  const extendUntilValid = !!extendUntil && extendUntil > extendTodayStr;
-  const extendAmountNum = Number(extendAmount);
-  const extendAmountValid = Number.isFinite(extendAmountNum) && extendAmountNum > 0;
-  const canSubmitExtend = extendUntilValid && (extendMode === 'free' || extendAmountValid);
-
   const moreItems: MenuEntry[] = [
     { key: 'impersonate', label: 'Войти как владелец', icon: LogIn, onSelect: () => setImpersonateConfirm(true) },
     { type: 'separator', key: 'sep' },
@@ -643,7 +492,8 @@ export default function AdminTenantDetailPage() {
         meta={
           <>
             <TenantStatusBadges tenant={tenant} size="sm" />
-            {subStatus && subStatus.status !== 'active' && (
+            {/* «Приостановлена» уже показывает TenantStatusBadges — здесь только истёкшая подписка */}
+            {subStatus && subStatus.status === 'expired' && (
               <Badge tone={subStatusMeta[subStatus.status].tone} size="sm">
                 {subStatusMeta[subStatus.status].label}
               </Badge>
@@ -657,10 +507,10 @@ export default function AdminTenantDetailPage() {
         }
         actions={
           <>
-            <Button icon={CalendarPlus} onClick={openExtendModal}>
+            <Button icon={CalendarPlus} onClick={() => setExtendModalOpen(true)}>
               Продлить
             </Button>
-            <Button variant="secondary" icon={CreditCard} onClick={openPlanModal}>
+            <Button variant="secondary" icon={CreditCard} onClick={() => setPlanModalOpen(true)}>
               Тариф
             </Button>
             <Button variant="secondary" icon={Pencil} onClick={openTenantEdit}>
@@ -698,93 +548,13 @@ export default function AdminTenantDetailPage() {
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
         {/* Подписка + показатели (superadmin cabinet) */}
-        <Card padding="none" className="xl:col-span-2">
-          <CardHeader icon={CreditCard} title="Подписка" subtitle="Тариф, срок и лимит сотрудников" />
-          <div className="px-5 py-4">
-            {cabinetError && !subStatus ? (
-              <ErrorRow
-                message="Не удалось загрузить данные подписки"
-                onRetry={() => refetchCabinet()}
-                loading={cabinetFetching}
-              />
-            ) : !subStatus ? (
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4" aria-busy="true">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i}>
-                    <Skeleton variant="text" className="w-20" />
-                    <Skeleton className="mt-2 h-5 w-24" />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <dl className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                <MiniStat label="Тариф" value={subStatus.planName || 'Не назначен'} />
-                <MiniStat label="Стоимость" value={`${formatMoney(subStatus.planPrice)}/мес`} />
-                <MiniStat
-                  label="Действует до"
-                  value={
-                    subStatus.subscriptionEnd ? formatDateRu(subStatus.subscriptionEnd, 'd MMMM yyyy') : 'Не указано'
-                  }
-                  tone={subStatus.status === 'expired' ? 'bad' : 'neutral'}
-                />
-                <MiniStat label="Сотрудников" value={`${subStatus.currentUsers} / ${subStatus.maxUsers}`} />
-              </dl>
-            )}
-          </div>
-
-          {/* Показатели клиента — сигналы активности */}
-          <div className="border-t border-line px-5 py-4">
-            <h3 className="mb-3 text-sm font-semibold text-ink">Показатели клиента</h3>
-            {cabinetError && !metrics ? (
-              <p className="text-sm text-ink-3">Показатели недоступны — повторите загрузку выше.</p>
-            ) : !metrics ? (
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-busy="true">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} className="h-[76px] w-full rounded-lg" />
-                ))}
-              </div>
-            ) : (
-              <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <MetricTile
-                  icon={ClipboardList}
-                  label="Заказ-наряды"
-                  value={metrics.checksTotal}
-                  hint={`за 30 дней: ${metrics.checksLast30d}`}
-                />
-                <MetricTile
-                  icon={Banknote}
-                  label="Выручка"
-                  value={formatMoney(metrics.revenueTotal)}
-                  hint={`за 30 дней: ${formatMoney(metrics.revenueLast30d)}`}
-                />
-                <MetricTile
-                  icon={Users}
-                  label="Сотрудники"
-                  value={metrics.usersCount}
-                  hint={`активных: ${metrics.activeUsersCount}`}
-                />
-                <MetricTile
-                  icon={Package}
-                  label="Товары · активность"
-                  value={metrics.productsCount}
-                  hint={
-                    metrics.lastActivityAt ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Clock className="h-3 w-3" aria-hidden="true" />
-                        {formatDistanceToNow(parseISO(metrics.lastActivityAt), { addSuffix: true, locale: ru })}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1">
-                        <Activity className="h-3 w-3" aria-hidden="true" />
-                        нет активности
-                      </span>
-                    )
-                  }
-                />
-              </dl>
-            )}
-          </div>
-        </Card>
+        <TenantSubscriptionCard
+          cabinet={cabinet}
+          isError={cabinetError}
+          isFetching={cabinetFetching}
+          onRetry={() => refetchCabinet()}
+          className="xl:col-span-2"
+        />
 
         {/* Информация о тенанте */}
         <Card padding="none">
@@ -828,6 +598,27 @@ export default function AdminTenantDetailPage() {
               ) : (
                 <span className="text-ink-3">не указано</span>
               )}
+            </InfoRow>
+            <InfoRow icon={UserCog} label="Менеджер">
+              <span className="text-ink-3">Менеджер: </span>
+              {tenant.managerId && tenant.managerName ? (
+                <Link
+                  to={`/admin/managers/${tenant.managerId}`}
+                  className={cn('rounded font-medium text-accent-text hover:underline', focusRing)}
+                >
+                  {tenantManager?.fullName ?? tenant.managerName}
+                </Link>
+              ) : (
+                <span className="text-ink-3">не назначен</span>
+              )}
+              {' · '}
+              <button
+                type="button"
+                onClick={() => setTransferModalOpen(true)}
+                className={cn('rounded text-accent-text hover:underline', focusRing)}
+              >
+                Передать
+              </button>
             </InfoRow>
             {tenant.subscriptionNote && (
               <InfoRow icon={StickyNote} label="Примечание">
@@ -1113,234 +904,72 @@ export default function AdminTenantDetailPage() {
         variant="danger"
       />
 
-      {/* Продление подписки — платно / бесплатно */}
-      <Modal
+      {/* Продление подписки — платно / бесплатно (общий модал кабинетов суперадмина и менеджера) */}
+      <ExtendModal
         isOpen={extendModalOpen}
         onClose={() => setExtendModalOpen(false)}
-        title="Продлить подписку"
-        description={`Текущий срок: ${subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указан'}`}
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setExtendModalOpen(false)} disabled={extendMutation.isPending}>
-              Отмена
-            </Button>
-            <Button onClick={handleExtendSubmit} disabled={!canSubmitExtend} loading={extendMutation.isPending}>
-              {extendMode === 'paid'
-                ? extendAmountValid
-                  ? `Продлить · ${formatMoney(extendAmountNum)}`
-                  : 'Продлить'
-                : 'Продлить бесплатно'}
-            </Button>
-          </>
+        mode="superadmin"
+        subscriptionEnd={subStatus?.subscriptionEnd ?? tenant.subscriptionEnd}
+        planPrice={subStatus?.planPrice ?? tenant.monthlyPrice}
+        currentPeriodKind={subStatus?.currentPeriodKind ?? tenant.currentPeriodKind}
+        manager={
+          tenant.managerId && tenantManager
+            ? { name: tenantManager.fullName, ownerSharePercent: tenantManager.ownerSharePercent }
+            : tenant.managerId && tenant.managerName
+              ? { name: tenant.managerName, ownerSharePercent: null }
+              : null
         }
-      >
-        <div className="space-y-4">
-          {subStatus?.currentPeriodKind && (
-            <SubscriptionPeriodBadge kind={subStatus.currentPeriodKind} until={subStatus.subscriptionEnd} />
-          )}
-
-          <Field
-            label="Тип продления"
-            hint={
-              extendMode === 'paid'
-                ? 'Платёж запишется в выручку по подпискам.'
-                : 'Бесплатное продление не учитывается как выручка.'
-            }
-          >
-            <SegmentedControl<'paid' | 'free'>
-              aria-label="Тип продления"
-              fullWidth
-              value={extendMode}
-              onChange={setExtendMode}
-              options={[
-                { value: 'paid', label: 'Платно', icon: Wallet },
-                { value: 'free', label: 'Бесплатно', icon: Gift },
-              ]}
-            />
-          </Field>
-
-          {extendMode === 'paid' && (
-            <Field
-              label="Сумма платежа"
-              htmlFor={`${uid}-ext-amount`}
-              error={extendAmount && !extendAmountValid ? 'Введите сумму больше 0.' : undefined}
-            >
-              <Input
-                id={`${uid}-ext-amount`}
-                inputMode="decimal"
-                className="tabular-nums"
-                value={extendAmount}
-                onChange={(e) => setExtendAmount(digitsOnly(e.target.value))}
-                placeholder="например, 2990"
-                invalid={!!extendAmount && !extendAmountValid}
-                rightSlot={<span className="text-xs">₽</span>}
-              />
-            </Field>
-          )}
-
-          <Field
-            label="Быстрое продление"
-            hint={`Считается от ${subscriptionEnd && !isExpired ? 'текущего срока' : 'сегодня'} и подставляет дату ниже.`}
-          >
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрое продление">
-              {EXTEND_PRESETS.map((preset) => {
-                const presetDate = format(preset.add(extendAnchor()), 'yyyy-MM-dd');
-                return (
-                  <ToggleChip
-                    key={preset.label}
-                    active={extendUntil === presetDate}
-                    onClick={() => applyExtendPreset(preset.add)}
-                  >
-                    {preset.label}
-                  </ToggleChip>
-                );
-              })}
-            </div>
-          </Field>
-
-          <Field
-            label="Действует до"
-            htmlFor={`${uid}-ext-until`}
-            error={extendUntil && !extendUntilValid ? 'Дата должна быть в будущем.' : undefined}
-          >
-            <Input
-              id={`${uid}-ext-until`}
-              type="date"
-              className="tabular-nums"
-              value={extendUntil}
-              min={extendTodayStr}
-              invalid={!!extendUntil && !extendUntilValid}
-              onChange={(e) => setExtendUntil(e.target.value)}
-            />
-          </Field>
-        </div>
-      </Modal>
+        isPending={extendMutation.isPending}
+        onSubmit={(request) => extendMutation.mutate(request, { onSuccess: () => setExtendModalOpen(false) })}
+      />
 
       {/* Назначить тариф */}
-      <Modal
+      <AssignPlanModal
         isOpen={planModalOpen}
         onClose={() => setPlanModalOpen(false)}
-        title="Назначить тариф"
-        description="Назначение тарифа синхронизирует цену и лимит сотрудников автосервиса."
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setPlanModalOpen(false)} disabled={assignPlanMutation.isPending}>
-              Отмена
-            </Button>
-            <Button
-              disabled={!selectedPlanId}
-              onClick={() => selectedPlanId && assignPlanMutation.mutate(selectedPlanId)}
-              loading={assignPlanMutation.isPending}
-            >
-              Назначить
-            </Button>
-          </>
-        }
-      >
-        <Field label="Тариф" htmlFor={`${uid}-plan`}>
-          <Select
-            id={`${uid}-plan`}
-            value={selectedPlanId}
-            onChange={(e) => setSelectedPlanId(e.target.value)}
-            placeholder="— Выберите тариф —"
-          >
-            {(plans ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} — {formatMoney(p.monthlyPrice)}/мес · до {p.maxUsers} сотр.
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </Modal>
+        mode="superadmin"
+        currentPlanId={subStatus?.planId ?? tenant.planId ?? null}
+        isPending={assignPlanMutation.isPending}
+        onSubmit={(planId) => assignPlanMutation.mutate(planId, { onSuccess: () => setPlanModalOpen(false) })}
+      />
 
       {/* Вход как владелец */}
-      <ConfirmDialog
+      <ImpersonateDialog
         isOpen={impersonateConfirm}
         onClose={() => setImpersonateConfirm(false)}
-        onConfirm={() => {
-          setImpersonateConfirm(false);
-          impersonateMutation.mutate();
-        }}
-        title="Войти как владелец"
-        message={`Вы войдёте в аккаунт владельца «${tenant.name}» под временной сессией (30 минут). Текущая сессия суперадмина будет заменена — потребуется повторный вход. Продолжить?`}
-        confirmText="Войти"
-        variant="primary"
+        mode="superadmin"
+        tenantName={tenant.name}
+        onConfirm={() => impersonateMutation.mutate()}
       />
 
       {/* Приостановка (причина + подтверждение) */}
-      <Modal
+      <SuspendModal
         isOpen={suspendModalOpen}
         onClose={() => setSuspendModalOpen(false)}
-        title="Приостановить автосервис"
-        description={`Сотрудники «${tenant.name}» потеряют доступ до возобновления. Срок подписки не меняется.`}
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setSuspendModalOpen(false)} disabled={suspendMutation.isPending}>
-              Отмена
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => suspendMutation.mutate(suspendReason.trim() || undefined)}
-              loading={suspendMutation.isPending}
-            >
-              Приостановить
-            </Button>
-          </>
-        }
-      >
-        <Field label="Причина (необязательно)" htmlFor={`${uid}-suspend-reason`}>
-          <Textarea
-            id={`${uid}-suspend-reason`}
-            rows={3}
-            value={suspendReason}
-            onChange={(e) => setSuspendReason(e.target.value)}
-            placeholder="Например: задолженность по оплате"
-          />
-        </Field>
-      </Modal>
+        tenantName={tenant.name}
+        isPending={suspendMutation.isPending}
+        onSubmit={(reason) => suspendMutation.mutate(reason, { onSuccess: () => setSuspendModalOpen(false) })}
+      />
 
       {/* Возобновление */}
-      <ConfirmDialog
+      <UnsuspendDialog
         isOpen={unsuspendConfirm}
         onClose={() => setUnsuspendConfirm(false)}
-        onConfirm={() => {
-          setUnsuspendConfirm(false);
-          unsuspendMutation.mutate();
-        }}
-        title="Возобновить работу"
-        message={`Возобновить доступ для «${tenant.name}»? Сотрудники снова смогут работать в приложении.`}
-        confirmText="Возобновить"
-        variant="primary"
+        tenantName={tenant.name}
+        onConfirm={() => unsuspendMutation.mutate()}
       />
-    </div>
-  );
-}
 
-/** Плитка показателя активности клиента: подпись с иконкой, значение, подсказка. */
-function MetricTile({
-  icon: Icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: typeof Users;
-  label: string;
-  value: React.ReactNode;
-  hint?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg bg-surface-2 p-3">
-      <dt className="mb-1 flex items-center gap-1.5 text-xs text-ink-3">
-        <Icon className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
-        {label}
-      </dt>
-      <dd>
-        <p className="text-lg font-semibold tabular-nums tracking-tight text-ink">{value}</p>
-        {hint && <p className="text-xs tabular-nums text-ink-3">{hint}</p>}
-      </dd>
+      {/* Передача менеджеру */}
+      <TransferManagerModal
+        isOpen={transferModalOpen}
+        onClose={() => setTransferModalOpen(false)}
+        tenantName={tenant.name}
+        currentManagerId={tenant.managerId ?? null}
+        isPending={transferMutation.isPending}
+        onSubmit={(managerId) =>
+          transferMutation.mutate({ tenantId: tenant.id, managerId }, { onSuccess: () => setTransferModalOpen(false) })
+        }
+      />
     </div>
   );
 }

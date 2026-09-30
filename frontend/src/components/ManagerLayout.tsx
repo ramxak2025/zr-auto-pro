@@ -1,93 +1,46 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { MotionConfig } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
-import {
-  Building2,
-  ChevronDown,
-  ChevronRight,
-  CreditCard,
-  LayoutDashboard,
-  LogOut,
-  Megaphone,
-  ScrollText,
-  UserCog,
-  UserPlus,
-  type LucideIcon,
-} from 'lucide-react';
+import { Building2, ChevronDown, ChevronRight, LayoutDashboard, LogOut, Wallet, type LucideIcon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { adminApi } from '../api/services';
 import { cn } from '../ui/cn';
 import { DropdownMenu } from '../ui/DropdownMenu';
 import { focusRing, focusRingOnRail } from '../ui/tokens';
 
-// ─── Навигация панели платформы ─────────────────────────────────────────────
-// Подписи пунктов совпадают с H1 страниц (правило системы: заголовок = пункт
-// меню). Маршруты не менялись.
-interface AdminNavItem {
+// ─── Навигация кабинета менеджера ───────────────────────────────────────────
+// Менеджер платформы работает только со своими автосервисами и расчётами с владельцем;
+// автосервисных страниц (касса, склад, клиенты) у него нет.
+interface ManagerNavItem {
   label: string;
   path: string;
   icon: LucideIcon;
-  /** Пункт носит счётчик ожидающих заявок. */
-  pendingBadge?: boolean;
 }
 
-const navItems: AdminNavItem[] = [
-  { label: 'Главная', path: '/admin/dashboard', icon: LayoutDashboard },
-  { label: 'Автосервисы', path: '/admin/tenants', icon: Building2 },
-  { label: 'Менеджеры', path: '/admin/managers', icon: UserCog },
-  { label: 'Заявки', path: '/admin/registration', icon: UserPlus, pendingBadge: true },
-  { label: 'Тарифы', path: '/admin/plans', icon: CreditCard },
-  { label: 'Рассылка', path: '/admin/broadcast', icon: Megaphone },
-  { label: 'Журнал действий', path: '/admin/audit-log', icon: ScrollText },
+const navItems: ManagerNavItem[] = [
+  { label: 'Обзор', path: '/manager/dashboard', icon: LayoutDashboard },
+  { label: 'Мои автосервисы', path: '/manager/tenants', icon: Building2 },
+  { label: 'Расчёты', path: '/manager/ledger', icon: Wallet },
 ];
 
-// Разделы с карточкой записи: /admin/tenants/:id и /admin/managers/:id.
-const detailCrumbs: Record<string, string> = {
-  '/admin/tenants': 'Карточка автосервиса',
-  '/admin/managers': 'Карточка менеджера',
-};
+const ROLE_LABEL = 'Менеджер Autexa';
 
-/** Хлебные крошки: раздел (+ «Карточка» для страниц записи). */
+/** Хлебные крошки: раздел (+ «Карточка» для /manager/tenants/:id). */
 function crumbsFor(pathname: string): { label: string; to?: string }[] {
   const item = navItems.find((i) => pathname === i.path || pathname.startsWith(i.path + '/'));
-  if (!item) return [{ label: 'Панель платформы' }];
-  const detail = detailCrumbs[item.path];
-  if (pathname !== item.path && detail) {
-    return [{ label: item.label, to: item.path }, { label: detail }];
+  if (!item) return [{ label: 'Кабинет менеджера' }];
+  if (pathname !== item.path && item.path === '/manager/tenants') {
+    return [{ label: item.label, to: item.path }, { label: 'Карточка автосервиса' }];
   }
   return [{ label: item.label }];
 }
 
-function PendingBadge({ count }: { count: number }) {
-  return (
-    <span
-      className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-warn px-1.5 text-2xs font-semibold tabular-nums text-white"
-      aria-label={`${count} ожидающих заявок`}
-    >
-      {count}
-    </span>
-  );
-}
-
 /**
- * Оболочка суперадминки: та же идиома, что у Layout тенантского приложения —
- * тёмная боковая панель (rail), светлая верхняя панель с крошками и меню
- * пользователя, единственный скролл-контейнер <main id="main">. Панель
- * визуально отделяет «пульт платформы» от приложения автосервиса подписью
- * «Панель платформы» под логотипом.
+ * Оболочка кабинета менеджера платформы: та же идиома, что у AdminLayout, — тёмная боковая панель,
+ * верхняя панель с крошками, единственный скролл-контейнер <main id="main">.
  */
-export default function AdminLayout() {
+export default function ManagerLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-
-  // Счётчик ожидающих заявок → бейдж на пункте «Заявки» (кэш общий с Главной).
-  const { data: pendingCount } = useQuery({
-    queryKey: ['registration-requests', 'pending'],
-    queryFn: () => adminApi.listRegistrationRequests('pending'),
-    select: (res) => res.data.length,
-    staleTime: 60_000,
-  });
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -97,7 +50,7 @@ export default function AdminLayout() {
   };
 
   const crumbs = crumbsFor(location.pathname);
-  const initial = user?.fullName?.trim().charAt(0).toUpperCase() || 'A';
+  const initial = user?.fullName?.trim().charAt(0).toUpperCase() || 'М';
 
   return (
     <MotionConfig reducedMotion="user">
@@ -113,8 +66,8 @@ export default function AdminLayout() {
         <aside className="hidden w-[256px] flex-shrink-0 flex-col bg-rail text-rail-text md:flex">
           <div className="flex h-14 flex-shrink-0 items-center border-b border-white/10 px-4">
             <Link
-              to="/admin/dashboard"
-              aria-label="Autexa — панель платформы, на главную"
+              to="/manager/dashboard"
+              aria-label="Autexa — кабинет менеджера, на главную"
               className={cn('flex min-w-0 items-center gap-2.5 rounded-lg', focusRingOnRail)}
             >
               <img
@@ -127,13 +80,13 @@ export default function AdminLayout() {
               <span className="min-w-0">
                 <span className="block truncate text-[17px] font-bold leading-5 tracking-tight text-white">Autexa</span>
                 <span className="block truncate text-2xs font-semibold uppercase tracking-[0.08em] text-rail-muted">
-                  Панель платформы
+                  Кабинет менеджера
                 </span>
               </span>
             </Link>
           </div>
 
-          <nav aria-label="Разделы панели платформы" className="flex-1 overflow-y-auto px-3 py-3">
+          <nav aria-label="Разделы кабинета менеджера" className="flex-1 overflow-y-auto px-3 py-3">
             <ul className="space-y-0.5">
               {navItems.map((item) => {
                 const Icon = item.icon;
@@ -164,7 +117,6 @@ export default function AdminLayout() {
                         aria-hidden="true"
                       />
                       <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                      {item.pendingBadge && !!pendingCount && <PendingBadge count={pendingCount} />}
                     </NavLink>
                   </li>
                 );
@@ -182,7 +134,7 @@ export default function AdminLayout() {
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium text-white">{user?.fullName}</span>
-                <span className="block truncate text-xs text-rail-muted">Владелец платформы</span>
+                <span className="block truncate text-xs text-rail-muted">{ROLE_LABEL}</span>
               </span>
               <button
                 type="button"
@@ -204,7 +156,7 @@ export default function AdminLayout() {
           {/* Верхняя панель (десктоп): крошки + меню пользователя */}
           <header className="hidden h-14 flex-shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-6 md:flex">
             <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1.5 text-sm">
-              <span className="text-ink-3">Панель платформы</span>
+              <span className="text-ink-3">Кабинет менеджера</span>
               {crumbs.map((c, i) => (
                 <span key={`${c.label}-${i}`} className="flex min-w-0 items-center gap-1.5">
                   <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-ink-4" aria-hidden="true" />
@@ -238,7 +190,7 @@ export default function AdminLayout() {
                 </button>
               }
               items={[
-                { type: 'label', key: 'role', label: 'Владелец платформы' },
+                { type: 'label', key: 'role', label: ROLE_LABEL },
                 { key: 'logout', label: 'Выйти', icon: LogOut, danger: true, onSelect: handleLogout },
               ]}
             />
@@ -247,15 +199,15 @@ export default function AdminLayout() {
           {/* Мобильная шапка */}
           <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-line bg-surface px-4 md:hidden">
             <Link
-              to="/admin/dashboard"
+              to="/manager/dashboard"
               className={cn('flex min-w-0 items-center gap-2 rounded-lg', focusRing)}
-              aria-label="Autexa — панель платформы, на главную"
+              aria-label="Autexa — кабинет менеджера, на главную"
             >
               <img src="/logo-icon.png" alt="" width={32} height={32} className="h-8 w-8 rounded-lg object-contain" />
               <span className="min-w-0">
                 <span className="block truncate text-sm font-bold leading-4 text-ink">Autexa</span>
                 <span className="block truncate text-2xs font-semibold uppercase tracking-[0.08em] text-ink-3">
-                  Панель платформы
+                  Кабинет менеджера
                 </span>
               </span>
             </Link>
@@ -272,9 +224,9 @@ export default function AdminLayout() {
             </button>
           </header>
 
-          {/* Мобильные вкладки — горизонтальный скролл: семь пунктов в ширину телефона не влезают */}
+          {/* Мобильные вкладки */}
           <nav
-            aria-label="Разделы панели платформы"
+            aria-label="Разделы кабинета менеджера"
             className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-surface px-2 no-scrollbar md:hidden"
           >
             {navItems.map((item) => {
@@ -293,7 +245,6 @@ export default function AdminLayout() {
                 >
                   <Icon className="h-4 w-4" aria-hidden="true" />
                   {item.label}
-                  {item.pendingBadge && !!pendingCount && <PendingBadge count={pendingCount} />}
                 </NavLink>
               );
             })}
