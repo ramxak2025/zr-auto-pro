@@ -6,10 +6,11 @@
  */
 import { Pool } from 'pg';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../common/check-money-sql';
+import { effectiveMonthMembershipSql } from '../../common/period-membership';
 import { pointFilterSql } from '../../common/point-scope';
 import { motivationPointFilterSql, premiumCashAmountExpr } from '../../common/salary-extras-sql';
 import { ReportContext } from './report-context';
-import { baseParams, expenseApproved, expenseMembership, inPeriod, num, premiumMembership } from './report-sql';
+import { TZ_PH, baseParams, expenseApproved, expenseMembership, inPeriod, num, premiumMembership } from './report-sql';
 
 export interface CheckAggregate {
   checks: number;
@@ -111,8 +112,13 @@ export async function salaryExtrasTotal(
 
 /**
  * Выплачено зарплаты за период — принятые выплаты нового flow (salary_payouts,
- * status='accepted') + легаси-выплаты (salary_payments без сторно), по ДАТЕ
- * ФАКТА выдачи. Филиал — собственный point_id строки (как в salary.getAll).
+ * status='accepted') + легаси-выплаты (salary_payments без сторно), по МЕСЯЦУ,
+ * «ЗА КОТОРЫЙ» они выданы (правка №3, 2026-09-30): выплата, выданная 3 октября
+ * за сентябрь, стоит в сентябре — так же, как на экране «Зарплата» и в отчёте
+ * «По зарплатам» (общий helper common/period-membership.ts). Выплата без
+ * назначенного месяца (старые строки) — по дате факта. Кассу (ленту «Расходы»,
+ * смену, Z-отчёт) это НЕ меняет: там деньги по-прежнему по дате выдачи.
+ * Филиал — собственный point_id строки (как в salary.getAll).
  */
 export async function salaryPaidTotal(
   pool: Pool,
@@ -126,13 +132,15 @@ export async function salaryPaidTotal(
     payoutPoint = ` AND p.point_id = $${params.length}`;
     legacyPoint = ` AND sp.point_id = $${params.length}`;
   }
+  const member = (periodCol: string, factCol: string) =>
+    effectiveMonthMembershipSql(periodCol, factCol, ctx.dateFrom, ctx.dateTo, TZ_PH);
   const { rows } = await pool.query(
     `SELECT COALESCE(SUM(x.amount), 0) AS total FROM (
        SELECT p.amount FROM salary_payouts p
-        WHERE p.tenant_id = $1 AND p.status = 'accepted' AND ${inPeriod('p.created_at')}${payoutPoint}
+        WHERE p.tenant_id = $1 AND p.status = 'accepted' AND ${member('p.period_month', 'p.created_at')}${payoutPoint}
        UNION ALL
        SELECT sp.amount FROM salary_payments sp
-        WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL AND ${inPeriod('sp.date')}${legacyPoint}
+        WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL AND ${member('sp.month_year', 'sp.date')}${legacyPoint}
      ) x`,
     params,
   );
