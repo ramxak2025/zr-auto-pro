@@ -59,9 +59,9 @@ export default function AssignCellModal({
   const submit = async () => {
     if (busy || productIds.length === 0) return;
     setBusy(true);
+    let updated = 0;
     try {
       // Сервер принимает не больше MAX_BULK_CELLS товаров за запрос.
-      let updated = 0;
       for (let i = 0; i < productIds.length; i += MAX_BULK_CELLS) {
         const { data } = await productsApi.bulkAssignCell({
           productIds: productIds.slice(i, i + MAX_BULK_CELLS),
@@ -69,7 +69,6 @@ export default function AssignCellModal({
         });
         updated += data.updated;
       }
-      invalidate();
       const code = byId.get(cellId)?.code ?? currentCell?.code;
       if (!cellId) toast.success(`Адрес снят у ${countLabel(updated, PRODUCT_FORMS)}`);
       else if (updated === 0) toast.success('Товары уже лежат в этой ячейке');
@@ -77,8 +76,15 @@ export default function AssignCellModal({
       onDone?.(updated);
       onClose();
     } catch (err) {
-      toast.error(storageCellErrorMessage(err, 'Не удалось назначить ячейку'));
+      const message = storageCellErrorMessage(err, 'Не удалось назначить ячейку');
+      toast.error(
+        updated > 0
+          ? `${message}. Уже назначено: ${countLabel(updated, PRODUCT_FORMS)}, повторите для остальных`
+          : message,
+      );
     } finally {
+      // Часть чанков могла записаться до сбоя — списки и счётчики ячеек обновляем в любом случае.
+      invalidate();
       setBusy(false);
     }
   };
