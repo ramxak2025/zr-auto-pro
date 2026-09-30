@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Авторизация                       | `auth/` (`auth.controller.ts`: login/register/me/logout/avatar; `jwt.strategy.ts`; DTO в `auth/dto/`) | `LoginPage.tsx`                                                                              | `LoginScreen.tsx`                                                    |
 | Главная / Дашборд                 | `reports/` (статистика, рейтинги)                                                                     | `DashboardPage.tsx`                                                                          | `DashboardScreen.tsx`                                                |
 | Касса / Заказ-наряд               | `checks/`                                                                                             | `CheckCreatePage.tsx`, `CheckDetailPage.tsx`, `ChecksPage.tsx`, `RetailChecksPage.tsx`       | `CheckCreateScreen.tsx`, `CheckDetailScreen.tsx`, `ChecksScreen.tsx` |
-| Склад / Товары                    | `products/`, `warehouse/`                                                                             | `ProductsPage.tsx`                                                                           | `ProductsScreen.tsx`                                                 |
+| Склад / Товары                    | `products/`, `warehouse/`, `storage-cells/` (адресное хранение, ячейки)                               | `ProductsPage.tsx` (+ `components/warehouse/StorageCell*`)                                   | `ProductsScreen.tsx`, `StorageCellsScreen.tsx`                       |
 | Услуги                            | `services/`                                                                                           | `ServicesPage.tsx`                                                                           | `ServicesScreen.tsx`                                                 |
 | Клиенты                           | `clients/`                                                                                            | `ClientsPage.tsx`, `ClientDetailPage.tsx`                                                    | `ClientsScreen.tsx`, `ClientDetailScreen.tsx`                        |
 | Автомобили клиентов               | `cars/`                                                                                               | `CarsPage.tsx`                                                                               | `CarsScreen.tsx`                                                     |
@@ -66,7 +66,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Имущество / equipment             | `equipment/`                                                                                          | `EquipmentPage.tsx`                                                                          | `EquipmentScreen.tsx`                                                |
 | Подписка / тарифы                 | `plans/`, `tenants/`                                                                                  | `TariffPage.tsx`, `SubscriptionBlockedPage.tsx`                                              | `SubscriptionScreen.tsx`                                             |
 | Настройки компании                | `tenants/`                                                                                            | `CompanySettingsPage.tsx`                                                                    | `CompanySettingsScreen.tsx`                                          |
-| Admin (superadmin)                | `tenants/`, `plans/`                                                                                  | `pages/admin/{AdminDashboardPage,AdminPlansPage,AdminTenantsPage,AdminTenantDetailPage}.tsx` | `AdminScreen.tsx`                                                    |
+| Admin (superadmin)                | `tenants/`, `plans/`, `platform-managers/`                                                            | `pages/admin/*` (Dashboard, Plans, Tenants, TenantDetail, Managers, ManagerDetail, AuditLog) | `screens/admin/*` (`Admin*Screen.tsx`, шторки)                       |
+| Менеджеры платформы               | `platform-managers/` (`/admin/managers*` — суперадмин, `/manager/*` — сам менеджер)                   | `pages/manager/*`, `components/ManagerLayout.tsx`                                            | `screens/admin/*` в режиме `AdminShellMode` = `manager`              |
 | Корзина / soft-delete             | реализовано через миграцию `023_soft_delete_products_categories.sql` (нет отдельного модуля)          | (страницы нет — функционал распределён)                                                      | `TrashScreen.tsx`                                                    |
 | «Ещё» / меню                      | —                                                                                                     | `MorePage.tsx`                                                                               | `MoreScreen.tsx`                                                     |
 | Аплоады (фото товаров и клиентов) | `uploads/` (multipart через busboy + sharp + S3)                                                      | используется через `axios` напрямую                                                          | `src/api/services.ts` → `uploadsApi.upload()` (FormData)             |
@@ -79,7 +80,7 @@ Bottom-tab нижний бар iOS/Android (`mobile/src/navigation/TabBarShared.
 Backend, его API, БД и бизнес-логика — **зона повышенной ответственности**. По умолчанию **не трогаем**.
 
 1. **Не менять без явного разрешения владельца:**
-   - модули из `backend/src/app.module.ts` (`auth`, `users`, `tenants`, `plans`, `clients`, `cars`, `services`, `products`, `checks`, `suppliers`, `salary`, `reports`, `shifts`, `schedule`, `uploads`, `warehouse`, `health`, `expenses`, `marketing`, `calls`, `equipment`);
+   - модули из `backend/src/app.module.ts` (`auth`, `users`, `tenants`, `plans`, `clients`, `cars`, `services`, `products`, `checks`, `suppliers`, `salary`, `reports`, `shifts`, `schedule`, `uploads`, `warehouse`, `health`, `expenses`, `marketing`, `calls`, `equipment`, `storage-cells`, `platform-managers`);
    - controllers, services, DTO в этих модулях;
    - guards (`common/guards/{jwt-auth,rate-limit,roles}.guard.ts`), interceptors (`common/interceptors/etag.interceptor.ts`), filters (`common/filters/http-exception.filter.ts`), decorators (`common/decorators/current-user.decorator.ts`);
    - бизнес-логика и SQL-запросы внутри сервисов.
@@ -88,7 +89,7 @@ Backend, его API, БД и бизнес-логика — **зона повыш
 
 3. **База данных.** Используется `pg.Pool` напрямую, без ORM. Миграции — `backend/migrations/NNN_*.sql`, прогоняются через `MigrationRunner` (`backend/src/migration-runner.ts`) при старте процесса, регистрируются в служебной таблице `_migrations`. **Правила миграций:**
    - идемпотентные (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`);
-   - только дописываем новые файлы со следующим номером, **никогда не редактируем уже применённые** (текущий хвост — `024_users_team.sql`);
+   - только дописываем новые файлы со следующим номером, **никогда не редактируем уже применённые** (текущий хвост — последний по номеру файл в `backend/migrations/`; на 2026-09-30 это `173_platform_managers.sql`);
    - схему/индексы/типы данных не меняем без отдельного разрешения.
 
 4. **Auth-логика.** JWT (`@nestjs/jwt`, `passport-jwt`), `JwtAuthGuard` + `RateLimitGuard` стоят глобально (`main.ts`). Black-list ревокаций — через миграцию `021_revoked_tokens.sql` + опционально Redis (`REDIS_URL`). `RolesGuard` + декоратор `@Roles(...)` в `common/guards/roles.guard.ts`. Эти механизмы — **трогать только с владельцем**.
@@ -157,7 +158,7 @@ npm run typecheck      # tsc --noEmit
 npm run lint           # eslint src/**/*.ts --max-warnings=10000
 npm run build          # nest build
 npm run start:dev      # nest start --watch
-# тестов в backend нет (jest не установлен)
+npm test               # nest build + node --test test/*.test.cjs (встроенный node:test, jest не нужен); typecheck запускает его сам через pretypecheck
 ```
 
 ### Frontend (`cd frontend`)
@@ -291,20 +292,23 @@ Claude Code работает автономно от изучения до ко�
 
 - **Касса** — экран создания заказ-наряда / чека (`CheckCreateScreen` / `CheckCreatePage`). Центральный таб iOS, `isKassa: true` в `TabBarShared.ts`. Backend — `checks/`.
 - **Заказ-наряд** — то же что чек в продуктовой терминологии. Хранится в таблице `checks`.
-- **Чек** — строки услуг + товаров + клиент + авто + оплата. Типы — `Check`, `CheckServiceLine`, `CheckProductLine` в `shared/types/index.ts`.
+- **Чек** — строки услуг + товаров + клиент + авто + оплата. Типы — `Check`, `CheckServiceLine`, `CheckProductLine` в `shared/types/index.ts`. Строка услуги — только цена, без количества (у старых чеков `quantity > 1` сохраняется, историю не трогаем); у строки товара количество есть.
 - **Розничный чек** — отдельный поток в web (`RetailChecksPage.tsx`).
 - **Журнал** — список чеков (`ChecksScreen` / `ChecksPage`). Лейбл четвёртого таба iOS.
 - **Склад** — товары + остатки + категории. Backend `products/` + `warehouse/`. Лейбл второго таба iOS — «Склад» (UI-имя, в коде — `Products`).
+- **Ячейка хранения (адресное хранение)** — место товара на конкретном складе (`warehouses`: основной / брак / Б/У филиала), код вида `A-1-2` (стеллаж-полка-ячейка). Код уникален в пределах склада без учёта регистра, у товара одна ячейка (`products.storage_cell_id`, `ON DELETE SET NULL`). Сетка «стеллажи × полки × ячейки» создаётся пачкой (`A-C × 3 × 4` → 36 кодов, не больше 2000 за раз); ячейка удаляется, только если пуста или с переносом/отвязкой товаров. Поиск по коду — в Складе, Кассе и Инвентаризации. Backend `storage-cells/` (миграция `172_storage_cells.sql`), правила кодов — `shared/utils/storageCells.ts`, web `components/warehouse/StorageCell*`, mobile `StorageCellsScreen.tsx`.
 - **Расписание / График** — смены и плановая загрузка мастеров. Backend `schedule/` + `shifts/`. **Владельцы (owner / superadmin) в графике не отображаются** — это требование продукта.
 - **Госномер / плашка** — российский номер формата `1 буква + 3 цифры + 2 буквы | регион 2-3 цифры`. Логика валидации — `mobile/src/utils/plateMask.ts` (тесты в `__tests__/plateMask.test.ts`). Только кириллица из `АВЕКМНОРСТУХ`, latin-аналоги (A→А, B→В…) автоконвертируются. Регион хранится отдельно от основной части и **не дублируется** в ней. Компоненты: `RussianPlateInput.tsx`, `PlateModeSwitcher.tsx`.
 - **Мастер** — `User` с ролью `master`, выполняет работы в чеке.
 - **Директор** — `User` с ролью `director`, видит финансы своего тенанта.
 - **Владелец / superadmin** — глобальная роль, обходит все feature gates (`FeatureGate.tsx`: `if (user?.role === 'superadmin') return <>{children}</>;`). Backend — `roles.guard.ts` + `@Roles(...)`.
+- **Менеджер (платформы)** — `User` с ролью `manager` и без тенанта (`tenant_id IS NULL`): сотрудник владельца Autexa. Заводит автосервисы, выдаёт пробный доступ (не больше `manager_max_free_days`), продлевает платные подписки и меняет тарифы СВОИМ клиентам (`tenants.manager_id`). С каждой платной оплаты `ownerSharePercent` % (по умолчанию 60) записывается как долг менеджера владельцу (снимок в `subscription_payments.owner_share_amount`); баланс = Σ долей − Σ расчётов (`manager_settlements`). Обход `RolesGuard` остаётся только у superadmin — менеджер проходит там, где `@Roles('manager', …)` назван явно. Клиентов между менеджерами передаёт суперадмин. Backend `platform-managers/`, миграция `173_platform_managers.sql`.
 - **Тенант (`tenants`)** — изолированная организация-автосервис. Каждый запрос привязан к `tenantID` из JWT.
 - **Тариф / план (`plans`)** — набор разрешённых фич у тенанта. UI — `SubscriptionScreen` / `TariffPage`. `FeatureGate` блокирует экран, если ключ фичи не входит в `currentPlan.features`.
 - **Имущество (equipment)** — оборудование автосервиса. Backend `equipment/`, миграции `016_equipment.sql` + `017_equipment_v2.sql`.
 - **Маркетинг / отзывы** — backend `marketing/`, миграции `007_marketing_reviews.sql` + `008_messaging_provider_types.sql`. Публичная страница отзыва — `ReviewPublicPage.tsx`.
 - **Касса по дням / cash flow** — экран движения денег (`CashFlowPage` / `CashFlowScreen`). Источник — backend `reports/`.
+- **Месяц «за который» (`period_month`)** — к какому месяцу относится выплата зарплаты, расход или оплата поставщику (выплата в октябре за сентябрь = сентябрь). Отчёты конструктора считают по нему, «Движение денег» и лента расходов — по дате факта. Backend `salary/`, `expenses/`, `suppliers/`; правила — `docs/specs/2026-09-30-SALARY_MONTHS.md`.
 - **Liquid Glass** — визуальный материал iOS 26 (`UIGlassEffect`), на iOS 13–25 деградирует до `UIVisualEffectView` + `systemThinMaterial`. Реализация — `mobile/modules/autexa-liquid-glass/`.
 - **Floating Island Tab Bar** — нижний бар iOS, плавающий поверх контента, центральная кнопка «Касса» без подписи, активный индикатор — жидкая капля (Swift, `AutexaLiquidGlassTabBarView.swift`).
 
@@ -318,14 +322,14 @@ Claude Code работает автономно от изучения до ко�
 
 **Карта слой → агент:**
 
-| Слой | Агент |
-|---|---|
-| Backend / API / БД / `shared/` контракт | `backend-engineer` |
-| Web PWA (`frontend/`) | `web-engineer` |
-| iOS RN-слой (TypeScript) | `ios-engineer` |
-| iOS Swift / native (`mobile/modules/*/ios/`) | `ios-native-engineer` |
-| Android (`*.android.tsx`, `app.json android.*`) | `android-engineer` |
-| Финальный QA gate | `qa-build-engineer` |
+| Слой                                            | Агент                 |
+| ----------------------------------------------- | --------------------- |
+| Backend / API / БД / `shared/` контракт         | `backend-engineer`    |
+| Web PWA (`frontend/`)                           | `web-engineer`        |
+| iOS RN-слой (TypeScript)                        | `ios-engineer`        |
+| iOS Swift / native (`mobile/modules/*/ios/`)    | `ios-native-engineer` |
+| Android (`*.android.tsx`, `app.json android.*`) | `android-engineer`    |
+| Финальный QA gate                               | `qa-build-engineer`   |
 
 Узкие экранные агенты (`cash-plate-engineer`, `schedule-engineer`, `suppliers-engineer`, `warehouse-product-picker-engineer`, `journal-documents-engineer`, `autexa-visual-system-designer`, `ios-ux-designer`, `rn-performance-engineer`) — для конкретных экранов / зон, у каждого своя продуктовая память. Тим-лид зовёт узкого вместо `ios-engineer`, если задача укладывается в его профиль.
 
@@ -337,7 +341,7 @@ Claude Code работает автономно от изучения до ко�
 
 Места, которые в коде не нашли, но в шаблоне правил есть — отметить как открытые вопросы:
 
-1. **Backend tests.** `backend/package.json` не содержит ни `jest`, ни `test`-скрипта. Если в правилах требуется «backend юнит-тесты» — их сейчас просто нет. Уточнить у владельца, нужно ли заводить.
+1. **Backend tests.** Есть, без jest: `npm test` (nest build + `node --test test/*.test.cjs`), `typecheck` запускает его через `pretypecheck`. Живые SQL-тесты включаются переменными `SALARY_LIVE_DB` (одноразовый Postgres) / `SERVICE_LINES_LIVE_DB` (локальная dev-БД) — без них они пропускаются, в CI не идут; прод-строку подключения туда не подставлять.
 2. **Frontend tests.** Аналогично — в `frontend/package.json` нет тестового фреймворка. Web-проверки сейчас сводятся к `typecheck + lint + build`.
 3. **Android native build.** Папки `mobile/android/` в репо нет (в gitignore через Expo). Полноценная Android-проверка возможна только после `expo prebuild --platform android` + `gradlew assembleDebug` или `npm run android`. Уточнить, есть ли у владельца Android-устройство для приёмки.
 4. **`mobile/eas.json` → `submit.production`** содержит плейсхолдеры (`REPLACE_WITH_YOUR_APPLE_ID@example.com`, `REPLACE_WITH_APP_STORE_CONNECT_ID`, `REPLACE_WITH_TEAM_ID`). До TestFlight / App Store эти поля заполняет владелец вручную.
