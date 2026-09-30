@@ -40,6 +40,11 @@ export function isValidPhone(phone: string): boolean {
   return digits.length >= 10;
 }
 
+/** Номер введён целиком (+7 и 10 цифр) — для форм, где телефон служит логином; isValidPhone пропускает и 10 цифр. */
+export function isCompletePhone(phone: string): boolean {
+  return /^\+7\d{10}$/.test(normalizePhone(phone));
+}
+
 /**
  * Reduce a phone (in ANY format) to its core national key for matching:
  * strip every non-digit, then keep the last 10 digits — which drops a leading

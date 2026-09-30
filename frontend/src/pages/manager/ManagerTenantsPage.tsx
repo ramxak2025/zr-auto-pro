@@ -8,7 +8,7 @@ import { managerApi, plansApi } from '../../api/services';
 import type { CreateManagerTenantRequest } from '../../api/services';
 import type { Plan, SubscriptionStatus, Tenant } from '../../types';
 import { formatMoney } from '../../../../shared/utils/formatters';
-import { isValidPhone, normalizePhone } from '../../../../shared/validation/phone';
+import { isCompletePhone, normalizePhone } from '../../../../shared/validation/phone';
 import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/Modal';
 import SearchInput from '../../components/SearchInput';
@@ -156,10 +156,11 @@ export default function ManagerTenantsPage() {
   const trialNum = Number(form.trialDays);
   const errors = {
     name: form.name.trim() ? undefined : 'Введите название автосервиса.',
-    phone: form.phone === '' || isValidPhone(form.phone) ? undefined : 'Введите телефон полностью или очистите поле.',
+    phone:
+      form.phone === '' || isCompletePhone(form.phone) ? undefined : 'Введите телефон полностью или очистите поле.',
     planId: form.planId ? undefined : 'Выберите тариф.',
     directorName: form.directorName.trim() ? undefined : 'Введите имя владельца.',
-    directorPhone: isValidPhone(form.directorPhone) ? undefined : 'Введите телефон полностью — это логин владельца.',
+    directorPhone: isCompletePhone(form.directorPhone) ? undefined : 'Введите телефон полностью — это логин владельца.',
     directorPassword:
       form.directorPassword.length >= MIN_PASSWORD ? undefined : `Пароль — не короче ${MIN_PASSWORD} символов.`,
     trialDays:

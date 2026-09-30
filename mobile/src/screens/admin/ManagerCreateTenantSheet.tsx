@@ -11,7 +11,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { managerApi, plansApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
 import { extractApiErrorMessage } from '../../utils/apiError';
-import { formatPhone, isValidPhone, normalizePhone } from '../../../../shared/validation/phone';
+import { formatPhone, isCompletePhone, normalizePhone } from '../../../../shared/validation/phone';
 import type { ManagerSummary, Plan, Tenant } from '../../../../shared/types';
 import type { CreateManagerTenantRequest } from '../../../../shared/api/types';
 import { formatMoney, invalidatePlatformQueries } from './adminShared';
@@ -128,12 +128,15 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
       Alert.alert(title, message);
     };
     if (!name.trim()) return fail('Укажите название', 'Название автосервиса обязательно.');
-    if (phone.trim() && !isValidPhone(phone))
-      return fail('Проверьте телефон', 'Телефон автосервиса — не меньше 10 цифр.');
+    if (phone.trim() && !isCompletePhone(phone))
+      return fail('Проверьте телефон', 'Введите телефон автосервиса полностью: +7 и 10 цифр — или очистите поле.');
     if (!effectivePlanId) return fail('Выберите тариф', 'Тарифы ещё не загрузились или недоступны.');
     if (!ownerName.trim()) return fail('Укажите владельца', 'Имя владельца автосервиса обязательно.');
-    if (!isValidPhone(ownerPhone))
-      return fail('Проверьте телефон владельца', 'Телефон — это логин владельца, нужно не меньше 10 цифр.');
+    if (!isCompletePhone(ownerPhone))
+      return fail(
+        'Проверьте телефон владельца',
+        'Телефон — это логин владельца: введите номер полностью, +7 и 10 цифр.',
+      );
     if (ownerPassword.length < MIN_PASSWORD)
       return fail('Слишком короткий пароль', `Пароль владельца — не короче ${MIN_PASSWORD} символов.`);
     if (!Number.isInteger(effectiveTrial) || effectiveTrial < 1)

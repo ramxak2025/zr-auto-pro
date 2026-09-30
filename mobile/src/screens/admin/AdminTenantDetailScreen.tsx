@@ -70,6 +70,7 @@ import {
   InitialAvatar,
 } from './adminShared';
 import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
+import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 
@@ -157,6 +158,7 @@ export default function AdminTenantDetailScreen() {
   const isManager = useAdminMode() === 'manager';
 
   const [extendOpen, setExtendOpen] = React.useState(false);
+  const [planPickerOpen, setPlanPickerOpen] = React.useState(false);
   const [transferOpen, setTransferOpen] = React.useState(false);
   const [resetPasswordOpen, setResetPasswordOpen] = React.useState(false);
   const [suspendOpen, setSuspendOpen] = React.useState(false);
@@ -511,20 +513,13 @@ export default function AdminTenantDetailScreen() {
 
   const handleChangePlan = React.useCallback(() => {
     if (!tenant) return;
-    const options = plans.filter((p) => p.isActive && p.id !== tenant.planId);
-    if (options.length === 0) {
+    if (!plans.some((p) => p.isActive && p.id !== tenant.planId)) {
       Alert.alert('Нет доступных тарифов', 'Все активные тарифы уже назначены.');
       return;
     }
     haptic('tap');
-    Alert.alert('Сменить тариф', `Выберите тариф для «${tenant.name}»`, [
-      ...options.map((p) => ({
-        text: `${p.name} · ${formatMoney(p.monthlyPrice)}/мес`,
-        onPress: () => assignPlanMutation.mutate(p.id),
-      })),
-      { text: 'Отмена', style: 'cancel' as const },
-    ]);
-  }, [plans, tenant, assignPlanMutation]);
+    setPlanPickerOpen(true);
+  }, [plans, tenant]);
 
   const openSuspend = React.useCallback(() => {
     haptic('tap');
@@ -925,6 +920,16 @@ export default function AdminTenantDetailScreen() {
         }}
         planPrice={monthlyPrice}
         currentKind={sub?.currentPeriodKind ?? tenant.currentPeriodKind ?? null}
+      />
+
+      <PlanPickerSheet
+        visible={planPickerOpen}
+        tenantName={tenant.name}
+        currentPlanId={tenant.planId}
+        plans={plans}
+        saving={assignPlanMutation.isPending}
+        onClose={() => setPlanPickerOpen(false)}
+        onPick={(planId) => assignPlanMutation.mutate(planId, { onSuccess: () => setPlanPickerOpen(false) })}
       />
 
       {!isManager ? (

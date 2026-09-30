@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { adminManagersApi } from '../../api/services';
 import type { CreateManagerRequest } from '../../api/services';
 import type { PlatformManager } from '../../types';
-import { formatPhone, isValidPhone, normalizePhone } from '../../../../shared/validation/phone';
+import { formatPhone, isCompletePhone, normalizePhone } from '../../../../shared/validation/phone';
 import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/Modal';
 import { Badge } from '../../ui/Badge';
@@ -64,7 +64,7 @@ export default function AdminManagersPage() {
   const shareNum = parseDecimalInput(form.ownerSharePercent);
   const errors = {
     fullName: form.fullName.trim() ? undefined : 'Введите имя менеджера.',
-    phone: isValidPhone(form.phone) ? undefined : 'Введите телефон полностью — это логин менеджера.',
+    phone: isCompletePhone(form.phone) ? undefined : 'Введите телефон полностью — это логин менеджера.',
     password: form.password.length >= MIN_PASSWORD ? undefined : `Пароль — не короче ${MIN_PASSWORD} символов.`,
     share: Number.isFinite(shareNum) && shareNum >= 0 && shareNum <= 100 ? undefined : 'Введите число от 0 до 100.',
   };

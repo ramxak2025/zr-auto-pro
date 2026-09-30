@@ -14,6 +14,7 @@ import { Input } from '../../ui/Input';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { ToggleChip } from './adminUi';
 import { formatRubExact, previewOwnerShare } from './MoneyExact';
+import { parseDecimalInput, sanitizeDecimalInput } from './numberInput';
 
 // Быстрые пресеты считают дату от якоря (текущий срок, если он в будущем, иначе сегодня).
 const EXTEND_PRESETS: { label: string; add: (d: Date) => Date }[] = [
@@ -95,7 +96,7 @@ export default function ExtendModal({
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
   const untilValid = !!until && until > todayStr;
-  const amountNum = Number(amount);
+  const amountNum = parseDecimalInput(amount);
   const amountValid = Number.isFinite(amountNum) && amountNum > 0;
   const daysNum = Number(days);
   const daysValid = Number.isInteger(daysNum) && daysNum >= 1 && daysNum <= maxDays;
@@ -105,9 +106,8 @@ export default function ExtendModal({
   const canSubmit = kind === 'paid' ? untilValid && amountValid : freeByDays ? daysValid : untilValid;
 
   const sharePercent = isManager ? ownerSharePercent : (manager?.ownerSharePercent ?? null);
-  const shareAmount =
-    amountValid && sharePercent != null ? previewOwnerShare(Math.round(amountNum), sharePercent) : null;
-  const paidAmount = amountValid ? Math.round(amountNum) : 0;
+  const paidAmount = amountValid ? Math.round(amountNum * 100) / 100 : 0;
+  const shareAmount = amountValid && sharePercent != null ? previewOwnerShare(paidAmount, sharePercent) : null;
 
   const handleSubmit = () => {
     if (!canSubmit) return;
@@ -193,7 +193,7 @@ export default function ExtendModal({
               inputMode="decimal"
               className="tabular-nums"
               value={amount}
-              onChange={(e) => setAmount(digitsOnly(e.target.value))}
+              onChange={(e) => setAmount(sanitizeDecimalInput(e.target.value))}
               placeholder="например, 2990"
               invalid={!!amount && !amountValid}
               rightSlot={<span className="text-xs">₽</span>}

@@ -9,7 +9,8 @@ export function sanitizeDecimalInput(
   options: { allowNegative?: boolean; fraction?: number } = {},
 ): string {
   const { allowNegative = false, fraction = 2 } = options;
-  const negative = allowNegative && raw.trimStart().startsWith('-');
+  // Сама программа рисует минус как «−» (U+2212): вставленное «−1 200 ₽» обязано остаться отрицательным.
+  const negative = allowNegative && /^[-−–—]/.test(raw.trimStart());
   const chars = raw.replace(/[^\d.,]/g, '');
   const sep = chars.search(/[.,]/);
   const intPart = (sep === -1 ? chars : chars.slice(0, sep)).replace(/[.,]/g, '');

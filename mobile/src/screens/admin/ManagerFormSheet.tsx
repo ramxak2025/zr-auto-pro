@@ -9,7 +9,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminManagersApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
 import { extractApiErrorMessage } from '../../utils/apiError';
-import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
+import { formatPhone, normalizePhone, isCompletePhone } from '../../../../shared/validation/phone';
 import type { PlatformManager } from '../../../../shared/types';
 import type { UpdateManagerRequest } from '../../../../shared/api/types';
 import { formatPercent, invalidatePlatformQueries } from './adminShared';
@@ -104,8 +104,8 @@ export default function ManagerFormSheet({ visible, manager, onClose, onSaved }:
       Alert.alert('Укажите имя', 'ФИО менеджера обязательно.');
       return;
     }
-    if (!isValidPhone(phone)) {
-      Alert.alert('Проверьте телефон', 'Телефон — это логин менеджера, нужно не меньше 10 цифр.');
+    if (!isCompletePhone(phone)) {
+      Alert.alert('Проверьте телефон', 'Телефон — это логин менеджера: введите номер полностью, +7 и 10 цифр.');
       return;
     }
     if ((!manager || password) && password.length < MIN_PASSWORD) {

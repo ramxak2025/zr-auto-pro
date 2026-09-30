@@ -24,7 +24,8 @@ export function formatRubExact(value: number): string {
  */
 export function previewOwnerShare(amount: number, percent: number): number {
   if (!Number.isFinite(amount) || !Number.isFinite(percent)) return 0;
-  return Math.round(amount * percent) / 100;
+  // toFixed(6) гасит хвост двоичной дроби (301.49999999999994 → 301.5), как numeric в PG.
+  return Math.round(Number((amount * percent).toFixed(6))) / 100;
 }
 
 /** Баланс менеджера: положительный — менеджер должен владельцу (красным), отрицательный — владелец должен ему. */

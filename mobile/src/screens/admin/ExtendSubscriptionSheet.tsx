@@ -34,6 +34,7 @@ import {
   formatPercent,
   invalidatePlatformQueries,
   isExpired,
+  parseAmount,
   useAdminMode,
 } from './adminShared';
 import {
@@ -118,7 +119,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
     if (visible && !wasVisible.current) {
       const price = planPrice ?? tenant?.monthlyPrice ?? 0;
       setType(mode === 'superadmin' && currentKind === 'free' ? 'free' : 'paid');
-      setAmount(price > 0 ? String(Math.round(price)) : '');
+      setAmount(price > 0 ? String(Math.round(price * 100) / 100).replace('.', ',') : '');
       setUntil(null);
       setDays('');
       setCreditManager(false);
@@ -168,7 +169,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
     },
   });
 
-  const amountNum = Math.round(Number(amount.replace(',', '.')));
+  const amountNum = parseAmount(amount) ?? Number.NaN;
   const paid = type === 'paid';
   const shareOn = paid && (mode === 'manager' || (hasManager && creditManager));
   const sharePercent = mode === 'manager' ? summary?.ownerSharePercent : clientManager?.ownerSharePercent;
@@ -268,9 +269,9 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
           <SheetInput
             label="Сумма, ₽"
             value={amount}
-            onChangeText={(v) => setAmount(v.replace(/[^0-9]/g, ''))}
+            onChangeText={(v) => setAmount(v.replace(/[^0-9.,]/g, ''))}
             placeholder="0"
-            keyboardType="number-pad"
+            keyboardType="decimal-pad"
             big
           />
         ) : null}

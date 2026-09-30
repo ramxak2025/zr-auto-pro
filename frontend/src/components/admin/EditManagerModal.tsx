@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { adminManagersApi } from '../../api/services';
 import type { UpdateManagerRequest } from '../../api/services';
 import type { PlatformManager } from '../../types';
-import { isValidPhone, normalizePhone } from '../../../../shared/validation/phone';
+import { isCompletePhone, normalizePhone } from '../../../../shared/validation/phone';
 import Modal from '../Modal';
 import Switch from '../Switch';
 import { Button } from '../../ui/Button';
@@ -68,7 +68,7 @@ export default function EditManagerModal({ isOpen, onClose, manager }: EditManag
   const shareNum = parseDecimalInput(form.ownerSharePercent);
   const errors = {
     fullName: form.fullName.trim() ? undefined : 'Введите имя менеджера.',
-    phone: isValidPhone(form.phone) ? undefined : 'Введите телефон полностью — это логин менеджера.',
+    phone: isCompletePhone(form.phone) ? undefined : 'Введите телефон полностью — это логин менеджера.',
     share: Number.isFinite(shareNum) && shareNum >= 0 && shareNum <= 100 ? undefined : 'Введите число от 0 до 100.',
     password:
       form.password === '' || form.password.length >= MIN_PASSWORD
@@ -80,7 +80,7 @@ export default function EditManagerModal({ isOpen, onClose, manager }: EditManag
   // PATCH получает только изменённые поля: пустой запрос — нечего сохранять.
   const request: UpdateManagerRequest = {};
   if (form.fullName.trim() !== manager.fullName) request.fullName = form.fullName.trim();
-  if (isValidPhone(form.phone) && normalizePhone(form.phone) !== normalizePhone(manager.phone)) {
+  if (isCompletePhone(form.phone) && normalizePhone(form.phone) !== normalizePhone(manager.phone)) {
     request.phone = normalizePhone(form.phone);
   }
   if (Number.isFinite(shareNum) && shareNum !== manager.ownerSharePercent) request.ownerSharePercent = shareNum;
