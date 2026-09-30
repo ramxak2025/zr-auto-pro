@@ -52,7 +52,7 @@ const test = require('node:test');
  *
  * Тесты поведенческие там, где это возможно (сервисы поднимаются на пуле-заглушке), и
  * статические там, где проверяется текст SQL/исходника: живой БД в CI нет. Живой прогон
- * на PG16 выполняется вручную (см. отчёт агента).
+ * на PG16 (в режиме RLS с `DB_APP_PASSWORD`) выполняется вручную — см. docs/ios-redesign/MANAGERS_2026-09-30.md.
  */
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-for-jwt-strategy-32-chars-min';
@@ -4335,7 +4335,7 @@ test('updateSettings: значения нормализуются поверх D
   });
 });
 
-test('UpdatePlatformSettingsDto: managerMaxFreeDays — целое 1..365, необязательное, whitelist его не вырезает', async () => {
+test('UpdatePlatformSettingsDto: managerMaxFreeDays — целое 1..365, необязательное (но не null), whitelist его не вырезает', async () => {
   const kept = await validateBody(UpdatePlatformSettingsDto, {
     managerMaxFreeDays: 45,
     globalFreeVoiceMinutes: 10,
@@ -4352,7 +4352,8 @@ test('UpdatePlatformSettingsDto: managerMaxFreeDays — целое 1..365, не�
       (await validateBody(UpdatePlatformSettingsDto, { managerMaxFreeDays: days })).managerMaxFreeDays,
       days,
     );
-  for (const bad of [0, -1, 366, 1.5, '30', 'abc']) {
+  // null — не «поле не передано»: раньше проходил IsOptional и сервис молча сбрасывал лимит к 30.
+  for (const bad of [0, -1, 366, 1.5, '30', 'abc', null]) {
     await expectHttp(() => validateBody(UpdatePlatformSettingsDto, { managerMaxFreeDays: bad }), 400);
   }
 });

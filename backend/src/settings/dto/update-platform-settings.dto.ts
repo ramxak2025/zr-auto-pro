@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 
 /**
  * PATCH /admin/settings body — глобальные настройки платформы (superadmin).
@@ -9,6 +9,8 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  *
  * 173 — `managerMaxFreeDays`: максимум дней ОДНОГО бесплатного (пробного)
  * продления, которое может выдать менеджер платформы (целое 1..365, дефолт 30).
+ * Необязательность — только «поле не передано»: `null` (в отличие от IsOptional)
+ * отклоняется, иначе сервис молча сбросил бы лимит к 30.
  */
 export class UpdatePlatformSettingsDto {
   @IsOptional()
@@ -17,7 +19,7 @@ export class UpdatePlatformSettingsDto {
   @Max(100000)
   globalFreeVoiceMinutes?: number;
 
-  @IsOptional()
+  @ValidateIf((body: UpdatePlatformSettingsDto) => body.managerMaxFreeDays !== undefined)
   @IsInt()
   @Min(1)
   @Max(365)
