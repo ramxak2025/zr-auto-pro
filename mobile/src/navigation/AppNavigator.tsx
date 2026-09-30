@@ -13,6 +13,7 @@ import DashboardScreen from '../screens/DashboardScreen';
 import ProductsScreen from '../screens/ProductsScreen';
 import ProductDetailScreen from '../screens/ProductDetailScreen';
 import InventoryScreen from '../screens/InventoryScreen';
+import StorageCellsScreen from '../screens/StorageCellsScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
@@ -313,7 +314,17 @@ export type ProductsStackParamList = {
   // `editProduct` is set by ProductDetailScreen's «Изменить» on the route it
   // pops back to — ProductsScreen consumes it once to open its edit modal,
   // reusing the form instead of duplicating it.
-  ProductsHome: { activePath?: string[]; editProduct?: Product } | undefined;
+  // `storageCellId/storageCellCode/warehouseId` — фильтр «товары в ячейке»: пушится с экрана
+  // «Ячейки хранения» (2026-09-30); `warehouseId` ещё и выбирает склад открываемого списка.
+  ProductsHome:
+    | {
+        activePath?: string[];
+        editProduct?: Product;
+        storageCellId?: string;
+        storageCellCode?: string;
+        warehouseId?: string;
+      }
+    | undefined;
   // Dedicated product drill-down. Pushed on row tap; the passed `product`
   // seeds instant paint while the screen revalidates the full shape. `edit:
   // true` lands straight in the on-detail edit mode (from the row long-press
@@ -325,6 +336,9 @@ export type ProductsStackParamList = {
   // lives in THIS stack so the floating tab bar stays visible and edge-swipe
   // pops back to the warehouse list.
   Inventory: undefined;
+  // Ячейки хранения (2026-09-30): справочник адресов склада. `warehouseId` — склад, с
+  // которого открыли меню; без него экран берёт основной склад.
+  StorageCells: { warehouseId?: string } | undefined;
 };
 
 // EquipmentStackParamList — два экрана, корневой grid и detail на сотрудника.
@@ -619,6 +633,8 @@ function ProductsStackNavigator() {
       {/* Инвентаризация — scan-driven recount; reuses productsApi.updateStock
           (type 'inventory'). In-stack so the tab bar stays visible. */}
       <ProductsStack.Screen name="Inventory" component={InventoryScreen} />
+      {/* Ячейки хранения — справочник адресов склада; in-stack, tab bar остаётся. */}
+      <ProductsStack.Screen name="StorageCells" component={StorageCellsScreen} />
     </ProductsStack.Navigator>
   );
 }
