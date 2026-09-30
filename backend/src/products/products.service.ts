@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  HttpException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -18,6 +19,8 @@ import { seedWarehousesForPoint } from '../warehouses/warehouses.service';
 import { actorPointId, mainWarehouseOfPointSql, pointFilterSql, warehousePointFilterSql } from '../common/point-scope';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
+import { BulkAssignCellDto } from './dto/bulk-assign-cell.dto';
+import { MAX_CELL_CODE_LENGTH, normalizeCellCode } from '../storage-cells/storage-cells.helpers';
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor =
@@ -30,6 +33,11 @@ type ProductActor =
 // «склад не указан» → мягкий фолбэк на основной склад.
 const isUuid = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
+// 172 — адрес хранения: код и подпись ячейки едут в каждом ответе, который кормит
+// mapProduct (список, карточка, «мало на складе», корзина). Алиас таблицы — `p`.
+const CELL_COLUMNS_SQL = 'sc.code AS storage_cell_code, sc.name AS storage_cell_name';
+const CELL_JOIN_SQL = 'LEFT JOIN storage_cells sc ON sc.id = p.storage_cell_id';
 
 @Injectable()
 export class ProductsService {
@@ -70,6 +78,10 @@ export class ProductsService {
       warehouseId: row.warehouse_id ?? null,
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
       barcode: row.barcode ?? null,
+      // 172 — адрес хранения; код/подпись приходят из JOIN'а (см. CELL_COLUMNS_SQL).
+      storageCellId: row.storage_cell_id ?? null,
+      storageCellCode: row.storage_cell_code ?? null,
+      storageCellName: row.storage_cell_name ?? null,
       createdAt: row.created_at,
     };
     if (row.supplier_name) {
@@ -164,10 +176,23 @@ export class ProductsService {
     let idx = 2;
 
     if (search) {
-      where += ` AND (p.name ILIKE $${idx} OR p.barcode ILIKE $${idx})`;
+      // 172 — поиск находит и по коду ячейки («A-01-03» → всё, что лежит на этой полке).
+      where += ` AND (p.name ILIKE $${idx} OR p.barcode ILIKE $${idx} OR sc.code ILIKE $${idx})`;
       params.push(`%${search}%`);
       idx++;
     }
+
+    // 172 — «содержимое ячейки»: uuid ячейки либо 'none' (товары без адреса). Всё
+    // остальное — мусор от битых клиентов ('undefined', ' '): фильтр не применяем,
+    // как и для warehouseId ниже (иначе 22P02 → 500).
+    const cellFilter = typeof query.storageCellId === 'string' ? query.storageCellId.trim() : '';
+    if (cellFilter === 'none') {
+      where += ' AND p.storage_cell_id IS NULL';
+    } else if (isUuid(cellFilter)) {
+      params.push(cellFilter);
+      where += ` AND p.storage_cell_id = $${params.length}`;
+    }
+    idx = params.length + 1;
 
     // Default the product list to the "main" warehouse so existing clients
     // (which don't pass a warehouseId yet) keep seeing the same data. The
@@ -192,13 +217,18 @@ export class ProductsService {
     where += warehousePointFilterSql('p', pointId, params);
     idx = params.length + 1;
 
-    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM products p WHERE ${where}`, params);
+    // JOIN ячеек нужен и счётчику: `where` может ссылаться на sc.code (поиск).
+    const countResult = await this.pool.query(
+      `SELECT COUNT(*) as total FROM products p ${CELL_JOIN_SQL} WHERE ${where}`,
+      params,
+    );
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
     const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name
+      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${CELL_JOIN_SQL}
        WHERE ${where} ORDER BY p.name LIMIT $${idx} OFFSET $${idx + 1}`,
       params,
     );
@@ -219,8 +249,9 @@ export class ProductsService {
     const params: unknown[] = [tenantID];
     const pointFilter = warehousePointFilterSql('p', actorPointId(actor), params);
     const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name
+      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL
          AND p.stock <= p.min_stock AND p.min_stock > 0${pointFilter}
        ORDER BY p.name`,
@@ -326,8 +357,9 @@ export class ProductsService {
 
   async getById(id: string, tenantID: string, actor?: ProductActor) {
     const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name
+      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${CELL_JOIN_SQL}
        WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL`,
       [id, tenantID],
     );
@@ -343,9 +375,11 @@ export class ProductsService {
     // 169 — склад филиала сессии (явный или его основной).
     const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true }, pointId);
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
+    // 172 — адрес обязан быть ячейкой ТОГО ЖЕ склада (до любой записи).
+    const cell = dto.storageCellId ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId) : null;
     const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
       [
         dto.name,
         dto.category,
@@ -362,9 +396,38 @@ export class ProductsService {
         warehouseId,
         warrantyDays,
         dto.barcode ?? null,
+        cell?.id ?? null,
       ],
     );
-    return this.mapProduct(rows[0]);
+    return this.mapProduct({
+      ...rows[0],
+      storage_cell_code: cell?.code ?? null,
+      storage_cell_name: cell?.name ?? null,
+    });
+  }
+
+  /**
+   * 172 — ячейка хранения обязана принадлежать тенанту и ТОМУ ЖЕ складу, что и товар;
+   * чужая/несуществующая — 400 STORAGE_CELL_WRONG_WAREHOUSE (существование чужой
+   * ячейки не подтверждаем — один и тот же ответ на оба случая). Филиал сессии уже
+   * проверен через склад товара (resolveWarehouseId / assertProductInPoint).
+   */
+  private async loadCellOfWarehouse(
+    tenantID: string,
+    cellId: string,
+    warehouseId: string | null,
+  ): Promise<{ id: string; code: string; name: string | null }> {
+    const { rows } = await this.pool.query(
+      'SELECT id, code, name FROM storage_cells WHERE id = $1 AND tenant_id = $2 AND warehouse_id = $3::uuid',
+      [cellId, tenantID, warehouseId],
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException({
+        message: 'Ячейка не найдена на складе товара',
+        code: 'STORAGE_CELL_WRONG_WAREHOUSE',
+      });
+    }
+    return rows[0];
   }
 
   private normalizeWarrantyDays(value: unknown): number | null {
@@ -405,9 +468,9 @@ export class ProductsService {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
 
-    // Get current prices (и остаток) before update for price history
+    // Get current prices (и остаток, склад) before update for price history
     const { rows: current } = await this.pool.query(
-      'SELECT cost_price, sell_price, stock FROM products WHERE id=$1 AND tenant_id=$2',
+      'SELECT cost_price, sell_price, stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
 
@@ -480,10 +543,15 @@ export class ProductsService {
       sets.push(`supplier_id=$${idx++}`);
       vals.push(dto.supplierId);
     }
+    // 172 — склад товара ПОСЛЕ этой правки: адрес хранения живёт внутри склада.
+    let finalWarehouseId: string | null = current.length > 0 ? (current[0].warehouse_id ?? null) : null;
+    let warehouseChanged = false;
     if (dto.warehouseId !== undefined) {
       const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId, {}, pointId);
       sets.push(`warehouse_id=$${idx++}`);
       vals.push(resolved);
+      warehouseChanged = current.length > 0 && resolved !== finalWarehouseId;
+      finalWarehouseId = resolved;
     }
     if (dto.warrantyDays !== undefined) {
       sets.push(`warranty_days=$${idx++}`);
@@ -492,6 +560,18 @@ export class ProductsService {
     if (dto.barcode !== undefined) {
       sets.push(`barcode=$${idx++}`);
       vals.push(dto.barcode ?? null);
+    }
+    // 172 — адрес: null снимает; uuid — ячейка склада товара (проверка ДО записи);
+    // не пришёл, но склад сменился — сбрасываем (ячейка старого склада тут чужая).
+    if (dto.storageCellId === null) {
+      sets.push('storage_cell_id=NULL');
+    } else if (dto.storageCellId !== undefined) {
+      if (current.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
+      const cell = await this.loadCellOfWarehouse(tenantID, dto.storageCellId, finalWarehouseId);
+      sets.push(`storage_cell_id=$${idx++}`);
+      vals.push(cell.id);
+    } else if (warehouseChanged) {
+      sets.push('storage_cell_id=NULL');
     }
 
     // NEW-3 (атомарность): основной UPDATE полей выполняется ПЕРВЫМ. Конкурентное
@@ -503,8 +583,14 @@ export class ProductsService {
     let mainRow: any = null;
     if (sets.length > 0) {
       vals.push(id, tenantID);
+      // 172 — CTE вместо голого UPDATE ... RETURNING *: тем же запросом подтягиваем код
+      // и подпись ячейки, чтобы ответ PATCH не расходился с GET (без лишнего круга в БД).
       const { rows } = await this.pool.query(
-        `UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        `WITH upd AS (
+           UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *
+         )
+         SELECT upd.*, sc.code AS storage_cell_code, sc.name AS storage_cell_name
+           FROM upd LEFT JOIN storage_cells sc ON sc.id = upd.storage_cell_id`,
         vals,
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
@@ -630,7 +716,9 @@ export class ProductsService {
     const oldSell = parseFloat(current[0].sell_price) || 0;
 
     const { rows } = await this.pool.query(
-      `UPDATE products SET sell_price=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      `WITH upd AS (UPDATE products SET sell_price=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *)
+       SELECT upd.*, sc.code AS storage_cell_code, sc.name AS storage_cell_name
+         FROM upd LEFT JOIN storage_cells sc ON sc.id = upd.storage_cell_id`,
       [numeric, id, tenantID],
     );
 
@@ -980,6 +1068,91 @@ export class ProductsService {
     }
   }
 
+  /**
+   * 172 — массово положить товары в одну ячейку хранения либо снять адрес
+   * (storageCellId = null). Одна транзакция; порядок блокировок тот же, что при
+   * удалении ячейки: сначала ячейка (FOR SHARE), затем товары (FOR UPDATE по id).
+   *
+   *   • Ячейка задана → каждый товар обязан лежать на её складе; чужой или
+   *     недоступный (другой филиал/тенант, несуществующий) — 400
+   *     STORAGE_CELL_WRONG_WAREHOUSE со списком productIds, ничего не записано.
+   *   • Товары из корзины пропускаются молча (как в bulkMove) и не считаются.
+   *
+   * Returns { updated } — сколько товаров реально сменили адрес.
+   */
+  async bulkAssignCell(
+    tenantID: string,
+    dto: BulkAssignCellDto,
+    pointId: string | null = null,
+  ): Promise<{ updated: number }> {
+    const requested = Array.from(new Set(dto.productIds.map((id) => id.toLowerCase())));
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      let cellWarehouseId: string | null = null;
+      if (dto.storageCellId) {
+        const cellParams: unknown[] = [dto.storageCellId, tenantID];
+        const cellPointFilter = warehousePointFilterSql('sc', pointId, cellParams);
+        const { rows: cells } = await client.query(
+          `SELECT sc.warehouse_id FROM storage_cells sc
+            WHERE sc.id = $1 AND sc.tenant_id = $2${cellPointFilter} FOR SHARE`,
+          cellParams,
+        );
+        if (cells.length === 0) {
+          throw new BadRequestException({ message: 'Ячейка не найдена', code: 'STORAGE_CELL_WRONG_WAREHOUSE' });
+        }
+        cellWarehouseId = cells[0].warehouse_id;
+      }
+
+      const prodParams: unknown[] = [requested, tenantID];
+      const prodPointFilter = warehousePointFilterSql('p', pointId, prodParams);
+      const { rows: found } = await client.query(
+        `SELECT p.id, p.warehouse_id, p.deleted_at IS NOT NULL AS trashed
+           FROM products p
+          WHERE p.id = ANY($1::uuid[]) AND p.tenant_id = $2${prodPointFilter}
+          ORDER BY p.id FOR UPDATE`,
+        prodParams,
+      );
+      const live = found.filter((r) => !r.trashed);
+
+      if (cellWarehouseId) {
+        const known = new Set<string>(found.map((r) => r.id));
+        const foreign = [
+          ...requested.filter((id) => !known.has(id)),
+          ...live.filter((r) => r.warehouse_id !== cellWarehouseId).map((r) => r.id as string),
+        ];
+        if (foreign.length > 0) {
+          throw new BadRequestException({
+            message: 'Часть товаров лежит на другом складе, чем ячейка',
+            code: 'STORAGE_CELL_WRONG_WAREHOUSE',
+            productIds: foreign,
+          });
+        }
+      }
+
+      const targetIds = live.map((r) => r.id as string);
+      let updated = 0;
+      if (targetIds.length > 0) {
+        const res = await client.query(
+          `UPDATE products SET storage_cell_id = $1::uuid
+            WHERE id = ANY($2::uuid[]) AND tenant_id = $3 AND storage_cell_id IS DISTINCT FROM $1::uuid`,
+          [dto.storageCellId, targetIds, tenantID],
+        );
+        updated = res.rowCount ?? 0;
+      }
+      await client.query('COMMIT');
+      return { updated };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if (err instanceof HttpException) throw err;
+      this.logger.error(`bulkAssignCell failed: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException({ message: 'Не удалось назначить ячейку' });
+    } finally {
+      client.release();
+    }
+  }
+
   // List items currently in trash, newest first.
   async getTrash(tenantID: string, actor?: ProductActor) {
     const canSeeCost = this.canSeeCost(actor);
@@ -987,8 +1160,9 @@ export class ProductsService {
     const params: unknown[] = [tenantID];
     const pointFilter = warehousePointFilterSql('p', actorPointId(actor), params);
     const { rows } = await this.pool.query(
-      `SELECT p.*, s.name as supplier_name
+      `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       ${CELL_JOIN_SQL}
        WHERE p.tenant_id = $1 AND p.deleted_at IS NOT NULL${pointFilter}
        ORDER BY p.deleted_at DESC`,
       params,
@@ -1151,12 +1325,16 @@ export class ProductsService {
     const params: unknown[] = [tenantID];
     const pointFilter = warehousePointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT p.name, p.category, p.unit, p.sell_price, p.cost_price, p.stock, p.min_stock
-       FROM products p WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${pointFilter}
+      `SELECT p.name, p.category, p.unit, p.sell_price, p.cost_price, p.stock, p.min_stock,
+              sc.code AS storage_cell_code
+       FROM products p ${CELL_JOIN_SQL}
+       WHERE p.tenant_id = $1 AND p.deleted_at IS NULL${pointFilter}
        ORDER BY p.category, p.name`,
       params,
     );
-    const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток';
+    // 172 — «Ячейка» всегда последняя: клиенты разбирают колонки по заголовку, но
+    // порядок прежних семи колонок трогать нельзя.
+    const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток;Ячейка';
     const lines = rows.map((r) => {
       const vals = [
         r.name || '',
@@ -1166,6 +1344,7 @@ export class ProductsService {
         parseFloat(r.cost_price) || 0,
         parseFloat(r.stock) || 0,
         parseFloat(r.min_stock) || 0,
+        r.storage_cell_code || '',
       ];
       return vals.join(';');
     });
@@ -1210,6 +1389,10 @@ export class ProductsService {
           sellPrice: number;
           stock: number;
           minStock: number;
+          // 172 — адрес из колонки «Ячейка»: '' = адрес не трогаем. Код длиннее лимита не
+          // режем (получился бы чужой адрес): адрес пропускаем, товар грузим, в errors — заметка.
+          storageCell: string;
+          cellTooLong: boolean;
         }
       >();
 
@@ -1218,6 +1401,8 @@ export class ProductsService {
         const it = item as Record<string, unknown>;
         const name = toStr(it.name).slice(0, 500);
         if (!name) continue;
+        const cellCode = normalizeCellCode(it.storageCell);
+        const cellTooLong = cellCode.length > MAX_CELL_CODE_LENGTH;
         // Last write wins for duplicate names within the same import
         byName.set(name, {
           name,
@@ -1227,6 +1412,8 @@ export class ProductsService {
           sellPrice: clampPrice(toNum(it.sellPrice)),
           stock: clampStock(toNum(it.stock)),
           minStock: clampStock(toNum(it.minStock)),
+          storageCell: cellTooLong ? '' : cellCode,
+          cellTooLong,
         });
       }
 
@@ -1265,20 +1452,51 @@ export class ProductsService {
       let skipped = 0;
       const errors: string[] = [];
 
+      const cellTooLongCount = normalized.filter((r) => r.cellTooLong).length;
+      if (cellTooLongCount > 0) {
+        errors.push(
+          `Адрес не сохранён у ${cellTooLongCount} тов.: код ячейки длиннее ${MAX_CELL_CODE_LENGTH} символов`,
+        );
+      }
+
       const client = await this.pool.connect();
       try {
         await client.query('BEGIN');
 
-        // Batch INSERT new items — chunk by 100 to stay under param limit (65535/9 ≈ 7k max).
+        // 172 — ячейки ищем по коду на складе импорта, недостающие создаём тут же, в этой
+        // транзакции (откат импорта не оставит пустых ячеек). Регистр — как у уникального
+        // индекса (lower(code)), сравнение целиком на стороне БД.
+        const cellIdByCode = new Map<string, string>();
+        const cellCodes = Array.from(new Set(normalized.map((r) => r.storageCell).filter((c) => c !== '')));
+        if (cellCodes.length > 0 && importWarehouseId) {
+          await client.query(
+            `INSERT INTO storage_cells (tenant_id, warehouse_id, code, sort_order)
+             SELECT $1::uuid, $2::uuid, u.code,
+                    COALESCE((SELECT MAX(sort_order) FROM storage_cells WHERE warehouse_id = $2::uuid), -1) + u.pos
+               FROM unnest($3::text[]) WITH ORDINALITY AS u(code, pos)
+             ON CONFLICT DO NOTHING`,
+            [tenantID, importWarehouseId, cellCodes],
+          );
+          const { rows: cellRows } = await client.query(
+            `SELECT u.code AS requested, sc.id
+               FROM unnest($2::text[]) AS u(code)
+               JOIN storage_cells sc ON sc.warehouse_id = $1::uuid AND sc.tenant_id = $3
+                                    AND lower(sc.code) = lower(u.code)`,
+            [importWarehouseId, cellCodes, tenantID],
+          );
+          for (const row of cellRows) cellIdByCode.set(row.requested, row.id);
+        }
+
+        // Batch INSERT new items — chunk by 100 to stay under param limit (65535/10 ≈ 6.5k max).
         const newItems = normalized.filter((r) => !existingMap.has(r.name));
         for (let i = 0; i < newItems.length; i += 100) {
           const chunk = newItems.slice(i, i + 100);
           const values: unknown[] = [];
           const placeholders: string[] = [];
           chunk.forEach((it, idx) => {
-            const b = idx * 9;
+            const b = idx * 10;
             placeholders.push(
-              `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9})`,
+              `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10})`,
             );
             values.push(
               it.name,
@@ -1290,11 +1508,12 @@ export class ProductsService {
               it.unit,
               tenantID,
               importWarehouseId,
+              cellIdByCode.get(it.storageCell) ?? null,
             );
           });
           try {
             await client.query(
-              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id) VALUES ${placeholders.join(', ')}`,
+              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id, storage_cell_id) VALUES ${placeholders.join(', ')}`,
               values,
             );
             created += chunk.length;
@@ -1314,9 +1533,22 @@ export class ProductsService {
         for (const it of updateItems) {
           const existingId = existingMap.get(it.name);
           try {
+            // 172 — пустая колонка «Ячейка» адрес не меняет (COALESCE держит прежний).
             await client.query(
-              `UPDATE products SET category=$3, cost_price=$4, sell_price=$5, stock=$6, min_stock=$7, unit=$8 WHERE id=$1 AND tenant_id=$2`,
-              [existingId, tenantID, it.category, it.costPrice, it.sellPrice, it.stock, it.minStock, it.unit],
+              `UPDATE products SET category=$3, cost_price=$4, sell_price=$5, stock=$6, min_stock=$7, unit=$8,
+                      storage_cell_id=COALESCE($9::uuid, storage_cell_id)
+                WHERE id=$1 AND tenant_id=$2`,
+              [
+                existingId,
+                tenantID,
+                it.category,
+                it.costPrice,
+                it.sellPrice,
+                it.stock,
+                it.minStock,
+                it.unit,
+                cellIdByCode.get(it.storageCell) ?? null,
+              ],
             );
             updated++;
           } catch (err) {
