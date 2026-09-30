@@ -148,6 +148,64 @@ test('shared-контракт отдаёт expensesApi.update', () => {
   assert.match(sharedApi, /update: \(id: string, data: \{[^}]*\}\) =>\s*api\.patch\(`\/expenses\/\$\{id\}`, data\)/);
 });
 
+// ── 6. «За какой месяц» и attribution ленты (правка №3, 2026-09-30) ─────────
+//
+// Исполняемые доказательства — test/salary-month-attribution.test.cjs; здесь стражи
+// того же класса, что выше: замок зеркала выплаты не должен ослабнуть вместе с
+// появлением правки месяца.
+
+test('periodMonth: формат проверяется ДО записей, месяц правится и снимается тем же единственным UPDATE', () => {
+  const body = updateBody();
+  assert.match(
+    body,
+    /const periodTouched = dto\.periodMonth !== undefined;/,
+    'undefined — поле не трогаем, null — снять',
+  );
+  assert.match(body, /this\.parsePeriodMonth\(dto\.periodMonth\)/, 'мусор — 400, а не 500 от CHECK колонки');
+  assert.match(body, /if \(nextPeriod !== currentPeriod\)/, 'значение, равное текущему, — no-op');
+  assert.match(
+    body,
+    /sets\.push\(`period_month=\$\$\{idx\+\+\}`\)/,
+    'месяц пишется в тот же UPDATE, отдельной записи нет',
+  );
+});
+
+test('periodMonth: у строк, связанных с выплатами зарплаты, месяц заперт (то же значение игнорируется, иное — 400)', () => {
+  const body = updateBody();
+  // Месяц зеркала определяет сама выплата (salary_payouts.period_month / month_year):
+  // правка здесь развела бы «По зарплатам» и «По расходам» на одних и тех же деньгах.
+  assert.match(
+    body,
+    /if \(isLinked \|\| \(await this\.isSalaryCategory\(current\.category_id \?\? null, tenantID\)\)\)/,
+    'замок — по связи expense_id (payouts и payments) И по категории «Зарплата»',
+  );
+  assert.match(body, /Месяц расхода выплаты зарплаты задаётся самой выплатой/);
+  // Прочие поля зеркала по-прежнему отказ; пропуск ограничен ровно одним полем — periodMonth.
+  assert.match(body, /if \(touchesOtherFields \|\| !periodTouched\)/);
+});
+
+test('getAll: attribution — date по умолчанию (касса), period режется общим helper-ом; мусор — 400', () => {
+  const start = service.indexOf('async getAll(');
+  assert.ok(start > 0, 'ExpensesService.getAll должен существовать');
+  const body = service.slice(start, service.indexOf('\n  async ', start + 20));
+  assert.match(
+    body,
+    /this\.parseAttribution\(query\.attribution\)/,
+    'невалидное значение — 400, откат к date молчаливым не бывает',
+  );
+  assert.match(body, /if \(attribution === 'period'\)/);
+  assert.match(
+    body,
+    /effectiveMonthMembershipSql\('e\.period_month', 'e\.date', from, to, tzPh,/,
+    'период — тем же предикатом, что отчёты и экран «Зарплата»',
+  );
+  assert.match(
+    body,
+    /e\.date >= \$\$\{idx\+\+\}::date::timestamp AT TIME ZONE/,
+    'по умолчанию — по дате факта (касса)',
+  );
+});
+
 test('мобильный экран правит расход одним PATCH и показывает текст сервера', () => {
   const start = mobileScreen.indexOf('const editMutation = useMutation({');
   assert.ok(start > 0, 'editMutation должен существовать');

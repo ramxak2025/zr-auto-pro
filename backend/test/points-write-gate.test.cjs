@@ -98,7 +98,9 @@ test('денежные INSERT штампуются филиалом, а не п�
   for (const marker of [
     '[tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, pointId]',
     '[tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, pointId]',
-    '[categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId]',
+    // 2026-09-30 (правка №3): зеркальный расход легаси-выплаты получил period_month
+    // (= month_year выплаты) — филиал по-прежнему штампуется, добавился 8-й параметр.
+    '[categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId, dto.monthYear]',
     'pointId: pointId,',
   ]) {
     assert.ok(salary.includes(marker), `salary: денежная строка пишется без филиала — ${marker}`);

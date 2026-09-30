@@ -134,3 +134,62 @@ test('getEmployeeMonth: карточка сохраняет effective-резол
   assert.match(block, /FROM master_rate_history/, 'карточка резолвит ставку месяца из истории');
   assert.match(block, /month <= \$3/, 'последняя строка с month <= запрошенного месяца');
 });
+
+// ── Правка №3 (2026-09-30): выплата — по месяцу «за который», долг за прошлые месяцы ─────
+//
+// Исполняемые доказательства (фейковый пул + LIVE Postgres) лежат в
+// test/salary-month-attribution.test.cjs. Здесь — стражи того же класса, что выше, чтобы
+// правка этой атрибуции мимо общего helper-а или мимо carryOver ловилась в файле-
+// первоисточнике: выплата, выданная в сентябре «за август», стоит в августе и на экране
+// «Зарплата», и в отчётах, а мастер видит «не выплачено за прошлые месяцы».
+
+test('getAll: принятые выплаты — по общему helper-у; долг за прошлые месяцы — тем же методом, что в карточке', () => {
+  const block = slice('async getAll', 'async getPayments');
+  assert.match(
+    block,
+    /monthMember\('p\.period_month', 'p\.created_at'\)/,
+    'принятые выплаты — по эффективному месяцу COALESCE(period_month, месяц факта), не по одной дате выдачи',
+  );
+  assert.match(
+    block,
+    /this\.carryOverRemainders\(/,
+    'carryOverAmount списка считается тем же методом, что carryOver карточки',
+  );
+  assert.match(
+    block,
+    /carryOverAmount: positiveCarryTotal\(/,
+    'в строке списка — сумма ПОЛОЖИТЕЛЬНЫХ остатков (переплата одного месяца долг другого не гасит)',
+  );
+});
+
+test('getEmployeeMonth: carryOver отдаётся ВСЕГДА (контракт SalaryMonthDetail) и считается тем же методом, что список', () => {
+  const block = service.slice(service.indexOf('async getEmployeeMonth'));
+  assert.match(
+    block,
+    /this\.carryOverRemainders\(tenantID, \[employeeId\], monthYear, tz, pointId\)/,
+    'остатки прошлых месяцев — один сгруппированный запрос, а не 12 вызовов карточки',
+  );
+  assert.match(
+    block,
+    /payments,\s+carryOver,\s+\};/,
+    'поле возвращается безусловно: нет долгов — { total: 0, months: [] }',
+  );
+  assert.match(
+    block,
+    /\.sort\(\(a, b\) => b\.month\.localeCompare\(a\.month\)\)/,
+    'месяцы — по убыванию, клиенту сортировать не нужно',
+  );
+});
+
+test('createPayout: месяц не указан — месяц факта в поясе тенанта (не NULL); будущий и мусорный месяц — 400', () => {
+  const block = slice('async createPayout', 'async decidePayout');
+  assert.match(block, /let periodMonth = currentMonth;/, 'без periodMonth выплата встаёт в месяц выдачи, а не в NULL');
+  assert.match(block, /zonedMonthKey\(new Date\(\), tz\)/, 'месяц факта считается в поясе тенанта, а не сервера');
+  assert.match(block, /!isMonthKey\(requested\)/, 'формат ГГГГ-ММ с месяцем 01–12');
+  assert.match(block, /requested > currentMonth/, 'месяц позже текущего отклоняется');
+  assert.match(
+    block,
+    /\[tenantID, dto\.employeeId, type, amount, comment, createdBy, periodMonth, pointId\]/,
+    'в INSERT уходит вычисленный periodMonth, а не dto.periodMonth как есть',
+  );
+});

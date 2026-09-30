@@ -13,7 +13,9 @@ import {
   startOfWeekInZone,
   zonedDateKey,
   zonedMidnight,
+  zonedMonthKey,
 } from '../common/timezone';
+import { effectiveMonthMembershipSql, isMonthKey, monthKeysBefore, periodPredicate } from '../common/period-membership';
 import { assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
 
@@ -24,6 +26,16 @@ interface PremiumDto {
   bonusPercent?: number;
   reason: string;
   periodMonthYear?: string;
+}
+
+/** Округление до копеек: суммы приходят из numeric строками, а складываются числами. */
+const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** Сумма ТОЛЬКО положительных остатков: переплата одного месяца долг другого не гасит. */
+function positiveCarryTotal(months: Iterable<number>): number {
+  let total = 0;
+  for (const remaining of months) if (remaining > 0) total += remaining;
+  return round2(total);
 }
 
 @Injectable()
@@ -105,41 +117,15 @@ export class SalaryService {
   }
 
   /**
-   * Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone). Хелперы ниже собирают
-   * SQL-фрагменты, поэтому пояс приходит к ним не значением, а ГОТОВЫМ
-   * ПЛЕЙСХОЛДЕРОМ ('$4::text') — само значение вызывающий кладёт в params.
-   * Склеивать пояс в текст запроса нельзя даже из своей таблицы: параметр —
-   * единственная защита, не зависящая от того, кто заполнил колонку.
+   * Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone). SQL-фрагменты периода
+   * (`periodPredicate`, `effectiveMonthMembershipSql`) живут в общем
+   * common/period-membership.ts — их же используют отчёты («По зарплатам»,
+   * «Сводный», «По расходам»), чтобы цифра экрана и цифра отчёта считались ОДНИМ
+   * правилом. Пояс приходит в них не значением, а ГОТОВЫМ ПЛЕЙСХОЛДЕРОМ
+   * ('$4::text') — само значение вызывающий кладёт в params. Склеивать пояс в текст
+   * запроса нельзя даже из своей таблицы: параметр — единственная защита, не
+   * зависящая от того, кто заполнил колонку.
    */
-  private static readonly DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-  /**
-   * SQL-предикат зарплатного периода [dateFrom..dateTo] для timestamptz-колонки
-   * `col` (значения — параметры $2/$3, пояс — `tzPh`). Строка `YYYY-MM-DD`
-   * трактуется как МЕСТНЫЙ календарный день тенанта: полуинтервал
-   * [from 00:00, to+1 00:00) — паттерн reports.service. Раньше границы
-   * строились кастом `::date + 1` в СЕРВЕРНОЙ TZ (UTC в контейнере) с
-   * ВКЛЮЧЁННОЙ верхней полуночью: начисления первых часов дня уезжали в
-   * соседний период, а момент ровно to+1 00:00 попадал в оба смежных периода.
-   * Полный timestamp в параметре — прежняя семантика 1:1 (guard, чтобы не
-   * менять поведение нестандартных клиентов).
-   */
-  private static periodPredicate(col: string, dateFrom: string, dateTo: string, tzPh: string): string {
-    const lowerIsDay = SalaryService.DATE_ONLY_RE.test(dateFrom);
-    const upperIsDay = SalaryService.DATE_ONLY_RE.test(dateTo);
-    const lower = lowerIsDay ? `${col} >= $2::date::timestamp AT TIME ZONE ${tzPh}` : `${col} >= $2`;
-    const upper = upperIsDay
-      ? `${col} < ($3::date + 1)::timestamp AT TIME ZONE ${tzPh}`
-      : `${col} <= ($3::date + 1)::timestamptz`;
-    if (lowerIsDay || upperIsDay) return `${lower} AND ${upper}`;
-    // Обе границы пришли полным timestamp'ом (guard для нестандартных клиентов)
-    // — AT TIME ZONE не нужен, но параметр пояса УЖЕ передан в запрос, а
-    // Postgres отвергает и лишний параметр («bind message supplies N
-    // parameters, but prepared statement requires M»), и дырку в нумерации.
-    // Якорь тождественно истинен (пояс — непустая строка) и схлопывается
-    // планировщиком; он лишь гарантирует ссылку на плейсхолдер.
-    return `${lower} AND ${upper} AND ${tzPh} IS NOT NULL`;
-  }
 
   /**
    * Round 16 (баг 2) — SQL-выражение месяца-отнесения премии: НАЗНАЧЕННЫЙ
@@ -158,67 +144,12 @@ export class SalaryService {
     );
   }
 
-  /**
-   * Round 16 (HIGH + MEDIUM, деньги) — предикат принадлежности ПОМЕСЯЧНО-
-   * относимой строки (премия / выплата salary_payout / legacy salary_payment)
-   * запрошенному диапазону [dateFrom..dateTo] в getAll. $2 = dateFrom,
-   * $3 = dateTo (date-only 'YYYY-MM-DD') — те же плейсхолдеры, что periodPredicate.
-   * Зеркало reports.getFinancial (149 / R15) и карточки getEmployeeMonth,
-   * приведённое к семантике ДЕНЕГ:
-   *
-   *   • строка с ЯВНЫМ периодом (`periodCol` ~ 'YYYY-MM') включается ТОЛЬКО
-   *     когда диапазон покрывает её месяц «по сегодняшний день»: dateFrom ≤ 1-е
-   *     число месяца, месяц уже НАЧАЛСЯ (1-е ≤ сегодня-МСК — будущие месяцы не
-   *     притягиваются) И dateTo ≥ LEAST(последнее число, сегодня-МСК). Значит
-   *     ПОЛНЫЙ календарный месяц (моб. дефолт monthBounds = [1-е..последнее],
-   *     веб-инициализация) И «месяц-к-дате» (веб-пресет «Месяц» = [1-е, сегодня])
-   *     — ВКЛЮЧАЮТ месяц; «неделя»/«день», НЕ начинающиеся с 1-го, — НЕТ.
-   *     Раньше getAll разворачивал ЛЮБОЙ диапазон в целые месяцы
-   *     (getMonthYearsForRange → IN) и узкий срез, задевший границу месяца, тянул
-   *     премии/выплаты ДВУХ ЦЕЛЫХ месяцев (баг MEDIUM: 2 полных месяца премий на
-   *     недельном виде).
-   *
-   *     Про clamp к «сегодня» (в reports.getFinancial верх = чистое
-   *     `последнее ≤ dateTo` без clamp): reports считает ПРИБЫЛЬ — там честно
-   *     прятать период-строку из НЕПОЛНОГО месяца до его конца (касса покрывает
-   *     по дате факта). Здесь — ОСТАТОК ЗАРПЛАТЫ: «недосписанная» принятая
-   *     выплата задирает остаток и открывает путь к ПОВТОРНОЙ выдаче (баг HIGH).
-   *     Клиенты смотрят ТЕКУЩИЙ месяц как [1-е, сегодня] ещё до его конца — значит
-   *     принятая сегодня выплата ОБЯЗАНА списываться уже сейчас. Clamp верхней
-   *     границы к «сегодня» делает [1-е, сегодня] «полным месяцем-к-дате» →
-   *     выплата списана, остаток честный; задвоения нет (узкие срезы всё равно
-   *     исключены — они не начинаются с 1-го).
-   *
-   *   • строка БЕЗ явного периода (`periodCol` NULL / не по маске) относится по
-   *     ДАТЕ ФАКТА (`factCol`, московский полуинтервал periodPredicate) — узкий
-   *     срез видит ровно те начисления, что реально произошли в его дни.
-   *
-   * Для ПОЛНОГО календарного месяца оба рукава сводятся к равенству
-   * effective-месяца (как premiumMonthExpr = $3 и COALESCE(period_month, …) = $3
-   * в getEmployeeMonth) — суммы СПИСКА и КАРТОЧКИ совпадают до копейки (инвариант
-   * HIGH: getAll.remaining == getEmployeeMonth.remaining). CASE-guard в mfirst:
-   * period_month_year — TEXT без CHECK, мусор → to_date(NULL) → рукав assigned
-   * гаснет, строка уходит в fallback по дате факта (а не роняет запрос).
-   */
-  private static periodMonthMembership(
-    periodCol: string,
-    factCol: string,
-    dateFrom: string,
-    dateTo: string,
-    tzPh: string,
-  ): string {
-    const validPeriod = `${periodCol} ~ '^\\d{4}-\\d{2}$'`;
-    const mfirst = `to_date(CASE WHEN ${validPeriod} THEN ${periodCol} || '-01' END, 'YYYY-MM-DD')`;
-    const mlast = `(${mfirst} + interval '1 month' - interval '1 day')::date`;
-    const today = `(now() AT TIME ZONE ${tzPh})::date`;
-    const assigned =
-      `${validPeriod} AND $2::date <= ${mfirst} AND ${mfirst} <= ${today} ` +
-      `AND $3::date >= LEAST(${mlast}, ${today})`;
-    const byFact =
-      `(${periodCol} IS NULL OR ${periodCol} !~ '^\\d{4}-\\d{2}$') ` +
-      `AND ${SalaryService.periodPredicate(factCol, dateFrom, dateTo, tzPh)}`;
-    return `((${assigned}) OR (${byFact}))`;
-  }
+  // Предикат принадлежности помесячно-относимой строки (премия / выплата /
+  // legacy-платёж) диапазону — `effectiveMonthMembershipSql` из
+  // common/period-membership.ts (раньше — приватный periodMonthMembership здесь;
+  // Round 16, HIGH+MEDIUM: месяц-к-дате с clamp к «сегодня», строка без периода — по
+  // дате факта). Вынесен, чтобы отчёты считали выплату в том же месяце, что и этот
+  // экран, — поведение getAll не менялось.
 
   private static readonly MONTH_NAMES = [
     'Январь',
@@ -296,7 +227,12 @@ export class SalaryService {
     return assertRowPointForWrite(this.pool, table, id, tenantID, pointId, notFoundMessage);
   }
 
-  async getAll(tenantID: string, query: any, pointId: string | null = null) {
+  async getAll(tenantID: string, query: any, pointId: string | null = null, opts: { carryOver?: boolean } = {}) {
+    // Правка №3 (2026-09-30): `carryOverAmount` — «долг за прошлые месяцы» — по
+    // умолчанию считается (экран «Зарплата»); отчёт «По зарплатам» берёт из getAll
+    // только начисления и отключает его (`carryOver: false`), чтобы не платить
+    // дополнительным запросом за колонку, которой в отчёте нет.
+    const withCarryOver = opts.carryOver !== false;
     const dateFrom =
       query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
@@ -307,12 +243,14 @@ export class SalaryService {
     const TZ_PH = '$4::text';
     // Единые границы периода для ВСЕХ компонент зарплаты (чеки / премии /
     // штрафы / мотивация) — местный полуинтервал, см. periodPredicate.
-    const period = (col: string) => SalaryService.periodPredicate(col, dateFrom, dateTo, TZ_PH);
+    const period = (col: string) => periodPredicate(col, dateFrom, dateTo, TZ_PH);
     // Помесячно-относимые компоненты (payments / premiums / принятые payouts)
-    // выбираются через periodMonthMembership (полный месяц-к-дате включает,
-    // узкий срез — нет), а не разворотом диапазона в целые месяцы.
+    // выбираются через effectiveMonthMembershipSql (полный месяц-к-дате включает,
+    // узкий срез — нет), а не разворотом диапазона в целые месяцы. Это ТО ЖЕ
+    // правило, по которому отчёты «По зарплатам» / «Сводный» / «По расходам»
+    // относят выплату к месяцу «за который» она выдана.
     const monthMember = (periodCol: string, factCol: string) =>
-      SalaryService.periodMonthMembership(periodCol, factCol, dateFrom, dateTo, TZ_PH);
+      effectiveMonthMembershipSql(periodCol, factCol, dateFrom, dateTo, TZ_PH);
 
     // Round 16 (баг 3) — месяц, на который резолвится ОТОБРАЖАЕМЫЙ процент:
     // последний месяц запрошенного периода (клиенты шлют календарный месяц —
@@ -453,7 +391,7 @@ export class SalaryService {
     // + confirmed_at: раньше поля в getAll не было вовсе — клиентский фильтр
     // `!p.confirmedAt` был истинным ВСЕГДА, и уже подтверждённая выплата
     // всплывала модалом до конца месяца (pre-existing gap, review п.3).
-    // Round 16 (MEDIUM) — отнесение legacy-выплат по periodMonthMembership
+    // Round 16 (MEDIUM) — отнесение legacy-выплат по effectiveMonthMembershipSql
     // (month_year — назначенный месяц; date — дата факта fallback), а не
     // month_year IN (целые месяцы диапазона). Раньше недельный/дневной срез,
     // задевший границу месяца, тянул выплаты ЦЕЛЫХ месяцев — веб-суммы за
@@ -502,7 +440,7 @@ export class SalaryService {
     }
 
     // Premiums for the period — both cash and rate_bonus rows.
-    // Round 16 (баг 2 + MEDIUM) — атрибуция по periodMonthMembership: премия с
+    // Round 16 (баг 2 + MEDIUM) — атрибуция по effectiveMonthMembershipSql: премия с
     // НАЗНАЧЕННЫМ месяцем (period_month_year) относится к нему и включается,
     // только когда диапазон покрывает этот месяц-к-дате; премия БЕЗ периода — по
     // дате факта (created_at МСК). Раньше — premiumMonthExpr IN (целые месяцы
@@ -601,7 +539,7 @@ export class SalaryService {
     // Считаем ТОЛЬКО status='accepted' (pending/rejected/cancelled исключены —
     // точным зеркалом карточки getEmployeeMonth, где paidAmount =
     // acceptedPayoutsAmount + legacyPaidAmount). Отнесение по месяцу —
-    // periodMonthMembership(period_month, created_at): выплата «за июль»,
+    // effectiveMonthMembershipSql(period_month, created_at): выплата «за июль»,
     // принятая в августе, списывает остаток ИЮЛЯ (как в карточке), а не августа;
     // полный месяц-к-дате списывает, узкий срез — нет.
     const payoutParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
@@ -630,6 +568,23 @@ export class SalaryService {
     // не было филиала, и смены, отработанные в соседнем автосервисе,
     // занижали «за смену» здесь.
     const shiftsByUser = await this.workedShiftsByUser(tenantID, dateFrom, dateTo, pointId);
+
+    // Правка №3 (2026-09-30) — «долг за прошлые месяцы»: положительные остатки 12
+    // месяцев, ПРЕДШЕСТВУЮЩИХ месяцу начала периода (месяцы самого диапазона в него
+    // не входят — они и так в totalEarnings / paidAmount этой строки). ОДИН запрос
+    // на всех сотрудников листа, сгруппированный по (сотрудник, месяц), — тот же
+    // carryOverRemainders, что даёт carryOver карточки месяца: цифра списка и
+    // цифра карточки не могут разойтись.
+    const carryOverByUser =
+      withCarryOver && rows.length > 0
+        ? await this.carryOverRemainders(
+            tenantID,
+            rows.map((r) => r.master_id as string),
+            dateFrom.slice(0, 7),
+            tz,
+            pointId,
+          )
+        : new Map<string, Map<string, number>>();
 
     return rows.map((r) => {
       const masterId = r.master_id;
@@ -674,6 +629,12 @@ export class SalaryService {
         paidAmount,
         // Penalties reduce what the shop still owes the employee.
         remainingAmount: totalEarnings - paidAmount - penaltiesAmount,
+        // Долг за прошлые месяцы (положительные остатки 12 месяцев до периода).
+        // Не входит ни в totalEarnings, ни в remainingAmount: это ОТДЕЛЬНАЯ
+        // цифра — остаток периода не должен менять смысл. Без carryOver — поля нет.
+        ...(withCarryOver
+          ? { carryOverAmount: positiveCarryTotal((carryOverByUser.get(masterId) ?? new Map()).values()) }
+          : {}),
         // v3.0.1 ФИЧА 4 — «ЗП за день» (по отработанным сменам за период).
         workedShifts,
         perDay,
@@ -807,11 +768,16 @@ export class SalaryService {
       // 4. Create expense record + прямая связь выплата → расход (153):
       //    сторно (reversePayment) компенсирует расход по expense_id, а не
       //    best-effort-матчем. Обе строки — в одной транзакции.
+      //    period_month = month_year выплаты («за какой месяц»): зеркальный расход
+      //    обязан жить в том же месяце, что и сама выплата, — иначе отчёт «По
+      //    расходам» (по назначенному месяцу) показал бы деньги в месяце факта, а
+      //    «По зарплатам» / экран «Зарплата» — в месяце «за». Касса (лента
+      //    расходов, смена) по-прежнему считает по date = моменту выдачи.
       const { rows: expRows } = await client.query(
-        `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id, period_month)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id`,
-        [categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId],
+        [categoryId, dto.amount, description, payment.date, createdBy, tenantID, pointId, dto.monthYear],
       );
       await client.query(`UPDATE salary_payments SET expense_id = $1 WHERE id = $2`, [expRows[0].id, payment.id]);
 
@@ -1432,9 +1398,28 @@ export class SalaryService {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException({ message: 'Сумма выплаты должна быть положительной' });
     }
-    // 149 — «за какой месяц» выплата ('YYYY-MM'). NULL = месяц выписки (МСК) —
-    // прежнее поведение. DTO уже отвалидировал формат; belt-and-braces здесь.
-    const periodMonth = dto.periodMonth && /^\d{4}-\d{2}$/.test(dto.periodMonth) ? dto.periodMonth : null;
+    // 149 — «за какой месяц» выплата ('YYYY-MM'). Правка №3 (2026-09-30): выплата
+    // ВСЕГДА получает месяц. Клиент не прислал — берётся месяц ФАКТА в поясе
+    // тенанта, а не NULL: отчёты и экран считают по назначенному месяцу, и строка
+    // с NULL зависела бы от того, в каком часе и поясе её прочитали. Старые
+    // NULL-строки по-прежнему читаются через COALESCE — данные не правятся.
+    // Месяц ПОЗЖЕ текущего — 400: аванс «в будущее» не относится ни к одному
+    // закрытому периоду и висел бы отрицательным остатком неделями. Пояс — до
+    // pool.connect(): вторая коннекция под открытой транзакцией на исчерпанном
+    // пуле даёт взаимную блокировку.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const currentMonth = zonedMonthKey(new Date(), tz);
+    let periodMonth = currentMonth;
+    if (dto.periodMonth !== undefined && dto.periodMonth !== null && String(dto.periodMonth).trim() !== '') {
+      const requested = String(dto.periodMonth).trim();
+      if (!isMonthKey(requested)) {
+        throw new BadRequestException({ message: 'Месяц выплаты указывается в формате ГГГГ-ММ' });
+      }
+      if (requested > currentMonth) {
+        throw new BadRequestException({ message: 'Нельзя выдать выплату за месяц, который ещё не наступил' });
+      }
+      periodMonth = requested;
+    }
 
     // Tenant-isolation: the recipient must belong to the caller's tenant.
     const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
@@ -2582,7 +2567,9 @@ export class SalaryService {
       expenseId: r.expense_id ?? null,
       // 161 — филиал, за счёт которого выплата сделана.
       pointId: r.point_id ?? null,
-      // 149 — «за какой месяц» ('YYYY-MM'); null = месяц выписки (МСК).
+      // 149 — «за какой месяц» ('YYYY-MM'). Новые выплаты (createPayout) всегда
+      // получают месяц; null остался только у строк, созданных до правки №3
+      // (2026-09-30) — для них месяц = месяц выписки в поясе тенанта.
       periodMonth: (r.period_month as string | null) ?? null,
       // 153 — отмена владельцем: строка остаётся (UI зачёркивает с причиной),
       // из «выплачено» исключена (суммируется только status='accepted').
@@ -2633,6 +2620,128 @@ export class SalaryService {
       // которого сделана (текущая точка выдающего).
       pointId: pointId,
     });
+  }
+
+  // ─── Долг за прошлые месяцы (правка №3, 2026-09-30) ───────────────────────
+
+  /** Сколько месяцев ДО запрошенного входит в «долг за прошлые месяцы». */
+  private static readonly CARRY_OVER_MONTHS = 12;
+
+  /**
+   * Остаток к выплате по каждому из 12 месяцев, ПРЕДШЕСТВУЮЩИХ `beforeMonth`
+   * ('YYYY-MM'), для одного или всех сотрудников листа. Возвращает
+   * Map<сотрудник, Map<месяц, остаток>> — только месяцы с остатком ≠ 0
+   * (положительный — долг перед сотрудником, отрицательный — переплата).
+   *
+   * ОДИН запрос, сгруппированный по (сотрудник, месяц), а не 12 вызовов
+   * getEmployeeMonth: список листа с десятком сотрудников иначе ушёл бы в сотни
+   * запросов на каждое открытие экрана. Каждая ветка UNION ALL — дословное зеркало
+   * соответствующего запроса карточки месяца (getEmployeeMonth), знак «+» у
+   * начислений и «−» у штрафов и выплат, поэтому остаток месяца M здесь равен
+   * `remainingAmount` карточки за M до копейки:
+   *   + услуги (исполнитель строки) и товары (автор чека) по checks.date,
+   *     is_deferred = false, deleted_at IS NULL;
+   *   + мотивация по accrued_at;  + денежные премии по месяцу «за какой»;
+   *   − штрафы по своей дате;
+   *   − ПРИНЯТЫЕ выплаты по эффективному месяцу COALESCE(period_month, месяц факта);
+   *   − legacy-платежи по month_year (не сторнированные).
+   * Филиал (`pointId`) режет каждую ветку тем же строгим равенством, что карточка
+   * и getAll (мотивация — через точку чека): сумма филиальных остатков равна сетевому.
+   */
+  private async carryOverRemainders(
+    tenantID: string,
+    employeeIds: string[],
+    beforeMonth: string,
+    tz: string,
+    pointId: string | null,
+  ): Promise<Map<string, Map<string, number>>> {
+    const result = new Map<string, Map<string, number>>();
+    if (employeeIds.length === 0 || !isMonthKey(beforeMonth)) return result;
+
+    const monthKeys = monthKeysBefore(beforeMonth, SalaryService.CARRY_OVER_MONTHS);
+    const [year, mon] = beforeMonth.split('-').map(Number);
+    // Полуинтервал [начало месяца M−12, начало месяца M) по поясу тенанта — те же
+    // границы, что у карточки (zonedMidnight), только шире на 12 месяцев.
+    const windowStart = zonedMidnight(tz, year, mon - 1 - SalaryService.CARRY_OVER_MONTHS, 1).toISOString();
+    const windowEnd = zonedMidnight(tz, year, mon - 1, 1).toISOString();
+
+    const params: unknown[] = [tenantID, employeeIds, tz, windowStart, windowEnd, monthKeys];
+    let pointPh = '';
+    if (pointId) {
+      params.push(pointId);
+      pointPh = `$${params.length}`;
+    }
+    const pt = (alias: string) => (pointPh ? ` AND ${alias}.point_id = ${pointPh}` : '');
+    const motivationPoint = pointPh
+      ? ` AND EXISTS (SELECT 1 FROM checks chm WHERE chm.id = ma.check_id AND chm.tenant_id = $1 AND chm.point_id = ${pointPh})`
+      : '';
+    const premiumMonth = SalaryService.premiumMonthExpr('sp', '$3::text');
+    const payoutMonth = `COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE $3::text, 'YYYY-MM'))`;
+
+    const { rows } = await this.pool.query(
+      `SELECT t.employee_id, t.ym, COALESCE(SUM(t.amount), 0) AS remaining
+         FROM (
+           SELECT COALESCE(sl.master_id, ch.master_id) AS employee_id,
+                  to_char(ch.date AT TIME ZONE $3::text, 'YYYY-MM') AS ym,
+                  COALESCE(sl.salary_amount, 0) AS amount
+             FROM checks ch
+             JOIN check_service_lines sl ON sl.check_id = ch.id
+            WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+              AND COALESCE(sl.master_id, ch.master_id) = ANY($2::uuid[])
+              AND ch.date >= $4::timestamptz AND ch.date < $5::timestamptz${pt('ch')}
+           UNION ALL
+           SELECT ch.master_id, to_char(ch.date AT TIME ZONE $3::text, 'YYYY-MM'),
+                  COALESCE(ch.product_salary_total, 0)
+             FROM checks ch
+            WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+              AND ch.master_id = ANY($2::uuid[])
+              AND ch.date >= $4::timestamptz AND ch.date < $5::timestamptz${pt('ch')}
+           UNION ALL
+           SELECT ma.employee_id, to_char(ma.accrued_at AT TIME ZONE $3::text, 'YYYY-MM'),
+                  COALESCE(ma.amount, 0)
+             FROM motivation_accruals ma
+            WHERE ma.tenant_id = $1 AND ma.employee_id = ANY($2::uuid[])
+              AND ma.accrued_at >= $4::timestamptz AND ma.accrued_at < $5::timestamptz${motivationPoint}
+           UNION ALL
+           SELECT sp.user_id, ${premiumMonth}, COALESCE(sp.amount, 0)
+             FROM salary_premiums sp
+            WHERE sp.tenant_id = $1 AND sp.type = 'cash' AND sp.user_id = ANY($2::uuid[])
+              AND ${premiumMonth} = ANY($6::text[])${pt('sp')}
+           UNION ALL
+           SELECT pen.user_id, to_char(pen.date AT TIME ZONE $3::text, 'YYYY-MM'), -COALESCE(pen.amount, 0)
+             FROM salary_penalties pen
+            WHERE pen.tenant_id = $1 AND pen.user_id = ANY($2::uuid[])
+              AND pen.date >= $4::timestamptz AND pen.date < $5::timestamptz${pt('pen')}
+           UNION ALL
+           SELECT p.employee_id, ${payoutMonth}, -COALESCE(p.amount, 0)
+             FROM salary_payouts p
+            WHERE p.tenant_id = $1 AND p.status = 'accepted' AND p.employee_id = ANY($2::uuid[])
+              AND ${payoutMonth} = ANY($6::text[])${pt('p')}
+           UNION ALL
+           SELECT spm.user_id, spm.month_year, -COALESCE(spm.amount, 0)
+             FROM salary_payments spm
+            WHERE spm.tenant_id = $1 AND spm.reversed_at IS NULL AND spm.user_id = ANY($2::uuid[])
+              AND spm.month_year = ANY($6::text[])${pt('spm')}
+         ) t
+        GROUP BY t.employee_id, t.ym`,
+      params,
+    );
+
+    const inWindow = new Set(monthKeys);
+    for (const r of rows) {
+      const month = r.ym as string;
+      if (!inWindow.has(month)) continue;
+      const remaining = round2(parseFloat(r.remaining) || 0);
+      if (remaining === 0) continue;
+      const employeeId = r.employee_id as string;
+      let perMonth = result.get(employeeId);
+      if (!perMonth) {
+        perMonth = new Map<string, number>();
+        result.set(employeeId, perMonth);
+      }
+      perMonth.set(month, remaining);
+    }
+    return result;
   }
 
   // ─── Per-employee monthly salary detail ──────────────────────────────────
@@ -2837,6 +2946,23 @@ export class SalaryService {
     const totalEarnings = serviceEarnings + productEarnings + premiumsAmount + motivationAmount;
     const paidAmount = acceptedPayoutsAmount + legacyPaidAmount;
 
+    // Правка №3 (2026-09-30): «Не выплачено за прошлые месяцы» — остаток по каждому
+    // из 12 месяцев ДО запрошенного. Один сгруппированный запрос (не 12 вызовов
+    // этого метода); тот же метод считает `carryOverAmount` списка getAll, поэтому
+    // цифры карточки и списка не могут разойтись. Поле присутствует ВСЕГДА
+    // (контракт SalaryMonthDetail.carryOver): нет долгов и переплат — { 0, [] }.
+    const carryRemainders =
+      (await this.carryOverRemainders(tenantID, [employeeId], monthYear, tz, pointId)).get(employeeId) ??
+      new Map<string, number>();
+    const carryOver = {
+      total: positiveCarryTotal(carryRemainders.values()),
+      // Порядок — по убыванию месяца (ближайший к запрошенному первым); клиенту
+      // сортировать не нужно.
+      months: [...carryRemainders.entries()]
+        .map(([carryMonth, remaining]) => ({ month: carryMonth, remaining }))
+        .sort((a, b) => b.month.localeCompare(a.month)),
+    };
+
     return {
       userId: employeeId,
       userName: user.full_name,
@@ -2860,6 +2986,7 @@ export class SalaryService {
       fines,
       premiums,
       payments,
+      carryOver,
     };
   }
 }
