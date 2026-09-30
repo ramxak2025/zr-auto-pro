@@ -21,6 +21,8 @@ downloads/*.apk
 Autexa-*.apk
 .backups/
 .claude/scheduled_tasks.lock
+# Рабочие копии агентов: EAS читает только .gitignore (не .git/info/exclude) и иначе пакует их в архив сборки.
+.claude/worktrees/
 .deploy.lock
 # Локальные артефакты ручной выгрузки IPA (xcodebuild -exportArchive) —
 # содержат teamID/опции загрузки, к репо отношения не имеют.
