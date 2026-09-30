@@ -1,8 +1,8 @@
 /**
- * AdminTabBar — the «особое нижнее меню» for the superadmin platform-operator
- * shell. A premium floating island, visually consistent with the car-service
- * Liquid Glass bar, but WITHOUT the central Касса FAB math — every slot is an
- * equal-width tab.
+ * AdminTabBar — the «особое нижнее меню» for the platform-operator shell
+ * (superadmin: 5 tabs; manager: Обзор · Автосервисы · Ещё). A premium floating
+ * island, visually consistent with the car-service Liquid Glass bar, but
+ * WITHOUT the central Касса FAB math — every slot is an equal-width tab.
  *
  * Design:
  *   • Floating, absolutely-positioned island (lifted out of the navigator's
@@ -57,9 +57,24 @@ export const ADMIN_TAB_DEFINITIONS: AdminTabDef[] = [
   },
 ];
 
+/** Which platform-operator shell is mounted: the full superadmin one or the trimmed manager one. */
+export type AdminShellMode = 'superadmin' | 'manager';
+
+// The manager is tenant-less and has no plans / broadcast admin: three tabs,
+// and «Тенанты» reads «Автосервисы» (their own car services).
+const MANAGER_TAB_ROUTES = ['AdminOverview', 'AdminTenants', 'AdminMore'];
+export const MANAGER_TAB_DEFINITIONS: AdminTabDef[] = ADMIN_TAB_DEFINITIONS.filter((t) =>
+  MANAGER_TAB_ROUTES.includes(t.routeName),
+).map((t) => (t.routeName === 'AdminTenants' ? { ...t, label: 'Автосервисы' } : t));
+
 const CORNER_RADIUS = ADMIN_BAR_HEIGHT / 2;
 
-export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
+export default function AdminTabBar({
+  state,
+  navigation,
+  mode = 'superadmin',
+}: BottomTabBarProps & { mode?: AdminShellMode }) {
+  const tabs = mode === 'manager' ? MANAGER_TAB_DEFINITIONS : ADMIN_TAB_DEFINITIONS;
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 8);
   const palette = useColors();
@@ -80,16 +95,14 @@ export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
   // Resolve the focused admin tab index from the navigator state. Falls back
   // to 0 when nothing matches (cold start).
   const focusedIndex = React.useMemo(() => {
-    const idx = ADMIN_TAB_DEFINITIONS.findIndex(
-      (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
-    );
+    const idx = tabs.findIndex((t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index);
     return idx < 0 ? 0 : idx;
-  }, [state]);
+  }, [state, tabs]);
 
   // Measure the inner row width so the sliding pill can position itself.
   // `slotWidth` is rowWidth / tabCount.
   const [rowWidth, setRowWidth] = React.useState(0);
-  const tabCount = ADMIN_TAB_DEFINITIONS.length;
+  const tabCount = tabs.length;
   const slotWidth = rowWidth > 0 ? rowWidth / tabCount : 0;
 
   const pillX = useSharedValue(0);
@@ -120,7 +133,7 @@ export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
 
   const navigateToTab = React.useCallback(
     (index: number) => {
-      const tab = ADMIN_TAB_DEFINITIONS[index];
+      const tab = tabs[index];
       if (!tab) return;
       const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
       const focused = state.index === routeIndex;
@@ -134,7 +147,7 @@ export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
         navigation.navigate(tab.routeName as never);
       }
     },
-    [state, navigation],
+    [state, navigation, tabs],
   );
 
   return (
@@ -180,7 +193,7 @@ export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
             />
           )}
 
-          {ADMIN_TAB_DEFINITIONS.map((tab, index) => {
+          {tabs.map((tab, index) => {
             const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
             const focused = state.index === routeIndex;
             return (
