@@ -123,7 +123,28 @@ export class AuditService {
         LIMIT $1`,
       [limit],
     );
-    return rows.map((r) => ({
+    return rows.map((r) => AuditService.mapRow(r));
+  }
+
+  /**
+   * 173 — журнал ОДНОГО актора (кабинет менеджера: «только записи, где актор — я»).
+   * Отбор по `actor_user_id` (id из JWT, а не имя — тёзка не увидит чужого),
+   * пагинация limit/offset — как у общего журнала суперадмина.
+   */
+  async listByActor(actorUserId: string, limit = 50, offset = 0): Promise<AuditLogEntryRow[]> {
+    const { rows } = await this.pool.query(
+      `SELECT id, actor_name, action, target_type, target_id, target_name, detail, created_at
+         FROM admin_audit_log
+        WHERE actor_user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2 OFFSET $3`,
+      [actorUserId, limit, offset],
+    );
+    return rows.map((r) => AuditService.mapRow(r));
+  }
+
+  private static mapRow(r: any): AuditLogEntryRow {
+    return {
       id: r.id,
       actorName: r.actor_name ?? null,
       action: r.action,
@@ -132,6 +153,6 @@ export class AuditService {
       targetName: r.target_name ?? null,
       detail: typeof r.detail === 'string' ? JSON.parse(r.detail) : (r.detail ?? {}),
       createdAt: r.created_at,
-    }));
+    };
   }
 }

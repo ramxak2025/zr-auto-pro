@@ -14,12 +14,13 @@ import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
-import { invalidateAuthToken, NO_TENANT_ID } from '../common/auth-cache';
+import { invalidateAuthToken, isPlatformRole, NO_TENANT_ID } from '../common/auth-cache';
 import { runWithTenant } from '../common/tenant-context';
 import { actorPointId } from '../common/point-scope';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { DEFAULT_OWNER_SHARE_PERCENT } from '../platform-managers/owner-share';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SelectPointDto } from './dto/select-point.dto';
@@ -37,6 +38,7 @@ const USER_WITH_TENANT_COLUMNS = `
   u.id, u.phone, u.full_name, u.avatar, u.role, u.role_id,
   r.name as role_name, r.matrix as role_matrix,
   COALESCE(u.salary_percent, 0) as salary_percent,
+  u.owner_share_percent,
   u.is_active, u.dismissed_at, u.purged_at, u.tenant_id, u.current_point_id, u.created_at,
   CASE WHEN t.id IS NOT NULL THEN
     json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
@@ -113,6 +115,15 @@ function mapUserRow(row: any, sessionPointId?: string | null) {
     currentPointId: sessionPointId ?? null,
     createdAt: row.created_at,
   };
+
+  // 173 — доля владельца едет ТОЛЬКО с менеджером (подписи «Моя доля 40 %» на
+  // его клиентах). У остальных ролей ключ в ответ не попадает — payload
+  // директора/мастера остаётся байт-в-байт прежним. NULL в колонке у менеджера
+  // = «по умолчанию» (60 %): ровно так же её читают сводка и продление подписки.
+  if (row.role === 'manager') {
+    const percent = row.owner_share_percent == null ? DEFAULT_OWNER_SHARE_PERCENT : parseFloat(row.owner_share_percent);
+    user.ownerSharePercent = Number.isFinite(percent) ? percent : DEFAULT_OWNER_SHARE_PERCENT;
+  }
 
   if (row.tenant_json) {
     try {
@@ -634,6 +645,13 @@ export class AuthService {
     if (!row.is_active) {
       throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
     }
+    // 173 — у роли платформы (superadmin | manager) нет тенанта, а значит и
+    // филиалов. login отдаёт ей полноценный токен сразу, промежуточный токен ей
+    // не выпускается — сюда можно попасть только подделкой. Отказ явный, а не
+    // побочный эффект пустого списка availablePoints.
+    if (isPlatformRole(row.role)) {
+      throw new ForbiddenException({ message: 'У этой роли нет филиалов' });
+    }
 
     // Филиал обязан быть доступен ИМЕННО ЭТОМУ сотруднику: без проверки любой
     // сотрудник тенанта подставил бы в шаг 2 чужой филиал и получил бы законный
@@ -775,6 +793,13 @@ export class AuthService {
     // токен, ни профиль в ответе — ни в одной ветке ручки.
     if (row.session_stale === true) {
       throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
+    }
+    // 173 — роль платформы (superadmin | manager) филиалов не имеет: переключать
+    // нечего, а чеканить токен с pointId чужого тенанта нельзя ни при каких
+    // условиях. Раньше отказ получался косвенно (autexa_available_points для
+    // tenant NULL пуст); теперь он явный и не зависит от SQL-функции.
+    if (isPlatformRole(row.role)) {
+      throw new ForbiddenException({ message: 'У этой роли нет филиалов' });
     }
 
     // УЖЕ В ЭТОМ ФИЛИАЛЕ — НЕ ОШИБКА. Повторный тап по текущему филиалу и

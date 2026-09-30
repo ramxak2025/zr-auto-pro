@@ -6,6 +6,9 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  * сервис обновляет только переданные. `globalFreeVoiceMinutes` — целое ≥ 0
  * (бесплатные минуты голосового ввода для ВСЕХ тенантов). Верхний потолок —
  * защита от опечатки/переполнения при `* 60`.
+ *
+ * 173 — `managerMaxFreeDays`: максимум дней ОДНОГО бесплатного (пробного)
+ * продления, которое может выдать менеджер платформы (целое 1..365, дефолт 30).
  */
 export class UpdatePlatformSettingsDto {
   @IsOptional()
@@ -13,4 +16,10 @@ export class UpdatePlatformSettingsDto {
   @Min(0)
   @Max(100000)
   globalFreeVoiceMinutes?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  managerMaxFreeDays?: number;
 }

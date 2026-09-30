@@ -16,6 +16,10 @@ import { invalidateTenantSubscription } from '../common/interceptors/subscriptio
 import { AuditService, AuditActor } from './audit.service';
 import { UpdateMyCompanyDto } from './dto/company.dto';
 import { assertSupportedTimezone, invalidateTenantTimezone, normalizeTimezone } from '../common/timezone';
+import { computeOwnerShare, DEFAULT_OWNER_SHARE_PERCENT } from '../platform-managers/owner-share';
+
+/** Любой UUID (без привязки к версии) — валидация id из тела запроса до обращения к БД. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * One month of the platform MRR trend (GET /admin/mrr-trends). Matches the
@@ -37,6 +41,25 @@ export interface MrrTrendPoint {
 export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
 
 /**
+ * Единственное правило «активен / истёк / приостановлен» по строке тенанта.
+ * Вынесено из класса, чтобы им же пользовались кабинеты менеджеров (сводка и
+ * фильтр по статусу): два разных определения статуса рано или поздно разойдутся.
+ * `suspended` главнее `expired` (ручная блокировка жёстче, чем истёкший срок);
+ * легаси is_active=false читается как `suspended`.
+ */
+export function computeSubscriptionStatusOf(row: {
+  is_active?: boolean | null;
+  suspended_at?: Date | string | null;
+  subscription_end?: Date | string | null;
+}): SubscriptionStatus {
+  if (row.suspended_at != null || row.is_active === false) return 'suspended';
+  if (row.subscription_end != null && new Date(row.subscription_end).getTime() < Date.now()) {
+    return 'expired';
+  }
+  return 'active';
+}
+
+/**
  * Options for TenantsService.extend (122). Mirrors the shared
  * `ExtendSubscriptionRequest` — every field optional so the legacy `{ days }`
  * body still works. Business rules (must supply `until` or `days`; paid needs
@@ -48,6 +71,37 @@ export interface ExtendSubscriptionOptions {
   amount?: number;
   until?: string;
   note?: string;
+}
+
+/**
+ * Область видимости менеджера платформы (173). Кабинет менеджера передаёт сюда
+ * `managerId` = его собственный id: тогда КАЖДЫЙ запрос к `tenants` внутри метода
+ * получает предикат `manager_id = $N`, и чужой (или ничей) клиент выглядит как
+ * несуществующий — 404, а не 403, чтобы не подтверждать сам факт существования.
+ * `managerId` null/undefined — без ограничения (суперадмин).
+ */
+export interface TenantScope {
+  managerId?: string | null;
+}
+
+/**
+ * Контекст платного продления (173): кто принял деньги и должен долю владельцу.
+ *   • `credit: { managerId }` — платёж провёл этот менеджер (кабинет менеджера);
+ *   • `credit: 'tenant-manager'` — суперадмин поставил галочку «оплату получил
+ *     менеджер»: долю пишем менеджеру, за которым закреплён тенант;
+ *   • без `credit` — деньги пришли владельцу напрямую, доли нет.
+ * Для бесплатного продления `credit` игнорируется — доли нет никогда.
+ * `scope` — см. {@link TenantScope}: проверка принадлежности под блокировкой строки.
+ */
+export interface ExtendContext {
+  credit?: { managerId: string } | 'tenant-manager';
+  scope?: TenantScope;
+}
+
+/** Фильтр списка тенантов (getAll): кабинет менеджера и карточка менеджера у суперадмина. */
+export interface TenantListFilter extends TenantScope {
+  id?: string;
+  status?: SubscriptionStatus;
 }
 
 @Injectable()
@@ -114,9 +168,28 @@ export class TenantsService {
             currentPeriodKind: (row.current_period_kind as 'paid' | 'free' | null) ?? null,
           }
         : {}),
+      // 173 — менеджер платформы, за которым закреплён автосервис. Поля есть ТОЛЬКО
+      // в ответах запросов, которые джойнят менеджера и выбирают `manager_name`
+      // (getAll / getById / getCabinet и кабинет менеджера). Все остальные пути
+      // (`SELECT *`/`RETURNING *` — /my-company, extend, suspend и т. п.) колонку
+      // `manager_name` не выбирают ⇒ поля не появляются: владелец автосервиса не
+      // должен узнавать id менеджера платформы через свой /my-company.
+      ...(row.manager_name !== undefined
+        ? {
+            managerId: (row.manager_id as string | null) ?? null,
+            managerName: (row.manager_name as string | null) ?? null,
+          }
+        : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  /** NUMERIC (строка из pg) → число или null, если значения нет. */
+  private static nullableNumber(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    const n = parseFloat(String(value));
+    return Number.isFinite(n) ? n : null;
   }
 
   /**
@@ -136,11 +209,21 @@ export class TenantsService {
       note: row.last_payment_note ?? null,
       createdBy: row.last_payment_created_by ?? null,
       createdAt: row.last_payment_created_at,
+      // 173 — снимок доли владельца и тарифа (null у строк до миграции 173).
+      managerId: (row.last_payment_manager_id as string | null) ?? null,
+      ownerSharePercent: TenantsService.nullableNumber(row.last_payment_owner_share_percent),
+      ownerShareAmount: TenantsService.nullableNumber(row.last_payment_owner_share_amount),
+      planId: (row.last_payment_plan_id as string | null) ?? null,
+      planName: (row.last_payment_plan_name as string | null) ?? null,
     };
   }
 
-  /** Map a raw subscription_payments row into the shared SubscriptionPayment shape. */
-  private mapSubscriptionPayment(row: any) {
+  /**
+   * Map a raw subscription_payments row into the shared SubscriptionPayment shape.
+   * Публичный: им же пользуются ленты взаиморасчётов менеджеров (platform-managers),
+   * чтобы форма платежа была одна на все ответы.
+   */
+  mapSubscriptionPayment(row: any) {
     return {
       id: row.id,
       tenantId: row.tenant_id,
@@ -152,6 +235,12 @@ export class TenantsService {
       note: row.note ?? null,
       createdBy: row.created_by ?? null,
       createdAt: row.created_at,
+      // 173 — снимок доли владельца и тарифа (null у строк до миграции 173).
+      managerId: (row.manager_id as string | null) ?? null,
+      ownerSharePercent: TenantsService.nullableNumber(row.owner_share_percent),
+      ownerShareAmount: TenantsService.nullableNumber(row.owner_share_amount),
+      planId: (row.plan_id as string | null) ?? null,
+      planName: (row.plan_name as string | null) ?? null,
     };
   }
 
@@ -166,7 +255,9 @@ export class TenantsService {
   private static readonly LAST_PAYMENT_JOIN = `
     LEFT JOIN LATERAL (
       SELECT sp.id, sp.amount, sp.is_free, sp.period_from, sp.period_to,
-             sp.previous_end, sp.note, sp.created_by, sp.created_at
+             sp.previous_end, sp.note, sp.created_by, sp.created_at,
+             sp.manager_id, sp.owner_share_percent, sp.owner_share_amount,
+             sp.plan_id, sp.plan_name
         FROM subscription_payments sp
        WHERE sp.tenant_id = t.id
        ORDER BY sp.created_at DESC, sp.id DESC
@@ -183,6 +274,11 @@ export class TenantsService {
     lp.note          AS last_payment_note,
     lp.created_by    AS last_payment_created_by,
     lp.created_at    AS last_payment_created_at,
+    lp.manager_id           AS last_payment_manager_id,
+    lp.owner_share_percent  AS last_payment_owner_share_percent,
+    lp.owner_share_amount   AS last_payment_owner_share_amount,
+    lp.plan_id              AS last_payment_plan_id,
+    lp.plan_name            AS last_payment_plan_name,
     CASE
       WHEN lp.id IS NULL THEN NULL
       WHEN lp.period_to IS NOT DISTINCT FROM t.subscription_end
@@ -200,24 +296,47 @@ export class TenantsService {
     suspended_at?: Date | string | null;
     subscription_end?: Date | string | null;
   }): SubscriptionStatus {
-    if (row.suspended_at != null || row.is_active === false) return 'suspended';
-    if (row.subscription_end != null && new Date(row.subscription_end).getTime() < Date.now()) {
-      return 'expired';
-    }
-    return 'active';
+    // Правило одно на весь backend — см. computeSubscriptionStatusOf (кабинеты менеджеров).
+    return computeSubscriptionStatusOf(row);
   }
 
-  async getAll() {
-    const { rows } = await this.pool.query(
+  /**
+   * Список тенантов (GET /tenants). Без аргументов — все, как раньше. `filter`
+   * (173) сужает выдачу для кабинета менеджера и карточки менеджера у суперадмина:
+   * `managerId` — только его клиенты (`t.manager_id = $N`), `id` — один тенант
+   * (так кабинет менеджера отдаёт карточку клиента в той же форме, что список),
+   * `status` — по единому правилу {@link computeSubscriptionStatusOf}.
+   * Каждый тенант приходит с `managerId`/`managerName` (join users).
+   */
+  async getAll(filter: TenantListFilter = {}) {
+    const params: unknown[] = [];
+    const where: string[] = [];
+    // `!= null`, а не «truthy»: пустая строка от кабинета менеджера (баг вызова)
+    // должна дать `''::uuid` → 22P02 и провал запроса, а не молча снять ограничение
+    // и отдать менеджеру ВСЕХ клиентов. Fail-closed: сузить можно, расширить — нет.
+    if (filter.managerId != null) {
+      params.push(filter.managerId);
+      where.push(`t.manager_id = $${params.length}::uuid`);
+    }
+    if (filter.id != null) {
+      params.push(filter.id);
+      where.push(`t.id = $${params.length}::uuid`);
+    }
+    const { rows: allRows } = await this.pool.query(
       `SELECT t.*,
               (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count,
               p.name as plan_name, p.monthly_price as plan_monthly_price, p.max_users as plan_max_users, p.description as plan_description,
+              mgr.full_name AS manager_name,
               ${TenantsService.LAST_PAYMENT_COLUMNS}
        FROM tenants t
        LEFT JOIN plans p ON p.id = t.plan_id
+       LEFT JOIN users mgr ON mgr.id = t.manager_id
        ${TenantsService.LAST_PAYMENT_JOIN}
+       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
        ORDER BY t.created_at DESC`,
+      params,
     );
+    const rows = filter.status ? allRows.filter((row) => computeSubscriptionStatusOf(row) === filter.status) : allRows;
     return rows.map((row) => {
       const tenant = this.mapTenant(row);
       if (row.plan_id && row.plan_name) {
@@ -259,7 +378,20 @@ export class TenantsService {
          (SELECT COUNT(*) FROM subscription_payments
             WHERE is_free = false AND created_at >= date_trunc('month', now())) AS paid_ext_this_month,
          (SELECT COUNT(*) FROM subscription_payments
-            WHERE is_free = true AND created_at >= date_trunc('month', now())) AS free_ext_this_month`,
+            WHERE is_free = true AND created_at >= date_trunc('month', now())) AS free_ext_this_month,
+         -- 173 — «Долг менеджеров»: Σ ПОЛОЖИТЕЛЬНЫХ балансов менеджеров, где баланс
+         -- одного = Σ доли владельца его платных оплат − Σ его расчётов. Переплата
+         -- одного менеджера (отрицательный баланс) долг другого не гасит.
+         (SELECT COALESCE(SUM(GREATEST(b.balance, 0)), 0)
+            FROM (SELECT COALESCE((SELECT SUM(sp.owner_share_amount) FROM subscription_payments sp
+                                    WHERE sp.manager_id = u.id AND sp.is_free = false), 0)
+                       - COALESCE((SELECT SUM(ms.amount) FROM manager_settlements ms
+                                    WHERE ms.manager_id = u.id), 0) AS balance
+                    FROM users u WHERE u.role = 'manager') b) AS managers_balance_total,
+         -- 173 — платная выручка месяца, проведённая через менеджеров (входит в paid_revenue_this_month).
+         (SELECT COALESCE(SUM(amount), 0) FROM subscription_payments
+            WHERE is_free = false AND manager_id IS NOT NULL
+              AND created_at >= date_trunc('month', now())) AS paid_by_managers_this_month`,
     );
     const r = rows[0];
     const activeTenants = parseInt(r.active_tenants, 10);
@@ -277,6 +409,9 @@ export class TenantsService {
       paidRevenueTotal: Math.round(parseFloat(r.paid_revenue_total) || 0),
       paidExtensionsThisMonth: parseInt(r.paid_ext_this_month, 10) || 0,
       freeExtensionsThisMonth: parseInt(r.free_ext_this_month, 10) || 0,
+      // 173 — менеджеры платформы (рубли, округлено, как остальные денежные поля).
+      managersBalanceTotal: Math.round(parseFloat(r.managers_balance_total) || 0),
+      paidByManagersThisMonth: Math.round(parseFloat(r.paid_by_managers_this_month) || 0),
     };
   }
 
@@ -403,8 +538,12 @@ export class TenantsService {
    * derived from existing tables filtered by tenant_id; every aggregate is
    * COALESCE-guarded so a brand-new tenant returns zeros, never null.
    */
-  async getMetrics(id: string) {
-    const { rows: exists } = await this.pool.query(`SELECT created_at FROM tenants WHERE id = $1`, [id]);
+  async getMetrics(id: string, scope: TenantScope = {}) {
+    // 173 — чужой (или ничей) клиент менеджера выглядит как несуществующий: 404.
+    const { rows: exists } = await this.pool.query(
+      `SELECT created_at FROM tenants WHERE id = $1 AND ($2::uuid IS NULL OR manager_id = $2::uuid)`,
+      [id, scope.managerId ?? null],
+    );
     if (exists.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
     const tenantCreatedAt: string = exists[0].created_at;
 
@@ -447,30 +586,37 @@ export class TenantsService {
    * and computeSubscriptionStatus() for the status, so the cabinet view and the
    * tenant's own /subscription poll always agree.
    */
-  async getCabinet(id: string) {
+  async getCabinet(id: string, scope: TenantScope = {}) {
     const { rows } = await this.pool.query(
       `SELECT t.id, t.name, t.is_active, t.suspended_at, t.suspended_reason,
               t.subscription_end, t.monthly_price, t.max_users, t.plan_id, t.created_at,
+              t.manager_id,
               (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) AS current_users,
               p.name AS plan_name,
+              mgr.full_name AS manager_name,
               ${TenantsService.LAST_PAYMENT_COLUMNS}
          FROM tenants t
          LEFT JOIN plans p ON p.id = t.plan_id
+         LEFT JOIN users mgr ON mgr.id = t.manager_id
          ${TenantsService.LAST_PAYMENT_JOIN}
-        WHERE t.id = $1`,
-      [id],
+        WHERE t.id = $1
+          AND ($2::uuid IS NULL OR t.manager_id = $2::uuid)`,
+      [id, scope.managerId ?? null],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
     const r = rows[0];
 
     // getMetrics re-checks existence (cheap) and returns the activity signals.
-    const metrics = await this.getMetrics(id);
+    const metrics = await this.getMetrics(id, scope);
 
     return {
       id: r.id,
       name: r.name,
       isActive: r.is_active === true,
       createdAt: r.created_at,
+      // 173 — закреплённый менеджер платформы (аддитивно; в TenantCabinet контракта этих полей нет).
+      managerId: (r.manager_id as string | null) ?? null,
+      managerName: (r.manager_name as string | null) ?? null,
       subscription: {
         status: this.computeSubscriptionStatus(r),
         planId: r.plan_id ?? null,
@@ -492,8 +638,11 @@ export class TenantsService {
   async getById(id: string) {
     const { rows } = await this.pool.query(
       `SELECT t.*,
-              (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count
-       FROM tenants t WHERE t.id = $1`,
+              (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count,
+              mgr.full_name AS manager_name
+       FROM tenants t
+       LEFT JOIN users mgr ON mgr.id = t.manager_id
+       WHERE t.id = $1`,
       [id],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
@@ -561,7 +710,7 @@ export class TenantsService {
    * guarantees the owner's rule "free extensions NEVER count as profit" holds
    * even for the old endpoint shape.
    */
-  async extend(id: string, opts: ExtendSubscriptionOptions, actor?: AuditActor) {
+  async extend(id: string, opts: ExtendSubscriptionOptions, actor?: AuditActor, ctx: ExtendContext = {}) {
     const note = opts.note ?? null;
 
     // Paid iff explicitly type='paid', OR (no type given but a positive amount
@@ -591,11 +740,45 @@ export class TenantsService {
       await client.query('BEGIN');
 
       // Lock the tenant row and capture the PREVIOUS end before we overwrite it.
-      const { rows: cur } = await client.query(`SELECT name, subscription_end FROM tenants WHERE id = $1 FOR UPDATE`, [
-        id,
-      ]);
+      // 173: the SAME statement carries the manager scope (a foreign client is a
+      // 404 before anything is written) and the plan snapshot that every ledger
+      // row now records. FOR UPDATE OF t — the LEFT JOIN on plans must not be
+      // locked (and PG rejects a bare FOR UPDATE over the nullable side).
+      const { rows: cur } = await client.query(
+        `SELECT t.name, t.subscription_end, t.plan_id, t.manager_id, p.name AS plan_name
+           FROM tenants t
+           LEFT JOIN plans p ON p.id = t.plan_id
+          WHERE t.id = $1
+            AND ($2::uuid IS NULL OR t.manager_id = $2::uuid)
+          FOR UPDATE OF t`,
+        [id, ctx.scope?.managerId ?? null],
+      );
       if (cur.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
       const previousEnd: string | null = cur[0].subscription_end ?? null;
+
+      // 173 — доля владельца. Снимок процента и суммы пишется В ТОЙ ЖЕ транзакции,
+      // что и продление: пересчитать «потом» нельзя, менеджеру могут поменять
+      // процент, а история его долга обязана остаться прежней. Только для платных.
+      let share: { managerId: string; percent: number; amount: number } | null = null;
+      if (!isFree && ctx.credit) {
+        const creditManagerId: string | null =
+          ctx.credit === 'tenant-manager' ? ((cur[0].manager_id as string | null) ?? null) : ctx.credit.managerId;
+        if (creditManagerId) {
+          // is_active менеджера НЕ проверяем: деактивированный менеджер, за которым
+          // остались клиенты, всё равно получил деньги — долг за ним. Роль проверяем:
+          // доля не может быть записана на директора/мастера.
+          const { rows: mgr } = await client.query(
+            `SELECT owner_share_percent FROM users WHERE id = $1 AND role = 'manager'`,
+            [creditManagerId],
+          );
+          if (mgr.length > 0) {
+            const percent =
+              mgr[0].owner_share_percent == null ? DEFAULT_OWNER_SHARE_PERCENT : parseFloat(mgr[0].owner_share_percent);
+            const shareAmount = computeOwnerShare(amount, percent, isFree);
+            if (shareAmount !== null) share = { managerId: creditManagerId, percent, amount: shareAmount };
+          }
+        }
+      }
 
       // Compute anchor + new end IN SQL (timezone-correct GREATEST/interval math).
       const { rows: calc } = await client.query(
@@ -616,12 +799,32 @@ export class TenantsService {
 
       await client.query(
         `INSERT INTO subscription_payments
-           (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, amount, isFree, anchor, newEnd, previousEnd, note, actor?.userId ?? null],
+           (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by,
+            manager_id, owner_share_percent, owner_share_amount, plan_id, plan_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+          id,
+          amount,
+          isFree,
+          anchor,
+          newEnd,
+          previousEnd,
+          note,
+          actor?.userId ?? null,
+          share?.managerId ?? null,
+          share?.percent ?? null,
+          share?.amount ?? null,
+          cur[0].plan_id ?? null,
+          cur[0].plan_name ?? null,
+        ],
       );
 
       await client.query('COMMIT');
+
+      // Продление снимает блокировку по сроку СРАЗУ, а не через TTL кэша статуса
+      // подписки (SubscriptionGuardInterceptor, 30 с) — раньше этот вызов был только
+      // в suspend/unsuspend. После COMMIT: до коммита кэш прочитал бы старую дату.
+      invalidateTenantSubscription(id);
 
       // Best-effort audit (never fails the committed extension).
       if (actor) {
@@ -636,6 +839,9 @@ export class TenantsService {
             until: hasUntil ? opts.until : null,
             previousEnd,
             subscriptionEnd: updated[0].subscription_end,
+            ...(share
+              ? { managerId: share.managerId, ownerSharePercent: share.percent, ownerShareAmount: share.amount }
+              : {}),
           },
         });
       }
@@ -659,7 +865,7 @@ export class TenantsService {
    * Assign a plan to a tenant and SYNC the denormalized monthly_price + max_users
    * from the chosen plan row (so the tenant card and MRR math stay coherent).
    */
-  async assignPlan(id: string, planId: string, actor?: AuditActor) {
+  async assignPlan(id: string, planId: string, actor?: AuditActor, scope: TenantScope = {}) {
     const { rows: planRows } = await this.pool.query(
       `SELECT id, name, monthly_price, max_users FROM plans WHERE id = $1`,
       [planId],
@@ -674,10 +880,15 @@ export class TenantsService {
               max_users = $4,
               updated_at = now()
         WHERE id = $1
+          AND ($5::uuid IS NULL OR manager_id = $5::uuid)
         RETURNING *`,
-      [id, plan.id, plan.monthly_price, plan.max_users],
+      [id, plan.id, plan.monthly_price, plan.max_users, scope.managerId ?? null],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    // 173: смена тарифа меняет max_users / набор фич — кэш статуса подписки
+    // (30 с) не должен держать старый тариф.
+    invalidateTenantSubscription(id);
 
     if (actor) {
       await this.audit.log(actor, 'tenant_change_plan', {
@@ -698,7 +909,7 @@ export class TenantsService {
    * the tenant's /subscription status reads `suspended`. Idempotent: re-suspending
    * refreshes the reason but COALESCEs the original suspension instant.
    */
-  async suspend(id: string, reason: string | undefined, actor?: AuditActor) {
+  async suspend(id: string, reason: string | undefined, actor?: AuditActor, scope: TenantScope = {}) {
     const { rows } = await this.pool.query(
       `UPDATE tenants
           SET suspended_at = COALESCE(suspended_at, now()),
@@ -706,8 +917,9 @@ export class TenantsService {
               is_active = false,
               updated_at = now()
         WHERE id = $1
+          AND ($3::uuid IS NULL OR manager_id = $3::uuid)
         RETURNING *`,
-      [id, reason ?? null],
+      [id, reason ?? null, scope.managerId ?? null],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
 
@@ -732,7 +944,7 @@ export class TenantsService {
    * had already lapsed, the tenant returns to `expired` (not `active`).
    * Idempotent for an already-active tenant.
    */
-  async unsuspend(id: string, actor?: AuditActor) {
+  async unsuspend(id: string, actor?: AuditActor, scope: TenantScope = {}, reason?: string) {
     const { rows } = await this.pool.query(
       `UPDATE tenants
           SET suspended_at = NULL,
@@ -740,8 +952,9 @@ export class TenantsService {
               is_active = true,
               updated_at = now()
         WHERE id = $1
+          AND ($2::uuid IS NULL OR manager_id = $2::uuid)
         RETURNING *`,
-      [id],
+      [id, scope.managerId ?? null],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
 
@@ -753,7 +966,9 @@ export class TenantsService {
         targetType: 'tenant',
         targetId: id,
         targetName: rows[0].name,
-        detail: {},
+        // reason — необязательная пометка кабинета менеджера (SuspendTenantRequest);
+        // у суперадмина тела нет, detail остаётся пустым, как раньше.
+        detail: reason ? { reason } : {},
       });
     }
     return this.mapTenant(rows[0]);
@@ -787,9 +1002,14 @@ export class TenantsService {
    * снова находит филиал. Ничего специального для impersonate здесь делать НЕ
    * НАДО — правило доступа одно, в SQL-функции миграции 166.
    */
-  async impersonate(id: string, actor?: AuditActor) {
-    // Tenant must exist (and be findable) — surfaces a clean 404.
-    const { rows: tenantRows } = await this.pool.query(`SELECT id FROM tenants WHERE id = $1`, [id]);
+  async impersonate(id: string, actor?: AuditActor, scope: TenantScope = {}) {
+    // Tenant must exist (and be findable) — surfaces a clean 404. 173: for a
+    // platform manager the same query proves the tenant is THEIRS — a foreign
+    // client is indistinguishable from a missing one (404), so no token is minted.
+    const { rows: tenantRows } = await this.pool.query(
+      `SELECT id FROM tenants WHERE id = $1 AND ($2::uuid IS NULL OR manager_id = $2::uuid)`,
+      [id, scope.managerId ?? null],
+    );
     if (tenantRows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
 
     // Owner = active, non-dismissed, non-purged director; oldest wins if several.
@@ -845,14 +1065,32 @@ export class TenantsService {
     return { token, user, expiresIn: 1800 };
   }
 
-  async create(dto: any) {
+  async create(dto: any, actor?: AuditActor) {
+    // 173 — сразу за менеджером (только суперадмин, POST /tenants { managerId }).
+    // Проверяем ДО транзакции: catch ниже превращает любую ошибку в 500, а
+    // «менеджер не найден» — это 400, ошибка запроса, а не сбой сервера.
+    let managerId: string | null = null;
+    let managerName: string | null = null;
+    if (dto.managerId !== undefined && dto.managerId !== null && dto.managerId !== '') {
+      if (typeof dto.managerId !== 'string' || !UUID_RE.test(dto.managerId)) {
+        throw new BadRequestException({ message: 'Некорректный идентификатор менеджера' });
+      }
+      const { rows: mgr } = await this.pool.query(
+        `SELECT id, full_name FROM users WHERE id = $1 AND role = 'manager' AND is_active = true`,
+        [dto.managerId],
+      );
+      if (mgr.length === 0) throw new BadRequestException({ message: 'Менеджер не найден или отключён' });
+      managerId = mgr[0].id;
+      managerName = mgr[0].full_name;
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
       const { rows: tenantRows } = await client.query(
-        `INSERT INTO tenants (name, phone, address, email, description, is_active, max_users, plan_id, monthly_price, subscription_end, subscription_note)
-         VALUES ($1,$2,$3,$4,$5,COALESCE($6,true),$7,$8,$9,$10,$11)
+        `INSERT INTO tenants (name, phone, address, email, description, is_active, max_users, plan_id, monthly_price, subscription_end, subscription_note, manager_id)
+         VALUES ($1,$2,$3,$4,$5,COALESCE($6,true),$7,$8,$9,$10,$11,$12)
          RETURNING *`,
         [
           dto.name,
@@ -866,10 +1104,11 @@ export class TenantsService {
           dto.monthlyPrice || 0,
           dto.subscriptionEnd,
           dto.subscriptionNote,
+          managerId,
         ],
       );
 
-      const tenant = this.mapTenant(tenantRows[0]);
+      const tenant = this.mapTenant({ ...tenantRows[0], manager_name: managerName });
 
       // Seed the three default warehouses for this tenant. Idempotent via
       // ON CONFLICT on the (tenant_id, kind) unique constraint, so retrying
@@ -911,6 +1150,17 @@ export class TenantsService {
       }
 
       await client.query('COMMIT');
+
+      // 173: создание тенанта теперь в журнале действий (раньше не писалось вовсе).
+      // Best-effort и ПОСЛЕ коммита — сбой аудита не откатывает созданный автосервис.
+      if (actor) {
+        await this.audit.log(actor, 'tenant_create', {
+          targetType: 'tenant',
+          targetId: tenant.id,
+          targetName: tenant.name,
+          detail: { managerId, planId: dto.planId ?? null },
+        });
+      }
       return tenant;
     } catch (err) {
       await client.query('ROLLBACK');
@@ -956,8 +1206,26 @@ export class TenantsService {
       until?: string | null; // explicit trial end (wins over trialDays)
       trialDays: number; // used when `until` is null
       createdBy?: string | null; // superadmin id → subscription_payments.created_by
+      /**
+       * 173 — кабинет менеджера платформы (POST /manager/tenants) заводит автосервис
+       * ТЕМ ЖЕ путём: одна транзакция «тенант + директор + пробный период», хеш пароля
+       * не хешируется повторно, дубликат телефона откатывает ВСЁ. Всё необязательное:
+       * без `extra` (заявка на регистрацию) SQL и результат байт-в-байт прежние.
+       */
+      extra?: {
+        maxUsers?: number | null;
+        phone?: string | null;
+        address?: string | null;
+        planId?: string | null;
+        planName?: string | null; // снимок названия тарифа на строку журнала
+        monthlyPrice?: number | null;
+        subscriptionNote?: string | null;
+        managerId?: string | null; // tenants.manager_id
+        trialNote?: string | null; // note строки журнала пробного периода
+      };
     },
   ): Promise<{ tenant: ReturnType<TenantsService['mapTenant']>; ownerUserId: string }> {
+    const extra = opts.extra ?? {};
     // Compute the trial end once (TZ-correct): `until` verbatim if given, else
     // now() + trialDays. `anchor` (now) is the ledger period_from.
     const { rows: calc } = await client.query(
@@ -972,11 +1240,30 @@ export class TenantsService {
     const newEnd: string = calc[0].new_end;
 
     // 1. Tenant — active, default 10 seats, subscription_end = trial end.
+    //    Колонки собираются из КОНСТАНТНЫХ имён (пользовательский ввод — только в
+    //    параметрах): без `extra` получается ровно прежний
+    //    INSERT (name, is_active, max_users, subscription_end) VALUES ($1, true, 10, $2).
+    const cols: string[] = ['name', 'is_active', 'max_users', 'subscription_end'];
+    const vals: unknown[] = [opts.companyName, true, extra.maxUsers ?? 10, newEnd];
+    const optionalColumns: Array<[string, unknown]> = [
+      ['phone', extra.phone],
+      ['address', extra.address],
+      ['plan_id', extra.planId],
+      ['monthly_price', extra.monthlyPrice],
+      ['subscription_note', extra.subscriptionNote],
+      ['manager_id', extra.managerId],
+    ];
+    for (const [col, value] of optionalColumns) {
+      if (value !== undefined && value !== null) {
+        cols.push(col);
+        vals.push(value);
+      }
+    }
     const { rows: tenantRows } = await client.query(
-      `INSERT INTO tenants (name, is_active, max_users, subscription_end)
-       VALUES ($1, true, 10, $2)
+      `INSERT INTO tenants (${cols.join(', ')})
+       VALUES (${vals.map((_, i) => `$${i + 1}`).join(', ')})
        RETURNING *`,
-      [opts.companyName, newEnd],
+      vals,
     );
     const tenant = this.mapTenant(tenantRows[0]);
 
@@ -1010,11 +1297,21 @@ export class TenantsService {
 
     // 5. FREE trial ledger row (item-122 mechanism): amount 0, is_free=true,
     //    period_from=now, period_to=trial end, no previous end (brand-new tenant).
+    //    173: строка несёт снимок тарифа (plan_id/plan_name) — как и любое продление;
+    //    manager_id/доля тут NULL всегда: бесплатное денег не приносит.
     await client.query(
       `INSERT INTO subscription_payments
-         (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by)
-       VALUES ($1, 0, true, $2, $3, NULL, $4, $5)`,
-      [tenant.id, anchor, newEnd, 'Пробный период (одобрение заявки на регистрацию)', opts.createdBy ?? null],
+         (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by, plan_id, plan_name)
+       VALUES ($1, 0, true, $2, $3, NULL, $4, $5, $6, $7)`,
+      [
+        tenant.id,
+        anchor,
+        newEnd,
+        extra.trialNote ?? 'Пробный период (одобрение заявки на регистрацию)',
+        opts.createdBy ?? null,
+        extra.planId ?? null,
+        extra.planName ?? null,
+      ],
     );
 
     return { tenant, ownerUserId: ownerRows[0].id };
@@ -1114,6 +1411,10 @@ export class TenantsService {
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
     const updated = this.mapTenant(rows[0]);
+
+    // 173: смена тарифа через PATCH (как и через assign-plan) сбрасывает кэш статуса
+    // подписки, иначе тенант до 30 с живёт со старым тарифом.
+    if (dto.planId !== undefined) invalidateTenantSubscription(id);
 
     // Best-effort audit: only on a real change of a tracked field.
     if (actor && before) {

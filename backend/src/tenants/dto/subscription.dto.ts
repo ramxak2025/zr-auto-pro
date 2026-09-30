@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsISO8601,
@@ -49,6 +50,18 @@ export class ExtendSubscriptionDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+
+  /**
+   * 173 — только для суперадмина (POST /tenants/:id/extend) и только для платного
+   * продления: «оплату получил менеджер — учесть его долю». Если у тенанта есть
+   * менеджер, в строку реестра пишется снимок доли владельца этого менеджера; без
+   * флага (по умолчанию) деньги считаются полученными владельцем напрямую и доли
+   * нет. В кабинете менеджера (POST /manager/tenants/:id/extend) поле игнорируется:
+   * платные продления менеджера ВСЕГДА несут долю.
+   */
+  @IsOptional()
+  @IsBoolean()
+  creditManager?: boolean;
 }
 
 /** POST /tenants/:id/assign-plan body — switch the tenant to a plan. */
