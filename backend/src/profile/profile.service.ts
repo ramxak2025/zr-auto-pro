@@ -11,7 +11,8 @@ import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
-import { invalidateAuthUser } from '../common/auth-cache';
+import { invalidateAuthUser, isPlatformRole } from '../common/auth-cache';
+import { DEFAULT_OWNER_SHARE_PERCENT } from '../platform-managers/owner-share';
 import { PushService } from '../push/push.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -89,6 +90,10 @@ interface SelfRow {
  *
  *  • PATCH /profile  — edit ФИО / телефон / аватар.
  *      - director / superadmin («владелец») → applied DIRECTLY to `users`.
+ *      - manager (сотрудник платформы, 173) → тоже DIRECTLY: у него нет тенанта, а значит
+ *        нет владельца-директора, который мог бы одобрить запрос (profile_change_requests.tenant_id
+ *        NOT NULL). Правит только свою строку; это не выход за границы — доступ менеджера к
+ *        чужим данным здесь ни при чём.
  *      - admin / master («сотрудник»)       → creates / supersedes a
  *        profile_change_request (status 'pending'); the user row is NOT touched.
  *
@@ -132,7 +137,10 @@ export class ProfileService {
       return { status: 'applied' as const, applied: true, user: await this.fetchUser(self.id) };
     }
 
-    const isOwner = self.role === 'director' || self.role === 'superadmin';
+    // 173: менеджер платформы (tenant_id IS NULL) — без директора над ним, правит себя сам.
+    // Раньше он падал в ветку «запрос на одобрение» и упирался в tenant_id = '' (uuid) —
+    // правка своего профиля не работала вовсе.
+    const isOwner = self.role === 'director' || isPlatformRole(self.role);
     if (isOwner) {
       await this.applyProfileChanges(this.pool, self.id, diff, self.tenant_id);
       invalidateAuthUser(self.id);
@@ -521,6 +529,7 @@ export class ProfileService {
       `SELECT u.id, u.phone, u.full_name, u.avatar, u.role,
               COALESCE(u.salary_percent, 0) AS salary_percent,
               COALESCE(u.permissions, '{}') AS permissions,
+              u.owner_share_percent,
               u.is_active, u.tenant_id, u.created_at,
               CASE WHEN t.id IS NOT NULL THEN
                 json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
@@ -551,6 +560,13 @@ export class ProfileService {
       tenantId: row.tenant_id,
       createdAt: row.created_at,
     };
+    // 173 — как в /auth/me: доля владельца едет только с менеджером (клиент подменяет
+    // текущего пользователя ответом без refetch — без ключа менеджер потерял бы «Моя доля»).
+    if (row.role === 'manager') {
+      const percent =
+        row.owner_share_percent == null ? DEFAULT_OWNER_SHARE_PERCENT : parseFloat(row.owner_share_percent);
+      user.ownerSharePercent = Number.isFinite(percent) ? percent : DEFAULT_OWNER_SHARE_PERCENT;
+    }
     if (row.tenant_json) {
       try {
         user.tenant = JSON.parse(row.tenant_json);

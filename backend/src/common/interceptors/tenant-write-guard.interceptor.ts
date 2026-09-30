@@ -34,8 +34,9 @@ import { ALLOW_NO_TENANT_KEY } from '../decorators/allow-no-tenant.decorator';
  *   2. method is a MUTATION (POST/PUT/PATCH/DELETE) — GETs are left as-is, the
  *      sentinel already makes their SELECTs empty and the web admin must not
  *      break;
- *   3. `isTenantLess(user)` — i.e. role === 'superadmin' AND tenantID is falsy
- *      or the sentinel. A regular role, a real tenant, or a superadmin acting
+ *   3. `isTenantLess(user)` — i.e. a platform role (`superadmin` or `manager`,
+ *      see PLATFORM_ROLES in auth-cache.ts) AND tenantID is falsy or the
+ *      sentinel. A regular role, a real tenant, or a platform user acting
  *      WITHIN a tenant (real uuid tenantID, e.g. impersonation) is byte-for-byte
  *      unaffected;
  *   4. the route is NOT opted out via @AllowNoTenant() and NOT under a
@@ -63,7 +64,19 @@ export class TenantWriteGuardInterceptor implements NestInterceptor {
    * hypothetical `/tenants-x` would not). Kept in sync with the @AllowNoTenant
    * controllers; the prefix list is the belt to the decorator's braces.
    */
-  private static readonly ALLOWED_PREFIXES = ['tenants', 'plans', 'admin', 'auth', 'health', 'registration-requests'];
+  // 'manager' — кабинет менеджера платформы (`/api/manager/*`, миграция 173): все его
+  // мутации адресуются по явному :id тенанта (и ограничены manager_id = актор в сервисе),
+  // ни одна не пишет под собственным tenant_id. Любой ДРУГОЙ тенантный write менеджера
+  // (`POST /users`, `POST /clients`, …) по-прежнему получает 409 NO_TENANT_CONTEXT.
+  private static readonly ALLOWED_PREFIXES = [
+    'tenants',
+    'plans',
+    'admin',
+    'auth',
+    'health',
+    'registration-requests',
+    'manager',
+  ];
 
   private static readonly MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -87,9 +100,10 @@ export class TenantWriteGuardInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    // Only a tenant-less superadmin is at risk. Everyone else is unaffected —
-    // this is the invariant that guarantees zero behaviour change for real
-    // tenants, regular roles, and a superadmin impersonating a real tenant.
+    // Only a tenant-less platform user (superadmin | manager) is at risk. Everyone
+    // else is unaffected — this is the invariant that guarantees zero behaviour
+    // change for real tenants, regular roles, and a platform user impersonating
+    // a real tenant.
     if (!isTenantLess(request?.user)) {
       return next.handle();
     }

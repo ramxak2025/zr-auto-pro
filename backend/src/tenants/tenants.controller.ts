@@ -64,10 +64,13 @@ export class TenantsController {
     return this.tenantsService.getCabinet(id);
   }
 
+  // 173 — актор нужен для аудита `tenant_create` (создание тенанта раньше в
+  // журнал не попадало). `managerId` в теле (закрепить сразу за менеджером)
+  // валидирует сам TenantsService.create до транзакции.
   @Roles('superadmin')
   @Post('tenants')
-  create(@Body() dto: any) {
-    return this.tenantsService.create(dto);
+  async create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.tenantsService.create(dto, await this.actor(user));
   }
 
   @Roles('superadmin')
@@ -89,7 +92,13 @@ export class TenantsController {
   async extend(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ExtendSubscriptionDto) {
     // 122 — pass the whole DTO (paid/free, amount, until, days, note). The
     // legacy `{ days }` body still validates and records a FREE ledger row.
-    return this.tenantsService.extend(id, dto, await this.actor(user));
+    // 173 — `creditManager` (только суперадмин): «оплату получил менеджер
+    // клиента — учесть его долю». Без флага деньги считаются полученными
+    // владельцем напрямую и доля не пишется; для бесплатного продления и для
+    // тенанта без менеджера флаг молча не действует.
+    return this.tenantsService.extend(id, dto, await this.actor(user), {
+      credit: dto.creditManager === true ? 'tenant-manager' : undefined,
+    });
   }
 
   @Roles('superadmin')

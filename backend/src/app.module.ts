@@ -57,6 +57,7 @@ import { RegistrationModule } from './registration/registration.module';
 import { PlanningModule } from './planning/planning.module';
 import { PointsModule } from './points/points.module';
 import { VinModule } from './vin/vin.module';
+import { PlatformManagersModule } from './platform-managers/platform-managers.module';
 
 @Module({
   imports: [
@@ -117,6 +118,7 @@ import { VinModule } from './vin/vin.module';
     PlanningModule,
     PointsModule,
     VinModule,
+    PlatformManagersModule,
   ],
   providers: [MigrationRunner],
 })

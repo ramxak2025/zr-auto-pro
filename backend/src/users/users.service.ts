@@ -32,6 +32,12 @@ import { invalidateReportsForTenant } from '../common/reports-cache';
 // is rejected up front so a manipulated DTO can't sneak a role string past
 // the DB CHECK constraint (which would still reject it, but the early throw
 // gives a clearer error and avoids relying on the DB layer alone).
+//
+// 173 — `manager` (менеджер платформы, users.tenant_id IS NULL) сюда НЕ входит
+// НАМЕРЕННО и не должен входить: это не сотрудник автосервиса, а сотрудник
+// владельца платформы, его создаёт ТОЛЬКО суперадмин через POST /admin/managers
+// (AdminManagersService.create — доля владельца, tenant_id NULL, аудит). Тест
+// backend/test/managers-scope.test.cjs фиксирует это.
 const ALLOWED_ROLES = new Set(['master', 'admin', 'director', 'superadmin']);
 
 // Only `superadmin` may mint or grant the `superadmin` role. A `director`
@@ -76,6 +82,16 @@ export class UsersService {
    */
   private assertCanAssignRole(actorRole: string, requestedRole: string | undefined) {
     if (!requestedRole) return;
+    // 173 — менеджера платформы через /users не создаёт и не «назначает» НИКТО,
+    // включая суперадмина, при любом tenantId: у менеджера нет тенанта, а долю
+    // владельца, аудит и tenant_id NULL проставляет только AdminManagersService.
+    // Явная ветка (а не общее «Недопустимая роль») — чтобы суперадмин, попавший
+    // сюда из старой формы «Сотрудники», увидел, куда идти.
+    if (requestedRole === 'manager') {
+      throw new BadRequestException({
+        message: 'Менеджера платформы создаёт только суперадмин в разделе «Менеджеры»',
+      });
+    }
     if (!ALLOWED_ROLES.has(requestedRole)) {
       throw new BadRequestException({ message: `Недопустимая роль: ${requestedRole}` });
     }

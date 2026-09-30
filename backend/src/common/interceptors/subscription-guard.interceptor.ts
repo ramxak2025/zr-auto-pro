@@ -2,7 +2,7 @@ import { CallHandler, ExecutionContext, ForbiddenException, Injectable, NestInte
 import { Observable } from 'rxjs';
 import { Pool } from 'pg';
 import { ttlCache } from '../ttl-cache';
-import { NO_TENANT_ID } from '../auth-cache';
+import { NO_TENANT_ID, isPlatformRole } from '../auth-cache';
 
 /**
  * SubscriptionGuardInterceptor — enforcement подписки тенанта (R10).
@@ -26,7 +26,8 @@ import { NO_TENANT_ID } from '../auth-cache';
  *   • Блок: tenants.is_active = false (suspend / легаси-отключение) ИЛИ
  *     subscription_end в прошлом. subscription_end NULL = бессрочно.
  *   • Исключения:
- *       – superadmin (платформенные операции + импersonation-обслуживание);
+ *       – роли платформы — superadmin и manager (PLATFORM_ROLES; платформенные
+ *         операции + импersonation-обслуживание; у них нет собственного тенанта);
  *       – пользователи без тенанта (нечего блокировать);
  *       – публичные роуты (нет request.user — interceptor их не видит);
  *       – whitelist-пути (ALLOWED_PREFIXES): /auth/* (login/logout/me — вход и
@@ -90,8 +91,9 @@ export class SubscriptionGuardInterceptor implements NestInterceptor {
     }>();
 
     const user = request?.user;
-    // Публичные роуты (нет user) и superadmin — вне enforcement'а.
-    if (!user || user.role === 'superadmin') {
+    // Публичные роуты (нет user) и роли платформы (superadmin | manager) — вне
+    // enforcement'а: у них нет собственного тенанта, блокировать нечего.
+    if (!user || isPlatformRole(user.role)) {
       return next.handle();
     }
 
