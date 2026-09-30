@@ -34,6 +34,7 @@ import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
 import SearchInput from '../components/SearchInput';
 import BarcodeScanner from '../components/BarcodeScanner';
+import StorageCellChip from '../components/StorageCellChip';
 import { Text } from '../platform/Typography';
 import { productsApi, warehousesApi, warehouseCategoriesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +43,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
+import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
 import type { Product, PaginatedResponse, Warehouse } from '../../../shared/types';
 
 // Тот же лимит, что у «Склада»: пересчёт по неполной номенклатуре «сходился»
@@ -168,7 +170,8 @@ export default function InventoryScreen() {
         const cat = p.category || '';
         if (cat !== categoryFilter && !cat.startsWith(categoryFilter + '/')) return false;
       }
-      if (q && !p.name.toLowerCase().includes(q)) return false;
+      // Код ячейки ищется так же, как хранится: регистр и пробелы не важны.
+      if (q && !p.name.toLowerCase().includes(q) && !cellCodeMatchesQuery(p.storageCellCode, q)) return false;
       return true;
     });
   }, [allProducts, categoryFilter, search]);
@@ -351,7 +354,16 @@ export default function InventoryScreen() {
             <Text variant="callout" color={palette.text.primary} numberOfLines={2}>
               {item.name}
             </Text>
-            {item.category ? (
+            {item.storageCellCode ? (
+              <View style={styles.rowMeta}>
+                {item.category ? (
+                  <Text variant="caption" color={palette.text.tertiary} numberOfLines={1} style={styles.rowMetaText}>
+                    {item.category.split('/').pop()}
+                  </Text>
+                ) : null}
+                <StorageCellChip code={item.storageCellCode} />
+              </View>
+            ) : item.category ? (
               <Text variant="caption" color={palette.text.tertiary} numberOfLines={1}>
                 {item.category.split('/').pop()}
               </Text>
@@ -551,7 +563,7 @@ export default function InventoryScreen() {
 
       {/* Search */}
       <View style={styles.searchWrap}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара..." />
+        <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара или ячейки..." />
       </View>
 
       {/* Last-scan banner */}
@@ -702,6 +714,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   rowInfo: { flex: 1, minWidth: 0 },
+  // Категория + код ячейки в одну строку: категория ужимается вместе с плашкой, остаток справа не двигается.
+  rowMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  rowMetaText: { flexShrink: 1 },
   rowSystem: { alignItems: 'center', minWidth: 44 },
   input: {
     width: 64,
