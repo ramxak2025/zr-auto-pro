@@ -25,7 +25,11 @@ import type { Product, Warehouse, CheckProductLine } from '../../../shared/types
 
 export interface ProductPickerBridge {
   /** Текущие строки товаров чека — источник qty-бейджей и нижнего бара. */
-  productLines: CheckProductLine[];
+  productLines: Pick<CheckProductLine, 'productId' | 'quantity' | 'sellPrice'>[];
+  /** Контекст закупки использует тот же пикер с закупочной ценой. */
+  priceKind?: 'sell' | 'cost';
+  title?: string;
+  totalLabel?: string;
   /** Добавить товар (комплекты разворачивает сама Касса — addProductLine). */
   addProduct: (product: Product) => void;
   /** Убрать одну единицу; при quantity → 0 строка удаляется из чека. */

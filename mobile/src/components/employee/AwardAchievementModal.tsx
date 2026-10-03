@@ -17,15 +17,14 @@
  * `CenteredDialog`: `animationType="fade"`, a `KeyboardAwareView`
  * wrapper (react-native-keyboard-controller — see components/KeyboardAware.tsx),
  * the shared `ModalBlurBackdrop` (tap-outside / blurred area to close) and a
- * vertically-centered card (88% width, max 460pt wide, max 520pt tall). The
- * card scrolls internally if it overflows.
+ * vertically-centered card (max 460pt wide, bounded by safe area and keyboard).
+ * The form scrolls to the focused field if it overflows.
  */
 import React from 'react';
 import {
   Alert,
   Modal as RNModal,
   Pressable,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -33,11 +32,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { employeesApi } from '../../api/services';
 import ModalBlurBackdrop from '../ModalBlurBackdrop';
-import { KeyboardAwareView } from '../KeyboardAware';
+import { KeyboardAwareView, KeyboardAwareScroll } from '../KeyboardAware';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
@@ -54,6 +54,7 @@ export interface AwardAchievementModalProps {
 
 export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAchievementModalProps) {
   const palette = useColors();
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -96,7 +97,7 @@ export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAch
   };
 
   return (
-    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
       {/* Клавиатура (миграция на keyboard-controller). RN-core <Modal> —
           отдельное нативное окно, корневой KeyboardProvider из App.tsx туда
           не дотягивается → вложенный провайдер обязателен (как в Modal.tsx /
@@ -108,157 +109,169 @@ export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAch
             top of it. KeyboardAwareView keeps the centered card clear of the
             keyboard when the text fields are focused; pointerEvents="box-none"
             keeps taps outside the card falling through to the backdrop. */}
-        <KeyboardAwareView style={styles.centerRoot} pointerEvents="box-none">
-          <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
-            {/* Header strip — title centered, × top-right (mirrors CenteredDialog). */}
-            <View style={styles.header}>
-              <View style={styles.headerSpacer} />
-              <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                Новый значок
-              </Text>
-              <Pressable
-                onPress={onClose}
-                hitSlop={12}
-                accessibilityRole="button"
-                accessibilityLabel="Закрыть"
-                style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
-              >
-                <Ionicons name="close" size={20} color={palette.text.secondary} />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={styles.body}
-              contentContainerStyle={styles.bodyContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Preview */}
-              <View
-                style={[
-                  styles.preview,
-                  {
-                    borderColor: color,
-                    shadowColor: color,
-                    backgroundColor: palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(255, 255, 255, 0.6)',
-                  },
-                ]}
-              >
-                <Text style={styles.previewIcon}>{icon}</Text>
-                <Text style={[styles.previewName, { color: palette.text.primary }]} numberOfLines={1}>
-                  {name || 'Название значка'}
+        <KeyboardAwareView style={styles.keyboardHost} pointerEvents="box-none">
+          <View
+            style={[
+              styles.centerRoot,
+              { paddingTop: insets.top + spacing[3], paddingBottom: insets.bottom + spacing[3] },
+            ]}
+            pointerEvents="box-none"
+          >
+            <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
+              {/* Header strip — title centered, × top-right (mirrors CenteredDialog). */}
+              <View style={styles.header}>
+                <View style={styles.headerSpacer} />
+                <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                  Новый значок
                 </Text>
-                {!!description && (
-                  <Text style={[styles.previewDesc, { color: palette.text.secondary }]} numberOfLines={2}>
-                    {description}
-                  </Text>
-                )}
+                <Pressable
+                  onPress={onClose}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityLabel="Закрыть"
+                  style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+                >
+                  <Ionicons name="close" size={20} color={palette.text.secondary} />
+                </Pressable>
               </View>
 
-              <Field label="Название">
-                <TextInput
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="Лучший мастер месяца"
-                  placeholderTextColor={palette.text.tertiary}
+              <KeyboardAwareScroll
+                style={styles.body}
+                contentContainerStyle={styles.bodyContent}
+                reserveTabBar={false}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* Preview */}
+                <View
                   style={[
-                    styles.input,
+                    styles.preview,
                     {
-                      color: palette.text.primary,
-                      borderColor: palette.border.subtle,
-                      backgroundColor: palette.bg.muted,
+                      borderColor: color,
+                      shadowColor: color,
+                      backgroundColor: palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(255, 255, 255, 0.6)',
                     },
                   ]}
-                />
-              </Field>
-
-              <Field label="Описание">
-                <TextInput
-                  value={description}
-                  onChangeText={setDescription}
-                  placeholder="За высочайшее качество работы"
-                  placeholderTextColor={palette.text.tertiary}
-                  multiline
-                  numberOfLines={3}
-                  style={[
-                    styles.input,
-                    {
-                      color: palette.text.primary,
-                      borderColor: palette.border.subtle,
-                      backgroundColor: palette.bg.muted,
-                      minHeight: 70,
-                      paddingTop: 12,
-                      textAlignVertical: 'top',
-                    },
-                  ]}
-                />
-              </Field>
-
-              <Field label="Иконка">
-                <View style={styles.iconRow}>
-                  {EMOJI_CHOICES.map((e) => (
-                    <Pressable
-                      key={e}
-                      onPress={() => {
-                        setIcon(e);
-                        haptic('tap');
-                      }}
-                      style={[
-                        styles.iconBtn,
-                        {
-                          backgroundColor: e === icon ? colors.primary[50] : palette.bg.muted,
-                          borderColor: e === icon ? colors.primary[400] : palette.border.subtle,
-                        },
-                      ]}
-                    >
-                      <Text style={styles.iconGlyph}>{e}</Text>
-                    </Pressable>
-                  ))}
+                >
+                  <Text style={styles.previewIcon} maxFontSizeMultiplier={1.3}>
+                    {icon}
+                  </Text>
+                  <Text style={[styles.previewName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {name || 'Название значка'}
+                  </Text>
+                  {!!description && (
+                    <Text style={[styles.previewDesc, { color: palette.text.secondary }]} numberOfLines={2}>
+                      {description}
+                    </Text>
+                  )}
                 </View>
-              </Field>
 
-              <Field label="Цвет">
-                <View style={styles.iconRow}>
-                  {COLOR_CHOICES.map((c) => (
-                    <Pressable
-                      key={c}
-                      onPress={() => {
-                        setColor(c);
-                        haptic('tap');
-                      }}
-                      style={[
-                        styles.colorBtn,
-                        {
-                          backgroundColor: c,
-                          borderColor:
-                            c === color ? (palette.mode === 'dark' ? colors.white : '#0F172A') : 'transparent',
-                        },
-                      ]}
-                    />
-                  ))}
-                </View>
-              </Field>
-            </ScrollView>
+                <Field label="Название">
+                  <TextInput
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="Лучший мастер месяца"
+                    placeholderTextColor={palette.text.tertiary}
+                    style={[
+                      styles.input,
+                      {
+                        color: palette.text.primary,
+                        borderColor: palette.border.subtle,
+                        backgroundColor: palette.bg.muted,
+                      },
+                    ]}
+                  />
+                </Field>
 
-            {/* Footer CTA — pinned inside the card. */}
-            <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
-              <Pressable
-                onPress={onClose}
-                style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
-              >
-                <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
-              </Pressable>
-              <Pressable
-                onPress={onSave}
-                disabled={addMutation.isPending}
-                style={[styles.btn, styles.btnPrimary, addMutation.isPending && styles.btnDisabled]}
-              >
-                {addMutation.isPending ? (
-                  <ActivityIndicator size="small" color={colors.white} />
-                ) : (
-                  <Text style={styles.btnPrimaryText}>Выдать</Text>
-                )}
-              </Pressable>
+                <Field label="Описание">
+                  <TextInput
+                    value={description}
+                    onChangeText={setDescription}
+                    placeholder="За высочайшее качество работы"
+                    placeholderTextColor={palette.text.tertiary}
+                    multiline
+                    numberOfLines={3}
+                    style={[
+                      styles.input,
+                      {
+                        color: palette.text.primary,
+                        borderColor: palette.border.subtle,
+                        backgroundColor: palette.bg.muted,
+                        minHeight: 70,
+                        paddingTop: 12,
+                        textAlignVertical: 'top',
+                      },
+                    ]}
+                  />
+                </Field>
+
+                <Field label="Иконка">
+                  <View style={styles.iconRow}>
+                    {EMOJI_CHOICES.map((e) => (
+                      <Pressable
+                        key={e}
+                        onPress={() => {
+                          setIcon(e);
+                          haptic('tap');
+                        }}
+                        style={[
+                          styles.iconBtn,
+                          {
+                            backgroundColor: e === icon ? colors.primary[50] : palette.bg.muted,
+                            borderColor: e === icon ? colors.primary[400] : palette.border.subtle,
+                          },
+                        ]}
+                      >
+                        <Text style={styles.iconGlyph} maxFontSizeMultiplier={1.3}>
+                          {e}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </Field>
+
+                <Field label="Цвет">
+                  <View style={styles.iconRow}>
+                    {COLOR_CHOICES.map((c) => (
+                      <Pressable
+                        key={c}
+                        onPress={() => {
+                          setColor(c);
+                          haptic('tap');
+                        }}
+                        style={[
+                          styles.colorBtn,
+                          {
+                            backgroundColor: c,
+                            borderColor:
+                              c === color ? (palette.mode === 'dark' ? colors.white : '#0F172A') : 'transparent',
+                          },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </Field>
+              </KeyboardAwareScroll>
+
+              {/* Footer CTA — pinned inside the card. */}
+              <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
+                <Pressable
+                  onPress={onClose}
+                  style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+                >
+                  <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
+                </Pressable>
+                <Pressable
+                  onPress={onSave}
+                  disabled={addMutation.isPending}
+                  style={[styles.btn, styles.btnPrimary, addMutation.isPending && styles.btnDisabled]}
+                >
+                  {addMutation.isPending ? (
+                    <ActivityIndicator size="small" color={colors.white} />
+                  ) : (
+                    <Text style={styles.btnPrimaryText}>Выдать</Text>
+                  )}
+                </Pressable>
+              </View>
             </View>
           </View>
         </KeyboardAwareView>
@@ -278,6 +291,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const styles = StyleSheet.create({
+  keyboardHost: { flex: 1 },
   // Centered card root — sits above ModalBlurBackdrop, fills the screen so
   // the card is vertically + horizontally centered. box-none so taps that
   // miss the card fall through to the backdrop (tap-outside-to-close).
@@ -288,9 +302,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
   },
   card: {
-    width: '88%',
+    width: '100%',
     maxWidth: 460,
-    maxHeight: 520,
+    maxHeight: '100%',
+    flexShrink: 1,
     borderRadius: Platform.OS === 'android' ? 28 : 22,
     overflow: 'hidden',
     shadowColor: colors.black,
@@ -323,7 +338,7 @@ const styles = StyleSheet.create({
   },
   // flexGrow:0 keeps the ScrollView only as tall as it needs, never
   // overrunning the card's maxHeight.
-  body: { flexGrow: 0 },
+  body: { flexGrow: 0, flexShrink: 1 },
   bodyContent: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[3], gap: spacing[3] },
   field: { gap: spacing[1.5] },
   label: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
@@ -343,7 +358,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
   },
-  iconGlyph: { fontSize: 22 },
+  iconGlyph: { fontSize: 22, lineHeight: 30 },
   colorBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 3 },
 
   preview: {
@@ -357,7 +372,7 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
   },
-  previewIcon: { fontSize: 48 },
+  previewIcon: { fontSize: 48, lineHeight: 64 },
   previewName: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, marginTop: spacing[2] },
   previewDesc: { fontSize: 13, marginTop: spacing[1], textAlign: 'center' },
 
@@ -372,7 +387,8 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    height: Platform.OS === 'android' ? 44 : 48,
+    minHeight: Platform.OS === 'android' ? 44 : 48,
+    paddingVertical: spacing[2],
     borderRadius: Platform.OS === 'android' ? 22 : 14,
     alignItems: 'center',
     justifyContent: 'center',

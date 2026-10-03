@@ -241,6 +241,17 @@ export class SalaryController {
     return this.salaryService.createPenalty(user.tenantID, user.userID, dto, point(user));
   }
 
+  // Recipient-only inbox: JWT identity, never a client-supplied user/tenant.
+  @Get('penalties/unviewed')
+  listUnviewedPenalties(@CurrentUser() user: JwtPayload) {
+    return this.salaryService.listUnviewedPenalties(user.tenantID, user.userID);
+  }
+
+  @Post('penalties/:id/viewed')
+  markPenaltyViewed(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.markPenaltyViewed(id, user.tenantID, user.userID);
+  }
+
   /**
    * Fines for the tenant (or one employee via `?userId=`). Owner-only finance
    * data — 'salary_payouts_manage'. Employees see their fines via the

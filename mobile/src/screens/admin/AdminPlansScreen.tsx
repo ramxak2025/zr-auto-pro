@@ -17,17 +17,8 @@
  *   • Archive = isActive:false (soft, via update).
  */
 import React from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  Modal,
-  TextInput,
-  Switch,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
+import { View, StyleSheet, Pressable, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { plansApi, tenantsApi, adminApi } from '../../api/services';
@@ -75,7 +66,7 @@ export default function AdminPlansScreen() {
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
-  const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const { contentContainerPaddingBottom, tabBarHeight } = useAdminTabBarScrollInsets();
 
   const [editing, setEditing] = React.useState<PlanDraft | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -272,11 +263,11 @@ export default function AdminPlansScreen() {
         }
       />
 
-      <ScrollView
-        contentInset={contentInset}
+      <KeyboardAwareScroll
+        reserveTabBar={false}
+        extraKeyboardBottomOffset={tabBarHeight}
         contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
       >
         {/* Платформенный лимит бесплатных минут голосового ввода (116) */}
         <View style={[styles.card, surface.card]}>
@@ -418,7 +409,7 @@ export default function AdminPlansScreen() {
             );
           })
         )}
-      </ScrollView>
+      </KeyboardAwareScroll>
 
       <AdminSheet
         visible={trialLimitOpen}
@@ -442,203 +433,178 @@ export default function AdminPlansScreen() {
       </AdminSheet>
 
       {/* Edit / create sheet */}
-      <Modal
+      <AdminSheet
         visible={!!editing}
-        transparent
-        statusBarTranslucent
-        animationType="slide"
-        onRequestClose={() => setEditing(null)}
+        title={editing?.id ? 'Тариф' : 'Новый тариф'}
+        onClose={() => setEditing(null)}
+        onSave={handleSave}
+        saving={saving}
       >
-        <View style={styles.sheetBackdrop}>
-          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
-            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={() => setEditing(null)} hitSlop={8}>
-                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
-                {editing?.id ? 'Тариф' : 'Новый тариф'}
-              </Text>
-              <Pressable onPress={handleSave} disabled={saving} hitSlop={8}>
-                {saving ? (
-                  <ActivityIndicator size="small" color={palette.accent.primary} />
-                ) : (
-                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
-                )}
-              </Pressable>
+        {editing && (
+          <>
+            <Field label="Название" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="Например, Профи"
+                placeholderTextColor={palette.text.tertiary}
+                value={editing.name}
+                onChangeText={(v) => setEditing({ ...editing, name: v })}
+              />
+            </Field>
+            <Field label="Описание" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="Краткое описание тарифа"
+                placeholderTextColor={palette.text.tertiary}
+                value={editing.description}
+                onChangeText={(v) => setEditing({ ...editing, description: v })}
+              />
+            </Field>
+            <View style={styles.fieldRow}>
+              <Field label="Цена, ₽/мес" palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="number-pad"
+                  value={editing.monthlyPrice}
+                  onChangeText={(v) => setEditing({ ...editing, monthlyPrice: v.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
+              <Field label="Макс. польз." palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="1"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="number-pad"
+                  value={editing.maxUsers}
+                  onChangeText={(v) => setEditing({ ...editing, maxUsers: v.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
             </View>
+            <View style={styles.fieldRow}>
+              <Field label="Минуты голоса / мес" palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="number-pad"
+                  value={editing.voiceMinutes}
+                  onChangeText={(v) => setEditing({ ...editing, voiceMinutes: v.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
+              <Field label="Порядок" palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="number-pad"
+                  value={editing.sortOrder}
+                  onChangeText={(v) => setEditing({ ...editing, sortOrder: v.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
+            </View>
+            <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
+              0 минут = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод».
+            </Text>
+            {editing.id ? (
+              <View style={styles.field}>
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Активен</Text>
+                <View style={[styles.switchBox, surface.cardCompact]}>
+                  <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                    {editing.isActive ? 'Да' : 'Архив'}
+                  </Text>
+                  <Switch
+                    value={editing.isActive}
+                    onValueChange={(v) => setEditing({ ...editing, isActive: v })}
+                    trackColor={{ true: palette.accent.primary }}
+                  />
+                </View>
+              </View>
+            ) : null}
 
-            {editing && (
-              <ScrollView
-                contentContainerStyle={styles.sheetScroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                <Field label="Название" palette={palette} surface={surface}>
-                  <TextInput
-                    style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="Например, Профи"
-                    placeholderTextColor={palette.text.tertiary}
-                    value={editing.name}
-                    onChangeText={(v) => setEditing({ ...editing, name: v })}
-                  />
-                </Field>
-                <Field label="Описание" palette={palette} surface={surface}>
-                  <TextInput
-                    style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="Краткое описание тарифа"
-                    placeholderTextColor={palette.text.tertiary}
-                    value={editing.description}
-                    onChangeText={(v) => setEditing({ ...editing, description: v })}
-                  />
-                </Field>
-                <View style={styles.fieldRow}>
-                  <Field label="Цена, ₽/мес" palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={editing.monthlyPrice}
-                      onChangeText={(v) => setEditing({ ...editing, monthlyPrice: v.replace(/[^0-9]/g, '') })}
-                    />
-                  </Field>
-                  <Field label="Макс. польз." palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="1"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={editing.maxUsers}
-                      onChangeText={(v) => setEditing({ ...editing, maxUsers: v.replace(/[^0-9]/g, '') })}
-                    />
-                  </Field>
-                </View>
-                <View style={styles.fieldRow}>
-                  <Field label="Минуты голоса / мес" palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={editing.voiceMinutes}
-                      onChangeText={(v) => setEditing({ ...editing, voiceMinutes: v.replace(/[^0-9]/g, '') })}
-                    />
-                  </Field>
-                  <Field label="Порядок" palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={editing.sortOrder}
-                      onChangeText={(v) => setEditing({ ...editing, sortOrder: v.replace(/[^0-9]/g, '') })}
-                    />
-                  </Field>
-                </View>
-                <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
-                  0 минут = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод».
-                </Text>
-                {editing.id ? (
-                  <View style={styles.field}>
-                    <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Активен</Text>
-                    <View style={[styles.switchBox, surface.cardCompact]}>
-                      <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
-                        {editing.isActive ? 'Да' : 'Архив'}
+            <Text style={[styles.featuresLabel, { color: palette.text.tertiary }]}>Функции тарифа</Text>
+            {groupedFeatures.map((grp) => {
+              const keys = grp.items.map((f) => f.key);
+              const enabledCount = keys.filter((k) => editing.features.includes(k)).length;
+              const allOn = enabledCount === keys.length;
+              return (
+                <View key={grp.group} style={styles.featGroup}>
+                  <View style={styles.featGroupHead}>
+                    <Text style={[styles.featGroupLabel, { color: palette.text.secondary }]}>
+                      {grp.label}{' '}
+                      <Text style={{ color: palette.text.tertiary }}>
+                        {enabledCount}/{keys.length}
                       </Text>
-                      <Switch
-                        value={editing.isActive}
-                        onValueChange={(v) => setEditing({ ...editing, isActive: v })}
-                        trackColor={{ true: palette.accent.primary }}
-                      />
-                    </View>
+                    </Text>
+                    <Pressable
+                      onPress={() => {
+                        haptic('select');
+                        setEditing({
+                          ...editing,
+                          features: allOn
+                            ? editing.features.filter((k) => !keys.includes(k))
+                            : Array.from(new Set([...editing.features, ...keys])),
+                        });
+                      }}
+                      hitSlop={6}
+                    >
+                      <Text style={[styles.featGroupAction, { color: palette.accent.primary }]}>
+                        {allOn ? 'Снять все' : 'Выбрать все'}
+                      </Text>
+                    </Pressable>
                   </View>
-                ) : null}
-
-                <Text style={[styles.featuresLabel, { color: palette.text.tertiary }]}>Функции тарифа</Text>
-                {groupedFeatures.map((grp) => {
-                  const keys = grp.items.map((f) => f.key);
-                  const enabledCount = keys.filter((k) => editing.features.includes(k)).length;
-                  const allOn = enabledCount === keys.length;
-                  return (
-                    <View key={grp.group} style={styles.featGroup}>
-                      <View style={styles.featGroupHead}>
-                        <Text style={[styles.featGroupLabel, { color: palette.text.secondary }]}>
-                          {grp.label}{' '}
-                          <Text style={{ color: palette.text.tertiary }}>
-                            {enabledCount}/{keys.length}
-                          </Text>
-                        </Text>
-                        <Pressable
-                          onPress={() => {
-                            haptic('select');
-                            setEditing({
-                              ...editing,
-                              features: allOn
-                                ? editing.features.filter((k) => !keys.includes(k))
-                                : Array.from(new Set([...editing.features, ...keys])),
-                            });
-                          }}
-                          hitSlop={6}
+                  <View style={[styles.featuresCard, surface.card]}>
+                    {grp.items.map((feat, i) => {
+                      const on = editing.features.includes(feat.key);
+                      return (
+                        <View
+                          key={feat.key}
+                          style={[
+                            styles.featRow,
+                            i > 0 && {
+                              borderTopWidth: StyleSheet.hairlineWidth,
+                              borderTopColor: palette.border.subtle,
+                            },
+                          ]}
                         >
-                          <Text style={[styles.featGroupAction, { color: palette.accent.primary }]}>
-                            {allOn ? 'Снять все' : 'Выбрать все'}
-                          </Text>
-                        </Pressable>
-                      </View>
-                      <View style={[styles.featuresCard, surface.card]}>
-                        {grp.items.map((feat, i) => {
-                          const on = editing.features.includes(feat.key);
-                          return (
-                            <View
-                              key={feat.key}
-                              style={[
-                                styles.featRow,
-                                i > 0 && {
-                                  borderTopWidth: StyleSheet.hairlineWidth,
-                                  borderTopColor: palette.border.subtle,
-                                },
-                              ]}
-                            >
-                              <Text style={[styles.featLabel, { color: palette.text.primary }]}>{feat.label}</Text>
-                              <Switch
-                                value={on}
-                                trackColor={{ true: palette.accent.primary }}
-                                onValueChange={(v) => {
-                                  haptic('select');
-                                  setEditing({
-                                    ...editing,
-                                    features: v
-                                      ? [...editing.features, feat.key]
-                                      : editing.features.filter((k) => k !== feat.key),
-                                  });
-                                }}
-                              />
-                            </View>
-                          );
-                        })}
-                      </View>
-                    </View>
-                  );
-                })}
+                          <Text style={[styles.featLabel, { color: palette.text.primary }]}>{feat.label}</Text>
+                          <Switch
+                            value={on}
+                            trackColor={{ true: palette.accent.primary }}
+                            onValueChange={(v) => {
+                              haptic('select');
+                              setEditing({
+                                ...editing,
+                                features: v
+                                  ? [...editing.features, feat.key]
+                                  : editing.features.filter((k) => k !== feat.key),
+                              });
+                            }}
+                          />
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+              );
+            })}
 
-                {editing.id ? (
-                  <Pressable
-                    onPress={() => {
-                      const plan = plans.find((p) => p.id === editing.id);
-                      if (plan) confirmArchive(plan);
-                    }}
-                    style={styles.archiveBtn}
-                  >
-                    <Ionicons name="archive-outline" size={18} color={colors.red[600]} />
-                    <Text style={styles.archiveText}>Архивировать тариф</Text>
-                  </Pressable>
-                ) : null}
-                <View style={{ height: spacing[8] }} />
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
+            {editing.id ? (
+              <Pressable
+                onPress={() => {
+                  const plan = plans.find((p) => p.id === editing.id);
+                  if (plan) confirmArchive(plan);
+                }}
+                style={styles.archiveBtn}
+              >
+                <Ionicons name="archive-outline" size={18} color={colors.red[600]} />
+                <Text style={styles.archiveText}>Архивировать тариф</Text>
+              </Pressable>
+            ) : null}
+          </>
+        )}
+      </AdminSheet>
     </View>
   );
 }

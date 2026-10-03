@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, NotFoundException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 
@@ -141,6 +141,41 @@ export class AuditService {
       [actorUserId, limit, offset],
     );
     return rows.map((r) => AuditService.mapRow(r));
+  }
+
+  /**
+   * Journal opened from one car-service card. Access and entries are read in
+   * ONE statement/snapshot: transferring a tenant cannot leave an old manager
+   * with a successful access check followed by an unscoped journal read.
+   * A LEFT JOIN distinguishes an accessible, empty journal from a hidden tenant.
+   */
+  async listForTenant(
+    tenantId: string,
+    managerId: string | null = null,
+    limit: unknown = 50,
+    offset: unknown = 0,
+  ): Promise<AuditLogEntryRow[]> {
+    const boundedInt = (value: unknown, fallback: number, min: number, max: number) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : fallback;
+    };
+    const { rows } = await this.pool.query(
+      `SELECT a.*
+         FROM tenants t
+         LEFT JOIN LATERAL (
+           SELECT id, actor_name, action, target_type, target_id, target_name, detail, created_at
+             FROM admin_audit_log
+            WHERE (target_type = 'tenant' AND target_id = t.id::text)
+               OR detail->>'tenantId' = t.id::text
+            ORDER BY created_at DESC, id DESC
+            LIMIT $3 OFFSET $4
+         ) a ON TRUE
+        WHERE t.id = $1::uuid AND ($2::uuid IS NULL OR t.manager_id = $2::uuid)
+        ORDER BY a.created_at DESC, a.id DESC`,
+      [tenantId, managerId, boundedInt(limit, 50, 1, 200), boundedInt(offset, 0, 0, 1_000_000)],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Автосервис не найден' });
+    return rows.filter((r) => r.id !== null).map((r) => AuditService.mapRow(r));
   }
 
   private static mapRow(r: any): AuditLogEntryRow {

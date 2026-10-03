@@ -1,12 +1,11 @@
 import React, { ReactNode } from 'react';
-import { Modal as RNModal, View, Text, TouchableOpacity, StyleSheet, Platform, Dimensions } from 'react-native';
+import { Modal as RNModal, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView, KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
-
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 interface ModalProps {
   visible: boolean;
@@ -31,8 +30,9 @@ interface ModalProps {
  * с реальными кадрами клавиатуры):
  *   1. `KeyboardAvoidingView behavior="padding"` вокруг центрированного хоста —
  *      добавляет снизу отступ на высоту клавиатуры, поэтому центрированная
- *      карточка ПОДНИМАЕТСЯ и её низ выходит из-под клавиатуры (карточка
- *      capped `maxHeight: 0.85`, так что вверх не упирается в статус-бар).
+ *      карточка ПОДНИМАЕТСЯ и её низ выходит из-под клавиатуры. Внутренний
+ *      safe-area контейнер ограничивает её доступной высотой, а не высотой
+ *      экрана, измеренной однажды при запуске.
  *   2. Тело — `KeyboardAwareScrollView`: авто-скроллит к активному `TextInput`,
  *      удерживая его ВИДИМЫМ над клавиатурой ВНУТРИ карточки (поведение
  *      WhatsApp/Telegram). `bottomOffset` держит запас под полем.
@@ -46,6 +46,7 @@ interface ModalProps {
  */
 export default function Modal({ visible, onClose, title, children }: ModalProps) {
   const palette = useColors();
+  const insets = useSafeAreaInsets();
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
       <KeyboardProvider>
@@ -55,27 +56,32 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
             ModalBlurBackdrop под ним → закрытие по фону (Round 11 #15,
             регресс от keyboard-обёртки). Тап по карточке и полям работает
             как обычно (карточка — дочерний touch-target). */}
-        <KeyboardAvoidingView behavior="padding" style={styles.overlay} pointerEvents="box-none">
-          <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
-            <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
-            <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-              <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
-              <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="close" size={20} color={palette.text.tertiary} />
-              </TouchableOpacity>
+        <KeyboardAvoidingView behavior="padding" style={styles.keyboardHost} pointerEvents="box-none">
+          <View
+            style={[styles.overlay, { paddingTop: insets.top + spacing[3], paddingBottom: insets.bottom + spacing[3] }]}
+            pointerEvents="box-none"
+          >
+            <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
+              <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
+              <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+                <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
+                <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="close" size={20} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              </View>
+              <KeyboardAwareScrollView
+                style={styles.body}
+                contentContainerStyle={styles.bodyContent}
+                // Активное поле остаётся видимым над клавиатурой с небольшим
+                // запасом (авто-скролл к фокусу, не «поднять весь блок»).
+                bottomOffset={spacing[6]}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                showsVerticalScrollIndicator={false}
+              >
+                {children}
+              </KeyboardAwareScrollView>
             </View>
-            <KeyboardAwareScrollView
-              style={styles.body}
-              contentContainerStyle={styles.bodyContent}
-              // Активное поле остаётся видимым над клавиатурой с небольшим
-              // запасом (авто-скролл к фокусу, не «поднять весь блок»).
-              bottomOffset={spacing[6]}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="interactive"
-              showsVerticalScrollIndicator={false}
-            >
-              {children}
-            </KeyboardAwareScrollView>
           </View>
         </KeyboardAvoidingView>
       </KeyboardProvider>
@@ -84,6 +90,7 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
 }
 
 const styles = StyleSheet.create({
+  keyboardHost: { flex: 1 },
   overlay: {
     flex: 1,
     justifyContent: 'center',
@@ -98,7 +105,8 @@ const styles = StyleSheet.create({
     // native.
     borderRadius: Platform.OS === 'android' ? 28 : borderRadius['2xl'],
     width: '100%',
-    maxHeight: SCREEN_HEIGHT * 0.85,
+    maxHeight: '100%',
+    flexShrink: 1,
     shadowColor: colors.black,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.15,
@@ -124,11 +132,14 @@ const styles = StyleSheet.create({
     // borderBottomColor from palette.border.subtle (theme-aware) inline.
   },
   title: {
+    flex: 1,
+    marginRight: spacing[3],
     fontSize: fontSize.lg,
     fontWeight: fontWeight.bold,
     // color from palette.text.primary (theme-aware) inline.
   },
   closeBtn: {
+    flexShrink: 0,
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -137,7 +148,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   body: {
-    maxHeight: SCREEN_HEIGHT * 0.65,
+    flexGrow: 0,
+    flexShrink: 1,
   },
   bodyContent: {
     paddingHorizontal: spacing[5],

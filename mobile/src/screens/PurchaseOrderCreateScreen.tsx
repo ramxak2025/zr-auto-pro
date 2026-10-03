@@ -5,7 +5,7 @@
  * Поток:
  *   1. Поставщик — inline-пикер из suppliersApi.getAll (системный Б/У-канал
  *      исключён). Обязателен.
- *   2. Позиции — добавляются через ТОТ ЖЕ ProductPickerModal, что и в Кассе
+ *   2. Позиции — добавляются через ТОТ ЖЕ ProductPickerScreen, что и в Кассе
  *      (кэш-первый, мгновенный). У каждой строки: количество (степпер) и
  *      закупочная цена (по умолчанию — текущая себестоимость товара).
  *   3. «Дозаказ» — префилл строк из purchaseOrdersApi.suggestions()
@@ -23,20 +23,25 @@
  * Write-роль (director/admin/superadmin) гейтит весь экран на стороне списка
  * (кнопка «+» скрыта для остальных); сервер дублирует проверку.
  *
- * Android-safe: ProductPickerModal + inline-пикеры кроссплатформенны.
+ * Android-safe: ProductPickerScreen + inline-пикеры кроссплатформенны.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
-import ProductPickerModal from '../components/ProductPickerModal';
+import {
+  claimProductPickerSession,
+  notifyProductPickerSession,
+  releaseProductPickerSession,
+  type ProductPickerBridge,
+} from '../utils/productPickerSession';
 import QtyInput from '../components/QtyInput';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { useColors } from '../contexts/ThemeContext';
-import { purchaseOrdersApi, suppliersApi } from '../api/services';
+import { purchaseOrdersApi, suppliersApi, warehousesApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
@@ -46,6 +51,7 @@ import {
   type PurchaseOrder,
   type PurchaseOrderSuggestionGroup,
   type Supplier,
+  type Warehouse,
 } from '../../../shared/types';
 import { formatMoney } from './purchaseOrders/purchaseOrderHelpers';
 import { MIN_QTY, roundQty } from '../utils/units';
@@ -102,7 +108,7 @@ export default function PurchaseOrderCreateScreen() {
     })),
   );
   const [note, setNote] = useState(seedPo?.note ?? '');
-  const [showPicker, setShowPicker] = useState(false);
+  const [pickerWarehouseId, setPickerWarehouseId] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showRequest, setShowRequest] = useState(false);
 
@@ -128,11 +134,6 @@ export default function PurchaseOrderCreateScreen() {
   });
 
   // ── Lines ──────────────────────────────────────────────────────────────
-  const getCartQty = useCallback(
-    (productId: string) => lines.find((l) => l.productId === productId)?.quantity ?? 0,
-    [lines],
-  );
-
   const handleSelectProduct = useCallback((product: Product) => {
     setLines((prev) => {
       const existing = prev.find((l) => l.productId === product.id);
@@ -151,6 +152,52 @@ export default function PurchaseOrderCreateScreen() {
       ];
     });
   }, []);
+
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 10 * 60_000,
+  });
+  useEffect(() => {
+    if (!warehouses?.length || warehouses.some((w) => w.id === pickerWarehouseId)) return;
+    setPickerWarehouseId((warehouses.find((w) => w.kind === 'main') ?? warehouses[0]).id);
+  }, [warehouses, pickerWarehouseId]);
+  const decrementPickerProduct = useCallback((productId: string) => {
+    setLines((prev) =>
+      prev.flatMap((line) => {
+        if (line.productId !== productId) return [line];
+        const quantity = Math.max(line.received, roundQty(line.quantity - 1));
+        return quantity > 0 ? [{ ...line, quantity }] : [];
+      }),
+    );
+  }, []);
+  const pickerBridge: ProductPickerBridge = {
+    productLines: lines.map((line) => ({
+      productId: line.productId,
+      quantity: line.quantity,
+      sellPrice: parseCost(line.costText),
+    })),
+    addProduct: handleSelectProduct,
+    decrementProduct: decrementPickerProduct,
+    showCostPrice: true,
+    priceKind: 'cost',
+    title: 'Товары в заказ',
+    totalLabel: 'В заказе',
+    warrantyNames: new Set<string>(),
+    warehouseId: pickerWarehouseId,
+    setWarehouseId: setPickerWarehouseId,
+    warehouses: warehouses ?? [],
+  };
+  const pickerBridgeRef = useRef<ProductPickerBridge>(pickerBridge);
+  pickerBridgeRef.current = pickerBridge;
+  useEffect(() => {
+    notifyProductPickerSession(pickerBridgeRef);
+  }, [lines, pickerWarehouseId, warehouses]);
+  useEffect(() => () => releaseProductPickerSession(pickerBridgeRef), []);
+  const openProductPicker = () => {
+    claimProductPickerSession(pickerBridgeRef);
+    navigation.navigate('ProductPicker', {});
+  };
 
   const changeQty = useCallback((productId: string, delta: number) => {
     haptic('tap');
@@ -408,7 +455,7 @@ export default function PurchaseOrderCreateScreen() {
               style={styles.addLineBtn}
               onPress={() => {
                 haptic('tap');
-                setShowPicker(true);
+                openProductPicker();
               }}
               activeOpacity={0.7}
             >
@@ -422,7 +469,7 @@ export default function PurchaseOrderCreateScreen() {
               style={[styles.emptyLines, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => {
                 haptic('tap');
-                setShowPicker(true);
+                openProductPicker();
               }}
               activeOpacity={0.7}
             >
@@ -579,16 +626,6 @@ export default function PurchaseOrderCreateScreen() {
           </TouchableOpacity>
         </View>
       </View>
-
-      {/* ── Product picker (тот же, что в Кассе) ── */}
-      <ProductPickerModal
-        visible={showPicker}
-        onClose={() => setShowPicker(false)}
-        onSelectProduct={handleSelectProduct}
-        getCartQty={getCartQty}
-        title="Товары в заказ"
-        showCostPrice
-      />
 
       {/* ── Запрос поставщику (текст без цен → копировать / WhatsApp) ── */}
       <SupplierRequestSheet

@@ -1,3 +1,4 @@
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -372,8 +373,7 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   qc.prefetchQuery({
     queryKey: ['all-products-check'],
     queryFn: async () => {
-      const res = await productsApi.getAll({ search: '', page: 1, limit: PRODUCT_LIST_LIMIT });
-      return (res.data as { data?: unknown }).data ?? res.data;
+      return loadProductCatalog(productsApi.getAll);
     },
     staleTime: 5 * 60_000,
   }).catch(() => {});

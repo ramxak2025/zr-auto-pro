@@ -1,3 +1,5 @@
+import { productFolderParts, buildProductFolderLevel } from '../../../shared/utils/productFolders';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 /**
  * ProductPickerScreen — полноэкранный пикер товаров для Кассы (Round 8 #2).
  *
@@ -29,10 +31,10 @@
  * количества»: случайное добавление обратимо прямо в списке.
  *
  * Данные: ТЕ ЖЕ query keys, что и ProductPickerModal / прогрев Кассы —
- * `['all-products-check', { warehouseId }]` (весь склад, PICKER_PRODUCT_LIMIT)
+ * `['all-products-check', { warehouseId }]` (весь склад, все страницы API)
  * и `['warehouse-categories', { warehouseId }]`. Оба ключа в PERSISTED_KEYS и
  * греются prefetch'ем логина/Кассы, поэтому первый кадр — из кеша
- * (placeholderData prev=>prev + main-склад заимствует un-scoped слот),
+ * (main-склад заимствует un-scoped слот, другие склады его не используют),
  * ревалидация — в фоне при каждом открытии. Поиск — по ВСЕМУ складу (плоские
  * результаты, не только текущая папка), локальный дебаунс 200 мс.
  */
@@ -68,12 +70,6 @@ import type { Product } from '../../../shared/types';
  *  (случайный двойной тап добавляет один раз). Осознанный повтор — после окна
  *  или через явный «+» степпера. Тот же контракт, что в ProductPickerModal. */
 const ROW_TAP_DEBOUNCE_MS = 500;
-
-/** Весь склад одной страницей — MUST mirror PICKER_CACHE_PRODUCT_LIMIT в
- *  CheckCreateScreen и PICKER_PRODUCT_LIMIT в ProductPickerModal: все трое
- *  делят один query key, меньший limit тут снова уронил бы «хвост» склада
- *  (bug #58 / Round 7 audit #1). */
-const PICKER_PRODUCT_LIMIT = 100000;
 
 function formatMoney(v: number) {
   return (
@@ -127,6 +123,7 @@ interface PickerProductRowProps {
   product: Product;
   cartQty: number;
   showCostPrice: boolean;
+  priceKind: 'sell' | 'cost';
   underWarranty: boolean;
   onPress: (product: Product) => void;
   onIncrement: (product: Product) => void;
@@ -138,6 +135,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
   product,
   cartQty,
   showCostPrice,
+  priceKind,
   underWarranty,
   onPress,
   onIncrement,
@@ -146,7 +144,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
 }: PickerProductRowProps) {
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
   const photoUrl = getImageUrl((product as { photo?: string }).photo);
-  const categoryLeaf = product.category ? product.category.split('/').pop() : null;
+  const categoryLeaf = productFolderParts(product.category).pop();
   return (
     <Pressable
       onPress={() => onPress(product)}
@@ -155,7 +153,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
         { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle },
         pressed && { backgroundColor: palette.bg.muted },
       ]}
-      accessibilityLabel={`Добавить в чек: ${product.name}`}
+      accessibilityLabel={`Добавить товар: ${product.name}`}
     >
       <View style={styles.productRow}>
         {photoUrl ? (
@@ -186,9 +184,9 @@ const PickerProductRow = React.memo(function PickerProductRow({
           ) : null}
           <View style={styles.productPrices}>
             <Text style={[styles.productSellPrice, { color: palette.accent.primaryText }]}>
-              {formatMoney(product.sellPrice)}
+              {formatMoney(priceKind === 'cost' ? product.costPrice : product.sellPrice)}
             </Text>
-            {showCostPrice ? (
+            {showCostPrice && priceKind !== 'cost' ? (
               <Text style={[styles.productCostPrice, { color: palette.text.tertiary }]}>
                 {'Себест.'} {formatMoney(product.costPrice)}
               </Text>
@@ -265,11 +263,11 @@ export default function ProductPickerScreen() {
   const folderPath: string[] = useMemo(() => route.params?.folderPath ?? [], [route.params?.folderPath]);
   const depth = folderPath.length;
   const isRoot = depth === 0;
-  const title = isRoot ? 'Товары' : folderPath[folderPath.length - 1];
 
   // ── Сессия Кассы (см. utils/productPickerSession.ts) ─────────────────────
   useSyncExternalStore(subscribeProductPickerSession, getProductPickerSessionVersion);
   const session = getProductPickerSession();
+  const title = isRoot ? (session?.title ?? 'Товары') : folderPath[folderPath.length - 1];
 
   // Защита: экран без живой сессии (state-restoration / deep-link) — закрыться.
   useEffect(() => {
@@ -311,9 +309,9 @@ export default function ProductPickerScreen() {
   const scanAddCountRef = useRef(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ── Товары — ТОТ ЖЕ ключ/лимит, что модалка и прогрев Кассы. Кеш-first:
-  //    placeholderData держит предыдущий список (плюс main-склад заимствует
-  //    un-scoped слот логин-префетча), staleTime 30с + refetch на открытии
+  // ── Товары — тот же полный каталог, что модалка и прогрев Кассы.
+  //    Кеш сохраняется при обновлении; main-склад заимствует
+  //    un-scoped слот логин-префетча; staleTime 30с + refetch на открытии
   //    корня освежают остатки в фоне без блэнка. ──────────────────────────────
   const {
     data: allProducts,
@@ -322,14 +320,8 @@ export default function ProductPickerScreen() {
     refetch,
   } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
-    queryFn: async () => {
-      const params: { limit: number; warehouseId?: string } = { limit: PICKER_PRODUCT_LIMIT };
-      if (warehouseId) params.warehouseId = warehouseId;
-      const res = await productsApi.getAll(params);
-      return (res.data?.data || res.data) as Product[];
-    },
-    placeholderData: (prev) => {
-      if (prev !== undefined) return prev;
+    queryFn: () => loadProductCatalog(productsApi.getAll, { warehouseId: warehouseId || undefined }),
+    placeholderData: () => {
       if (warehouseId && warehouseId === mainWarehouseId) {
         return queryClient.getQueryData<Product[]>(['all-products-check']);
       }
@@ -354,7 +346,7 @@ export default function ProductPickerScreen() {
     },
     enabled: !!warehouseId,
     staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
+    placeholderData: undefined,
   });
 
   // ── Корзина: qty по productId + итоги нижнего бара — из session.productLines
@@ -402,51 +394,11 @@ export default function ProductPickerScreen() {
       return rows;
     }
 
-    const subs = new Map<string, { count: number; hasLow: boolean }>();
-    const prods: Product[] = [];
-    for (const p of products) {
-      const cat = p.category || '';
-      const catParts = cat ? cat.split('/') : [];
-      const matchesPath = folderPath.every((seg, i) => catParts[i] === seg);
-      if (!matchesPath && folderPath.length > 0) continue;
-      if (catParts.length > folderPath.length) {
-        const folderName = catParts[folderPath.length];
-        const existing = subs.get(folderName) || { count: 0, hasLow: false };
-        existing.count++;
-        if (p.stock <= p.minStock && p.minStock > 0) existing.hasLow = true;
-        subs.set(folderName, existing);
-      } else if (catParts.length === folderPath.length) {
-        prods.push(p);
-      }
-    }
-    // Пустые папки из warehouse_categories — как на Складе (тот же
-    // path||name fallback, что в ProductsScreen).
-    if (Array.isArray(extraFolders)) {
-      for (const ef of extraFolders) {
-        const efPath: string = ef.path || (ef as any).name || '';
-        if (!efPath) continue;
-        const efParts = efPath.split('/');
-        const matchesPath = folderPath.every((seg, i) => efParts[i] === seg);
-        if (matchesPath && efParts.length > folderPath.length) {
-          const folderName = efParts[folderPath.length];
-          if (!subs.has(folderName)) subs.set(folderName, { count: 0, hasLow: false });
-        }
-      }
-    }
-    // Порядок папок: sort_order из warehouse_categories, затем алфавит — как Склад.
-    const prefix = folderPath.join('/');
-    const orderLookup = new Map<string, number>();
-    if (Array.isArray(extraFolders)) {
-      for (const ef of extraFolders) {
-        if (ef.path) orderLookup.set(ef.path, ef.sort_order || 0);
-      }
-    }
-    const folders = Array.from(subs.entries())
-      .map(([name, info]) => {
-        const fullPath = prefix ? `${prefix}/${name}` : name;
-        return { name, ...info, sortOrder: orderLookup.get(fullPath) || 0 };
-      })
-      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+    const { subfolders: folders, currentProducts: prods } = buildProductFolderLevel(
+      products,
+      folderPath,
+      Array.isArray(extraFolders) ? extraFolders : [],
+    );
 
     const rows: PickerListRow[] = folders.map((f) => ({
       type: 'folder',
@@ -526,7 +478,7 @@ export default function ProductPickerScreen() {
           haptic('success');
           s.addProduct(match);
           scanAddCountRef.current += 1;
-          setScanFeedback(`+1 ${match.name} · в чеке ${scanAddCountRef.current}`);
+          setScanFeedback(`+1 ${match.name} · добавлено ${scanAddCountRef.current}`);
           return; // сканер НЕ закрываем — ждём следующий товар
         }
       }
@@ -559,6 +511,7 @@ export default function ProductPickerScreen() {
 
   const sessionWarrantyNames = session?.warrantyNames;
   const sessionShowCostPrice = !!session?.showCostPrice;
+  const priceKind = session?.priceKind ?? 'sell';
   const renderItem = useCallback(
     ({ item }: { item: PickerListRow }) => {
       if (item.type === 'folder') {
@@ -581,6 +534,7 @@ export default function ProductPickerScreen() {
           product={item.product}
           cartQty={qty}
           showCostPrice={sessionShowCostPrice}
+          priceKind={priceKind}
           underWarranty={underWarranty}
           onPress={handleRowPress}
           onIncrement={handleIncrement}
@@ -594,6 +548,7 @@ export default function ProductPickerScreen() {
       cartMap,
       sessionWarrantyNames,
       sessionShowCostPrice,
+      priceKind,
       handleRowPress,
       handleIncrement,
       handleDecrement,
@@ -804,7 +759,9 @@ export default function ProductPickerScreen() {
               </View>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>В чеке</Text>
+              <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>
+                {session?.totalLabel ?? 'В чеке'}
+              </Text>
               <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
                 {formatMoney(cartTotals.sum)}
               </Text>

@@ -8,6 +8,7 @@ import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
 import { UpdateMyCompanyDto } from './dto/company.dto';
+import { ParseUuidParam } from '../common/parse-uuid.pipe';
 
 // Superadmin manages ALL tenants here (by explicit :id), so these writes are
 // legitimately tenant-less — exempt from the tenant-less write block. The one
@@ -62,6 +63,16 @@ export class TenantsController {
   @Get('tenants/:id/cabinet')
   getCabinet(@Param('id') id: string) {
     return this.tenantsService.getCabinet(id);
+  }
+
+  @Roles('superadmin')
+  @Get('tenants/:id/audit-log')
+  tenantAuditLog(
+    @Param('id', ParseUuidParam) id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.audit.listForTenant(id, null, limit, offset);
   }
 
   // 173 — актор нужен для аудита `tenant_create` (создание тенанта раньше в

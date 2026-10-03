@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v16
+//  Autexa PWA Service Worker v17
 //
 //  SPEED STRATEGY:
 //  - GET /api/auth/* → bypass SW, always network (auth must be fresh)
@@ -48,8 +48,8 @@
 //    Ничего не дропается.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v16';
-const API_CACHE = 'autexa-api-v16';
+const STATIC_CACHE = 'autexa-static-v17';
+const API_CACHE = 'autexa-api-v17';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 const FAILED_STORE = 'autexa-offline-failed';
 const IDB_VERSION = 2; // v2: + FAILED_STORE
@@ -96,6 +96,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api')) {
     // Auth: always bypass — must never get stale auth data
     if (url.pathname.startsWith('/api/auth')) return;
+
+    // Integration keys/configuration must never be queued or returned stale.
+    // A lost create/rotate response requires an explicit owner retry.
+    if (url.pathname === '/api/one-c' || url.pathname.startsWith('/api/one-c/')) return;
 
     // Mutations: network with offline queue
     if (request.method !== 'GET') {

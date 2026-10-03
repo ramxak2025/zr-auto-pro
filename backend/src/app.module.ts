@@ -59,6 +59,7 @@ import { PlanningModule } from './planning/planning.module';
 import { PointsModule } from './points/points.module';
 import { VinModule } from './vin/vin.module';
 import { PlatformManagersModule } from './platform-managers/platform-managers.module';
+import { OneCModule } from './one-c/one-c.module';
 
 @Module({
   imports: [
@@ -121,6 +122,7 @@ import { PlatformManagersModule } from './platform-managers/platform-managers.mo
     PointsModule,
     VinModule,
     PlatformManagersModule,
+    OneCModule,
   ],
   providers: [MigrationRunner],
 })

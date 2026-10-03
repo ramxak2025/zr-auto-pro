@@ -4,7 +4,7 @@
  * что у шторок сотрудника/филиала в карточке автосервиса.
  *
  * Клавиатура: RN-core <Modal> — отдельное нативное окно, поэтому внутри свой
- * KeyboardProvider, а шторку поднимает KeyboardAwareView (правило проекта, см.
+ * KeyboardProvider, а поля прокручивает KeyboardAwareScroll (правило проекта, см.
  * components/KeyboardAware.tsx).
  */
 import React from 'react';
@@ -12,16 +12,17 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   TextInput,
   View,
+  useWindowDimensions,
   type TextInputProps,
 } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { KeyboardAwareView } from '../../components/KeyboardAware';
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
@@ -35,6 +36,7 @@ interface AdminSheetProps {
   saveLabel?: string;
   saving?: boolean;
   saveDisabled?: boolean;
+  destructive?: boolean;
   onClose: () => void;
   onSave: () => void;
   children: React.ReactNode;
@@ -47,44 +49,64 @@ export function AdminSheet({
   saveLabel = 'Сохранить',
   saving = false,
   saveDisabled = false,
+  destructive = false,
   onClose,
   onSave,
   children,
 }: AdminSheetProps) {
   const palette = useColors();
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType="slide" onRequestClose={onClose}>
       <KeyboardProvider>
-        <View style={styles.sheetBackdrop}>
-          <KeyboardAwareView style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+        <View style={[styles.sheetBackdrop, { paddingLeft: insets.left, paddingRight: insets.right }]}>
+          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas, maxHeight: height - insets.top - 12 }]}>
+            <Text accessibilityRole="header" style={[styles.sheetTitle, { color: palette.text.primary }]}>
+              {title}
+            </Text>
             <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={onClose} hitSlop={8}>
+              <Pressable onPress={onClose} style={styles.headerButton} accessibilityRole="button">
                 <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
               </Pressable>
-              <Text style={[styles.sheetTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                {title}
-              </Text>
-              <Pressable onPress={onSave} disabled={saving || saveDisabled} hitSlop={8}>
+              <Pressable
+                onPress={onSave}
+                disabled={saving || saveDisabled}
+                style={styles.headerButton}
+                accessibilityRole="button"
+                accessibilityLabel={saveLabel}
+                accessibilityState={{ disabled: saving || saveDisabled, busy: saving }}
+              >
                 {saving ? (
                   <ActivityIndicator size="small" color={palette.accent.primary} />
                 ) : (
                   <Text
-                    style={[styles.sheetSave, { color: saveDisabled ? palette.text.tertiary : palette.accent.primary }]}
+                    style={[
+                      styles.sheetSave,
+                      {
+                        color: saveDisabled
+                          ? palette.text.tertiary
+                          : destructive
+                            ? colors.red[600]
+                            : palette.accent.primary,
+                      },
+                    ]}
                   >
                     {saveLabel}
                   </Text>
                 )}
               </Pressable>
             </View>
-            <ScrollView
-              contentContainerStyle={styles.sheetScroll}
+            <KeyboardAwareScroll
+              style={styles.form}
+              reserveTabBar={false}
+              extraKeyboardBottomOffset={16}
+              contentContainerStyle={[styles.sheetScroll, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
             >
               {children}
-              <View style={{ height: spacing[8] }} />
-            </ScrollView>
-          </KeyboardAwareView>
+            </KeyboardAwareScroll>
+          </View>
         </View>
       </KeyboardProvider>
     </Modal>
@@ -350,7 +372,7 @@ export function SheetOptionRow({ title, subtitle, selected, onPress }: SheetOpti
 const styles = StyleSheet.create({
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   sheet: {
-    maxHeight: '92%',
+    flexShrink: 1,
     borderTopLeftRadius: borderRadius['3xl'],
     borderTopRightRadius: borderRadius['3xl'],
     paddingTop: spacing[2],
@@ -361,11 +383,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing[3],
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
+    paddingVertical: spacing[1],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   sheetCancel: { fontSize: 15, fontWeight: '500' },
-  sheetTitle: { fontSize: 16, fontWeight: '700', flexShrink: 1 },
+  sheetTitle: { fontSize: 20, fontWeight: '700', paddingHorizontal: spacing[4], paddingTop: spacing[3] },
+  headerButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing[1], flexShrink: 1 },
+  form: { flexGrow: 0, flexShrink: 1 },
   sheetSave: { fontSize: 15, fontWeight: '700' },
   sheetScroll: { padding: spacing[4], gap: spacing[2] },
   fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1], marginTop: spacing[2] },

@@ -1,4 +1,4 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig, type AxiosRequestConfig } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 import { rememberSessionEndedNotice } from '../utils/sessionNotice';
@@ -35,6 +35,22 @@ const IDEMPOTENT_METHODS = new Set(['get', 'head', 'options']);
 // Custom marker so a request is retried against the reserve at most once (loop
 // guard): once we flip it, an inner failure re-enters the interceptor and skips.
 type ReserveRetryConfig = InternalAxiosRequestConfig & { _reserveRetried?: boolean };
+type SessionBoundConfig = AxiosRequestConfig & { _expectedSessionToken?: string };
+
+/** Capture the owner before axios schedules its interceptors or a reserve retry. */
+export function createSessionBoundClient(token: string | null) {
+  const request = <T = unknown>(config: AxiosRequestConfig) => {
+    if (!token || readStoredToken() !== token) return Promise.reject(sessionTakeoverError());
+    return api.request<T>({ ...config, _expectedSessionToken: token } as SessionBoundConfig);
+  };
+  return {
+    get: <T = unknown>(url: string, config?: AxiosRequestConfig) => request<T>({ ...config, method: 'get', url }),
+    post: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'post', url, data }),
+    patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'patch', url, data }),
+  };
+}
 
 api.interceptors.request.use((config) => {
   // ── Сессию перевыпустили в ДРУГОЙ вкладке (167) ───────────────────────────
@@ -48,6 +64,8 @@ api.interceptors.request.use((config) => {
     throw sessionTakeoverError();
   }
   const token = readStoredToken();
+  const expectedToken = (config as SessionBoundConfig)._expectedSessionToken;
+  if (expectedToken !== undefined && token !== expectedToken) throw sessionTakeoverError();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

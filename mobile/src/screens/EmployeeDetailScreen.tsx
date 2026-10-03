@@ -62,6 +62,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
@@ -237,6 +238,7 @@ export default function EmployeeDetailScreen() {
   // user_management (isOwnerLike ниже); у одноточечного тенанта пункта нет.
   const [pointsOpen, setPointsOpen] = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
+  const awardAfterDismiss = useRef(false);
 
   // ── Achievement remove (custom only, long press) ─────────────────────
   const removeAch = useMutation({
@@ -741,7 +743,9 @@ export default function EmployeeDetailScreen() {
                     { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                   ]}
                 >
-                  <Text style={styles.trophyPreviewIcon}>{a.icon || '🏆'}</Text>
+                  <Text style={styles.trophyPreviewIcon} maxFontSizeMultiplier={1.3}>
+                    {a.icon || '🏆'}
+                  </Text>
                   <Text style={[styles.trophyPreviewName, { color: palette.text.primary }]} numberOfLines={2}>
                     {a.name}
                   </Text>
@@ -789,12 +793,24 @@ export default function EmployeeDetailScreen() {
       ) : null}
       <AchievementsModal
         visible={achievementsOpen}
-        onClose={() => setAchievementsOpen(false)}
+        onClose={() => {
+          awardAfterDismiss.current = false;
+          setAchievementsOpen(false);
+        }}
+        onDismiss={() => {
+          if (awardAfterDismiss.current) {
+            awardAfterDismiss.current = false;
+            setAwardOpen(true);
+          }
+        }}
         achievements={achievements}
         isOwnerLike={isOwnerLike}
         onAdd={() => {
+          // UIKit cannot present the award form while the trophy sheet's
+          // dismissal is still in progress. Android dialogs do not share it.
+          awardAfterDismiss.current = Platform.OS === 'ios';
           setAchievementsOpen(false);
-          setAwardOpen(true);
+          if (Platform.OS !== 'ios') setAwardOpen(true);
         }}
         onLongPress={(a) => {
           if (a.type !== 'custom') return;
@@ -1782,6 +1798,7 @@ function LearningSummary({ employeeId, accent, palette }: { employeeId: string; 
 function AchievementsModal({
   visible,
   onClose,
+  onDismiss,
   achievements,
   isOwnerLike,
   onAdd,
@@ -1790,19 +1807,37 @@ function AchievementsModal({
 }: {
   visible: boolean;
   onClose: () => void;
+  onDismiss: () => void;
   achievements: EmployeeAchievement[];
   isOwnerLike: boolean;
   onAdd: () => void;
   onLongPress: (a: EmployeeAchievement) => void;
   palette: Palette;
 }) {
+  const insets = useSafeAreaInsets();
   const auto = achievements.filter((a) => a.type === 'auto');
   const custom = achievements.filter((a) => a.type === 'custom');
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={[styles.modalSheet, { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle }]}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      onRequestClose={onClose}
+      onDismiss={onDismiss}
+      statusBarTranslucent
+    >
+      <View style={[styles.modalBackdrop, { paddingTop: insets.top + spacing[3] }]}>
+        <View
+          style={[
+            styles.modalSheet,
+            {
+              backgroundColor: palette.bg.canvas,
+              borderColor: palette.border.subtle,
+              paddingBottom: insets.bottom + spacing[3],
+            },
+          ]}
+        >
           <View style={[styles.modalHandle, { backgroundColor: palette.border.strong }]} />
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Все значки</Text>
@@ -1811,7 +1846,11 @@ function AchievementsModal({
             </Pressable>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={{ flexShrink: 1 }}
+            contentContainerStyle={styles.modalScroll}
+            showsVerticalScrollIndicator={false}
+          >
             {achievements.length === 0 && (
               <View
                 style={[styles.emptyTrophy, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
@@ -1838,7 +1877,9 @@ function AchievementsModal({
                         { borderColor: a.color || colors.amber[600] },
                       ]}
                     >
-                      <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
+                      <Text style={styles.trophyIcon} maxFontSizeMultiplier={1.3}>
+                        {a.icon || '🏆'}
+                      </Text>
                       <Text style={[styles.trophyName, { color: colors.gray[900] }]} numberOfLines={2}>
                         {a.name}
                       </Text>
@@ -1865,7 +1906,9 @@ function AchievementsModal({
                         { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
                       ]}
                     >
-                      <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
+                      <Text style={styles.trophyIcon} maxFontSizeMultiplier={1.3}>
+                        {a.icon || '🏆'}
+                      </Text>
                       <Text style={[styles.trophyName, { color: palette.text.primary }]} numberOfLines={2}>
                         {a.name}
                       </Text>
@@ -2401,7 +2444,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
-  trophyPreviewIcon: { fontSize: 26 },
+  trophyPreviewIcon: { fontSize: 26, lineHeight: 36 },
   trophyPreviewName: { fontSize: 11, fontWeight: '700', textAlign: 'center', lineHeight: 14 },
 
   // ── Trophy badge (used in modal) ────────────────────────────────────
@@ -2423,7 +2466,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  trophyIcon: { fontSize: 36 },
+  trophyIcon: { fontSize: 36, lineHeight: 48 },
   trophyName: { fontSize: 12, fontWeight: '700', textAlign: 'center', lineHeight: 15 },
   trophyDesc: { fontSize: 10, textAlign: 'center', lineHeight: 13, marginTop: 2 },
 
@@ -2475,7 +2518,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[6],
-    maxHeight: '88%',
+    maxHeight: '100%',
+    flexShrink: 1,
   },
   modalHandle: {
     alignSelf: 'center',
@@ -2494,6 +2538,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing[2],
   },
   modalTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: '800',
     letterSpacing: -0.4,

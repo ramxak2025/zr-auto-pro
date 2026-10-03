@@ -19,6 +19,7 @@
  * данные — `managerApi.tenants()`, удаления и правки реквизитов нет.
  */
 import React from 'react';
+import { AdminSheet } from './adminSheet';
 import {
   View,
   StyleSheet,
@@ -531,47 +532,185 @@ export default function AdminTenantsScreen() {
       ) : null}
 
       {/* Create / edit sheet */}
-      <Modal
+      <AdminSheet
         visible={!!editing}
-        transparent
-        statusBarTranslucent
-        animationType="slide"
-        onRequestClose={() => setEditing(null)}
+        title={editing?.id ? 'Автосервис' : 'Новый автосервис'}
+        onClose={() => {
+          setPicker(null);
+          setEditing(null);
+        }}
+        onSave={handleSave}
+        saving={saving}
       >
-        <View style={styles.sheetBackdrop}>
-          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
-            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={() => setEditing(null)} hitSlop={8}>
-                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
-                {editing?.id ? 'Автосервис' : 'Новый автосервис'}
-              </Text>
-              <Pressable onPress={handleSave} disabled={saving} hitSlop={8}>
-                {saving ? (
-                  <ActivityIndicator size="small" color={palette.accent.primary} />
-                ) : (
-                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
-                )}
+        {editing && (
+          <>
+            {/* ── Компания ── */}
+            <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Компания</Text>
+            <Field label="Название" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="Например, Автосервис на Ленина"
+                placeholderTextColor={palette.text.tertiary}
+                value={editing.name}
+                onChangeText={(v) => setEditing({ ...editing, name: v })}
+                autoCorrect={false}
+              />
+            </Field>
+            <Field label="Телефон" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="+7 (___) ___-__-__"
+                placeholderTextColor={palette.text.tertiary}
+                keyboardType="phone-pad"
+                value={editing.phone}
+                onChangeText={(v) => setEditing({ ...editing, phone: formatPhone(v) })}
+              />
+            </Field>
+            <Field label="Адрес" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="Город, улица, дом"
+                placeholderTextColor={palette.text.tertiary}
+                value={editing.address}
+                onChangeText={(v) => setEditing({ ...editing, address: v })}
+              />
+            </Field>
+            <Field label="Email" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="mail@example.com"
+                placeholderTextColor={palette.text.tertiary}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={editing.email}
+                onChangeText={(v) => setEditing({ ...editing, email: v })}
+              />
+            </Field>
+            <Field label="Описание" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, styles.inputMultiline, { color: palette.text.primary }]}
+                placeholder="Заметка об автосервисе"
+                placeholderTextColor={palette.text.tertiary}
+                multiline
+                value={editing.description}
+                onChangeText={(v) => setEditing({ ...editing, description: v })}
+              />
+            </Field>
+
+            {/* ── Подписка ── */}
+            <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Подписка</Text>
+            <View style={styles.field}>
+              <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Тариф</Text>
+              <Pressable
+                onPress={() => {
+                  if (activePlans.length === 0) {
+                    Alert.alert('Нет тарифов', 'Сначала создайте тариф в разделе «Тарифы».');
+                    return;
+                  }
+                  haptic('tap');
+                  setPicker('plan');
+                }}
+                style={[styles.pickerRow, surface.cardCompact]}
+              >
+                <Text
+                  style={[
+                    styles.pickerValue,
+                    { color: selectedPlanName ? palette.text.primary : palette.text.tertiary },
+                  ]}
+                >
+                  {selectedPlanName ?? 'Не выбран'}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
               </Pressable>
             </View>
-
-            {editing && (
-              <ScrollView
-                contentContainerStyle={styles.sheetScroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                {/* ── Компания ── */}
-                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Компания</Text>
-                <Field label="Название" palette={palette} surface={surface}>
+            {/* Менеджер клиента — только при создании и когда есть кого выбрать */}
+            {!editing.id && activeManagers.length > 0 ? (
+              <View style={styles.field}>
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Менеджер</Text>
+                <Pressable
+                  onPress={() => {
+                    haptic('tap');
+                    setPicker('manager');
+                  }}
+                  style={[styles.pickerRow, surface.cardCompact]}
+                >
+                  <Text
+                    style={[
+                      styles.pickerValue,
+                      { color: selectedManagerName ? palette.text.primary : palette.text.tertiary },
+                    ]}
+                  >
+                    {selectedManagerName ?? 'Без менеджера'}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                </Pressable>
+              </View>
+            ) : null}
+            <View style={styles.fieldRow}>
+              <Field label="Макс. польз." palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="1"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="number-pad"
+                  value={editing.maxUsers}
+                  onChangeText={(v) => setEditing({ ...editing, maxUsers: v.replace(/[^0-9]/g, '') })}
+                />
+              </Field>
+              <Field label="Оплачено до" palette={palette} surface={surface} flex>
+                <TextInput
+                  style={[styles.input, { color: palette.text.primary }]}
+                  placeholder="ГГГГ-ММ-ДД"
+                  placeholderTextColor={palette.text.tertiary}
+                  keyboardType="numbers-and-punctuation"
+                  autoCorrect={false}
+                  value={editing.subscriptionEnd}
+                  onChangeText={(v) => setEditing({ ...editing, subscriptionEnd: v.replace(/[^0-9-]/g, '') })}
+                />
+              </Field>
+            </View>
+            <Field label="Примечание к подписке" palette={palette} surface={surface}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="Например, договорённость об оплате"
+                placeholderTextColor={palette.text.tertiary}
+                value={editing.subscriptionNote}
+                onChangeText={(v) => setEditing({ ...editing, subscriptionNote: v })}
+              />
+            </Field>
+            {editing.id ? (
+              <>
+                <Field label="Доп. минуты голоса (надбавка)" palette={palette} surface={surface}>
                   <TextInput
                     style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="Например, Автосервис на Ленина"
+                    placeholder="0"
                     placeholderTextColor={palette.text.tertiary}
-                    value={editing.name}
-                    onChangeText={(v) => setEditing({ ...editing, name: v })}
-                    autoCorrect={false}
+                    keyboardType="number-pad"
+                    value={editing.voiceMinutesExtra}
+                    onChangeText={(v) => setEditing({ ...editing, voiceMinutesExtra: v.replace(/[^0-9]/g, '') })}
+                  />
+                </Field>
+                <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
+                  Прибавляется к пакету минут голосового ввода из тарифа. 0 = без надбавки.
+                </Text>
+              </>
+            ) : null}
+
+            {/* ── Директор (только при создании) ── */}
+            {!editing.id ? (
+              <>
+                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Директор</Text>
+                <Text style={[styles.sectionHint, { color: palette.text.tertiary }]}>
+                  Необязательно. Если указать, будет создан владелец автосервиса.
+                </Text>
+                <Field label="Имя" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="Имя директора"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editing.directorName}
+                    onChangeText={(v) => setEditing({ ...editing, directorName: v })}
                   />
                 </Field>
                 <Field label="Телефон" palette={palette} surface={surface}>
@@ -580,265 +719,103 @@ export default function AdminTenantsScreen() {
                     placeholder="+7 (___) ___-__-__"
                     placeholderTextColor={palette.text.tertiary}
                     keyboardType="phone-pad"
-                    value={editing.phone}
-                    onChangeText={(v) => setEditing({ ...editing, phone: formatPhone(v) })}
+                    value={editing.directorPhone}
+                    onChangeText={(v) => setEditing({ ...editing, directorPhone: formatPhone(v) })}
                   />
                 </Field>
-                <Field label="Адрес" palette={palette} surface={surface}>
+                <Field label="Пароль" palette={palette} surface={surface}>
                   <TextInput
                     style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="Город, улица, дом"
+                    placeholder="Минимум 8 символов"
                     placeholderTextColor={palette.text.tertiary}
-                    value={editing.address}
-                    onChangeText={(v) => setEditing({ ...editing, address: v })}
-                  />
-                </Field>
-                <Field label="Email" palette={palette} surface={surface}>
-                  <TextInput
-                    style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="mail@example.com"
-                    placeholderTextColor={palette.text.tertiary}
-                    keyboardType="email-address"
+                    secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
-                    value={editing.email}
-                    onChangeText={(v) => setEditing({ ...editing, email: v })}
+                    value={editing.directorPassword}
+                    onChangeText={(v) => setEditing({ ...editing, directorPassword: v })}
                   />
                 </Field>
-                <Field label="Описание" palette={palette} surface={surface}>
-                  <TextInput
-                    style={[styles.input, styles.inputMultiline, { color: palette.text.primary }]}
-                    placeholder="Заметка об автосервисе"
-                    placeholderTextColor={palette.text.tertiary}
-                    multiline
-                    value={editing.description}
-                    onChangeText={(v) => setEditing({ ...editing, description: v })}
-                  />
-                </Field>
-
-                {/* ── Подписка ── */}
-                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Подписка</Text>
-                <View style={styles.field}>
-                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Тариф</Text>
-                  <Pressable
-                    onPress={() => {
-                      if (activePlans.length === 0) {
-                        Alert.alert('Нет тарифов', 'Сначала создайте тариф в разделе «Тарифы».');
-                        return;
-                      }
-                      haptic('tap');
-                      setPicker('plan');
+              </>
+            ) : (
+              <>
+                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Статус</Text>
+                <View style={[styles.switchBox, surface.cardCompact]}>
+                  <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                    {editing.isActive ? 'Активен' : 'Отключён'}
+                  </Text>
+                  <Switch
+                    value={editing.isActive}
+                    onValueChange={(v) => {
+                      haptic('select');
+                      setEditing({ ...editing, isActive: v });
                     }}
-                    style={[styles.pickerRow, surface.cardCompact]}
-                  >
-                    <Text
-                      style={[
-                        styles.pickerValue,
-                        { color: selectedPlanName ? palette.text.primary : palette.text.tertiary },
-                      ]}
-                    >
-                      {selectedPlanName ?? 'Не выбран'}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-                  </Pressable>
-                </View>
-                {/* Менеджер клиента — только при создании и когда есть кого выбрать */}
-                {!editing.id && activeManagers.length > 0 ? (
-                  <View style={styles.field}>
-                    <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Менеджер</Text>
-                    <Pressable
-                      onPress={() => {
-                        haptic('tap');
-                        setPicker('manager');
-                      }}
-                      style={[styles.pickerRow, surface.cardCompact]}
-                    >
-                      <Text
-                        style={[
-                          styles.pickerValue,
-                          { color: selectedManagerName ? palette.text.primary : palette.text.tertiary },
-                        ]}
-                      >
-                        {selectedManagerName ?? 'Без менеджера'}
-                      </Text>
-                      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-                    </Pressable>
-                  </View>
-                ) : null}
-                <View style={styles.fieldRow}>
-                  <Field label="Макс. польз." palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="1"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="number-pad"
-                      value={editing.maxUsers}
-                      onChangeText={(v) => setEditing({ ...editing, maxUsers: v.replace(/[^0-9]/g, '') })}
-                    />
-                  </Field>
-                  <Field label="Оплачено до" palette={palette} surface={surface} flex>
-                    <TextInput
-                      style={[styles.input, { color: palette.text.primary }]}
-                      placeholder="ГГГГ-ММ-ДД"
-                      placeholderTextColor={palette.text.tertiary}
-                      keyboardType="numbers-and-punctuation"
-                      autoCorrect={false}
-                      value={editing.subscriptionEnd}
-                      onChangeText={(v) => setEditing({ ...editing, subscriptionEnd: v.replace(/[^0-9-]/g, '') })}
-                    />
-                  </Field>
-                </View>
-                <Field label="Примечание к подписке" palette={palette} surface={surface}>
-                  <TextInput
-                    style={[styles.input, { color: palette.text.primary }]}
-                    placeholder="Например, договорённость об оплате"
-                    placeholderTextColor={palette.text.tertiary}
-                    value={editing.subscriptionNote}
-                    onChangeText={(v) => setEditing({ ...editing, subscriptionNote: v })}
+                    trackColor={{ true: palette.accent.primary }}
                   />
-                </Field>
-                {editing.id ? (
-                  <>
-                    <Field label="Доп. минуты голоса (надбавка)" palette={palette} surface={surface}>
-                      <TextInput
-                        style={[styles.input, { color: palette.text.primary }]}
-                        placeholder="0"
-                        placeholderTextColor={palette.text.tertiary}
-                        keyboardType="number-pad"
-                        value={editing.voiceMinutesExtra}
-                        onChangeText={(v) => setEditing({ ...editing, voiceMinutesExtra: v.replace(/[^0-9]/g, '') })}
-                      />
-                    </Field>
-                    <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
-                      Прибавляется к пакету минут голосового ввода из тарифа. 0 = без надбавки.
-                    </Text>
-                  </>
-                ) : null}
+                </View>
+              </>
+            )}
 
-                {/* ── Директор (только при создании) ── */}
-                {!editing.id ? (
-                  <>
-                    <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Директор</Text>
-                    <Text style={[styles.sectionHint, { color: palette.text.tertiary }]}>
-                      Необязательно. Если указать, будет создан владелец автосервиса.
-                    </Text>
-                    <Field label="Имя" palette={palette} surface={surface}>
-                      <TextInput
-                        style={[styles.input, { color: palette.text.primary }]}
-                        placeholder="Имя директора"
-                        placeholderTextColor={palette.text.tertiary}
-                        value={editing.directorName}
-                        onChangeText={(v) => setEditing({ ...editing, directorName: v })}
-                      />
-                    </Field>
-                    <Field label="Телефон" palette={palette} surface={surface}>
-                      <TextInput
-                        style={[styles.input, { color: palette.text.primary }]}
-                        placeholder="+7 (___) ___-__-__"
-                        placeholderTextColor={palette.text.tertiary}
-                        keyboardType="phone-pad"
-                        value={editing.directorPhone}
-                        onChangeText={(v) => setEditing({ ...editing, directorPhone: formatPhone(v) })}
-                      />
-                    </Field>
-                    <Field label="Пароль" palette={palette} surface={surface}>
-                      <TextInput
-                        style={[styles.input, { color: palette.text.primary }]}
-                        placeholder="Минимум 8 символов"
-                        placeholderTextColor={palette.text.tertiary}
-                        secureTextEntry
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        value={editing.directorPassword}
-                        onChangeText={(v) => setEditing({ ...editing, directorPassword: v })}
-                      />
-                    </Field>
-                  </>
+            {/* Destructive: delete the whole tenant (existing only). */}
+            {editing.id ? (
+              <Pressable
+                onPress={handleDelete}
+                disabled={removeMutation.isPending}
+                style={[styles.deleteTenantBtn, { borderColor: colors.red[200] }]}
+              >
+                {removeMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.red[600]} />
                 ) : (
                   <>
-                    <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Статус</Text>
-                    <View style={[styles.switchBox, surface.cardCompact]}>
-                      <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
-                        {editing.isActive ? 'Активен' : 'Отключён'}
-                      </Text>
-                      <Switch
-                        value={editing.isActive}
-                        onValueChange={(v) => {
-                          haptic('select');
-                          setEditing({ ...editing, isActive: v });
-                        }}
-                        trackColor={{ true: palette.accent.primary }}
-                      />
-                    </View>
+                    <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
+                    <Text style={[styles.deleteTenantText, { color: colors.red[600] }]}>Удалить автосервис</Text>
                   </>
                 )}
-
-                {/* Destructive: delete the whole tenant (existing only). */}
-                {editing.id ? (
-                  <Pressable
-                    onPress={handleDelete}
-                    disabled={removeMutation.isPending}
-                    style={[styles.deleteTenantBtn, { borderColor: colors.red[200] }]}
-                  >
-                    {removeMutation.isPending ? (
-                      <ActivityIndicator size="small" color={colors.red[600]} />
-                    ) : (
-                      <>
-                        <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
-                        <Text style={[styles.deleteTenantText, { color: colors.red[600] }]}>Удалить автосервис</Text>
-                      </>
-                    )}
-                  </Pressable>
-                ) : null}
-
-                <View style={{ height: spacing[8] }} />
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Plan / manager pickers (nested over the sheet) */}
-      <OptionPickerModal
-        visible={picker === 'plan'}
-        title="Выберите тариф"
-        options={activePlans.map((p) => ({
-          id: p.id,
-          title: p.name,
-          meta: `${formatMoney(p.monthlyPrice)}/мес · до ${p.maxUsers} польз.`,
-        }))}
-        selectedId={editing?.planId ?? null}
-        clearLabel="Без тарифа"
-        onSelect={(planId) => {
-          const plan = activePlans.find((p) => p.id === planId);
-          setEditing((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  planId,
-                  // Auto-suggest the plan's seat limit when none typed yet.
-                  maxUsers: plan && !prev.maxUsers.trim() ? String(plan.maxUsers) : prev.maxUsers,
-                }
-              : prev,
-          );
-          setPicker(null);
-        }}
-        onClose={() => setPicker(null)}
-        palette={palette}
-      />
-      <OptionPickerModal
-        visible={picker === 'manager'}
-        title="Выберите менеджера"
-        options={activeManagers.map((m) => ({ id: m.id, title: m.fullName, meta: formatPhone(m.phone) }))}
-        selectedId={editing?.managerId ?? null}
-        clearLabel="Без менеджера"
-        onSelect={(managerId) => {
-          setEditing((prev) => (prev ? { ...prev, managerId } : prev));
-          setPicker(null);
-        }}
-        onClose={() => setPicker(null)}
-        palette={palette}
-      />
+              </Pressable>
+            ) : null}
+          </>
+        )}
+        {/* Plan / manager pickers (nested over the sheet) */}
+        <OptionPickerModal
+          visible={picker === 'plan'}
+          title="Выберите тариф"
+          options={activePlans.map((p) => ({
+            id: p.id,
+            title: p.name,
+            meta: `${formatMoney(p.monthlyPrice)}/мес · до ${p.maxUsers} польз.`,
+          }))}
+          selectedId={editing?.planId ?? null}
+          clearLabel="Без тарифа"
+          onSelect={(planId) => {
+            const plan = activePlans.find((p) => p.id === planId);
+            setEditing((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    planId,
+                    // Auto-suggest the plan's seat limit when none typed yet.
+                    maxUsers: plan && !prev.maxUsers.trim() ? String(plan.maxUsers) : prev.maxUsers,
+                  }
+                : prev,
+            );
+            setPicker(null);
+          }}
+          onClose={() => setPicker(null)}
+          palette={palette}
+        />
+        <OptionPickerModal
+          visible={picker === 'manager'}
+          title="Выберите менеджера"
+          options={activeManagers.map((m) => ({ id: m.id, title: m.fullName, meta: formatPhone(m.phone) }))}
+          selectedId={editing?.managerId ?? null}
+          clearLabel="Без менеджера"
+          onSelect={(managerId) => {
+            setEditing((prev) => (prev ? { ...prev, managerId } : prev));
+            setPicker(null);
+          }}
+          onClose={() => setPicker(null)}
+          palette={palette}
+        />
+      </AdminSheet>
     </View>
   );
 }

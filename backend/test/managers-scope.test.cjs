@@ -333,6 +333,7 @@ const EXPECTED_CABINET_ROUTES = [
   'POST /manager/tenants',
   'GET /manager/tenants/:id',
   'GET /manager/tenants/:id/cabinet',
+  'GET /manager/tenants/:id/audit-log',
   'POST /manager/tenants/:id/extend',
   'POST /manager/tenants/:id/assign-plan',
   'POST /manager/tenants/:id/suspend',
@@ -357,7 +358,7 @@ const EXPECTED_ADMIN_ROUTES = [
 const routeKeys = (controllers) =>
   controllers.flatMap((Controller) => routesOf(Controller).map((r) => methodKey(r.verb, r.path))).sort();
 
-test('кабинет менеджера: ровно 13 маршрутов, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
+test('кабинет менеджера: ровно 14 маршрутов, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
   const routes = routesOf(ManagerCabinetController);
   assert.deepEqual(routeKeys([ManagerCabinetController]), [...EXPECTED_CABINET_ROUTES].sort());
   for (const route of routes) {
@@ -425,7 +426,7 @@ test('маршруты контроллеров 1:1 совпадают с кон
     AdminTenantManagerController,
   ]).map((key) => key.replace(/:\w+/g, ':p'));
   const fromContract = contractManagerRoutes();
-  assert.equal(fromContract.length, 21, `в контракте ожидалось 21 маршрут (13 + 8), найдено ${fromContract.length}`);
+  assert.equal(fromContract.length, 22, `в контракте ожидалось 22 маршрута (14 + 8), найдено ${fromContract.length}`);
   assert.deepEqual([...fromController].sort(), fromContract);
 });
 
@@ -5311,7 +5312,7 @@ test("RolesGuard: файл guard'а не тронут — обход @Roles то
   assert.doesNotMatch(source, /manager|isPlatformRole|PLATFORM_ROLES|auth-cache/);
 });
 
-test('по всему API роль manager названа в @Roles ТОЛЬКО на 13 маршрутах кабинета менеджера', () => {
+test('по всему API роль manager названа в @Roles ТОЛЬКО на 14 маршрутах кабинета менеджера', () => {
   const controllers = allDistControllers();
   const namedManager = [];
   let routeCount = 0;
@@ -5476,7 +5477,7 @@ test('маршруты суперадмина в tenants и admin-audit: мен�
       closed += 1;
     }
   }
-  assert.equal(closed, 16, 'закрытых маршрутов суперадмина: 13 в TenantsController + 3 в AdminAuditController');
+  assert.equal(closed, 17, 'закрытых маршрутов суперадмина: 14 в TenantsController + 3 в AdminAuditController');
   assert.deepEqual(
     withoutRoles.sort(),
     ['TenantsController.getMyCompany', 'TenantsController.getSubscription', 'TenantsController.updateMyCompany'],

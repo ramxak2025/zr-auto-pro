@@ -1,10 +1,10 @@
-import { ReactNode, RefObject, useEffect, useId, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { ReactNode, RefObject, useId, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from './cn';
 import { IconButton } from './IconButton';
-import { lockBodyScroll, unlockBodyScroll } from './scrollLock';
+import { useDialogFocus } from './useDialogFocus';
 
 export type DrawerSize = 'sm' | 'md' | 'lg' | 'xl';
 
@@ -51,27 +51,8 @@ export function Drawer({
 }: DrawerProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const lastActiveRef = useRef<HTMLElement | null>(null);
   const reduced = useReducedMotion();
-
-  useEffect(() => {
-    if (!open) return;
-    lastActiveRef.current = document.activeElement as HTMLElement | null;
-    lockBodyScroll();
-    const t = window.setTimeout(() => {
-      (initialFocusRef?.current ?? panelRef.current)?.focus();
-    }, 20);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      window.clearTimeout(t);
-      document.removeEventListener('keydown', onKey);
-      unlockBodyScroll();
-      lastActiveRef.current?.focus?.();
-    };
-  }, [open, onClose, initialFocusRef]);
+  useDialogFocus(open, panelRef, onClose, initialFocusRef);
 
   // Минимальная ловушка фокуса: Tab с последнего элемента — на первый и наоборот.
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {

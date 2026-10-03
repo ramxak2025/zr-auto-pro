@@ -1,3 +1,4 @@
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
@@ -114,16 +115,6 @@ import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-
-/**
- * Full-warehouse limit for the shared ['all-products-check', { warehouseId }]
- * cache slot. MUST mirror `PICKER_PRODUCT_LIMIT` in `ProductPickerScreen.tsx`
- * (module-private there): both observers share one query key, so a smaller
- * limit here would re-introduce the "bundle component beyond position 500 is
- * silently dropped" bug the Round 7 audit closed. Effectively "no limit" —
- * the backend caps the response by tenant size, not by this number.
- */
-const PICKER_CACHE_PRODUCT_LIMIT = 100000;
 
 /**
  * Псевдо-индекс строки для пикера мастера: выбирается мастер ВСЕГО
@@ -908,7 +899,7 @@ export default function CheckCreateScreen() {
   // component beyond position 500 was SILENTLY dropped from the check and
   // the oversell guard went blind for those products. Now we observe the
   // exact scoped key the picker populates (['all-products-check',
-  // { warehouseId }], FULL list — same PICKER_CACHE_PRODUCT_LIMIT, no 500
+  // { warehouseId }], FULL list — all API pages, no 500
   // cap), so both consumers read the same complete list the user sees in
   // the picker. While `warehouses` is still resolving the key falls back to
   // the legacy un-scoped slot warmed by the login prefetch.
@@ -922,10 +913,7 @@ export default function CheckCreateScreen() {
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: pickerWarehouseId ? ['all-products-check', { warehouseId: pickerWarehouseId }] : ['all-products-check'],
     queryFn: async () => {
-      const params: { limit: number; warehouseId?: string } = { limit: PICKER_CACHE_PRODUCT_LIMIT };
-      if (pickerWarehouseId) params.warehouseId = pickerWarehouseId;
-      const res = await productsApi.getAll(params);
-      return res.data.data || res.data;
+      return loadProductCatalog(productsApi.getAll, { warehouseId: pickerWarehouseId || undefined });
     },
     enabled: false,
   });
@@ -983,10 +971,7 @@ export default function CheckCreateScreen() {
     queryClient.prefetchQuery({
       queryKey: wid ? ['all-products-check', { warehouseId: wid }] : ['all-products-check'],
       queryFn: async () => {
-        const params: { limit: number; warehouseId?: string } = { limit: PICKER_CACHE_PRODUCT_LIMIT };
-        if (wid) params.warehouseId = wid;
-        const res = await productsApi.getAll(params);
-        return res.data.data || res.data;
+        return loadProductCatalog(productsApi.getAll, { warehouseId: wid || undefined });
       },
       staleTime: 5 * 60_000,
     });

@@ -6,7 +6,9 @@
  * min(14, maxFreeDays) дней, поэтому срок всегда отправляем явно.
  */
 import React from 'react';
-import { Alert, Share } from 'react-native';
+import { Alert, Pressable, Share } from 'react-native';
+import { Text } from '../../platform/Typography';
+import { useColors } from '../../contexts/ThemeContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { managerApi, plansApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
@@ -38,6 +40,7 @@ interface ManagerCreateTenantSheetProps {
 }
 
 export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenant }: ManagerCreateTenantSheetProps) {
+  const palette = useColors();
   const queryClient = useQueryClient();
   const [name, setName] = React.useState('');
   const [phone, setPhone] = React.useState('');
@@ -65,13 +68,21 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
     wasVisible.current = visible;
   }, [visible]);
 
-  const { data: plans } = useQuery<Plan[]>({
+  const {
+    data: plans,
+    isError: plansError,
+    refetch: refetchPlans,
+  } = useQuery<Plan[]>({
     queryKey: ['admin-plans'],
     queryFn: async () => (await plansApi.getAll()).data,
     enabled: visible,
     placeholderData: (prev) => prev,
   });
-  const { data: summary } = useQuery<ManagerSummary>({
+  const {
+    data: summary,
+    isError: summaryError,
+    refetch: refetchSummary,
+  } = useQuery<ManagerSummary>({
     queryKey: ['manager', 'summary'],
     queryFn: async () => (await managerApi.summary()).data,
     enabled: visible,
@@ -159,6 +170,7 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
       title="Новый автосервис"
       saveLabel="Создать"
       saving={mutation.isPending}
+      saveDisabled={!summary || activePlans.length === 0}
       onClose={onClose}
       onSave={submit}
     >
@@ -173,6 +185,27 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
       <SheetInput label="Адрес" value={address} onChangeText={setAddress} placeholder="Необязательно" />
 
       <SheetLabel>Тариф</SheetLabel>
+      {(!summary || activePlans.length === 0) && (
+        <SheetHint icon="information-circle-outline">
+          {plansError || summaryError
+            ? 'Не удалось загрузить тарифы или условия пробного доступа.'
+            : plans
+              ? 'Нет доступных тарифов. Обратитесь к владельцу платформы.'
+              : 'Загружаем тарифы и условия…'}
+        </SheetHint>
+      )}
+      {(plansError || summaryError) && (
+        <Pressable
+          style={{ minHeight: 44, justifyContent: 'center' }}
+          accessibilityRole="button"
+          onPress={() => {
+            void refetchPlans();
+            void refetchSummary();
+          }}
+        >
+          <Text style={{ color: palette.accent.primary }}>Повторить загрузку</Text>
+        </Pressable>
+      )}
       {activePlans.map((p) => (
         <SheetOptionRow
           key={p.id}

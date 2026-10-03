@@ -1019,6 +1019,31 @@ export class SalaryService {
     return this.mapPenalty(p);
   }
 
+  async listUnviewedPenalties(tenantID: string, userID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT pen.*, c.full_name AS creator_name
+         FROM salary_penalties pen
+         LEFT JOIN users c ON c.id = pen.created_by AND c.tenant_id = pen.tenant_id
+        WHERE pen.tenant_id = $1 AND pen.user_id = $2 AND pen.viewed_at IS NULL
+        ORDER BY pen.created_at ASC, pen.id ASC
+        LIMIT 100`,
+      [tenantID, userID],
+    );
+    return rows.map((r) => this.mapPenalty(r));
+  }
+
+  async markPenaltyViewed(penaltyId: string, tenantID: string, userID: string) {
+    const { rows } = await this.pool.query(
+      `UPDATE salary_penalties
+          SET viewed_at = COALESCE(viewed_at, now())
+        WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+        RETURNING id, viewed_at`,
+      [penaltyId, tenantID, userID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Штраф не найден' });
+    return { penaltyId: rows[0].id, viewedAt: rows[0].viewed_at };
+  }
+
   async listPenalties(tenantID: string, query: { userId?: string }, pointId: string | null = null) {
     const conds: string[] = ['pen.tenant_id=$1'];
     const params: any[] = [tenantID];
@@ -1130,6 +1155,7 @@ export class SalaryService {
       createdBy: r.created_by ?? undefined,
       creatorName: r.creator_name ?? undefined,
       createdAt: r.created_at,
+      viewedAt: r.viewed_at ?? null,
     };
   }
 

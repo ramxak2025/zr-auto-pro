@@ -1,3 +1,5 @@
+import { productFolderParts, productFolderPath } from '../../../shared/utils/productFolders';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -44,22 +46,6 @@ import type { Product } from '../../../shared/types';
 const ROW_TAP_DEBOUNCE_MS = 500;
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-
-// Bug #58 — the in-cash picker must list EVERY product of the selected
-// warehouse, fully in sync with the Склад (ProductsScreen) list. The old
-// hard `limit: 500` silently truncated the server response at 500 rows:
-// the backend sorts `ORDER BY p.name` (products.service.getAll), so any
-// product whose name sorts past position 500 — e.g. «шланги газовые» («Ш»
-// is near the end of the Cyrillic alphabet) — never reached the client.
-// The picker then filters CLIENT-SIDE over that capped list, so neither
-// folder-browsing nor search could ever surface those tail products, even
-// though the warehouse screen found them (it searches SERVER-SIDE via
-// `productsApi.getAll({ search })`, which matches across the whole table).
-// The backend applies NO hard cap (`limit = parseInt(query.limit) || 100`),
-// so a high ceiling returns the entire warehouse in one page. Real tenants
-// never approach this count and FlashList virtualises the rows regardless,
-// so browse + client-side search now see the complete, in-sync list.
-const PICKER_PRODUCT_LIMIT = 100000;
 
 function formatMoney(v: number) {
   return (
@@ -159,7 +145,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
 }: PickerProductRowItemProps) {
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
   const photoUrl = getImageUrl((product as { photo?: string }).photo);
-  const categoryLeaf = product.category ? product.category.split('/').pop() : null;
+  const categoryLeaf = productFolderParts(product.category).pop();
   return (
     <Pressable
       onPress={() => onPress(product)}
@@ -335,18 +321,10 @@ export default function ProductPickerModal({
     refetch,
   } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
-    queryFn: async () => {
-      // `PICKER_PRODUCT_LIMIT` (not 500) so the whole warehouse loads and the
-      // picker mirrors Склад exactly — see bug #58 note on the constant.
-      const params: { limit: number; warehouseId?: string } = { limit: PICKER_PRODUCT_LIMIT };
-      if (warehouseId) params.warehouseId = warehouseId;
-      const res = await productsApi.getAll(params);
-      return (res.data?.data || res.data) as Product[];
-    },
+    queryFn: () => loadProductCatalog(productsApi.getAll, { warehouseId: warehouseId || undefined }),
     enabled: visible,
-    // Keep the previous list visible across mounts/refetches so the picker
-    // never blanks — same stale-while-revalidate idiom as ProductsScreen
-    // and the global QueryClient default. Explicit here as defence in depth.
+    // Reuse only the cache of this warehouse while refreshing. A previous
+    // warehouse must never appear under the newly selected warehouse label.
     //
     // Cold-slot seeding: the very first open after login uses the SCOPED
     // key ['all-products-check', { warehouseId: <main> }] (the parent seeds
@@ -357,8 +335,7 @@ export default function ProductPickerModal({
     // un-scoped data as placeholder: identical payload (server defaults to
     // main), shown instantly, replaced by the scoped fetch in ~150 ms.
     // Defect/used warehouses never borrow — main's products would be wrong.
-    placeholderData: (prev) => {
-      if (prev !== undefined) return prev;
+    placeholderData: () => {
       if (warehouseId && warehouseId === mainWarehouseId) {
         return queryClient.getQueryData<Product[]>(['all-products-check']);
       }
@@ -430,9 +407,9 @@ export default function ProductPickerModal({
     const products = Array.isArray(allProducts) ? allProducts : [];
     const set = new Set<string>();
     for (const p of products) {
-      const cat = p.category || '';
+      const cat = productFolderPath(p.category);
       if (!cat) continue;
-      const top = cat.split('/')[0].trim();
+      const top = productFolderParts(cat)[0];
       if (top) set.add(top);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
@@ -444,7 +421,7 @@ export default function ProductPickerModal({
     let list = Array.isArray(allProducts) ? allProducts : [];
     if (activeCategory) {
       list = list.filter((p) => {
-        const cat = p.category || '';
+        const cat = productFolderPath(p.category);
         return cat === activeCategory || cat.startsWith(`${activeCategory}/`);
       });
     }

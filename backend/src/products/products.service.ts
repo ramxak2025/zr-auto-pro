@@ -8,7 +8,7 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
@@ -229,7 +229,7 @@ export class ProductsService {
       `SELECT p.*, s.name as supplier_name, ${CELL_COLUMNS_SQL}
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
        ${CELL_JOIN_SQL}
-       WHERE ${where} ORDER BY p.name LIMIT $${idx} OFFSET $${idx + 1}`,
+       WHERE ${where} ORDER BY p.name, p.id LIMIT $${idx} OFFSET $${idx + 1}`,
       params,
     );
 
@@ -461,7 +461,17 @@ export class ProductsService {
     }
   }
 
-  async update(id: string, tenantID: string, dto: any, userID?: string, pointId: string | null = null) {
+  async update(
+    id: string,
+    tenantID: string,
+    dto: any,
+    userID?: string,
+    pointId: string | null = null,
+    transaction?: PoolClient,
+  ) {
+    if (transaction && dto.stock !== undefined)
+      throw new BadRequestException('Остаток меняется отдельной складской операцией');
+    const db = transaction ?? this.pool;
     // 169 — товар чужого филиала не правится.
     await this.assertProductInPoint(id, tenantID, pointId);
     if (dto.supplierId !== undefined && dto.supplierId !== null) {
@@ -469,7 +479,7 @@ export class ProductsService {
     }
 
     // Get current prices (и остаток, склад) before update for price history
-    const { rows: current } = await this.pool.query(
+    const { rows: current } = await db.query(
       'SELECT cost_price, sell_price, stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
@@ -585,7 +595,7 @@ export class ProductsService {
       vals.push(id, tenantID);
       // 172 — CTE вместо голого UPDATE ... RETURNING *: тем же запросом подтягиваем код
       // и подпись ячейки, чтобы ответ PATCH не расходился с GET (без лишнего круга в БД).
-      const { rows } = await this.pool.query(
+      const { rows } = await db.query(
         `WITH upd AS (
            UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *
          )
@@ -603,7 +613,7 @@ export class ProductsService {
         const newCost = dto.costPrice !== undefined ? parseFloat(dto.costPrice) : oldCost;
         const newSell = dto.sellPrice !== undefined ? parseFloat(dto.sellPrice) : oldSell;
         if (oldCost !== newCost || oldSell !== newSell) {
-          await this.pool.query(
+          await db.query(
             `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
             [id, oldCost, newCost, oldSell, newSell, userID || null, tenantID],
@@ -1587,7 +1597,14 @@ export class ProductsService {
    * списанный товар обязаны лечь в филиал того, кто списал, — иначе прибыль
    * чужого филиала просядет на не свою потерю.
    */
-  async updateStock(id: string, tenantID: string, dto: any, userId?: string, pointId: string | null = null) {
+  async updateStock(
+    id: string,
+    tenantID: string,
+    dto: any,
+    userId?: string,
+    pointId: string | null = null,
+    integrationGuard?: { expectedStock: number; expectedWarehouseId: string; requireSufficientStock?: boolean },
+  ) {
     const { type, quantity, reason, recordAsExpense } = dto;
     if (!type || quantity === undefined) {
       throw new BadRequestException({ message: 'Тип и количество обязательны' });
@@ -1613,7 +1630,7 @@ export class ProductsService {
 
       // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
-        `SELECT stock, warehouse_id, cost_price FROM products WHERE id=$1 AND tenant_id=$2
+        `SELECT stock, warehouse_id, cost_price, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
            AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                   WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))
          FOR UPDATE`,
@@ -1626,6 +1643,14 @@ export class ProductsService {
 
       const stockBefore = parseFloat(rows[0].stock) || 0;
       const productWarehouseId = (rows[0].warehouse_id as string | null) ?? null;
+      if (
+        integrationGuard &&
+        (rows[0].deleted_at ||
+          stockBefore !== integrationGuard.expectedStock ||
+          productWarehouseId !== integrationGuard.expectedWarehouseId ||
+          (integrationGuard.requireSufficientStock && ['expense', 'writeoff'].includes(type) && qty > stockBefore))
+      )
+        throw new ConflictException('Остаток или склад изменился; нужна сверка складского движения');
       const purchasePrice = parseFloat(rows[0].cost_price) || 0;
       let stockAfter: number;
 
@@ -1699,7 +1724,8 @@ export class ProductsService {
       return { stock: stockAfter, linkedExpenseId };
     } catch (err) {
       await client.query('ROLLBACK');
-      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      if (err instanceof NotFoundException || err instanceof BadRequestException || err instanceof ConflictException)
+        throw err;
       this.logger.error(`Stock update error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {

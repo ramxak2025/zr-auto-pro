@@ -94,6 +94,7 @@ import SessionRecoveryScreen from '../components/SessionRecoveryScreen';
 import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
 import AdminShellNavigator from './AdminShellNavigator';
+import { sessionShell } from './platformShell';
 import ImpersonationBanner from '../components/ImpersonationBanner';
 import { View, AppState } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
@@ -902,7 +903,7 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
  * MainShell — the authenticated root. Branches the navigator by role:
  *
  *   • A real superadmin or platform manager (role 'superadmin' / 'manager',
- *     NOT impersonating) gets the dedicated platform-operator
+ *     from the current server session) gets the dedicated platform-operator
  *     AdminShellNavigator with its «особое нижнее меню». No car-service tabs,
  *     no Касса FAB. The manager is tenant-less and sees a trimmed shell.
  *   • Everyone else — directors, masters, AND a superadmin currently
@@ -916,13 +917,14 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
  */
 function MainShell() {
   const { user, isImpersonating } = useAuth();
-  const isPlatformOperator = (user?.role === 'superadmin' || user?.role === 'manager') && !isImpersonating;
+  const { platformMode: mode, showImpersonation } = sessionShell(user?.role, isImpersonating);
+  const isPlatformOperator = mode !== null;
 
   // Non-operators (directors / masters / an impersonating superadmin) get the
   // car-service tree behind the SubscriptionGate — a hard block when the tenant
   // is expired/suspended. The real platform-operator AdminShell is never gated.
-  const navigator = isPlatformOperator ? (
-    <AdminShellNavigator mode={user?.role === 'manager' ? 'manager' : 'superadmin'} />
+  const navigator = mode ? (
+    <AdminShellNavigator mode={mode} />
   ) : (
     <SubscriptionGate>
       <TabNavigator />
@@ -936,7 +938,7 @@ function MainShell() {
   // Fast path — no impersonation banner. Render the navigator straight, so a
   // normal session has ZERO extra layout wrapping and the top inset stays
   // untouched (the router renders null alongside it).
-  if (!isImpersonating) {
+  if (!showImpersonation) {
     return (
       <>
         {navigator}

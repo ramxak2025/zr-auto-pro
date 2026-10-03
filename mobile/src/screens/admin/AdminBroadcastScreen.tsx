@@ -13,8 +13,9 @@
  *   • Отправка → notificationsApi.createBroadcast(...) with a confirm dialog,
  *     success haptic + toast.
  */
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Pressable, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -123,7 +124,7 @@ export default function AdminBroadcastScreen() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const isSuperadmin = user?.role === 'superadmin';
-  const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const { contentContainerPaddingBottom, tabBarHeight } = useAdminTabBarScrollInsets();
 
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
@@ -404,11 +405,11 @@ export default function AdminBroadcastScreen() {
         }
       />
 
-      <ScrollView
-        contentInset={contentInset}
+      <KeyboardAwareScroll
+        reserveTabBar={false}
+        extraKeyboardBottomOffset={tabBarHeight}
         contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
       >
         {/* Title */}
         <Text style={[styles.label, { color: palette.text.tertiary }]}>Заголовок</Text>
@@ -878,7 +879,7 @@ export default function AdminBroadcastScreen() {
             );
           })
         )}
-      </ScrollView>
+      </KeyboardAwareScroll>
 
       {/* Live preview — the ACTUAL BroadcastModal owners will see. */}
       <BroadcastModal broadcast={previewOpen ? previewBroadcast : null} onDismiss={() => setPreviewOpen(false)} />

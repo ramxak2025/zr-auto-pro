@@ -13,6 +13,7 @@ import {
   isPermanentAckRejection,
   parseStoredSalaryAcks,
   serializeSalaryAcks,
+  salaryAckStorageKey,
   type SalaryAckKind,
   type SalaryAckStorage,
 } from '../salaryAckQueue';
@@ -37,24 +38,97 @@ describe('классификация отказа', () => {
   it('4xx — отметка больше не нужна, сеть/5xx — нужна', () => {
     expect(isPermanentAckRejection(axiosError(400))).toBe(true);
     expect(isPermanentAckRejection(axiosError(404))).toBe(true);
+    expect(isPermanentAckRejection(axiosError(401))).toBe(false);
+    expect(isPermanentAckRejection(axiosError(408))).toBe(false);
+    expect(isPermanentAckRejection(axiosError(429))).toBe(false);
     expect(isPermanentAckRejection(axiosError(500))).toBe(false);
     expect(isPermanentAckRejection(axiosError(503))).toBe(false);
     expect(isPermanentAckRejection(axiosError())).toBe(false);
   });
 });
 
+describe('получатель и сессия', () => {
+  it('разделяет отметки между сотрудниками и компаниями, переживает перезапуск', async () => {
+    const { storage } = createMemoryStorage();
+    const aKey = salaryAckStorageKey({ tenantId: 'shop-A', userId: 'employee' });
+    const a = createSalaryAckQueueCore({ storage, storageKey: aKey });
+    await a.add('fineViewed', 'fine-A');
+    const b = createSalaryAckQueueCore({
+      storage,
+      storageKey: salaryAckStorageKey({ tenantId: 'shop-B', userId: 'employee' }),
+    });
+    const colleague = createSalaryAckQueueCore({
+      storage,
+      storageKey: salaryAckStorageKey({ tenantId: 'shop-A', userId: 'other' }),
+    });
+    await Promise.all([b.ensureLoaded(), colleague.ensureLoaded()]);
+    expect(b.has('fineViewed', 'fine-A')).toBe(false);
+    expect(colleague.has('fineViewed', 'fine-A')).toBe(false);
+    const restarted = createSalaryAckQueueCore({ storage, storageKey: aKey });
+    await restarted.ensureLoaded();
+    expect(restarted.has('fineViewed', 'fine-A')).toBe(true);
+  });
+
+  it('не отправляет следующую отметку после смены сессии во время первого запроса', async () => {
+    const { storage } = createMemoryStorage();
+    const queue = createSalaryAckQueueCore({ storage });
+    await queue.add('fineViewed', 'fine-1');
+    await queue.add('fineViewed', 'fine-2');
+    let active = true;
+    const send = jest.fn(async () => {
+      active = false;
+    });
+    await queue.flush(send, () => active);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(queue.snapshot().fineViewed).toEqual(['fine-1', 'fine-2']);
+  });
+
+  it.each([401, 429])('сохраняет отметку штрафа при HTTP %s и досылает после восстановления', async (status) => {
+    const { storage } = createMemoryStorage();
+    const queue = createSalaryAckQueueCore({ storage });
+    await queue.add('fineViewed', 'fine-1');
+    await queue.flush(async () => {
+      throw axiosError(status);
+    });
+    expect(queue.has('fineViewed', 'fine-1')).toBe(true);
+    await queue.flush(async () => {});
+    expect(queue.has('fineViewed', 'fine-1')).toBe(false);
+  });
+
+  it('не стартует доставку старой сессии после асинхронного чтения диска', async () => {
+    let restore!: (raw: string) => void;
+    const queue = createSalaryAckQueueCore({
+      storage: {
+        getItem: () =>
+          new Promise((resolve) => {
+            restore = resolve;
+          }),
+        setItem: async () => {},
+      },
+    });
+    let active = true;
+    const send = jest.fn(async () => {});
+    const flush = queue.flush(send, () => active);
+    active = false;
+    restore(serializeSalaryAcks({ payoutViewed: [], paymentConfirmed: [], fineViewed: ['fine-A'] }));
+    await flush;
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe('сериализация', () => {
   it('round-trip', () => {
-    const acks = { payoutViewed: ['p1', 'p2'], paymentConfirmed: ['c1'] };
+    const acks = { payoutViewed: ['p1', 'p2'], paymentConfirmed: ['c1'], fineViewed: [] };
     expect(parseStoredSalaryAcks(serializeSalaryAcks(acks))).toEqual(acks);
   });
 
   it('мусор и чужая версия схемы — пустая очередь, а не краш', () => {
-    expect(parseStoredSalaryAcks(null)).toEqual({ payoutViewed: [], paymentConfirmed: [] });
-    expect(parseStoredSalaryAcks('{oops')).toEqual({ payoutViewed: [], paymentConfirmed: [] });
+    expect(parseStoredSalaryAcks(null)).toEqual({ payoutViewed: [], paymentConfirmed: [], fineViewed: [] });
+    expect(parseStoredSalaryAcks('{oops')).toEqual({ payoutViewed: [], paymentConfirmed: [], fineViewed: [] });
     expect(parseStoredSalaryAcks(JSON.stringify({ v: 999, payoutViewed: ['p1'] }))).toEqual({
       payoutViewed: [],
       paymentConfirmed: [],
+      fineViewed: [],
     });
   });
 
@@ -109,7 +183,7 @@ describe('очередь отложенных отметок', () => {
       ['payoutViewed', 'p1'],
       ['paymentConfirmed', 'c1'],
     ]);
-    expect(core.snapshot()).toEqual({ payoutViewed: [], paymentConfirmed: [] });
+    expect(core.snapshot()).toEqual({ payoutViewed: [], paymentConfirmed: [], fineViewed: [] });
   });
 
   it('4xx (выплату отменили) снимает отметку насовсем — модалка не вернётся навечно', async () => {
@@ -140,7 +214,7 @@ describe('очередь отложенных отметок', () => {
 
     // Связь вернулась — уходят обе.
     await core.flush(async () => {});
-    expect(core.snapshot()).toEqual({ payoutViewed: [], paymentConfirmed: [] });
+    expect(core.snapshot()).toEqual({ payoutViewed: [], paymentConfirmed: [], fineViewed: [] });
   });
 
   it('конкурентные досылки сливаются в одну', async () => {

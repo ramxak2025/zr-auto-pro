@@ -31,5 +31,6 @@ import { ClientsModule } from '../clients/clients.module';
   imports: [WarrantyModule, PushModule, MarketingModule, InstallmentsModule, TenantsModule, ClientsModule],
   controllers: [ChecksController],
   providers: [ChecksService],
+  exports: [ChecksService],
 })
 export class ChecksModule {}

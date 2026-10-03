@@ -840,6 +840,39 @@ export function isSessionCleared(): boolean {
   return cachedAuthToken === null;
 }
 
+/** Synchronous guard for deferred user-scoped work before creating a request. */
+export function isCurrentAuthToken(token: string | null): boolean {
+  return token !== null && cachedAuthToken === token;
+}
+
+/** Bind deferred inbox work before axios schedules its async interceptors.
+ * Unlike logout cleanup, these requests must stop at a session boundary.
+ */
+export function createSessionBoundClient(token: string | null) {
+  const epoch = authTokenEpoch;
+  const request = <T = unknown>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (!isCurrentAuthToken(token) || epoch !== authTokenEpoch) {
+      return Promise.reject(Object.assign(new Error('Stale salary notification session'), { code: 'ERR_CANCELED' }));
+    }
+    const bound: AxiosRequestConfig & { _authEpoch: number; _authToken: string | null } = {
+      ...config,
+      _authEpoch: epoch,
+      _authToken: token,
+    };
+    return api.request<T>(bound);
+  };
+  return {
+    get: <T = unknown>(url: string, config?: AxiosRequestConfig) => request<T>({ ...config, method: 'get', url }),
+    post: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'post', url, data }),
+    put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'put', url, data }),
+    patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'patch', url, data }),
+    delete: <T = unknown>(url: string, config?: AxiosRequestConfig) => request<T>({ ...config, method: 'delete', url }),
+  };
+}
+
 export function setAuthToken(token: string | null): void {
   if (cachedAuthToken !== token) {
     authTokenEpoch += 1;

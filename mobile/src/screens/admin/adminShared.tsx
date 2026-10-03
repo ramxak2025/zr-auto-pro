@@ -86,6 +86,7 @@ export function invalidatePlatformQueries(queryClient: QueryClient, tenantId?: s
   queryClient.invalidateQueries({ queryKey: ['admin-subscription-revenue'] });
   queryClient.invalidateQueries({ queryKey: ['admin-managers'] });
   queryClient.invalidateQueries({ queryKey: ['admin-audit-log'] });
+  queryClient.invalidateQueries({ queryKey: ['admin', 'tenant-audit'] });
   queryClient.invalidateQueries({ queryKey: ['manager'] });
 }
 

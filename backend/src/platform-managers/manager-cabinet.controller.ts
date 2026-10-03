@@ -69,6 +69,17 @@ export class ManagerCabinetController {
   }
 
   @Roles('manager', 'superadmin')
+  @Get('tenants/:id/audit-log')
+  tenantAuditLog(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUuidParam) id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.cabinet.tenantAuditLog(cabinetActor(user), id, limit, offset);
+  }
+
+  @Roles('manager', 'superadmin')
   @Post('tenants/:id/extend')
   extend(@CurrentUser() user: JwtPayload, @Param('id', ParseUuidParam) id: string, @Body() dto: ManagerExtendDto) {
     return this.cabinet.extend(cabinetActor(user), id, dto);

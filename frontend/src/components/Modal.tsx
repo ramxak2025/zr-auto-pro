@@ -1,10 +1,10 @@
-import { ReactNode, useEffect, useId, useRef } from 'react';
+import { ReactNode, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from '../ui/cn';
 import { IconButton } from '../ui/IconButton';
-import { lockBodyScroll, unlockBodyScroll } from '../ui/scrollLock';
+import { useDialogFocus } from '../ui/useDialogFocus';
 
 interface ModalProps {
   isOpen: boolean;
@@ -37,25 +37,8 @@ const sizeClasses: Record<string, string> = {
 export default function Modal({ isOpen, onClose, title, children, size = 'md', description, footer }: ModalProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const lastActiveRef = useRef<HTMLElement | null>(null);
   const reduced = useReducedMotion();
-
-  useEffect(() => {
-    if (!isOpen) return;
-    lastActiveRef.current = document.activeElement as HTMLElement | null;
-    lockBodyScroll();
-    const t = window.setTimeout(() => panelRef.current?.focus(), 20);
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => {
-      window.clearTimeout(t);
-      document.removeEventListener('keydown', handleEscape);
-      unlockBodyScroll();
-      lastActiveRef.current?.focus?.();
-    };
-  }, [isOpen, onClose]);
+  useDialogFocus(isOpen, panelRef, onClose);
 
   return createPortal(
     <AnimatePresence>
