@@ -15,7 +15,7 @@
     "build:dev-ios": "eas build --profile development --platform ios",
     "build:preview-ios": "eas build --profile preview --platform ios",
     "build:production-ios": "eas build --profile production --platform ios",
-    "test:critical": "jest --runInBand src/contexts/__tests__/authSessionRuntime.test.ts src/contexts/__tests__/authSessionStorage.test.ts src/api/__tests__/apiHosts.test.ts src/api/__tests__/axiosAuthExpiryRace.test.ts src/api/__tests__/axiosHostRace.test.ts src/api/__tests__/axiosLoginRetry.test.ts src/utils/__tests__/backendRecovery.test.ts src/utils/__tests__/offlineCheckQueue.test.ts src/utils/__tests__/persistentCache.helpers.test.ts src/utils/__tests__/persistentCache.test.ts",
+    "test:critical": "node --test tests/more-tab-blur.test.cjs && jest --runInBand src/contexts/__tests__/authSessionRuntime.test.ts src/contexts/__tests__/authSessionStorage.test.ts src/api/__tests__/apiHosts.test.ts src/api/__tests__/axiosAuthExpiryRace.test.ts src/api/__tests__/axiosHostRace.test.ts src/api/__tests__/axiosLoginRetry.test.ts src/utils/__tests__/backendRecovery.test.ts src/utils/__tests__/offlineCheckQueue.test.ts src/utils/__tests__/persistentCache.helpers.test.ts src/utils/__tests__/persistentCache.test.ts",
     "pretypecheck": "npm run test:critical",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=10000",
