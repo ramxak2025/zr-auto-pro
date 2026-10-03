@@ -1,0 +1,50 @@
+# EAS uses this file instead of all .gitignore files.
+# Keep root exclusions and the generated native project exclusions below.
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.production
+*.log
+coverage/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+pgdata/
+/uploads/
+backups/
+backend/server
+.expo/
+*.apk
+downloads/*.apk
+Autexa-*.apk
+.backups/
+.claude/scheduled_tasks.lock
+# Рабочие копии агентов: EAS читает только .gitignore (не .git/info/exclude) и иначе пакует их в архив сборки.
+.claude/worktrees/
+.deploy.lock
+# Локальные артефакты ручной выгрузки IPA (xcodebuild -exportArchive) —
+# содержат teamID/опции загрузки, к репо отношения не имеют.
+mobile/export*.plist
+
+# Маркетинговые ролики (/brag) — медиа, не для репо
+brag-output/
+brag-output-*/
+
+# Локальные загрузки backend при dev-прогонах (в проде — volume uploads)
+backend/uploads/
+
+# Local 1C exchange state and credentials
+one-c-state/
+integrations/one-c/config.local.json
+
+# Generated native projects: keep local modules/*/ios source included.
+/mobile/ios
+/mobile/android
+
+# Build inputs do not need repository history or documentation screenshots.
+/.git
+/docs
