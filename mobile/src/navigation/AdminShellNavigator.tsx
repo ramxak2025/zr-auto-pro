@@ -13,12 +13,14 @@
  * through AdminModeProvider (one source of truth, no per-screen role checks).
  */
 import React from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import AdminTabBar, { type AdminShellMode } from './AdminTabBar';
 import AdminOverviewScreen from '../screens/admin/AdminOverviewScreen';
 import AdminTenantsScreen from '../screens/admin/AdminTenantsScreen';
 import AdminTenantDetailScreen from '../screens/admin/AdminTenantDetailScreen';
+import AdminTenantAuditScreen from '../screens/admin/AdminTenantAuditScreen';
 import AdminRegistrationRequestsScreen from '../screens/admin/AdminRegistrationRequestsScreen';
 import AdminPlansScreen from '../screens/admin/AdminPlansScreen';
 import AdminBroadcastScreen from '../screens/admin/AdminBroadcastScreen';
@@ -45,6 +47,7 @@ function AdminTenantsStackNavigator() {
     <TenantsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <TenantsStack.Screen name="AdminTenantsHome" component={AdminTenantsScreen} />
       <TenantsStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />
+      <TenantsStack.Screen name="AdminTenantAudit" component={AdminTenantAuditScreen} />
     </TenantsStack.Navigator>
   );
 }
@@ -61,6 +64,7 @@ function AdminOverviewStackNavigator() {
         <OverviewStack.Screen name="AdminRegistrationRequests" component={AdminRegistrationRequestsScreen} />
       )}
       <OverviewStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />
+      <OverviewStack.Screen name="AdminTenantAudit" component={AdminTenantAuditScreen} />
     </OverviewStack.Navigator>
   );
 }
@@ -75,6 +79,7 @@ function AdminMoreStackNavigator() {
       {mode === 'superadmin' && <MoreStack.Screen name="AdminManagers" component={AdminManagersScreen} />}
       {mode === 'superadmin' && <MoreStack.Screen name="AdminManagerDetail" component={AdminManagerDetailScreen} />}
       {mode === 'superadmin' && <MoreStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />}
+      {mode === 'superadmin' && <MoreStack.Screen name="AdminTenantAudit" component={AdminTenantAuditScreen} />}
       {mode === 'manager' && <MoreStack.Screen name="ManagerLedger" component={ManagerLedgerScreen} />}
     </MoreStack.Navigator>
   );
@@ -84,33 +89,36 @@ export default function AdminShellNavigator({ mode }: { mode: AdminShellMode }) 
   const isSuperadmin = mode === 'superadmin';
   return (
     <AdminModeProvider value={mode}>
-      <AdminTab.Navigator
-        screenOptions={{
-          headerShown: false,
-          sceneStyle: { backgroundColor: 'transparent' },
-          tabBarStyle: {
-            position: 'absolute',
-            backgroundColor: 'transparent',
-            borderTopWidth: 0,
-            elevation: 0,
-          },
-        }}
-        // eslint-disable-next-line react/no-unstable-nested-components
-        tabBar={(props) => <AdminTabBar {...props} mode={mode} />}
-        // NOTE: screenLayout (screenErrorBoundaryLayout) is INTENTIONALLY NOT set
-        // on the AdminTab.Navigator — same reasoning as the car-service
-        // TabNavigator: a per-tab boundary keyed by route.key forces the tab
-        // navigator to re-evaluate children on every tab-event, remounting the
-        // nested stacks mid-navigation. Per-tab boundaries stay on the nested
-        // stacks (TenantsStack/OverviewStack/MoreStack); tab-level crashes fall
-        // through to the root Stack + App.tsx boundary.
-      >
-        <AdminTab.Screen name="AdminOverview" component={AdminOverviewStackNavigator} />
-        <AdminTab.Screen name="AdminTenants" component={AdminTenantsStackNavigator} />
-        {isSuperadmin && <AdminTab.Screen name="AdminPlans" component={AdminPlansScreen} />}
-        {isSuperadmin && <AdminTab.Screen name="AdminBroadcast" component={AdminBroadcastScreen} />}
-        <AdminTab.Screen name="AdminMore" component={AdminMoreStackNavigator} />
-      </AdminTab.Navigator>
+      <SafeAreaView style={{ flex: 1 }} edges={['left', 'right']}>
+        <AdminTab.Navigator
+          key={mode}
+          screenOptions={{
+            headerShown: false,
+            sceneStyle: { backgroundColor: 'transparent' },
+            tabBarStyle: {
+              position: 'absolute',
+              backgroundColor: 'transparent',
+              borderTopWidth: 0,
+              elevation: 0,
+            },
+          }}
+          // eslint-disable-next-line react/no-unstable-nested-components
+          tabBar={(props) => <AdminTabBar {...props} mode={mode} />}
+          // NOTE: screenLayout (screenErrorBoundaryLayout) is INTENTIONALLY NOT set
+          // on the AdminTab.Navigator — same reasoning as the car-service
+          // TabNavigator: a per-tab boundary keyed by route.key forces the tab
+          // navigator to re-evaluate children on every tab-event, remounting the
+          // nested stacks mid-navigation. Per-tab boundaries stay on the nested
+          // stacks (TenantsStack/OverviewStack/MoreStack); tab-level crashes fall
+          // through to the root Stack + App.tsx boundary.
+        >
+          <AdminTab.Screen name="AdminOverview" component={AdminOverviewStackNavigator} />
+          <AdminTab.Screen name="AdminTenants" component={AdminTenantsStackNavigator} />
+          {isSuperadmin && <AdminTab.Screen name="AdminPlans" component={AdminPlansScreen} />}
+          {isSuperadmin && <AdminTab.Screen name="AdminBroadcast" component={AdminBroadcastScreen} />}
+          <AdminTab.Screen name="AdminMore" component={AdminMoreStackNavigator} />
+        </AdminTab.Navigator>
+      </SafeAreaView>
     </AdminModeProvider>
   );
 }

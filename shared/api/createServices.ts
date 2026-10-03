@@ -487,6 +487,9 @@ export function createTenantsApi(api: HttpClient) {
     getMetrics: (id: string) => api.get<TenantMetrics>(`/tenants/${id}/metrics`),
     /** Composed superadmin "drill-in": identity + subscription status/plan + metrics. */
     getCabinet: (id: string) => api.get<TenantCabinet>(`/tenants/${id}/cabinet`),
+    /** Journal of one selected car service; superadmin only. */
+    auditLog: (id: string, params?: { limit?: number; offset?: number }) =>
+      api.get<AuditLogEntry[]>(`/tenants/${id}/audit-log`, { params }),
     create: (data: CreateTenantRequest) => api.post<Tenant>('/tenants', data),
     update: (id: string, data: UpdateTenantRequest) => api.patch<Tenant>(`/tenants/${id}`, data),
     remove: (id: string) => api.delete(`/tenants/${id}`),
@@ -1324,6 +1327,9 @@ export function createSalaryApi(api: HttpClient) {
         date: data.date,
       }),
     listFines: (params?: { userId?: string }) => api.get<SalaryFine[]>('/salary/penalties', { params }),
+    /** Recipient-only inbox, across months/branches. JWT provides the owner. */
+    listUnviewedFines: () => api.get<SalaryFine[]>('/salary/penalties/unviewed'),
+    markFineViewed: (id: string) => api.post<{ penaltyId: string; viewedAt: string }>(`/salary/penalties/${id}/viewed`),
     removeFine: (id: string) => api.delete(`/salary/penalties/${id}`),
     /**
      * Round 15 (153) — правка штрафа (сумма/причина). Пересчёта не требует:
@@ -2929,6 +2935,9 @@ export function createManagerCabinetApi(api: HttpClient) {
     tenant: (id: string) => api.get<Tenant>(`/manager/tenants/${id}`),
     /** Сводная карточка автосервиса (подписка, тариф, метрики), как `tenantsApi.getCabinet`. */
     cabinet: (id: string) => api.get<TenantCabinet>(`/manager/tenants/${id}/cabinet`),
+    /** Journal of an owned car service; hidden/transferred tenants return 404. */
+    tenantAuditLog: (id: string, params?: { limit?: number; offset?: number }) =>
+      api.get<AuditLogEntry[]>(`/manager/tenants/${id}/audit-log`, { params }),
     /**
      * Продлить подписку. ТОЛЬКО объектом (старой формы «число дней» нет — она создавала
      * бесплатную строку без типа): `{ type: 'free', days }` — пробный, `days ≤ maxFreeDays`,

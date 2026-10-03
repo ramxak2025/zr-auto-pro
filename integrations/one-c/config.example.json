@@ -1,0 +1,8 @@
+{
+  "connectionId": "REPLACE_WITH_AUTEXA_CONNECTION_ID",
+  "autexaUrl": "https://autexa.pw/api",
+  "oneCUrl": "http://127.0.0.1:8081/hs/autexa/v1",
+  "entities": ["products", "stock", "clients", "purchases", "workOrders", "payments"],
+  "intervalSeconds": 60,
+  "stateDir": "./one-c-state"
+}

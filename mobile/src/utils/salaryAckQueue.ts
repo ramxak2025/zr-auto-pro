@@ -35,10 +35,11 @@ export interface SalaryAckStorage {
  *   • 'payoutViewed'      — salary_payouts.id, отметка «сотрудник увидел» (158).
  *                           Денег не двигает, это read-receipt для владельца.
  *   • 'paymentConfirmed'  — salary_payments.id, легаси «подтвердить получение».
+ *   • 'fineViewed'        — salary_penalties.id, получатель прочитал штраф.
  */
-export type SalaryAckKind = 'payoutViewed' | 'paymentConfirmed';
+export type SalaryAckKind = 'payoutViewed' | 'paymentConfirmed' | 'fineViewed';
 
-export const SALARY_ACK_KINDS: readonly SalaryAckKind[] = ['payoutViewed', 'paymentConfirmed'];
+export const SALARY_ACK_KINDS: readonly SalaryAckKind[] = ['payoutViewed', 'paymentConfirmed', 'fineViewed'];
 
 export type StoredSalaryAcks = Record<SalaryAckKind, readonly string[]>;
 
@@ -55,7 +56,7 @@ export const SALARY_ACK_QUEUE_LIMIT = 50;
 const STORAGE_VERSION = 1;
 
 function emptyAcks(): StoredSalaryAcks {
-  return { payoutViewed: [], paymentConfirmed: [] };
+  return { payoutViewed: [], paymentConfirmed: [], fineViewed: [] };
 }
 
 function sanitizeIds(raw: unknown): string[] {
@@ -79,6 +80,7 @@ export function parseStoredSalaryAcks(raw: string | null): StoredSalaryAcks {
     return {
       payoutViewed: sanitizeIds(parsed.payoutViewed),
       paymentConfirmed: sanitizeIds(parsed.paymentConfirmed),
+      fineViewed: sanitizeIds(parsed.fineViewed),
     };
   } catch {
     return emptyAcks();
@@ -107,25 +109,33 @@ export interface SalaryAckQueueCore {
    * сеть/5xx оставляет её до следующего раза и ОСТАНАВЛИВАЕТ раунд — сервер
    * недоступен, молотить остальные бессмысленно.
    */
-  flush(send: (kind: SalaryAckKind, id: string) => Promise<unknown>): Promise<void>;
+  flush(send: (kind: SalaryAckKind, id: string) => Promise<unknown>, isCurrent?: () => boolean): Promise<void>;
 }
 
-/** 4xx = отметка больше не имеет смысла (выплату отменили / уже отмечена). Повтор не поможет. */
+/** Permanent item rejection only. Expired auth / timeouts / rate limits retry. */
 export function isPermanentAckRejection(error: unknown): boolean {
   const status = (error as { response?: { status?: unknown } } | null | undefined)?.response?.status;
-  return typeof status === 'number' && status >= 400 && status < 500;
+  return status === 400 || status === 403 || status === 404 || status === 409 || status === 410 || status === 422;
 }
 
-export function createSalaryAckQueueCore(deps: { storage: SalaryAckStorage }): SalaryAckQueueCore {
+export function salaryAckStorageKey(owner: { tenantId: string; userId: string }): string {
+  return `${SALARY_ACK_QUEUE_STORAGE_KEY}:${encodeURIComponent(owner.tenantId)}:${encodeURIComponent(owner.userId)}`;
+}
+
+export function createSalaryAckQueueCore(deps: { storage: SalaryAckStorage; storageKey?: string }): SalaryAckQueueCore {
+  const storageKey = deps.storageKey ?? SALARY_ACK_QUEUE_STORAGE_KEY;
   let acks: StoredSalaryAcks = emptyAcks();
   let loaded = false;
   let loadPromise: Promise<void> | null = null;
   let flushing: Promise<void> | null = null;
+  let writes: Promise<void> = Promise.resolve();
 
   async function persist(next: StoredSalaryAcks): Promise<void> {
     acks = next;
     try {
-      await deps.storage.setItem(SALARY_ACK_QUEUE_STORAGE_KEY, serializeSalaryAcks(next));
+      const serialized = serializeSalaryAcks(next);
+      writes = writes.catch(() => {}).then(() => deps.storage.setItem(storageKey, serialized));
+      await writes;
     } catch {
       // Диск отказал ПОСЛЕ обновления памяти: в этой сессии отметка всё равно
       // не покажет модалку повторно и будет дослана. Хуже чем ничего не бывает.
@@ -136,13 +146,14 @@ export function createSalaryAckQueueCore(deps: { storage: SalaryAckStorage }): S
     if (loaded) return Promise.resolve();
     if (!loadPromise) {
       loadPromise = deps.storage
-        .getItem(SALARY_ACK_QUEUE_STORAGE_KEY)
+        .getItem(storageKey)
         .then((raw) => {
           const restored = parseStoredSalaryAcks(raw);
           // Не затираем отметки, поставленные, пока читался диск.
           acks = {
             payoutViewed: [...new Set([...restored.payoutViewed, ...acks.payoutViewed])],
             paymentConfirmed: [...new Set([...restored.paymentConfirmed, ...acks.paymentConfirmed])],
+            fineViewed: [...new Set([...restored.fineViewed, ...acks.fineViewed])],
           };
           loaded = true;
         })
@@ -172,18 +183,20 @@ export function createSalaryAckQueueCore(deps: { storage: SalaryAckStorage }): S
       if (!acks[kind].includes(id)) return;
       await persist({ ...acks, [kind]: acks[kind].filter((x) => x !== id) });
     },
-    flush: async (send) => {
+    flush: async (send, isCurrent = () => true) => {
       if (flushing) return flushing;
       const round = (async () => {
         await ensureLoaded();
         for (const kind of SALARY_ACK_KINDS) {
           // Копия списка: persist ниже подменяет массив на каждом шаге.
           for (const id of [...acks[kind]]) {
+            if (!isCurrent()) return;
             try {
               await send(kind, id);
             } catch (error) {
               if (!isPermanentAckRejection(error)) return; // сервер недоступен — раунд окончен
             }
+            if (!isCurrent()) return;
             await persist({ ...acks, [kind]: acks[kind].filter((x) => x !== id) });
           }
         }
@@ -201,18 +214,22 @@ export function createSalaryAckQueueCore(deps: { storage: SalaryAckStorage }): S
 // react-native в node-jest (тесты не транспилируют node_modules).
 
 let singleton: SalaryAckQueueCore | null = null;
+let singletonKey: string | null = null;
 
-export function getSalaryAckQueue(): SalaryAckQueueCore {
-  if (!singleton) {
+export function getSalaryAckQueue(owner: { tenantId: string; userId: string }): SalaryAckQueueCore {
+  const key = salaryAckStorageKey(owner);
+  if (!singleton || singletonKey !== key) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const AsyncStorage = require('@react-native-async-storage/async-storage')
       .default as typeof import('@react-native-async-storage/async-storage').default;
     singleton = createSalaryAckQueueCore({
+      storageKey: key,
       storage: {
         getItem: (key) => AsyncStorage.getItem(key),
         setItem: (key, value) => AsyncStorage.setItem(key, value),
       },
     });
+    singletonKey = key;
   }
   return singleton;
 }

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, FolderOpen, Package, Search } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { warehouseCategoriesApi } from '../../api/services';
 import type { Product, Warehouse } from '../../types';
 import { Drawer } from '../../ui/Drawer';
 import { Input } from '../../ui/Input';
@@ -13,6 +15,7 @@ import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { ErrorRow } from '../dashboard/shared';
 import { formatQtyUnit } from '../../utils/units';
+import { buildProductFolderLevel } from '../../../../shared/utils/productFolders';
 
 export interface ProductPickerDrawerProps {
   open: boolean;
@@ -22,6 +25,9 @@ export interface ProductPickerDrawerProps {
   isError?: boolean;
   onRetry?: () => void;
   onSelectProduct: (product: Product) => void;
+  priceKind?: 'sell' | 'cost';
+  selectedIds?: string[];
+  closeOnSelect?: boolean;
   /** Склады для переключателя; при 0–1 складе переключатель скрыт. */
   warehouses?: Warehouse[];
   selectedWarehouseId?: string;
@@ -52,6 +58,9 @@ export default function ProductPickerDrawer({
   isError = false,
   onRetry,
   onSelectProduct,
+  priceKind = 'sell',
+  selectedIds = [],
+  closeOnSelect = true,
   warehouses,
   selectedWarehouseId,
   onSelectWarehouse,
@@ -59,37 +68,25 @@ export default function ProductPickerDrawer({
   const [search, setSearch] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
+  const { data: extraFolders } = useQuery({
+    queryKey: ['warehouse-categories', selectedWarehouseId || 'main'],
+    queryFn: async () => (await warehouseCategoriesApi.getAll(selectedWarehouseId || undefined)).data,
+    enabled: open,
+    staleTime: 60_000,
+  });
 
   useEffect(() => {
     if (open) {
       setSearch('');
       setActivePath([]);
     }
-  }, [open]);
+  }, [open, selectedWarehouseId]);
 
   // Дерево папок из путей категорий — как в прежнем пикере.
-  const { subfolders, currentProducts } = useMemo(() => {
-    const prefix = activePath.length > 0 ? activePath.join('/') : '';
-    const subfolderMap = new Map<string, number>();
-    const prods: Product[] = [];
-    for (const p of products) {
-      const cat = p.category || '';
-      const catParts = cat ? cat.split('/') : [];
-      if (activePath.length === 0) {
-        if (!cat) prods.push(p);
-        else subfolderMap.set(catParts[0], (subfolderMap.get(catParts[0]) || 0) + 1);
-      } else if (cat === prefix) {
-        prods.push(p);
-      } else if (cat.startsWith(prefix + '/')) {
-        const next = cat.slice(prefix.length + 1).split('/')[0];
-        subfolderMap.set(next, (subfolderMap.get(next) || 0) + 1);
-      }
-    }
-    const sorted = Array.from(subfolderMap.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-    return { subfolders: sorted, currentProducts: prods };
-  }, [products, activePath]);
+  const { subfolders, currentProducts } = useMemo(
+    () => buildProductFolderLevel(products, activePath, extraFolders ?? []),
+    [products, activePath, extraFolders],
+  );
 
   // Подсказка поиска по адресу — только когда на складе есть ячейки.
   const hasCells = useMemo(() => products.some((p) => p.storageCellCode), [products]);
@@ -100,6 +97,7 @@ export default function ProductPickerDrawer({
     return products.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q)) ||
         (p.category && p.category.toLowerCase().includes(q)) ||
         (p.storageCellCode && p.storageCellCode.toLowerCase().includes(q)),
     );
@@ -107,7 +105,7 @@ export default function ProductPickerDrawer({
 
   const handleSelect = (product: Product) => {
     onSelectProduct(product);
-    onClose();
+    if (closeOnSelect) onClose();
   };
 
   const searching = search.trim().length > 0;
@@ -127,10 +125,12 @@ export default function ProductPickerDrawer({
         <button
           type="button"
           onClick={() => handleSelect(product)}
+          disabled={selectedIds.includes(product.id)}
           className={cn(
             'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-surface-3',
             focusRing,
             !inStock && 'opacity-70',
+            selectedIds.includes(product.id) && 'opacity-50',
           )}
         >
           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-3">
@@ -175,7 +175,11 @@ export default function ProductPickerDrawer({
           <Badge tone={inStock ? 'ok' : 'bad'} size="sm" className="tabular-nums">
             {inStock ? formatQtyUnit(product.stock, product.unit) : 'Нет'}
           </Badge>
-          <Money value={product.sellPrice} className="w-24 text-right text-sm font-semibold text-ink" />
+          {selectedIds.includes(product.id) && <Badge size="sm">Добавлен</Badge>}
+          <Money
+            value={priceKind === 'cost' ? product.costPrice : product.sellPrice}
+            className="w-24 text-right text-sm font-semibold text-ink"
+          />
         </button>
       </li>
     );
@@ -186,7 +190,13 @@ export default function ProductPickerDrawer({
       open={open}
       onClose={onClose}
       title="Добавить товар"
-      subtitle={activePath.length > 0 ? activePath.join(' / ') : 'Выберите товар со склада'}
+      subtitle={
+        activePath.length > 0
+          ? activePath.join(' / ')
+          : priceKind === 'cost'
+            ? 'Закупочная цена — из карточки товара'
+            : 'Выберите товар со склада'
+      }
       size="lg"
       initialFocusRef={searchRef}
     >

@@ -3821,6 +3821,7 @@ export class ChecksService {
     },
     actorUserId: string | null,
     actor?: ChecksActor,
+    exchange?: { onlyDeferred: true; expectedTotalRevenue: number },
   ) {
     // ФИЛИАЛ (161): приём оплаты — самая денежная запись из всех. Кассир
     // филиала А не принимает деньги за заказ филиала Б: выручка легла бы не в
@@ -3840,7 +3841,10 @@ export class ChecksService {
     if (dto?.discount !== undefined) sanitized.discount = dto.discount;
     // 155: рассрочка при приёме оплаты — параметры плана уходят в активацию.
     if (dto?.installment !== undefined) sanitized.installment = dto.installment;
-    return this.activateDeferred(id, tenantID, userRole, sanitized, actorUserId, actor, { viaAcceptPayment: true });
+    return this.activateDeferred(id, tenantID, userRole, sanitized, actorUserId, actor, {
+      viaAcceptPayment: true,
+      ...exchange,
+    });
   }
 
   private async activateDeferred(
@@ -3850,7 +3854,7 @@ export class ChecksService {
     dto: any,
     actorUserId: string | null,
     actor?: ChecksActor,
-    opts?: { viaAcceptPayment?: boolean },
+    opts?: { viaAcceptPayment?: boolean; onlyDeferred?: boolean; expectedTotalRevenue?: number },
   ) {
     // POS shift-mode (092) + allowlist (155): read once BEFORE the transaction
     // so the cashier gate below adds no extra connection while a client is
@@ -3877,6 +3881,14 @@ export class ChecksService {
       // check means a genuine true→false activation; an already-active check is
       // a no-op re-save that must NOT re-apply effects.
       const isActivating = checkRows[0].is_deferred === true;
+      // Machine exchange may close a known draft only; it must never race into
+      // editing an already-booked payment or normalize a stale external amount.
+      if (
+        opts?.onlyDeferred &&
+        (!isActivating || round2(Number(checkRows[0].total_revenue)) !== opts.expectedTotalRevenue)
+      ) {
+        throw new ConflictException({ message: 'Заказ-наряд уже оплачен или сумма изменилась; нужна сверка' });
+      }
 
       // PERMISSION (матрица v3): без `checks_edit_all` закрыть можно только СВОЙ
       // драфт (мастер по умолчанию — как раньше); owner-class/admin — любой.

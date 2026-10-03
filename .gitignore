@@ -34,3 +34,7 @@ brag-output-*/
 
 # Локальные загрузки backend при dev-прогонах (в проде — volume uploads)
 backend/uploads/
+
+# Local 1C exchange state and credentials
+one-c-state/
+integrations/one-c/config.local.json

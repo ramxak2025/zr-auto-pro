@@ -38,6 +38,35 @@ describe('axios auth-expiry epoch', () => {
     mockStorageRemoveItem.mockClear();
   });
 
+  it('recipient acknowledgement cannot inherit login B before async interceptors start', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const bound = mod.createSessionBoundClient('token-A');
+    const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => ok(config));
+    mod.default.defaults.adapter = adapter;
+    const ack = bound.post('/salary/penalties/fine-A/viewed');
+    // Deliberately switch synchronously, before axios runs its promise chain.
+    mod.setAuthToken('token-B');
+    await expect(ack).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    expect(adapter).not.toHaveBeenCalled();
+    await expect(bound.post('/salary/penalties/fine-A/viewed')).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    expect(adapter).not.toHaveBeenCalled();
+  });
+
+  it('recipient acknowledgement uses its own bearer while the session is current', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const bound = mod.createSessionBoundClient('token-A');
+    const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => ok(config));
+    mod.default.defaults.adapter = adapter;
+    await bound.post('/salary/penalties/fine-A/viewed');
+    expect(adapter.mock.calls[0][0].headers.Authorization).toBe('Bearer token-A');
+    mod.setAuthToken(null);
+    expect(mod.isCurrentAuthToken('token-A')).toBe(false);
+  });
+
   it('current 401 notifies synchronously and never owns persistent token cleanup', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require('../axios') as typeof import('../axios');

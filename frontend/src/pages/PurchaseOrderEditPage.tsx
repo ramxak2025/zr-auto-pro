@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Package, ShoppingCart, Sparkles, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { purchaseOrdersApi, suppliersApi, productsApi } from '../api/services';
+import { purchaseOrdersApi, suppliersApi, productsApi, warehousesApi } from '../api/services';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Button,
@@ -25,8 +26,8 @@ import {
   Textarea,
 } from '../ui';
 import type { DataTableColumn } from '../ui';
-import ProductPickerDrawer from '../components/warehouse/ProductPickerDrawer';
-import type { PurchaseOrder, Product, PurchaseOrderSuggestionGroup } from '../types';
+import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
+import type { PurchaseOrder, Product, PurchaseOrderSuggestionGroup, Warehouse } from '../types';
 import { formatQty } from '../utils/units';
 import { parseNumberInput } from '../components/warehouse/format';
 
@@ -53,6 +54,7 @@ export default function PurchaseOrderEditPage() {
   const [note, setNote] = useState('');
   const [items, setItems] = useState<LineDraft[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerWarehouseId, setPickerWarehouseId] = useState('');
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
@@ -83,12 +85,27 @@ export default function PurchaseOrderEditPage() {
     refetch: refetchProducts,
   } = useQuery<Product[]>({
     queryKey: ['products-all'],
-    queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 1000 });
-      return res.data?.data ?? (res.data as unknown as Product[]);
-    },
+    queryFn: () => loadProductCatalog(productsApi.getAll, { warehouseId: 'all' }),
     staleTime: 60_000,
   });
+
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 5 * 60_000,
+  });
+  useEffect(() => {
+    if (!warehouses?.length) return;
+    if (!warehouses.some((w) => w.id === pickerWarehouseId)) {
+      setPickerWarehouseId((warehouses.find((w) => w.kind === 'main') ?? warehouses[0]).id);
+    }
+  }, [warehouses, pickerWarehouseId]);
+  const pickerProducts = useMemo(() => {
+    const list = allProducts ?? [];
+    if (!pickerWarehouseId) return list;
+    const isMain = warehouses?.find((w) => w.id === pickerWarehouseId)?.kind === 'main';
+    return list.filter((p) => p.warehouseId === pickerWarehouseId || (isMain && !p.warehouseId));
+  }, [allProducts, pickerWarehouseId, warehouses]);
 
   // Правка — грузим существующий черновик.
   const {
@@ -416,18 +433,17 @@ export default function PurchaseOrderEditPage() {
       <ProductPickerDrawer
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        title="Добавить товар"
-        subtitle="Цена — закупочная из карточки; поправить можно в строке заказа"
-        products={allProducts ?? []}
+        products={pickerProducts}
+        warehouses={warehouses}
+        selectedWarehouseId={pickerWarehouseId}
+        onSelectWarehouse={setPickerWarehouseId}
         selectedIds={items.map((it) => it.productId)}
-        onSelect={addProduct}
+        onSelectProduct={addProduct}
         closeOnSelect={false}
         priceKind="cost"
         isLoading={productsLoading}
         isError={productsError}
         onRetry={() => refetchProducts()}
-        emptyTitle="Каталог пуст"
-        emptyDescription="Сначала добавьте товары на склад"
       />
 
       <SuggestionsModal isOpen={suggestOpen} onClose={() => setSuggestOpen(false)} onApply={applySuggestion} />

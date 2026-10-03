@@ -185,7 +185,7 @@ services:
     healthcheck:
       # nginx:alpine → busybox wget доступен. Проверяем, что nginx реально
       # отдаёт контент на / (listen 80), а не просто «процесс жив».
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

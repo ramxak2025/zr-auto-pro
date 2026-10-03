@@ -1,5 +1,5 @@
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { phoneSearchKey } from '../common/normalize-phone';
@@ -408,7 +408,8 @@ export class ClientsService {
     });
   }
 
-  async update(id: string, tenantID: string, dto: any, actorPoint?: string | null) {
+  async update(id: string, tenantID: string, dto: any, actorPoint?: string | null, transaction?: PoolClient) {
+    const db = transaction ?? this.pool;
     // 161 — правка чужого филиала невозможна: тот же предикат видимости, что и
     // в списке, уходит в WHERE — чужая карточка просто «не найдена».
     const viewerPoint = await this.separatePointFor(tenantID, actorPoint);
@@ -443,7 +444,7 @@ export class ClientsService {
     idx += 1; // теперь idx указывает на плейсхолдер tenant_id
     const pointWhere = this.separatePointWhere(null, viewerPoint, vals);
     try {
-      const { rows } = await this.pool.query(
+      const { rows } = await db.query(
         `UPDATE clients SET ${sets.join(', ')} WHERE id=$${idx - 1} AND tenant_id=$${idx}${pointWhere} RETURNING *`,
         vals,
       );

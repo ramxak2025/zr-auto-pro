@@ -4700,6 +4700,8 @@ export interface SalaryFine {
   createdBy?: string;
   creatorName?: string;
   createdAt: string;
+  /** First acknowledgement by the recipient. Does not change the deduction. */
+  viewedAt?: string | null;
 }
 
 /**

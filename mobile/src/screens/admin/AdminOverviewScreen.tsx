@@ -374,13 +374,21 @@ function ManagerOverview() {
   const { openExtend, sheet } = useExtendSheet();
 
   // Ключи ['manager', …] — не в persistent cache: деньги на диск не пишем.
-  const { data: summary } = useQuery<ManagerSummary>({
+  const {
+    data: summary,
+    isPending: summaryPending,
+    isError: summaryError,
+  } = useQuery<ManagerSummary>({
     queryKey: ['manager', 'summary'],
     queryFn: async () => (await managerApi.summary()).data,
     placeholderData: (prev) => prev,
   });
 
-  const { data: tenants = [] } = useQuery<Tenant[]>({
+  const {
+    data: tenants = [],
+    isPending: tenantsPending,
+    isError: tenantsError,
+  } = useQuery<Tenant[]>({
     queryKey: ['manager', 'tenants'],
     queryFn: async () => (await managerApi.tenants()).data,
     placeholderData: (prev) => prev,
@@ -408,7 +416,10 @@ function ManagerOverview() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Обзор" subtitle={user?.fullName || 'Кабинет менеджера'} />
+      <IosScreenHeader
+        title="Кабинет менеджера"
+        subtitle={user?.fullName || 'Подключение и сопровождение автосервисов'}
+      />
 
       <ScrollView
         contentInset={contentInset}
@@ -430,11 +441,42 @@ function ManagerOverview() {
           <Text style={styles.primaryBtnText}>Новый автосервис</Text>
         </Pressable>
 
+        <View style={styles.quickActions}>
+          <Pressable
+            style={[styles.quickAction, surface.card]}
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('AdminTenants', { screen: 'AdminTenantsHome' })}
+          >
+            <Ionicons name="business-outline" size={22} color={palette.accent.primary} />
+            <Text style={[styles.quickActionTitle, { color: palette.text.primary }]}>Мои автосервисы</Text>
+            <Text style={{ color: palette.text.tertiary }}>Подписки и доступы</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.quickAction, surface.card]}
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('AdminMore', { screen: 'ManagerLedger' })}
+          >
+            <Ionicons name="wallet-outline" size={22} color={palette.accent.primary} />
+            <Text style={[styles.quickActionTitle, { color: palette.text.primary }]}>Расчёты</Text>
+            <Text style={{ color: palette.text.tertiary }}>Оплаты и моя доля</Text>
+          </Pressable>
+        </View>
+        {(summaryError || tenantsError) && (
+          <Pressable style={[styles.notice, surface.card]} onPress={onRefresh} accessibilityRole="button">
+            <Text style={{ color: palette.text.secondary }}>
+              Не удалось обновить кабинет. Нажмите, чтобы повторить.
+            </Text>
+          </Pressable>
+        )}
+        {(summaryPending || tenantsPending) && (
+          <Text style={{ color: palette.text.tertiary }}>Загружаем данные кабинета…</Text>
+        )}
+
         <View style={styles.grid}>
           <MetricTile
             icon="business"
             tint={colors.primary[600]}
-            value={String(counts?.total ?? tenants.length)}
+            value={counts ? String(counts.total) : tenantsPending || tenantsError ? '—' : String(tenants.length)}
             label="Клиентов"
             surfaceCard={surface.card}
             palette={palette}
@@ -442,7 +484,7 @@ function ManagerOverview() {
           <MetricTile
             icon="checkmark-circle"
             tint={colors.green[600]}
-            value={String(counts?.active ?? 0)}
+            value={counts ? String(counts.active) : '—'}
             label="Активных"
             surfaceCard={surface.card}
             palette={palette}
@@ -450,7 +492,7 @@ function ManagerOverview() {
           <MetricTile
             icon="alarm-outline"
             tint={colors.orange[500]}
-            value={String(counts?.expiringIn7d ?? 0)}
+            value={counts ? String(counts.expiringIn7d) : '—'}
             label="Истекает за 7 дней"
             surfaceCard={surface.card}
             palette={palette}
@@ -458,7 +500,7 @@ function ManagerOverview() {
           <MetricTile
             icon="card-outline"
             tint={colors.blue[600]}
-            value={formatMoneyExact(summary?.paidThisMonth ?? 0)}
+            value={summary ? formatMoneyExact(summary.paidThisMonth) : '—'}
             label="Оплат за месяц"
             surfaceCard={surface.card}
             palette={palette}
@@ -466,7 +508,7 @@ function ManagerOverview() {
           <MetricTile
             icon="wallet-outline"
             tint={colors.green[600]}
-            value={formatMoneyExact(summary?.myShareThisMonth ?? 0)}
+            value={summary ? formatMoneyExact(summary.myShareThisMonth) : '—'}
             label={sharePercent != null ? `Моя доля · ${formatPercent(100 - sharePercent)}` : 'Моя доля'}
             surfaceCard={surface.card}
             palette={palette}
@@ -474,7 +516,7 @@ function ManagerOverview() {
           <MetricTile
             icon="cash-outline"
             tint={colors.red[600]}
-            value={formatMoneyExact(Math.abs(balance))}
+            value={summary ? formatMoneyExact(Math.abs(balance)) : '—'}
             valueColor={balanceColor(balance, palette)}
             label={overpaid ? 'Переплата владельцу' : 'Долг владельцу'}
             surfaceCard={surface.card}
@@ -485,7 +527,13 @@ function ManagerOverview() {
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Истекают и просрочены</Text>
         <ExpiringBoard
           items={expiringBoard}
-          emptyText="Нет подписок, требующих внимания"
+          emptyText={
+            tenantsPending
+              ? 'Загрузка…'
+              : tenantsError
+                ? 'Список подписок недоступен'
+                : 'Нет подписок, требующих внимания'
+          }
           palette={palette}
           surfaceCard={surface.card}
           onOpen={openTenant}
@@ -495,7 +543,13 @@ function ManagerOverview() {
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Последние автосервисы</Text>
         <RecentBoard
           items={recent}
-          emptyText="Пока нет автосервисов. Нажмите «Новый автосервис»."
+          emptyText={
+            tenantsPending
+              ? 'Загрузка…'
+              : tenantsError
+                ? 'Список автосервисов недоступен'
+                : 'Пока нет автосервисов. Нажмите «Новый автосервис».'
+          }
           palette={palette}
           surfaceCard={surface.card}
           onOpen={openTenant}
@@ -648,6 +702,10 @@ function PaidRevenueChart({ points, palette }: { points: SubscriptionRevenuePoin
 }
 
 const styles = StyleSheet.create({
+  notice: { padding: spacing[4] },
+  quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
+  quickAction: { flex: 1, minWidth: 140, padding: spacing[4], gap: spacing[2] },
+  quickActionTitle: { fontSize: 15, fontWeight: '600' },
   root: { flex: 1 },
   scroll: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[3] },
   requestsCard: {

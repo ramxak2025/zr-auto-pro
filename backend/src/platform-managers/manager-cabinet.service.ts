@@ -96,6 +96,10 @@ export class ManagerCabinetService {
     return this.tenants.getCabinet(id, actor.scope);
   }
 
+  async tenantAuditLog(actor: CabinetActor, id: string, limit?: string, offset?: string) {
+    return this.audit.listForTenant(id, actor.scope.managerId ?? null, limit, offset);
+  }
+
   /**
    * POST /manager/tenants — завести автосервис: тенант + владелец (директор) + пробный
    * период, ОДНОЙ транзакцией (тот же путь, что у одобрения заявки на регистрацию).

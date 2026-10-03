@@ -1138,7 +1138,9 @@ export default function ExpensesScreen() {
   // Header / hero / breakdown / top-5 / regular highlights рендерим
   // как ListHeaderComponent у FlashList — экран целиком прокручивается,
   // а не разделён на "статичную верхушку" + "скроллящийся низ".
-  const renderHeader = () => (
+  // Pass an element, not a new component type on every keystroke. A render
+  // function here remounts the custom-range TextInputs and drops native focus.
+  const listHeader = (
     <View>
       {/* Freshness badge — узкий ряд под шапкой */}
       <View style={styles.freshnessRow}>
@@ -1629,7 +1631,9 @@ export default function ExpensesScreen() {
           data={filteredExpenses}
           keyExtractor={(i) => i.id}
           renderItem={renderExpense}
-          ListHeaderComponent={renderHeader}
+          ListHeaderComponent={listHeader}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           ListEmptyComponent={
             <EmptyState
               title={filterCategory || pendingOnly || filterEmployeeId ? 'Ничего не найдено' : 'Нет расходов'}

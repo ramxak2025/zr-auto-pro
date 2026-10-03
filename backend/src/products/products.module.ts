@@ -9,5 +9,6 @@ import { WarehouseModule } from '../warehouse/warehouse.module';
   imports: [WarehouseModule],
   controllers: [ProductsController],
   providers: [ProductsService],
+  exports: [ProductsService],
 })
 export class ProductsModule {}

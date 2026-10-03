@@ -13,7 +13,6 @@
  * Mirrors the useTabBarHeight conventions so admin screens get correct
  * paddingBottom / contentInset on both platforms.
  */
-import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export const ADMIN_BAR_HEIGHT = 60;
@@ -27,9 +26,9 @@ export function useAdminTabBarHeight(): number {
 }
 
 /**
- * Scroll insets for admin screens — same iOS/Android split as
- * useTabBarScrollInsets: iOS lifts via `contentInset`, Android via explicit
- * `contentContainerStyle.paddingBottom` (it ignores contentInset).
+ * Reserve real content space on both platforms. Keyboard-aware scroll forms
+ * and lists share the same padding; the last control clears the floating bar
+ * without relying on iOS-only contentInset / automatic inset adjustments.
  */
 export function useAdminTabBarScrollInsets(): {
   contentInset: { bottom: number };
@@ -38,8 +37,8 @@ export function useAdminTabBarScrollInsets(): {
 } {
   const tabBarHeight = useAdminTabBarHeight();
   return {
-    contentInset: { bottom: tabBarHeight },
-    contentContainerPaddingBottom: Platform.OS === 'ios' ? 0 : tabBarHeight,
+    contentInset: { bottom: 0 },
+    contentContainerPaddingBottom: tabBarHeight + 16,
     tabBarHeight,
   };
 }

@@ -70,6 +70,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
+import OneCIntegrationCard from '../components/OneCIntegrationCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { MessagingIntegration, TelephonySettings } from '../../../shared/types';
@@ -935,6 +936,8 @@ export default function IntegrationsScreen() {
         <Text style={[styles.heroSub, { color: palette.text.secondary }]}>
           Подключайте сервисы — приём оплат, касса, звонки и каналы рассылок
         </Text>
+
+        <OneCIntegrationCard />
 
         {/* 1. Онлайн-касса 54-ФЗ — the fiscalization settings live on their own
             screen (PaymentIntegrations) because their secrets + long forms differ

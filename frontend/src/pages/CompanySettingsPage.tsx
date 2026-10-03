@@ -33,6 +33,7 @@ import { ErrorRow } from '../components/dashboard/shared';
 import StickySaveBar, { useUnsavedGuard } from '../components/company/StickySaveBar';
 import ToggleRow from '../components/company/ToggleRow';
 import VinSettingsCard from '../components/company/VinSettingsCard';
+import OneCSettingsCard from '../components/company/OneCSettingsCard';
 import type { LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict, Tenant } from '../types';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { DEFAULT_TIMEZONE, RU_TIMEZONES, formatDateTime, timezoneOption } from '../../../shared/utils/formatters';
@@ -90,7 +91,7 @@ const EMPTY_FORM: CompanyForm = {
   pointsSharedClients: true,
 };
 
-type SettingsTab = 'company' | 'cars' | 'cash' | 'loyalty';
+type SettingsTab = 'company' | 'cars' | 'cash' | 'loyalty' | 'oneC';
 
 // ---------------------------------------------------------------------------
 // POS «Кассовая смена + роли». Один тумблер под settings_manage: GET
@@ -826,6 +827,7 @@ export default function CompanySettingsPage() {
     if (canManageCompany) {
       items.push({ key: 'company', label: 'Реквизиты', icon: Building2 });
       items.push({ key: 'cars', label: 'Автомобили', icon: Car });
+      items.push({ key: 'oneC', label: '1С', icon: LayoutGrid });
     }
     if (canManageSettings) {
       items.push({ key: 'cash', label: 'Касса', icon: Wallet });
@@ -876,6 +878,9 @@ export default function CompanySettingsPage() {
             </TabPanel>
             <TabPanel idPrefix="company-settings" tabKey="cars" active={tab === 'cars'}>
               <VinSettingsCard />
+            </TabPanel>
+            <TabPanel idPrefix="company-settings" tabKey="oneC" active={tab === 'oneC'}>
+              <OneCSettingsCard />
             </TabPanel>
             <TabPanel idPrefix="company-settings" tabKey="cash" active={tab === 'cash'}>
               <ShiftModeSection />

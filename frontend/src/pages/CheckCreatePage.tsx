@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -463,8 +464,7 @@ export default function CheckCreatePage() {
   } = useQuery<Product[]>({
     queryKey: ['products-all'],
     queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 1000 });
-      return res.data?.data ?? res.data;
+      return loadProductCatalog(productsApi.getAll, { warehouseId: 'all' });
     },
     staleTime: 60_000,
   });

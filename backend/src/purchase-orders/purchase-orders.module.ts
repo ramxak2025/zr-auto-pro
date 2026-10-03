@@ -21,5 +21,6 @@ import { SuppliersModule } from '../suppliers/suppliers.module';
   imports: [StockMovementsModule, SuppliersModule],
   controllers: [PurchaseOrdersController],
   providers: [PurchaseOrdersService],
+  exports: [PurchaseOrdersService],
 })
 export class PurchaseOrdersModule {}
