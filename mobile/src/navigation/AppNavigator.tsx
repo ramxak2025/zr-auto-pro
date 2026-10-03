@@ -95,6 +95,7 @@ import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
 import AdminShellNavigator from './AdminShellNavigator';
 import { sessionShell } from './platformShell';
+import { getMoreTabBlurAction } from './moreTabBlur';
 import ImpersonationBanner from '../components/ImpersonationBanner';
 import { View, AppState } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
@@ -750,10 +751,10 @@ function TabNavigator() {
            another tab is left untouched → it just switches to MoreTab,
            which the `state` listener / blur-reset already pin to MoreHome.
 
-        3. `blur` — pops the nested MoreStack back to MoreHome when the tab
-           loses focus, WITHOUT re-focusing MoreTab (addresses the inner
-           stack by key so the outer tab focus is left where the user
-           actually tapped).
+        3. `blur` — pops MoreStack only after switching to another tab.
+           A root-stack overlay (ProductPicker) also blurs MoreTab, but must
+           keep the order form and its picker session mounted underneath.
+           The action targets the inner stack without re-focusing MoreTab.
 
         ВЫРОЖДЕННЫЙ СТЕК (баг владельца 05.07): если nested navigate успел
         сделать раздел ЕДИНСТВЕННЫМ роутом (`[Schedule]`, index 0 — v7 не
@@ -810,16 +811,8 @@ function TabNavigator() {
             }
           },
           blur: () => {
-            const inner = readMoreStackState(navigation);
-            if (!inner) return;
-            if (inner.routes[0]?.name !== 'MoreHome') {
-              navigation.dispatch({
-                ...CommonActions.reset({ index: 0, routes: [{ name: 'MoreHome' }] }),
-                target: inner.key,
-              });
-            } else if (inner.index > 0) {
-              navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
-            }
+            const action = getMoreTabBlurAction(navigation.getState());
+            if (action) navigation.dispatch(action);
           },
         })}
       />
