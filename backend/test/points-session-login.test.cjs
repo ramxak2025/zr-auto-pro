@@ -30,9 +30,13 @@ const backendRoot = join(__dirname, '..');
 const read = (relativePath) => readFileSync(join(backendRoot, relativePath), 'utf8');
 
 const bcrypt = require('bcryptjs');
+const { Reflector } = require('@nestjs/core');
+const { AuthController } = require('../dist/auth/auth.controller');
 const { AuthService } = require('../dist/auth/auth.service');
 const { JwtStrategy } = require('../dist/auth/jwt.strategy');
+const { PermissionsGuard } = require('../dist/common/guards/permissions.guard');
 const { PointsService } = require('../dist/points/points.service');
+const { TenantsController } = require('../dist/tenants/tenants.controller');
 const { POINT_SELECT_PURPOSE, POINT_SELECT_TTL_SECONDS } = require('../dist/auth/point-session');
 const { ttlCache } = require('../dist/common/ttl-cache');
 
@@ -112,6 +116,78 @@ const userRow = (extra = {}) => ({
 });
 
 const pointRow = (id, name, isMain) => ({ id, name, address: null, is_main: isMain });
+
+test('мастер получает флаг рабочих смен своего тенанта через login/me без права читать или менять компанию', async () => {
+  const otherTenant = '55555555-5555-4555-8555-555555555555';
+  const otherUser = '66666666-6666-4666-8666-666666666666';
+  const rows = [
+    userRow({ tenant_json: JSON.stringify({ id: TENANT, shiftsEnabled: true }) }),
+    userRow({
+      id: otherUser,
+      phone: '+79990000001',
+      tenant_id: otherTenant,
+      role_id: '77777777-7777-4777-8777-777777777777',
+      role_matrix: { settings: { company: false } },
+      tenant_json: JSON.stringify({ id: otherTenant, shiftsEnabled: false }),
+    }),
+  ];
+  const pool = fakePool([
+    [
+      /FROM users u/,
+      (params, calls) => {
+        const sql = calls.at(-1).text;
+        // Check the SQL actually issued by AuthService, not just a fabricated
+        // response: omitting the projection caused the original master bug.
+        assert.match(sql, /'shiftsEnabled',\s*COALESCE\(t\.shifts_enabled,\s*false\)/);
+        assert.match(sql, /LEFT JOIN tenants t ON t\.id = u\.tenant_id/);
+        if (/WHERE u\.id = \$1/.test(sql)) return rows.filter((row) => row.id === params[0]);
+        assert.match(sql, /WHERE u\.phone = \$1 OR u\.phone = \$2/);
+        return rows.filter((row) => params.includes(row.phone));
+      },
+    ],
+  ]);
+  const auth = new AuthService(pool, fakeJwt());
+  const controller = new AuthController(auth);
+  const guard = new PermissionsGuard(new Reflector());
+  assert.ok((Reflect.getMetadata('__guards__', TenantsController) || []).includes(PermissionsGuard));
+  assert.deepEqual(
+    (Reflect.getMetadata('__guards__', AuthController.prototype.me) || []).map((entry) => entry.name),
+    ['JwtAuthGuard'],
+  );
+
+  for (const row of rows) {
+    const profile = await controller.me({ userID: row.id, currentPointId: MAIN });
+    assert.equal(profile.role, 'master');
+    assert.equal(profile.permissions.company_manage, false);
+    assert.equal(profile.tenant.id, row.tenant_id);
+    assert.equal(profile.tenant.shiftsEnabled, row.tenant_id === TENANT);
+    assert.equal(profile.currentPointId, MAIN);
+    const login = await auth.login({ phone: row.phone, password: PASSWORD });
+    assert.deepEqual(
+      login.user.tenant,
+      profile.tenant,
+      'login и /auth/me отдают один флаг без отдельного запроса компании',
+    );
+
+    const actor = { userID: row.id, tenantID: row.tenant_id, role: profile.role, permissions: profile.permissions };
+    for (const handler of ['getMyCompany', 'updateMyCompany']) {
+      assert.throws(
+        () =>
+          guard.canActivate({
+            getClass: () => TenantsController,
+            getHandler: () => TenantsController.prototype[handler],
+            switchToHttp: () => ({ getRequest: () => ({ user: actor }) }),
+          }),
+        (error) => error.getStatus() === 403,
+        `${handler} должен остаться закрыт мастеру`,
+      );
+    }
+  }
+  assert.ok(
+    pool.calls.every((call) => /^\s*SELECT\b/.test(call.text)),
+    'чтение флага не меняет настройки компании',
+  );
+});
 
 // ── 1. Вход с ОДНИМ доступным филиалом: как раньше ──────────────────────────
 

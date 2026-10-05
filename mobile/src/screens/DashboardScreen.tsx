@@ -42,7 +42,6 @@ import {
   reportsApi,
   warehouseAnalyticsApi,
   productsApi,
-  myCompanyApi,
   installmentsApi,
   cashShiftsApi,
 } from '../api/services';
@@ -68,7 +67,6 @@ import type {
   WarehouseSummary,
   ReorderItem,
   Product,
-  Tenant,
   InstallmentWidget,
   CashShiftReport,
 } from '../../../shared/types';
@@ -4621,7 +4619,7 @@ function CashierShiftCard() {
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
   useAttendanceRefresh();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { palette } = useThemeMode();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -4630,18 +4628,9 @@ export default function DashboardScreen() {
   const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
   const [refreshing, setRefreshing] = useState(false);
 
-  // #7 — ShiftControl (карточка «Открыть/закрыть смену») показывается мастеру
-  // ТОЛЬКО если у тенанта включена фича «Смены» (shiftsEnabled). Источник —
-  // тот же `my-company` query, что использует экран настроек компании; здесь
-  // он лёгкий read-only потребитель (мастеру эндпоинт доступен). Отсутствие
-  // поля на легаси-пейлоаде ⇒ false (смены выключены).
-  const { data: myCompany } = useQuery<Tenant>({
-    queryKey: ['my-company'],
-    queryFn: async () => (await myCompanyApi.get()).data,
-    staleTime: 5 * 60 * 1000,
-    enabled: isMaster,
-  });
-  const shiftsEnabled = myCompany?.shiftsEnabled === true;
+  // Флаг приходит с собственным профилем: /my-company закрыт мастеру
+  // правом company_manage. Отсутствие поля в старом профиле означает false.
+  const shiftsEnabled = user?.tenant?.shiftsEnabled === true;
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -4693,8 +4682,14 @@ export default function DashboardScreen() {
       ['users'],
     ];
     const dashboardKeys = isMaster ? masterKeys : ownerKeys;
-    await Promise.all(dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })));
-    setRefreshing(false);
+    try {
+      await Promise.all([
+        refreshUser(),
+        ...dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const displayName = user?.fullName?.split(' ')[0] || '';

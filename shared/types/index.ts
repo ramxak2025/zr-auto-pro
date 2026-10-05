@@ -76,6 +76,8 @@ export interface Tenant {
    * 070 — per-tenant master toggle for the «Смены» (shifts) subsystem.
    * Absent on legacy payloads → treat as `false`. Mutable through the existing
    * PATCH /my-company update (Partial<Tenant>) — no dedicated endpoint.
+   * Also included in User.tenant from auth profiles: masters need this flag
+   * to open their work shift without the company_manage permission.
    */
   shiftsEnabled?: boolean;
   /**
