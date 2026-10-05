@@ -1,0 +1,77 @@
+// Exercise the actual JSX button handler without a native renderer or API.
+// Hooks retain this one render, so advancing the clock cannot refresh its closure.
+const mockSetPickedDate = jest.fn();
+jest.mock('react', () => ({
+  ...jest.requireActual('react'),
+  useState: (initial: unknown) => [typeof initial === 'function' ? initial() : initial, mockSetPickedDate],
+  useEffect: jest.fn(),
+  useMemo: (factory: () => unknown) => factory(),
+  useCallback: (callback: unknown) => callback,
+  useRef: () => ({ current: null }),
+}));
+jest.mock('react-native', () => ({
+  ActivityIndicator: 'ActivityIndicator',
+  RefreshControl: 'RefreshControl',
+  ScrollView: 'ScrollView',
+  Text: 'Text',
+  TouchableOpacity: 'TouchableOpacity',
+  View: 'View',
+  StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
+}));
+jest.mock('@tanstack/react-query', () => ({
+  useQuery: () => ({ data: [], isPending: false, isError: false, isFetching: false, refetch: jest.fn() }),
+}));
+jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('../../api/services', () => ({ shiftsApi: { getAll: jest.fn() } }));
+jest.mock('../../components/EmptyState', () => 'EmptyState');
+jest.mock('../../components/QueryErrorState', () => 'QueryErrorState');
+jest.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ user: { tenantId: 'tenant', currentPointId: 'point' } }),
+}));
+jest.mock('../../contexts/TenantTimezoneContext', () => ({ useTenantTimezone: () => 'Asia/Vladivostok' }));
+jest.mock('../../contexts/ThemeContext', () => ({
+  useColors: () => ({
+    mode: 'light',
+    bg: { card: '#fff', muted: '#eee' },
+    text: { primary: '#111', secondary: '#555', inverse: '#fff' },
+    border: { subtle: '#ddd' },
+    accent: { primary: '#2563eb', primarySoft: '#dbeafe', primaryText: '#1d4ed8' },
+  }),
+}));
+jest.mock('../../hooks/useTabBarHeight', () => ({ useTabBarHeight: () => 72 }));
+jest.mock('../../platform/haptics', () => ({ haptic: jest.fn() }));
+
+import React from 'react';
+import ShiftAttendanceHistory from '../ShiftAttendanceHistory';
+
+function todayHandler(node: React.ReactNode): (() => void) | undefined {
+  if (!React.isValidElement<{ children?: React.ReactNode; accessibilityLabel?: string; onPress?: () => void }>(node))
+    return undefined;
+  if (node.props.accessibilityLabel === 'Показать смены за сегодня') return node.props.onPress;
+  for (const child of React.Children.toArray(node.props.children)) {
+    const handler = todayHandler(child);
+    if (handler) return handler;
+  }
+  return undefined;
+}
+
+afterEach(() => {
+  jest.useRealTimers();
+  mockSetPickedDate.mockClear();
+});
+
+it('Today uses the click-time service day after midnight without rerendering', () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2026-10-31T13:59:59Z')); // 23:59:59 in the service.
+  const onMonthChange = jest.fn();
+  const rendered = ShiftAttendanceHistory({ currentMonth: new Date(2026, 9, 1, 12), onMonthChange });
+  const pressToday = todayHandler(rendered);
+  expect(pressToday).toBeDefined();
+
+  jest.setSystemTime(new Date('2026-10-31T14:00:01Z')); // New service day and month; no render.
+  pressToday?.();
+
+  expect(mockSetPickedDate).toHaveBeenCalledWith('2026-11-01');
+  const selectedMonth = onMonthChange.mock.calls[0][0] as Date;
+  expect([selectedMonth.getFullYear(), selectedMonth.getMonth(), selectedMonth.getDate()]).toEqual([2026, 10, 1]);
+});

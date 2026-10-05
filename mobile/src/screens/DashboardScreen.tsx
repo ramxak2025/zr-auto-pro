@@ -12,6 +12,7 @@ import {
   Platform,
   StyleProp,
   ViewStyle,
+  AppState,
 } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -28,7 +29,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle, RadialGradient } from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   checksApi,
@@ -84,10 +85,20 @@ import {
   type WidgetVisibility,
 } from './dashboard/dashboardWidgets';
 import DashboardWidgetsModal from './dashboard/DashboardWidgetsModal';
-import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+import {
+  calculateAttendanceStats,
+  attendanceScore,
+  emptyBreakdown,
+  recordedAttendanceBucket,
+} from '../../../shared/utils/attendance';
+import { formatDayKey } from '../../../shared/utils/formatters';
+import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
+import { useAttendanceRefresh } from '../hooks/useAttendanceRefresh';
 import { updateWidgetData } from '../utils/widgetBridge';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { formatShiftTime } from './shiftAttendanceHelpers';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -1279,17 +1290,10 @@ function OnShiftSnapshot() {
   });
 
   const statuses = Array.isArray(todayData) ? todayData : [];
-  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
-  const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
-  const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
-
-  const onShift = statuses.filter(
-    (s) =>
-      (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') &&
-      !s.isDayOff &&
-      !isSick(s) &&
-      !isAbsent(s),
-  );
+  const onShift = statuses.filter((s) => {
+    const bucket = recordedAttendanceBucket(s);
+    return s.isWorking || bucket === 'full' || bucket === 'lateMinor' || bucket === 'lateMajor';
+  });
 
   const visible = onShift.slice(0, 5);
   const more = Math.max(onShift.length - 5, 0);
@@ -3786,20 +3790,36 @@ function AdminDashboard({ name }: { name: string }) {
 function ShiftControl() {
   const palette = useColors();
   const queryClient = useQueryClient();
-  const { data: myShifts } = useQuery<Shift[]>({
+  const tenantTz = useTenantTimezone();
+  const isFocused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  const { data: myShifts, refetch } = useQuery<Shift[]>({
     queryKey: ['shifts', 'my'],
     queryFn: async () => {
       const res = await shiftsApi.getMy();
       return res.data;
     },
     staleTime: 10_000,
+    refetchInterval: isFocused && appActive ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setAppActive(state === 'active');
+      if (state === 'active' && isFocused) void refetch();
+    });
+    return () => subscription.remove();
+  }, [isFocused, refetch]);
+  useFocusEffect(
+    useCallback(() => {
+      if (AppState.currentState === 'active') void refetch();
+    }, [refetch]),
+  );
 
   const openShift = useMutation({
     mutationFn: () => shiftsApi.open(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['shifts'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      void invalidateAttendanceQueries(queryClient);
     },
     // Без onError мастер жал «Открыть смену», запрос молча умирал (offline /
     // 500), спиннер исчезал — и человек был уверен, что смена открыта.
@@ -3816,8 +3836,7 @@ function ShiftControl() {
   const closeShift = useMutation({
     mutationFn: (id: string) => shiftsApi.close(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['shifts'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      void invalidateAttendanceQueries(queryClient);
     },
     onError: (err: unknown) => {
       haptic('error');
@@ -3829,7 +3848,7 @@ function ShiftControl() {
     },
   });
 
-  const currentShift = myShifts?.find((s) => !s.closedAt);
+  const currentShift = (Array.isArray(myShifts) ? myShifts : []).find((s) => !s.closedAt);
   const isLoading = openShift.isPending || closeShift.isPending;
 
   return (
@@ -3859,7 +3878,7 @@ function ShiftControl() {
             </Text>
             {currentShift && (
               <Text style={[styles.shiftSince, { color: palette.text.tertiary }]}>
-                с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                с {formatShiftTime(currentShift.openedAt, tenantTz)}
               </Text>
             )}
           </View>
@@ -4108,10 +4127,8 @@ function MasterRecentChecks() {
 function MyAttendanceRankWidget({ userId }: { userId?: string }) {
   const palette = useColors();
   const navigation = useNavigation<any>();
-  const [selectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const tenantTz = useTenantTimezone();
+  const [selectedMonth] = useState(() => formatDayKey(new Date(), tenantTz).slice(0, 7));
   const monthStart = `${selectedMonth}-01`;
   const monthEnd = (() => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -4134,7 +4151,10 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
     [usersData],
   );
 
-  const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
+  const stats = useMemo(
+    () => calculateAttendanceStats(monthEntries as any, new Date(), tenantTz),
+    [monthEntries, tenantTz],
+  );
   const ranked = useMemo(
     () =>
       masters
@@ -4600,6 +4620,7 @@ function CashierShiftCard() {
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
+  useAttendanceRefresh();
   const { user } = useAuth();
   const { palette } = useThemeMode();
   const queryClient = useQueryClient();

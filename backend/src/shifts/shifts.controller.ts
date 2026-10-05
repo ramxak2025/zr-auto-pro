@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards } from '@nestjs/common';
 import { ShiftsService } from './shifts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
@@ -13,9 +13,9 @@ export class ShiftsController {
   // ролей — никого не запирает; кастомная роль без ячейки — 403, fail-closed).
   @RequirePermission('schedule_view')
   @Get()
-  getAll(@CurrentUser() user: JwtPayload) {
+  getAll(@CurrentUser() user: JwtPayload, @Query('date') date?: unknown) {
     // Актор целиком — сервису нужна его текущая точка (161).
-    return this.shiftsService.getAll(user.tenantID, user);
+    return this.shiftsService.getAll(user.tenantID, user, date);
   }
 
   // Self-роуты: свои смены и открытие СВОЕЙ смены — без permission-гейта

@@ -7,6 +7,8 @@
  * can show period-over-period deltas (this month vs last month, etc).
  */
 
+import { recordedAttendanceBucket } from '../../../shared/utils/attendance';
+
 export type PeriodKey = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'lastMonth';
 
 export interface PeriodLabel {
@@ -133,6 +135,8 @@ export interface AttendanceStats {
 
 interface EntryLike {
   userId: string;
+  date?: string;
+  note?: string | null;
   isDayOff?: boolean;
   actualArrival?: string | null;
   lateMinutes?: number;
@@ -144,7 +148,7 @@ interface EntryLike {
  * Cheaper than hitting a per-user stats endpoint N times — single query
  * to /schedule, then group on the client.
  */
-export function aggregateAttendance(entries: EntryLike[]): Map<string, AttendanceStats> {
+export function aggregateAttendance(entries: EntryLike[], todayKey?: string): Map<string, AttendanceStats> {
   const out = new Map<string, AttendanceStats>();
   const lateMins = new Map<string, number[]>();
 
@@ -156,17 +160,25 @@ export function aggregateAttendance(entries: EntryLike[]): Map<string, Attendanc
       lateMins.set(e.userId, []);
     }
     s.scheduled += 1;
-    if (e.isDayOff) {
+    const bucket = e.date && todayKey && e.date.slice(0, 10) > todayKey ? null : recordedAttendanceBucket(e);
+    if (bucket === 'dayOff' || bucket === 'sick') {
       s.daysOff += 1;
       continue;
     }
-    if (e.actualArrival) s.worked += 1;
-    if (e.lateStatus === 'on_time') s.onTime += 1;
-    else if (e.lateStatus === 'late_minor') s.lateMinor += 1;
-    else if (e.lateStatus === 'late_major') s.lateMajor += 1;
-    else if (!e.actualArrival) s.absent += 1;
+    if (bucket === 'full') {
+      s.worked += 1;
+      s.onTime += 1;
+    } else if (bucket === 'lateMinor') {
+      s.worked += 1;
+      s.lateMinor += 1;
+    } else if (bucket === 'lateMajor') {
+      s.worked += 1;
+      s.lateMajor += 1;
+    } else if (bucket === 'absent') s.absent += 1;
 
-    if ((e.lateMinutes ?? 0) > 0) lateMins.get(e.userId)!.push(e.lateMinutes!);
+    if ((bucket === 'lateMinor' || bucket === 'lateMajor') && (e.lateMinutes ?? 0) > 0) {
+      lateMins.get(e.userId)?.push(e.lateMinutes ?? 0);
+    }
   }
 
   for (const [uid, mins] of lateMins.entries()) {

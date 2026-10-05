@@ -767,28 +767,35 @@ export class UsersService {
     // request rather than after the auth-cache TTL.
     invalidateAuthUser(id);
 
-    // When daysOff changed, update future schedule entries accordingly
+    // Only generated future plans follow profile weekdays. Explicit calendar
+    // choices and recorded attendance take precedence, including a concurrent edit.
     if (dto.daysOff !== undefined) {
-      const today = new Date().toISOString().split('T')[0];
-      const newDaysOff: number[] = dto.daysOff || [];
-
-      // Get future schedule entries for this user
-      const { rows: futureEntries } = await this.pool.query(
-        `SELECT id, date FROM schedule_entries WHERE user_id=$1 AND tenant_id=$2 AND date >= $3`,
-        [id, tenantID, today],
-      );
-
-      for (const entry of futureEntries) {
-        const entryDate = new Date(entry.date);
-        const dayOfWeek = entryDate.getDay();
-        const shouldBeDayOff = newDaysOff.includes(dayOfWeek);
-
-        await this.pool.query(`UPDATE schedule_entries SET is_day_off=$1, shift_start=$2, shift_end=$3 WHERE id=$4`, [
-          shouldBeDayOff,
-          shouldBeDayOff ? null : '09:00',
-          shouldBeDayOff ? null : '18:00',
-          entry.id,
-        ]);
+      const timezone = await getTenantTimezone(this.pool, tenantID);
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: people } = await client.query<{ days_off: number[] }>(
+          'SELECT days_off FROM users WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+          [id, tenantID],
+        );
+        const daysOff = people[0]?.days_off ?? [];
+        await client.query(
+          `UPDATE schedule_entries SET
+             is_day_off = EXTRACT(DOW FROM date)::integer = ANY($3::integer[]),
+             shift_start = CASE WHEN EXTRACT(DOW FROM date)::integer = ANY($3::integer[]) THEN NULL ELSE COALESCE(shift_start, '09:00') END,
+             shift_end = CASE WHEN EXTRACT(DOW FROM date)::integer = ANY($3::integer[]) THEN NULL ELSE COALESCE(shift_end, '18:00') END
+           WHERE user_id=$1 AND tenant_id=$2 AND date > (clock_timestamp() AT TIME ZONE $4::text)::date
+             AND COALESCE(is_manual_override, false)=false AND actual_arrival IS NULL AND late_status IS NULL
+             AND COALESCE(late_minutes, 0)=0
+             AND COALESCE(note, '') NOT IN ('Прогул', 'Больничный')`,
+          [id, tenantID, daysOff, timezone],
+        );
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
       }
     }
 

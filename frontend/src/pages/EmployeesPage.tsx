@@ -138,7 +138,10 @@ export default function EmployeesPage() {
     return ROLE_ORDER.filter((r) => (counts.get(r) ?? 0) > 0).map((r) => ({ role: r, count: counts.get(r) ?? 0 }));
   }, [activeUsers]);
 
-  const attendance = useMemo(() => aggregateAttendance(scheduleEntries ?? []), [scheduleEntries]);
+  const attendance = useMemo(
+    () => aggregateAttendance(scheduleEntries ?? [], tenantToday),
+    [scheduleEntries, tenantToday],
+  );
 
   const salaryByUser = useMemo(() => {
     const map = new Map<string, MasterSalary>();

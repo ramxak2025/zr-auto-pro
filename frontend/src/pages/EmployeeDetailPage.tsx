@@ -23,6 +23,7 @@ import { shortTime, todayStatusOf } from '../components/company/scheduleStatus';
 import { ErrorRow, MiniStat } from '../components/dashboard/shared';
 import type { EmployeeRanking, MasterSalary, TodayEmployeeStatus, User } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
 
 const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -33,6 +34,7 @@ function placeLabel(place: number | null, total: number): string {
 
 export default function EmployeeDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
+  const timeZone = useTenantTimezone();
 
   // Профиль
   const {
@@ -192,7 +194,10 @@ export default function EmployeeDetailPage() {
                             : '—'
                       }
                     />
-                    <MiniStat label="Пришёл" value={today?.actualArrival ? shortTime(today.actualArrival) : '—'} />
+                    <MiniStat
+                      label="Пришёл"
+                      value={today?.actualArrival ? shortTime(today.actualArrival, timeZone) : '—'}
+                    />
                     <MiniStat
                       label="Опоздание"
                       value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}

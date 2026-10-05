@@ -179,8 +179,8 @@ test('рабочая смена открывается в филиале сес�
     'shifts.open: филиал снова резолвится на месте',
   );
   assert.ok(
-    /INSERT INTO shifts \(user_id, date, tenant_id, point_id\) VALUES \(\$1, \$2, \$3, \$4\)/.test(shifts) &&
-      /\[userID, today, tenantID, pointId\]/.test(shifts),
+    /INSERT INTO shifts \(user_id, date, tenant_id, point_id, opened_at\) VALUES \(\$1, \$2, \$3, \$4, \$5\)/.test(shifts) &&
+      /\[userID, today, tenantID, pointId, clock\.instant\]/.test(shifts),
     'shifts.open: INSERT пишет не резолвнутую точку',
   );
 });

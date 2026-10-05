@@ -14,6 +14,8 @@ import type {
   BroadcastSegment,
   NotificationCategory,
   SubscriptionStatus,
+  LateStatus,
+  WorkModeDayTimes,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -223,6 +225,11 @@ export interface PaginationParams {
   page?: number;
   limit?: number;
   search?: string;
+}
+
+export interface ShiftsQuery extends PaginationParams {
+  /** Business day (YYYY-MM-DD): all shifts for this day in the session point. */
+  date?: string;
 }
 
 /**
@@ -838,18 +845,16 @@ export interface SupplierRefundRequest {
 export interface CreateScheduleRequest {
   userId: string;
   date: string;
-  shiftStart?: string;
-  shiftEnd?: string;
+  shiftStart?: string | null;
+  shiftEnd?: string | null;
   isDayOff?: boolean;
-  note?: string;
+  note?: string | null;
+  lateStatus?: LateStatus | null;
+  lateMinutes?: number;
+  actualArrival?: string | null;
 }
 
-export interface UpdateScheduleRequest {
-  shiftStart?: string;
-  shiftEnd?: string;
-  isDayOff?: boolean;
-  note?: string;
-}
+export interface UpdateScheduleRequest extends Omit<CreateScheduleRequest, 'userId' | 'date'> {}
 
 export interface CreateWorkModeRequest {
   name: string;
@@ -859,13 +864,19 @@ export interface CreateWorkModeRequest {
   weekDays?: number[];
   shiftStart: string;
   shiftEnd: string;
+  dayTimes?: WorkModeDayTimes;
 }
 
 export interface UpdateWorkModeRequest {
   name?: string;
-  type?: string;
+  type?: 'rotating' | 'weekly';
+  workDays?: number;
+  offDays?: number;
+  weekDays?: number[];
   shiftStart?: string;
   shiftEnd?: string;
+  /** Omitted preserves overrides; an empty object clears them. */
+  dayTimes?: WorkModeDayTimes;
 }
 
 export interface CreateTenantRequest {

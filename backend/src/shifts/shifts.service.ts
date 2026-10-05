@@ -1,12 +1,30 @@
-import { Injectable, Inject, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  InternalServerErrorException,
+  ForbiddenException,
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Logger,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { PushService } from '../push/push.service';
-import { getTenantTimezone, zonedDateKey, zonedTimeKey } from '../common/timezone';
+import { getTenantTimezone, zonedTimeKey } from '../common/timezone';
 import { actorPointId, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
+import { staleShiftSql } from './shift-auto-close.sql';
+import {
+  AttendanceEntry,
+  attendanceClock,
+  classifyArrival,
+  hasRecordedAttendance,
+  lockAttendanceUser,
+  plannedStart,
+} from './attendance';
 
 @Injectable()
 export class ShiftsService {
@@ -56,20 +74,49 @@ export class ShiftsService {
     return shift;
   }
 
+  /** Request-time recovery keeps the caller's tenant, point or self scope. */
+  private async closeStaleForScope(tenantID: string, scope: { pointId?: string | null; userID?: string }) {
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const params: unknown[] = [tenantID, tz];
+    const stale = staleShiftSql('$2');
+    const pointFilter = pointFilterSql('s', scope.pointId ?? null, params);
+    const userFilter = scope.userID ? ` AND s.user_id = $${params.push(scope.userID)}` : '';
+    await this.pool.query(
+      `UPDATE shifts s SET closed_at = ${stale.closedAt}, is_auto_closed = true
+       WHERE s.tenant_id = $1 AND s.closed_at IS NULL
+         AND ${stale.predicate}${pointFilter}${userFilter}`,
+      params,
+    );
+  }
+
   /**
    * Лента смен команды. 161 — фильтр по филиалу: смена принадлежит той точке,
    * на которой её ОТКРЫЛИ (shifts.point_id), поэтому лента филиала показывает
    * ровно тех, кто работал здесь. Без филиала (у тенанта их нет /
    * одноточечный тенант) запрос остаётся прежним.
    */
-  async getAll(tenantID: string, actor?: JwtPayload) {
+  async getAll(tenantID: string, actor?: JwtPayload, date?: unknown) {
+    // Reject malformed, repeated and impossible dates before any SQL/write.
+    // PostgreSQL's date parser must not turn bad client input into a 500.
+    if (date !== undefined) {
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new BadRequestException({ message: 'Дата должна быть в формате ГГГГ-ММ-ДД' });
+      }
+      const parsed = Date.parse(`${date}T00:00:00Z`);
+      if (date.startsWith('0000-') || Number.isNaN(parsed) || new Date(parsed).toISOString().slice(0, 10) !== date) {
+        throw new BadRequestException({ message: 'Укажите существующую дату' });
+      }
+    }
+    await this.closeStaleForScope(tenantID, { pointId: actorPointId(actor) });
     const params: unknown[] = [tenantID];
     const pointFilter = pointFilterSql('s', actorPointId(actor), params);
+    const dateFilter = date === undefined ? '' : ` AND s.date = $${params.push(date)}::date`;
     const { rows } = await this.pool.query(
-      `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
-       FROM shifts s JOIN users u ON u.id = s.user_id
-       WHERE s.tenant_id = $1${pointFilter}
-       ORDER BY s.opened_at DESC LIMIT 100`,
+      `SELECT s.*, ${date === undefined ? '' : 's.date::text AS date, '}
+              u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+       FROM shifts s JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
+       WHERE s.tenant_id = $1${pointFilter}${dateFilter}
+       ORDER BY s.opened_at DESC, s.id DESC${date === undefined ? ' LIMIT 100' : ''}`,
       params,
     );
     return rows.map(this.mapShift);
@@ -77,6 +124,7 @@ export class ShiftsService {
 
   async getMy(userID: string, tenantID: string) {
     await this.ensureShiftsEnabled(tenantID);
+    await this.closeStaleForScope(tenantID, { userID });
     const { rows } = await this.pool.query(
       `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
        FROM shifts s JOIN users u ON u.id = s.user_id
@@ -108,69 +156,102 @@ export class ShiftsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-
-      // Auto-close old open shifts for this user
-      await client.query(
-        `UPDATE shifts SET closed_at = now(), is_auto_closed = true
-         WHERE user_id = $1 AND tenant_id = $2 AND closed_at IS NULL`,
-        [userID, tenantID],
-      );
-
-      // Create new shift. Бизнес-дата «сегодня» — календарный день В ПОЯСЕ
-      // ТЕНАНТА, как в shift-auto-close: чистая UTC-дата (toISOString) относила
-      // смену, открытую после местной полуночи, на вчера, а фиксированный
-      // московский сдвиг делал то же самое с любым тенантом восточнее Москвы.
-      const today = zonedDateKey(new Date(), tz);
-      const { rows } = await client.query(
-        `INSERT INTO shifts (user_id, date, tenant_id, point_id) VALUES ($1, $2, $3, $4)
-         RETURNING *`,
-        [userID, today, tenantID, pointId],
-      );
-      const shift = rows[0];
-
-      // Update schedule entry with lateness info
-      const { rows: schedRows } = await client.query(
-        `SELECT id, shift_start FROM schedule_entries
-         WHERE user_id = $1 AND date = $2 AND tenant_id = $3`,
+      await lockAttendanceUser(client, tenantID, userID);
+      const clock = await attendanceClock(client, tz);
+      const today = clock.today;
+      const { rows: scheduleRows } = await client.query<AttendanceEntry>(
+        `SELECT *, date::text AS date FROM schedule_entries
+         WHERE user_id=$1 AND date=$2 AND tenant_id=$3 FOR UPDATE`,
         [userID, today, tenantID],
       );
-
-      let late: { minutes: number; status: string } | null = null;
-      if (schedRows.length > 0 && schedRows[0].shift_start) {
-        const schedEntry = schedRows[0];
-        const now = new Date();
-        const [h, m] = schedEntry.shift_start.split(':').map(Number);
-        // Плановое начало — московское настенное время бизнес-даты `today`
-        // (не серверная локаль: контейнер живёт в UTC, и `new Date(y,m,d,h,m)`
-        // давал момент, смещённый на 3 часа от реального планового старта).
-        const scheduled = new Date(`${today}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+03:00`);
-        const lateMinutes = Math.round((now.getTime() - scheduled.getTime()) / 60000);
-
-        let lateStatus = 'on_time';
-        if (lateMinutes > 0) {
-          lateStatus = lateMinutes < 60 ? 'late_minor' : 'late_major';
-        }
-        late = { minutes: Math.max(lateMinutes, 0), status: lateStatus };
-
-        await client.query(
-          `UPDATE schedule_entries SET actual_arrival = now(), late_minutes = $1, late_status = $2
-           WHERE id = $3`,
-          [Math.max(lateMinutes, 0), lateStatus, schedEntry.id],
-        );
+      const entry = scheduleRows[0];
+      if (entry && (entry.point_id ?? null) !== pointId) {
+        throw new ConflictException({
+          message: 'На этот день график назначен в другом филиале. Обратитесь к руководителю.',
+        });
       }
 
-      await client.query('COMMIT');
-
-      // Return with user info
-      const { rows: fullRows } = await this.pool.query(
-        `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
-         FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
-        [shift.id],
+      const stale = staleShiftSql('$3', '$4');
+      await client.query(
+        `UPDATE shifts SET closed_at = ${stale.closedAt}, is_auto_closed = true
+         WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL AND ${stale.predicate}`,
+        [userID, tenantID, tz, clock.instant],
       );
-      void this.fireAttendancePush(tenantID, userID, fullRows[0].user_full_name, 'arrived', late, pointId);
+      const { rows: active } = await client.query(
+        `SELECT s.*, u.full_name AS user_full_name, u.role AS user_role, u.avatar AS user_avatar
+         FROM shifts s JOIN users u ON u.id=s.user_id AND u.tenant_id=s.tenant_id
+         WHERE s.user_id=$1 AND s.tenant_id=$2 AND s.date=$3 AND s.closed_at IS NULL
+         ORDER BY s.opened_at, s.id`,
+        [userID, tenantID, today],
+      );
+      // Legacy shifts may have no calendar row. The active event itself also
+      // prevents automatic transfer, including when another same-point event exists.
+      if (active.some((shift) => (shift.point_id ?? null) !== pointId)) {
+        throw new ConflictException({ message: 'Смена уже открыта в другом филиале. Обратитесь к руководителю.' });
+      }
+      const isNewShift = active.length === 0;
+      let shift = active[0];
+      if (isNewShift) {
+        // One authoritative instant, captured after the lock, governs both the
+        // date and opening time. Earlier days retain their midnight close.
+        await client.query(
+          `UPDATE shifts SET closed_at = CASE WHEN ${stale.predicate}
+              THEN ${stale.closedAt} ELSE $4::timestamptz END, is_auto_closed = true
+           WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL`,
+          [userID, tenantID, tz, clock.instant],
+        );
+        const { rows } = await client.query(
+          `INSERT INTO shifts (user_id, date, tenant_id, point_id, opened_at) VALUES ($1, $2, $3, $4, $5)
+           RETURNING *`,
+          [userID, today, tenantID, pointId, clock.instant],
+        );
+        shift = rows[0];
+      }
+      // Reusing an active event still repairs missing attendance. Anchor it to
+      // the first opening, never to the later retry's clock, and preserve marks.
+      const { rows: firstRows } = await client.query<{ opened_at: Date }>(
+        `SELECT opened_at FROM shifts WHERE user_id=$1 AND tenant_id=$2 AND date=$3
+           AND point_id IS NOT DISTINCT FROM $4::uuid ORDER BY opened_at, id LIMIT 1`,
+        [userID, tenantID, today, pointId],
+      );
+      const firstArrival = firstRows[0].opened_at;
+      let late: { minutes: number; status: string } | null = null;
+      if (!entry || !hasRecordedAttendance(entry)) {
+        const arrival = classifyArrival(firstArrival, tz, entry?.shift_start);
+        late = { minutes: arrival.lateMinutes, status: arrival.lateStatus };
+        await client.query(
+          `INSERT INTO schedule_entries
+             (user_id, date, tenant_id, point_id, shift_start, shift_end, actual_arrival, late_minutes, late_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
+             actual_arrival=EXCLUDED.actual_arrival, late_minutes=EXCLUDED.late_minutes,
+             late_status=EXCLUDED.late_status, shift_start=EXCLUDED.shift_start`,
+          [
+            userID,
+            today,
+            tenantID,
+            pointId,
+            plannedStart(entry?.shift_start),
+            entry?.shift_end || '18:00',
+            firstArrival,
+            arrival.lateMinutes,
+            arrival.lateStatus,
+          ],
+        );
+      }
+      const { rows: fullRows } = await client.query(
+        `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+         FROM shifts s JOIN users u ON u.id=s.user_id AND u.tenant_id=s.tenant_id WHERE s.id=$1 AND s.tenant_id=$2`,
+        [shift.id, tenantID],
+      );
+      await client.query('COMMIT');
+      if (isNewShift) {
+        void this.fireAttendancePush(tenantID, userID, fullRows[0].user_full_name, 'arrived', late, pointId);
+      }
       return this.mapShift(fullRows[0]);
     } catch (err) {
       await client.query('ROLLBACK');
+      if (err instanceof HttpException) throw err;
       this.logger.error(`Shift open error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
@@ -185,9 +266,14 @@ export class ShiftsService {
     // ячейке schedule.manage); все остальные — только СВОЮ (self-scope в WHERE).
     const canCloseAny = userHasPermission(actor, 'schedule_manage');
     const ownerCheck = canCloseAny ? '' : ` AND user_id = $3`;
-    const params = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
+    const params: unknown[] = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
+    const tzParam = `$${params.push(await getTenantTimezone(this.pool, tenantID))}` as const;
+    const stale = staleShiftSql(tzParam);
     const { rows } = await this.pool.query(
-      `UPDATE shifts SET closed_at = now() WHERE id = $1 AND tenant_id = $2${ownerCheck}
+      `UPDATE shifts SET closed_at = CASE WHEN ${stale.predicate}
+           THEN ${stale.closedAt} ELSE now() END,
+         is_auto_closed = CASE WHEN ${stale.predicate} THEN true ELSE is_auto_closed END
+       WHERE id = $1 AND tenant_id = $2${ownerCheck} AND closed_at IS NULL
        RETURNING *`,
       params,
     );
@@ -198,18 +284,22 @@ export class ShiftsService {
        FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
       [id],
     );
-    void this.fireAttendancePush(
-      tenantID,
-      fullRows[0].user_id,
-      fullRows[0].user_full_name,
-      'left',
-      null,
-      // Филиал берём У СМЕНЫ, а не у актора: закрыть смену может админ из
-      // другого филиала, и адресаты пуша обязаны определяться местом работы
-      // сотрудника, а не тем, кто нажал кнопку.
-      fullRows[0].point_id ?? null,
-      actor.userID,
-    );
+    // A late manual request only recovers the midnight closure, not a real
+    // departure now. Already-closed rows are never overwritten by a retry.
+    if (!rows[0].is_auto_closed) {
+      void this.fireAttendancePush(
+        tenantID,
+        fullRows[0].user_id,
+        fullRows[0].user_full_name,
+        'left',
+        null,
+        // Филиал берём У СМЕНЫ, а не у актора: закрыть смену может админ из
+        // другого филиала, и адресаты пуша обязаны определяться местом работы
+        // сотрудника, а не тем, кто нажал кнопку.
+        fullRows[0].point_id ?? null,
+        actor.userID,
+      );
+    }
     return this.mapShift(fullRows[0]);
   }
 

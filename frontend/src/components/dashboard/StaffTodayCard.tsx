@@ -8,21 +8,25 @@ import { SkeletonCard } from '../../ui/Skeleton';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { ErrorRow, initialsOf } from './shared';
+import { recordedAttendanceBucket } from '../../../../shared/utils/attendance';
 
 type StatusKind = 'onShift' | 'lateMinor' | 'lateMajor' | 'notArrived' | 'absent' | 'dayOff' | 'sick' | 'none';
 
 const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
 const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
 // Ручной статус «Смена» или фактический приход считаются «на смене».
-const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
+const isOnShift = (s: TodayEmployeeStatus) => {
+  const bucket = recordedAttendanceBucket(s);
+  return s.isWorking || bucket === 'full' || bucket === 'lateMinor' || bucket === 'lateMajor';
+};
 
 function kindOf(s: TodayEmployeeStatus): StatusKind {
   if (isSick(s)) return 'sick';
-  if (s.isDayOff) return 'dayOff';
-  if (s.lateStatus === 'late_major') return 'lateMajor';
-  if (s.lateStatus === 'late_minor') return 'lateMinor';
-  if (isOnShift(s)) return 'onShift';
   if (isAbsent(s)) return 'absent';
+  if (s.isDayOff) return 'dayOff';
+  if (recordedAttendanceBucket(s) === 'lateMajor') return 'lateMajor';
+  if (recordedAttendanceBucket(s) === 'lateMinor') return 'lateMinor';
+  if (isOnShift(s)) return 'onShift';
   if (s.hasSchedule) return 'notArrived';
   return 'none';
 }
@@ -31,7 +35,7 @@ const KIND: Record<StatusKind, { label: string; avatar: string; dot: string; bad
   onShift: { label: 'На смене', avatar: 'bg-ok text-white', dot: 'bg-ok' },
   lateMinor: { label: 'Опоздание до часа', avatar: 'bg-warn text-white', dot: 'bg-warn' },
   lateMajor: { label: 'Опоздание больше часа', avatar: 'bg-orange-600 text-white', dot: 'bg-orange-600' },
-  notArrived: { label: 'Ещё не пришёл', avatar: 'bg-ink-4 text-white', dot: 'bg-ink-4' },
+  notArrived: { label: 'Не отмечен', avatar: 'bg-ink-4 text-white', dot: 'bg-ink-4' },
   absent: { label: 'Прогул', avatar: 'bg-bad text-white', dot: 'bg-bad', badge: X },
   dayOff: { label: 'Выходной', avatar: 'bg-line-strong text-ink-2', dot: 'bg-line-strong', badge: Moon },
   sick: { label: 'Больничный', avatar: 'bg-info text-white', dot: 'bg-info', badge: Thermometer },
@@ -156,6 +160,7 @@ export default function StaffTodayCard() {
                       </span>
                       <span className="w-full truncate text-xs font-medium text-ink">{s.fullName.split(' ')[0]}</span>
                       <span className="w-full truncate text-2xs text-ink-3">{meta.label}</span>
+                      {s.isWorking && <span className="w-full text-2xs text-ink-3">Смена открыта</span>}
                     </Link>
                   </li>
                 );

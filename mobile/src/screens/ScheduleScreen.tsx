@@ -35,7 +35,7 @@ import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, scheduleSettingsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
-import { formatDayKey } from '../../../shared/utils/formatters';
+import { formatDayKey, formatTimeShort } from '../../../shared/utils/formatters';
 import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
@@ -50,9 +50,22 @@ import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { usePointUsers, USERS_POINT_QUERY_KEY } from '../hooks/useUsers';
-import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
-import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User, WorkMode } from '../../../shared/types';
+import {
+  calculateAttendanceStats,
+  attendanceScore,
+  emptyBreakdown,
+  recordedAttendanceBucket,
+} from '../../../shared/utils/attendance';
 import { decideScheduleView } from './scheduleViewState';
+import ShiftAttendanceHistory from './ShiftAttendanceHistory';
+import { attendanceCalendarDate } from './shiftAttendanceHelpers';
+import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
+import { useAttendanceRefresh } from '../hooks/useAttendanceRefresh';
+import { manualSchedulePayload, SCHEDULE_WEEKDAYS, type QuickAttendanceChoice } from './scheduleEditing';
+import WorkModeEditor from './WorkModeEditor';
+import ScheduleDayHoursForm from './ScheduleDayHoursForm';
+import { getCellDot, getTodayStatusInfo, gridAttendanceCounts } from './scheduleAttendance';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
@@ -214,165 +227,6 @@ function getAvatarColors(name?: string): string[] {
  *               start is not the implicit default "09:00".
  *   hasEntry  — true when a real entry exists for that day.
  */
-type CellStatusKey = 'worked' | 'dayoff' | 'sick' | 'short' | 'long' | 'absent';
-
-interface CellDescriptor {
-  key: CellStatusKey | null;
-  hasEntry: boolean;
-  icon: keyof typeof Ionicons.glyphMap | null;
-  dotColor: string;
-  bgColor: string;
-  bgDark: string;
-  label: string;
-}
-
-const EMPTY_CELL: CellDescriptor = {
-  key: null,
-  hasEntry: false,
-  icon: null,
-  dotColor: 'transparent',
-  bgColor: 'transparent',
-  bgDark: 'transparent',
-  label: '',
-};
-
-// Default shift start time. When the entry simply mirrors this we do
-// NOT render the time label — every worked day would otherwise read
-// "09:00" and turn the grid into chatbot noise.
-const DEFAULT_SHIFT_START = '09:00';
-
-function getCellDot(entry?: ScheduleEntry): CellDescriptor {
-  if (!entry) return EMPTY_CELL;
-  const note = (entry.note || '').toLowerCase();
-  const lateMin = entry.lateMinutes || 0;
-  // Normalise the date portion. Backend may return either a date-only
-  // 'YYYY-MM-DD' or a full ISO timestamp with 'T'. Concatenating
-  // 'T23:59:59' to the latter produced 'YYYY-MM-DDTHH:MM:SSZTT23:59:59'
-  // — an invalid string — so `new Date(invalid) < new Date()` returned
-  // NaN<Date which is `false`, and the "missed shift" branch (#7)
-  // silently never fired for those rows.
-  //
-  // Defensive: a malformed / orphaned entry (e.g. left over after an
-  // employee was deleted, or a legacy row written before the date column
-  // was non-null) may carry a missing `date`. `undefined.slice` throws
-  // "undefined is not a function" — which crashed the whole grid on
-  // mount. Coerce to string first so a bad row degrades to an empty cell
-  // instead of taking the screen down.
-  const dateOnly = String(entry.date ?? '').slice(0, 10);
-  if (!dateOnly) return EMPTY_CELL;
-  const isPast = new Date(`${dateOnly}T23:59:59`) < new Date();
-  // LOCAL today, not UTC: toISOString() flips to the next day after
-  // 21:00 Moscow time (UTC+3), которое до полуночи помечало «сегодня»
-  // прогулом. The grid keys all dates via formatDate (local) — the
-  // today comparison must use the same clock.
-  const isToday = dateOnly === formatDate(new Date());
-
-  // 1. Больничный
-  if (note.includes('больнич'))
-    return {
-      key: 'sick',
-      hasEntry: true,
-      icon: 'medkit-outline',
-      dotColor: colors.orange[600],
-      bgColor: colors.orange[50],
-      bgDark: 'rgba(234, 88, 12, 0.18)',
-      label: '',
-    };
-  // 2. Прогул из note — лёгкий X-glyph вместо «жирного красного кружка».
-  if (note.includes('прогул'))
-    return {
-      key: 'absent',
-      hasEntry: true,
-      icon: 'close',
-      dotColor: colors.red[600],
-      bgColor: colors.red[50],
-      bgDark: 'rgba(220, 38, 38, 0.18)',
-      label: '',
-    };
-  // 3. Выходной
-  if (entry.isDayOff)
-    return {
-      key: 'dayoff',
-      hasEntry: true,
-      icon: 'moon-outline',
-      dotColor: colors.gray[500],
-      bgColor: colors.gray[100],
-      bgDark: 'rgba(148, 163, 184, 0.15)',
-      label: '',
-    };
-  // 4. Опоздание >1ч — clean triangle-warning stroke. Previously the
-  //    Ionicons `alert-circle` mapped to a heavy filled circle that the
-  //    owner reported as "красный кружок вместо иконки". Swap to the
-  //    outline triangle which reads as "warning" with a clean stroke.
-  if (entry.lateStatus === 'late_major' || lateMin >= 60)
-    return {
-      key: 'long',
-      hasEntry: true,
-      icon: 'warning-outline',
-      dotColor: colors.red[500],
-      bgColor: colors.red[50],
-      bgDark: 'rgba(239, 68, 68, 0.15)',
-      label: '',
-    };
-  // 5. Опоздание <1ч
-  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60))
-    return {
-      key: 'short',
-      hasEntry: true,
-      icon: 'time-outline',
-      dotColor: colors.amber[600],
-      bgColor: colors.amber[50],
-      bgDark: 'rgba(217, 119, 6, 0.18)',
-      label: '',
-    };
-  // 6. Открыл смену вовремя (FACT) — saturated green background + light
-  //    pastel-green check. Owner explicitly wanted this to read as "yes,
-  //    this shift was actually worked" at-a-glance, distinct from a
-  //    merely-planned green outline cell (case #8 below). Time is shown
-  //    only when it differs from the default start.
-  if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
-    const startHHMM = String(entry.shiftStart).slice(0, 5);
-    return {
-      key: 'worked',
-      hasEntry: true,
-      icon: 'checkmark',
-      // Light pastel check on saturated green canvas — high contrast,
-      // owner can sweep the grid and instantly see what was confirmed.
-      dotColor: colors.green[100],
-      bgColor: colors.green[600],
-      bgDark: 'rgba(22, 163, 74, 0.55)',
-      label: startHHMM === DEFAULT_SHIFT_START ? '' : startHHMM,
-    };
-  }
-  // 7. Прогул для прошедших дней без смены
-  if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
-    return {
-      key: 'absent',
-      hasEntry: true,
-      icon: 'close',
-      dotColor: colors.red[600],
-      bgColor: colors.red[50],
-      bgDark: 'rgba(220, 38, 38, 0.18)',
-      label: '',
-    };
-  }
-  // 8. Запланирована смена (сегодня или будущее) — мягкий зелёный
-  //    outline-style cell. Контраст с case #6 даёт владельцу мгновенно
-  //    отличить «запланировано» от «отмечено как отработано».
-  if (entry.shiftStart) {
-    return {
-      key: 'worked',
-      hasEntry: true,
-      icon: 'checkmark',
-      dotColor: colors.green[700],
-      bgColor: colors.green[50],
-      bgDark: 'rgba(22, 163, 74, 0.15)',
-      label: '',
-    };
-  }
-  return EMPTY_CELL;
-}
-
 /**
  * TodayPill — composite "Сегодня" badge + day number used in the grid
  * header for today's column. The small uppercase label sits ABOVE the
@@ -594,7 +448,7 @@ const GridDayRow = memo(function GridDayRow({
       {days.map((d) => {
         const ds = formatDate(d);
         const entry = entryMap.get(`${userId}-${ds}`);
-        const cell = getCellDot(entry);
+        const cell = getCellDot(entry, today);
         const dow = (d.getDay() + 6) % 7;
         const isWeekend = dow >= 5;
         const isToday = ds === today;
@@ -644,6 +498,10 @@ const GridDayRow = memo(function GridDayRow({
               ) : (
                 <Ionicons name={cell.icon} size={20} color={cell.dotColor} />
               )
+            ) : cell.label ? (
+              <Text style={[styles.gridCellLabel, { color: isDark ? colors.gray[300] : cell.dotColor }]}>
+                {cell.label}
+              </Text>
             ) : (
               canEdit && <View style={[styles.gridCellEmpty, { backgroundColor: emptyDotColor }]} />
             )}
@@ -679,6 +537,7 @@ function GridTab() {
     entry?: ScheduleEntry;
     userName?: string;
   } | null>(null);
+  const [editHours, setEditHours] = useState(false);
   const [reorderUser, setReorderUser] = useState<{ userId: string; name: string; index: number } | null>(null);
   // Ephemeral, non-blocking error notice for a failed quick-action. The owner
   // explicitly does NOT want a blocking Alert per tap — a failed optimistic
@@ -735,7 +594,7 @@ function GridTab() {
   const month = safeMonth.getMonth();
   const dateFrom = formatDate(new Date(year, month, 1));
   const dateTo = formatDate(new Date(year, month + 1, 0));
-  const today = formatDate(new Date());
+  const today = formatDayKey(new Date(), tenantTz);
 
   const {
     data: entries,
@@ -922,17 +781,11 @@ function GridTab() {
   const userStats = useMemo(() => {
     const stats = new Map<string, { worked: number; off: number }>();
     activeUsers.forEach((u) => {
-      let worked = 0,
-        off = 0;
-      days.forEach((d) => {
-        const entry = entryMap.get(`${u.id}-${formatDate(d)}`);
-        if (entry?.shiftStart && !entry.isDayOff) worked++;
-        if (entry?.isDayOff) off++;
-      });
-      stats.set(u.id, { worked, off });
+      const rowEntries = days.map((d) => entryMap.get(`${u.id}-${formatDate(d)}`));
+      stats.set(u.id, gridAttendanceCounts(rowEntries, today));
     });
     return stats;
-  }, [activeUsers, days, entryMap]);
+  }, [activeUsers, days, entryMap, today]);
 
   const scheduleQueryKey = ['schedule', dateFrom, dateTo];
 
@@ -986,7 +839,7 @@ function GridTab() {
       showQuickError('Не удалось удалить смену. Попробуйте ещё раз.');
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      void invalidateAttendanceQueries(queryClient);
       setQuickPopup(null);
     },
   });
@@ -994,7 +847,6 @@ function GridTab() {
   const quickAction = (type: string) => {
     if (!quickPopup) return;
     const { userId, date, entry } = quickPopup;
-    const base: any = { userId, date };
 
     if (type === 'delete' && entry) {
       // Guard against a double-tap firing two DELETEs (the 2nd 404s and is
@@ -1018,75 +870,13 @@ function GridTab() {
     const cellKey = `${userId}-${date}`;
     if (cellInFlight.current.has(cellKey)) return;
 
-    // Pin actualArrival to the SCHEDULED date, not `now()`. Prevents past-date
-    // quick-actions from inflating rating counts with today's timestamp.
-    const shiftStartStr = entry?.shiftStart || '09:00';
-    const shiftEndStr = entry?.shiftEnd || '18:00';
-    const arrivalForDate = (offsetMin: number) => {
-      const [h, m] = shiftStartStr.split(':').map(Number);
-      const dt = new Date(`${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
-      dt.setMinutes(dt.getMinutes() + offsetMin);
-      return dt.toISOString();
-    };
-
-    // Бизнес-«сегодня» — календарный день В ПОЯСЕ АВТОСЕРВИСА (tenants.timezone,
-    // 157), тот же, по которому сервер считает отработанные смены. Будущий день
-    // — это ПЛАН: факт прихода (actualArrival) ему не пришиваем, иначе зарплата
-    // считала бы смену раньше, чем она отработана. Раньше здесь стоял
-    // фиксированный московский сдвиг, и у автосервиса восточнее Москвы
-    // «сегодня» на несколько часов считалось будущим.
-    const isFutureDay = date > formatDayKey(new Date(), tenantTz);
-
-    if (type === 'shift') {
-      base.shiftStart = shiftStartStr;
-      base.shiftEnd = shiftEndStr;
-      base.isDayOff = false;
-      base.note = '';
-      base.lateStatus = isFutureDay ? null : 'on_time';
-      base.lateMinutes = 0;
-      // null явно: частичный PATCH иначе оставил бы устаревший факт прихода.
-      base.actualArrival = isFutureDay ? null : arrivalForDate(0);
-    } else if (type === 'dayoff') {
-      base.isDayOff = true;
-      base.shiftStart = null;
-      base.shiftEnd = null;
-      base.note = '';
-      base.lateStatus = null;
-      base.lateMinutes = 0;
-      base.actualArrival = null;
-    } else if (type === 'sick') {
-      base.isDayOff = true;
-      base.shiftStart = null;
-      base.shiftEnd = null;
-      base.note = 'Больничный';
-      base.lateStatus = null;
-      base.lateMinutes = 0;
-      base.actualArrival = null;
-    } else if (type === 'late_minor') {
-      base.shiftStart = shiftStartStr;
-      base.shiftEnd = shiftEndStr;
-      base.isDayOff = false;
-      base.lateStatus = 'late_minor';
-      base.lateMinutes = 15;
-      base.note = '';
-      base.actualArrival = arrivalForDate(15);
-    } else if (type === 'late_major') {
-      base.shiftStart = shiftStartStr;
-      base.shiftEnd = shiftEndStr;
-      base.isDayOff = false;
-      base.lateStatus = 'late_major';
-      base.lateMinutes = 60;
-      base.note = '';
-      base.actualArrival = arrivalForDate(60);
-    } else if (type === 'absent') {
-      base.shiftStart = shiftStartStr;
-      base.shiftEnd = shiftEndStr;
-      base.isDayOff = false;
-      base.note = 'Прогул';
-      base.lateStatus = null;
-      base.lateMinutes = 0;
-      base.actualArrival = null;
-    }
+    const base = manualSchedulePayload(
+      type as QuickAttendanceChoice,
+      userId,
+      date,
+      formatDayKey(new Date(), tenantTz),
+      entry,
+    );
 
     // INSTANT apply — no «Применить» step. Repaint the cell immediately by
     // writing the new entry into the schedule cache, then fire the network
@@ -1134,8 +924,7 @@ function GridTab() {
             );
           }
         }
-        queryClient.invalidateQueries({ queryKey: ['schedule'] });
-        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+        void invalidateAttendanceQueries(queryClient);
       } catch {
         // Roll back to the pre-tap snapshot so the cell reverts to its old
         // state — no half-applied, no blocking dialog.
@@ -1202,7 +991,10 @@ function GridTab() {
 
   const handleCellPress = useCallback(
     (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => {
-      if (canEdit) setQuickPopup({ userId, date, entry, userName });
+      if (canEdit) {
+        setEditHours(false);
+        setQuickPopup({ userId, date, entry, userName });
+      }
     },
     [canEdit],
   );
@@ -1657,92 +1449,111 @@ function GridTab() {
             : 'Быстрое действие'
         }
       >
-        {quickPopup && (
-          <View style={styles.quickActions}>
-            {[
-              // Icons + hues mirror the grid cell language (getCellDot) and
-              // the «Сегодня» list (getStatusInfo) one-to-one, so a status
-              // looks identical wherever it appears: popup, cell, today row.
-              {
-                type: 'shift',
-                label: 'Смена',
-                icon: 'checkmark' as const,
-                iconColor: colors.green[600],
-                bg: colors.green[50],
-                gradient: [colors.green[50], colors.green[100]],
-              },
-              {
-                type: 'dayoff',
-                label: 'Выходной',
-                icon: 'moon-outline' as const,
-                iconColor: colors.gray[500],
-                bg: colors.gray[100],
-                gradient: [colors.gray[50], colors.gray[100]],
-              },
-              {
-                type: 'sick',
-                label: 'Больничный',
-                icon: 'medkit-outline' as const,
-                iconColor: colors.rose[600],
-                bg: colors.rose[50],
-                gradient: [colors.rose[50], '#ffe4e6'],
-              },
-              {
-                type: 'late_minor',
-                label: 'Опоздал <1ч',
-                icon: 'time-outline' as const,
-                iconColor: colors.amber[600],
-                bg: colors.amber[50],
-                gradient: [colors.amber[50], '#fef9c3'],
-              },
-              {
-                type: 'late_major',
-                label: 'Опоздал >1ч',
-                icon: 'warning-outline' as const,
-                iconColor: colors.orange[600],
-                bg: colors.orange[50],
-                gradient: [colors.orange[50], '#fed7aa'],
-              },
-              {
-                type: 'absent',
-                label: 'Прогул',
-                icon: 'close' as const,
-                iconColor: colors.red[600],
-                bg: colors.red[50],
-                gradient: [colors.red[50], '#fecaca'],
-              },
-            ].map((item) => (
-              <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
-                <LinearGradient
-                  colors={(dark ? [item.iconColor + '26', item.iconColor + '14'] : item.gradient) as [string, string]}
-                  style={styles.quickIcon}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
-                  <Ionicons name={item.icon} size={22} color={item.iconColor} />
-                </LinearGradient>
-                <Text style={[styles.quickLabel, { color: palette.text.secondary }]}>{item.label}</Text>
+        {quickPopup && editHours ? (
+          <ScheduleDayHoursForm
+            {...quickPopup}
+            onSaved={() => setQuickPopup(null)}
+            onCancel={() => setEditHours(false)}
+          />
+        ) : (
+          quickPopup && (
+            <View style={styles.quickActions}>
+              {[
+                // Icons + hues mirror the grid cell language (getCellDot) and
+                // the «Сегодня» list (getStatusInfo) one-to-one, so a status
+                // looks identical wherever it appears: popup, cell, today row.
+                {
+                  type: 'shift',
+                  label: 'Смена',
+                  icon: 'checkmark' as const,
+                  iconColor: colors.green[600],
+                  bg: colors.green[50],
+                  gradient: [colors.green[50], colors.green[100]],
+                },
+                {
+                  type: 'dayoff',
+                  label: 'Выходной',
+                  icon: 'moon-outline' as const,
+                  iconColor: colors.gray[500],
+                  bg: colors.gray[100],
+                  gradient: [colors.gray[50], colors.gray[100]],
+                },
+                {
+                  type: 'sick',
+                  label: 'Больничный',
+                  icon: 'medkit-outline' as const,
+                  iconColor: colors.rose[600],
+                  bg: colors.rose[50],
+                  gradient: [colors.rose[50], '#ffe4e6'],
+                },
+                {
+                  type: 'late_minor',
+                  label: 'Опоздал <1ч',
+                  icon: 'time-outline' as const,
+                  iconColor: colors.amber[600],
+                  bg: colors.amber[50],
+                  gradient: [colors.amber[50], '#fef9c3'],
+                },
+                {
+                  type: 'late_major',
+                  label: 'Опоздал >1ч',
+                  icon: 'warning-outline' as const,
+                  iconColor: colors.orange[600],
+                  bg: colors.orange[50],
+                  gradient: [colors.orange[50], '#fed7aa'],
+                },
+                {
+                  type: 'absent',
+                  label: 'Прогул',
+                  icon: 'close' as const,
+                  iconColor: colors.red[600],
+                  bg: colors.red[50],
+                  gradient: [colors.red[50], '#fecaca'],
+                },
+              ].map((item) => (
+                <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
+                  <LinearGradient
+                    colors={(dark ? [item.iconColor + '26', item.iconColor + '14'] : item.gradient) as [string, string]}
+                    style={styles.quickIcon}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  >
+                    <Ionicons name={item.icon} size={22} color={item.iconColor} />
+                  </LinearGradient>
+                  <Text style={[styles.quickLabel, { color: palette.text.secondary }]}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Изменить время дня"
+                style={styles.quickBtn}
+                onPress={() => setEditHours(true)}
+              >
+                <View style={[styles.quickIcon, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="time-outline" size={22} color={palette.text.secondary} />
+                </View>
+                <Text style={[styles.quickLabel, { color: palette.text.secondary }]}>Время дня</Text>
               </TouchableOpacity>
-            ))}
-            {quickPopup.entry && (
-              <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('delete')}>
-                <LinearGradient
-                  colors={
-                    (dark ? ['rgba(220,38,38,0.26)', 'rgba(220,38,38,0.14)'] : [colors.red[50], colors.red[100]]) as [
-                      string,
-                      string,
-                    ]
-                  }
-                  style={styles.quickIcon}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
-                  <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
-                </LinearGradient>
-                <Text style={[styles.quickLabel, { color: colors.red[600] }]}>Удалить</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+              {quickPopup.entry && (
+                <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('delete')}>
+                  <LinearGradient
+                    colors={
+                      (dark ? ['rgba(220,38,38,0.26)', 'rgba(220,38,38,0.14)'] : [colors.red[50], colors.red[100]]) as [
+                        string,
+                        string,
+                      ]
+                    }
+                    style={styles.quickIcon}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  >
+                    <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+                  </LinearGradient>
+                  <Text style={[styles.quickLabel, { color: colors.red[600] }]}>Удалить</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )
         )}
       </Modal>
     </View>
@@ -1756,6 +1567,7 @@ function TodayTab() {
   const palette = useColors();
   const [refreshing, setRefreshing] = useState(false);
   const tabBarHeight = useTabBarHeight();
+  const tenantTz = useTenantTimezone();
 
   const {
     data: todayData,
@@ -1782,56 +1594,27 @@ function TodayTab() {
   // then we drop anything without a userId so downstream `.note`/`.fullName`
   // access can never hit `undefined`.
   const statuses = toArray<TodayEmployeeStatus>(todayData).filter((s): s is TodayEmployeeStatus => !!s && !!s.userId);
-  const working = statuses.filter((s) => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
-  const notWorking = statuses.filter((s) => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
+  const working = statuses.filter((s) => s.isWorking);
+  const notWorking = statuses.filter((s) => !s.isWorking);
 
   // Status descriptor for the "Сегодня" list — mirrors the GridTab cell
   // icon language EXACTLY (getCellDot): clean Ionicons in semantic colours,
   // NO emojis. `icon` is rendered inside a soft tinted circle; `tint` is the
   // semantic colour; `softBg` the matching shade-50 / dark-alpha pill fill so
   // a row reads at a glance the same way the calendar cell does.
-  const getStatusInfo = (
-    s: TodayEmployeeStatus,
-  ): {
-    label: string;
-    icon: keyof typeof Ionicons.glyphMap;
-    tint: string;
-    softBg: string;
-  } => {
-    const note = (s.note || '').toLowerCase();
-    if (note.includes('больнич'))
-      return { label: 'Больничный', icon: 'medkit-outline', tint: colors.rose[600], softBg: colors.rose[50] };
-    if (s.isDayOff)
-      return { label: 'Выходной', icon: 'moon-outline', tint: colors.gray[500], softBg: colors.gray[100] };
-    if (s.lateStatus === 'late_major')
-      return {
-        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание больше часа',
-        icon: 'warning-outline',
-        tint: colors.orange[600],
-        softBg: colors.orange[50],
-      };
-    if (s.lateStatus === 'late_minor')
-      return {
-        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание меньше часа',
-        icon: 'time-outline',
-        tint: colors.amber[600],
-        softBg: colors.amber[50],
-      };
-    if (s.isWorking)
-      return { label: 'На смене', icon: 'checkmark-circle', tint: colors.green[600], softBg: colors.green[50] };
-    if (s.hasSchedule && !s.isDayOff)
-      return { label: 'Прогул', icon: 'close', tint: colors.red[600], softBg: colors.red[50] };
-    return { label: 'Нет смены', icon: 'remove-outline', tint: colors.gray[400], softBg: colors.gray[50] };
-  };
-
-  const todayDate = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  const todayDate = new Date().toLocaleDateString('ru-RU', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: tenantTz,
+  });
 
   // Single source for one row — reused by the "На смене" and "Отсутствуют"
   // sections. Apple grouped-list feel: SF-style icon in a soft tinted
   // circle (same icon language as the grid cells), name + status line,
   // optional shift / arrival meta. No emoji, no saturated card body.
   const renderRow = (s: TodayEmployeeStatus, idx: number) => {
-    const info = getStatusInfo(s);
+    const info = getTodayStatusInfo(s);
     return (
       <AnimatedCard key={s.userId} index={Math.min(idx + 2, 7)} onPress={() => openEmployee(navigation, s.userId)}>
         <View style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
@@ -1864,15 +1647,15 @@ function TodayTab() {
                   <View style={styles.todayMetaChip}>
                     <Ionicons name="log-in-outline" size={12} color={palette.text.tertiary} />
                     <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
-                      {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {formatTimeShort(s.actualArrival, tenantTz)}
                     </Text>
                   </View>
                 ) : null}
               </View>
             ) : null}
+            {s.isWorking && (
+              <Text style={[styles.todayNote, { color: palette.text.secondary }]}>Фактическая смена открыта</Text>
+            )}
             {s.note ? (
               <Text style={[styles.todayNote, { color: palette.text.tertiary }]} numberOfLines={1}>
                 {s.note}
@@ -1966,7 +1749,7 @@ function TodayTab() {
           )}
           {notWorking.length > 0 && (
             <>
-              <Text style={[styles.todaySectionTitle, { color: palette.text.tertiary }]}>ОТСУТСТВУЮТ</Text>
+              <Text style={[styles.todaySectionTitle, { color: palette.text.tertiary }]}>БЕЗ ОТКРЫТОЙ СМЕНЫ</Text>
               {notWorking.map((s, idx) => renderRow(s, working.length + idx))}
             </>
           )}
@@ -1978,6 +1761,17 @@ function TodayTab() {
 
 // ============== SHIFTS TAB ==============
 function ShiftsTab() {
+  const { hasPermission } = useAuth();
+  const { currentMonth, setCurrentMonth } = useScheduleMonth();
+  const safeMonth = currentMonth instanceof Date && !Number.isNaN(currentMonth.getTime()) ? currentMonth : new Date();
+  return hasPermission('schedule_manage') ? (
+    <ShiftAttendanceHistory currentMonth={safeMonth} onMonthChange={setCurrentMonth} />
+  ) : (
+    <PersonalShiftsStatsTab />
+  );
+}
+
+function PersonalShiftsStatsTab() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
   const dark = palette.mode === 'dark';
@@ -2169,10 +1963,8 @@ function RatingTab() {
   // values are byte-identical to the previous shade-50/700 pairs, dark gives
   // a translucent tinted fill with a light-300 text.
   const cb = getBadgeColors(palette.mode);
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const tenantTz = useTenantTimezone();
+  const [selectedMonth, setSelectedMonth] = useState(() => formatDayKey(new Date(), tenantTz).slice(0, 7));
 
   const monthStart = `${selectedMonth}-01`;
   const monthEnd = (() => {
@@ -2180,7 +1972,7 @@ function RatingTab() {
     return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
   })();
 
-  const { data: monthEntries } = useQuery<ScheduleEntry[]>({
+  const { data: monthEntries, dataUpdatedAt } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
     // toArray — a 204 / empty body / non-array (502 window) must not reach
     // calculateAttendanceStats() (which would call array methods on it).
@@ -2208,7 +2000,10 @@ function RatingTab() {
 
   // SHARED attendance utility — same logic everywhere (web + mobile).
   // toArray guards against a malformed cache value reaching the iterator.
-  const stats = useMemo(() => calculateAttendanceStats(toArray<ScheduleEntry>(monthEntries) as any), [monthEntries]);
+  const stats = useMemo(
+    () => calculateAttendanceStats(toArray<ScheduleEntry>(monthEntries), new Date(), tenantTz),
+    [monthEntries, tenantTz, dataUpdatedAt],
+  );
 
   const ranked = useMemo(
     () =>
@@ -2557,6 +2352,7 @@ function SettingsTab() {
   const { hasPermission } = useAuth();
   const palette = useColors();
   const dark = palette.mode === 'dark';
+  const [modeEditor, setModeEditor] = useState<{ mode?: WorkMode } | null>(null);
   const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes' | 'shifts'>('daysoff');
   const tabBarHeight = useTabBarHeight();
 
@@ -2567,11 +2363,16 @@ function SettingsTab() {
   // ['users', 'point'] — команда текущего филиала (167), единая форма `User[]`.
   const { data: usersData } = usePointUsers();
 
-  const { data: workModes } = useQuery<any[]>({
+  const {
+    data: workModes,
+    isPending: modesPending,
+    isError: modesError,
+    refetch: refetchModes,
+  } = useQuery<WorkMode[]>({
     queryKey: ['work-modes'],
     queryFn: async () => {
       const res = await scheduleApi.getWorkModes();
-      return toArray<any>(res.data);
+      return toArray<WorkMode>(res.data);
     },
     placeholderData: (prev) => prev,
   });
@@ -2620,7 +2421,7 @@ function SettingsTab() {
   const applyMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.applyWorkMode(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      void invalidateAttendanceQueries(queryClient);
       setShowApplyModal(false);
       Alert.alert('Готово', 'Режим применён');
     },
@@ -2857,9 +2658,10 @@ function SettingsTab() {
                     </View>
                   </View>
                   <View style={styles.daysOffRow}>
-                    {DAY_ABBR.map((label, dow) => {
+                    {DAY_ABBR.map((label, index) => {
+                      const dow = SCHEDULE_WEEKDAYS[index];
                       const isOff = daysOff.includes(dow);
-                      const isWeekend = dow >= 5;
+                      const isWeekend = dow === 0 || dow === 6;
                       return (
                         <TouchableOpacity
                           key={dow}
@@ -2873,6 +2675,9 @@ function SettingsTab() {
                               },
                             isOff && styles.dayBtnActive,
                           ]}
+                          disabled={!canEditSettings}
+                          accessibilityLabel={`${u.fullName}, ${label}, выходной`}
+                          accessibilityState={{ selected: isOff, disabled: !canEditSettings }}
                           onPress={() => toggleDayOff(u.id, dow)}
                           activeOpacity={0.6}
                         >
@@ -2897,7 +2702,18 @@ function SettingsTab() {
         </View>
       ) : (
         <View style={{ gap: spacing[3] }}>
-          {toArray<any>(workModes).map((mode: any, idx: number) => (
+          {canEditSettings && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={[styles.applyBtnMain, { minHeight: 44 }]}
+              onPress={() => setModeEditor({})}
+            >
+              <Text style={{ color: colors.white, fontWeight: '600' }}>Создать режим</Text>
+            </TouchableOpacity>
+          )}
+          {modesPending && <ActivityIndicator color={palette.accent.primary} />}
+          {modesError && <QueryErrorState title="Не удалось загрузить режимы" onRetry={() => void refetchModes()} />}
+          {toArray<WorkMode>(workModes).map((mode, idx) => (
             <AnimatedCard key={mode.id} index={idx}>
               <View style={[styles.modeCard, buildShadow(palette), { backgroundColor: palette.bg.card }]}>
                 <LinearGradient
@@ -2921,39 +2737,75 @@ function SettingsTab() {
                     <Ionicons name="exit-outline" size={12} color={colors.orange[500]} />
                     <Text style={[styles.modeTimeText, { color: palette.text.secondary }]}>{mode.shiftEnd}</Text>
                   </View>
+                  {SCHEDULE_WEEKDAYS.some(
+                    (day) => mode.dayTimes?.[day] && (!mode.weekDays.length || mode.weekDays.includes(day)),
+                  ) && (
+                    <Text style={[styles.modeTimeText, { color: palette.text.secondary, marginTop: spacing[1] }]}>
+                      {SCHEDULE_WEEKDAYS.filter(
+                        (day) => mode.dayTimes?.[day] && (!mode.weekDays.length || mode.weekDays.includes(day)),
+                      )
+                        .map(
+                          (day) =>
+                            `${DAY_ABBR[(day + 6) % 7]} ${mode.dayTimes?.[day]?.shiftStart}–${mode.dayTimes?.[day]?.shiftEnd}`,
+                        )
+                        .join(', ')}
+                    </Text>
+                  )}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], marginTop: spacing[2] }}>
+                    {canEditSettings && (
+                      <TouchableOpacity
+                        accessibilityRole="button"
+                        accessibilityLabel={`Изменить режим ${mode.name}`}
+                        style={{
+                          minHeight: 44,
+                          paddingHorizontal: spacing[2],
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        onPress={() => setModeEditor({ mode })}
+                      >
+                        <Text style={{ fontSize: fontSize.xs, color: palette.text.secondary }}>Изменить</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      disabled={!canEditSettings}
+                      accessibilityLabel={`Применить режим ${mode.name}`}
+                      style={[
+                        styles.modeApplyBtn,
+                        { backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50] },
+                      ]}
+                      onPress={() => {
+                        setApplyModeId(mode.id);
+                        setApplyUserId('');
+                        setApplyFrom(null);
+                        setApplyTo(null);
+                        setShowApplyModal(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.modeApplyText}>Применить</Text>
+                      <Ionicons name="arrow-forward" size={14} color={colors.primary[600]} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <TouchableOpacity
-                  style={[
-                    styles.modeApplyBtn,
-                    { backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50] },
-                  ]}
-                  onPress={() => {
-                    setApplyModeId(mode.id);
-                    setApplyUserId('');
-                    setApplyFrom(null);
-                    setApplyTo(null);
-                    setShowApplyModal(true);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.modeApplyText}>Применить</Text>
-                  <Ionicons name="arrow-forward" size={14} color={colors.primary[600]} />
-                </TouchableOpacity>
               </View>
             </AnimatedCard>
           ))}
-          {toArray<any>(workModes).length === 0 && (
+          {!modesPending && !modesError && toArray<WorkMode>(workModes).length === 0 && (
             <View style={styles.emptyState}>
               <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
                 <Ionicons name="time-outline" size={36} color={palette.text.tertiary} />
               </View>
               <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Нет режимов работы</Text>
-              <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>Создайте режимы в веб-панели</Text>
+              <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
+                Создайте режим и примените его к графику
+              </Text>
             </View>
           )}
         </View>
       )}
 
+      {modeEditor && <WorkModeEditor mode={modeEditor.mode} onClose={() => setModeEditor(null)} />}
       <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title="Применить режим">
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сотрудник</Text>
@@ -3128,16 +2980,20 @@ const isPlaceholderId = (id: string | undefined | null): boolean =>
   typeof id === 'string' && id.startsWith(SCHEDULE_PLACEHOLDER_PREFIX);
 
 export default function ScheduleScreen() {
+  useAttendanceRefresh();
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
   const palette = useColors();
+  const tenantTz = useTenantTimezone();
   // Таб «Настройки» — только держателю schedule_manage (те же мутации, что
   // гейтит сервер; admin живёт по матрице из /auth/me).
   const isAdmin = hasPermission('schedule_manage');
   const [tab, setTab] = useState<TabType>('grid');
   // Single source of truth for the schedule month — provided to GridTab
   // and ShiftsTab via context, manipulated from the header trailing slot.
-  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [currentMonth, setCurrentMonth] = useState<Date>(() =>
+    attendanceCalendarDate(formatDayKey(new Date(), tenantTz)),
+  );
   const monthCtxValue = useMemo(() => ({ currentMonth, setCurrentMonth }), [currentMonth]);
   // Defensive: never let an out-of-shape Date make getMonth() return NaN —
   // MONTH_NAMES[NaN] is undefined and `.slice` on it would crash the
@@ -3193,7 +3049,7 @@ export default function ScheduleScreen() {
       <TouchableOpacity
         onPress={() => {
           haptic('tap');
-          setCurrentMonth(new Date());
+          setCurrentMonth(attendanceCalendarDate(formatDayKey(new Date(), tenantTz)));
         }}
         activeOpacity={0.7}
       >

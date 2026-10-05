@@ -91,7 +91,9 @@ import type {
   TodayEmployeeStatus,
   User,
 } from '../../../shared/types';
-import { roleLabels } from '../../../shared/utils/formatters';
+import { recordedAttendanceBucket } from '../../../shared/utils/attendance';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { roleLabels, formatTimeShort } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 import { ShareCardModal } from '../components/employee/ShareCardModal';
 import { EditProfileModal } from '../components/employee/EditProfileModal';
@@ -123,7 +125,7 @@ const formatMoneyFull = (v: number): string =>
  * Accepts both ISO timestamps (actualArrival) and plain "HH:mm" strings
  * (shiftStart/shiftEnd stored as TEXT in DB). Falls back to "—".
  */
-const formatHM = (raw?: string | null): string => {
+const formatHM = (raw?: string | null, timeZone?: string): string => {
   if (!raw) return '—';
   const hm = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
   if (hm) {
@@ -132,7 +134,7 @@ const formatHM = (raw?: string | null): string => {
   }
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return formatTimeShort(d, timeZone);
 };
 
 const formatShortDate = (iso: string): string =>
@@ -146,16 +148,15 @@ const formatLongDate = (iso: string): string => {
 
 function statusBadge(s?: TodayEmployeeStatus): { text: string; bg: string; fg: string } {
   if (!s) return { text: '—', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
-  const note = (s.note || '').toLowerCase();
-  if (note.includes('больнич')) return { text: 'Б/Л', bg: 'rgba(244,114,182,0.30)', fg: '#fff' };
-  if (s.isDayOff) return { text: 'Выходной', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
-  if (s.lateStatus === 'late_major')
-    return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(248,113,113,0.34)', fg: '#fff' };
-  if (s.lateStatus === 'late_minor')
-    return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(251,191,36,0.34)', fg: '#fff' };
-  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time')
-    return { text: 'На смене', bg: 'rgba(52,211,153,0.32)', fg: '#fff' };
-  if (s.hasSchedule) return { text: 'Не пришёл', bg: 'rgba(248,113,113,0.30)', fg: '#fff' };
+  const bucket = recordedAttendanceBucket(s);
+  if (bucket === 'sick') return { text: 'Б/Л', bg: 'rgba(244,114,182,0.30)', fg: '#fff' };
+  if (bucket === 'absent') return { text: 'Прогул', bg: 'rgba(248,113,113,0.30)', fg: '#fff' };
+  if (bucket === 'dayOff') return { text: 'Выходной', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
+  if (bucket === 'lateMajor') return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(248,113,113,0.34)', fg: '#fff' };
+  if (bucket === 'lateMinor') return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(251,191,36,0.34)', fg: '#fff' };
+  if (bucket === 'full' || s.isWorking)
+    return { text: bucket === 'full' ? 'Смена' : 'На смене', bg: 'rgba(52,211,153,0.32)', fg: '#fff' };
+  if (s.hasSchedule) return { text: 'Не отмечен', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
   return { text: '—', bg: 'rgba(255,255,255,0.16)', fg: '#fff' };
 }
 
@@ -1152,12 +1153,13 @@ function StatsSummary({
  * поэтому через formatHM().
  */
 function TodayShiftStrip({ today, palette }: { today?: TodayEmployeeStatus; palette: Palette }) {
+  const tenantTz = useTenantTimezone();
   const hasShift = !!(today?.shiftStart && today?.shiftEnd);
   if (!hasShift && !today?.isDayOff) return null;
 
   const startStr = formatHM(today?.shiftStart);
   const endStr = formatHM(today?.shiftEnd);
-  const progress = computeShiftProgress(today);
+  const progress = computeShiftProgress(today, tenantTz);
 
   if (today?.isDayOff && !hasShift) {
     return (
@@ -1167,14 +1169,19 @@ function TodayShiftStrip({ today, palette }: { today?: TodayEmployeeStatus; pale
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.todayStripLabel, { color: palette.text.tertiary }]}>Сегодня</Text>
-          <Text style={[styles.todayStripValue, { color: palette.text.primary }]}>Выходной</Text>
+          <Text style={[styles.todayStripValue, { color: palette.text.primary }]}>
+            {(today.note || '').toLowerCase().includes('больнич') ? 'Больничный' : 'Выходной'}
+          </Text>
+          {today.isWorking && (
+            <Text style={[styles.todayStripSub, { color: palette.text.secondary }]}>Фактическая смена открыта</Text>
+          )}
         </View>
       </View>
     );
   }
 
   const lateText = today && today.lateMinutes > 0 ? `опоздал на ${today.lateMinutes} мин` : null;
-  const arrivalText = today?.actualArrival ? `пришёл в ${formatHM(today.actualArrival)}` : null;
+  const arrivalText = today?.actualArrival ? `пришёл в ${formatHM(today.actualArrival, tenantTz)}` : null;
 
   return (
     <View style={[styles.todayStrip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
@@ -1187,7 +1194,7 @@ function TodayShiftStrip({ today, palette }: { today?: TodayEmployeeStatus; pale
       )}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.todayStripLabel, { color: palette.text.tertiary }]}>
-          {progress ? 'Идёт смена' : 'Смена сегодня'}
+          {progress ? 'Идёт смена' : 'План на сегодня'}
         </Text>
         <Text style={[styles.todayStripValue, { color: palette.text.primary }]} numberOfLines={1}>
           {`${startStr} – ${endStr}`}
@@ -1971,21 +1978,20 @@ function computePeriodTotals(
   return { earnings, revenue, toPay, checks, spark };
 }
 
-function computeShiftProgress(s?: TodayEmployeeStatus): { ratio: number; elapsedMs: number } | null {
-  if (!s?.shiftStart || !s?.shiftEnd) return null;
+function computeShiftProgress(
+  s: TodayEmployeeStatus | undefined,
+  timeZone: string,
+): { ratio: number; elapsedMs: number } | null {
+  if (!s?.isWorking || !s.shiftStart || !s.shiftEnd) return null;
   const startHM = /^(\d{1,2}):(\d{2})$/.exec(s.shiftStart);
   const endHM = /^(\d{1,2}):(\d{2})$/.exec(s.shiftEnd);
   if (!startHM || !endHM) return null;
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(Number(startHM[1]), Number(startHM[2]), 0, 0);
-  const end = new Date(now);
-  end.setHours(Number(endHM[1]), Number(endHM[2]), 0, 0);
-  if (end <= start) return null;
-  if (now < start) return null;
-  if (now >= end) return null;
-  const ratio = (now.getTime() - start.getTime()) / (end.getTime() - start.getTime());
-  return { ratio, elapsedMs: now.getTime() - start.getTime() };
+  const [hour, minute] = formatTimeShort(new Date(), timeZone).split(':').map(Number);
+  const now = hour * 60 + minute;
+  const start = Number(startHM[1]) * 60 + Number(startHM[2]);
+  const end = Number(endHM[1]) * 60 + Number(endHM[2]);
+  if (end <= start || now < start || now >= end) return null;
+  return { ratio: (now - start) / (end - start), elapsedMs: (now - start) * 60_000 };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

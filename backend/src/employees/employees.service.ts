@@ -8,6 +8,8 @@ import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
+import { getTenantTimezone } from '../common/timezone';
+import { EXPLICIT_ATTENDANCE_SQL, hasRecordedAttendance } from '../shifts/attendance';
 
 /**
  * Actor shape (JWT payload subset) needed for the manager-vs-self split.
@@ -616,16 +618,18 @@ export class EmployeesService {
     // Discipline = % of last 30 schedule_entries days that were on-time / dayoff.
     // 167 — дни графика режутся филиалом карточки (schedule_entries.point_id),
     // как и все денежные срезы этой карточки.
-    const discParams: unknown[] = [employeeId, tenantID];
+    const disciplineTimezone = await getTenantTimezone(this.pool, tenantID);
+    const discParams: unknown[] = [employeeId, tenantID, disciplineTimezone];
     const discPointFilter = pointFilterSql(null, view.pointId, discParams);
     const { rows: discRows } = await this.pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE late_status IN ('on_time') OR is_day_off = true) AS good,
+         COUNT(*) FILTER (WHERE (late_status IN ('on_time') OR is_day_off = true) AND COALESCE(note, '') <> 'Прогул') AS good,
          COUNT(*) AS total
        FROM schedule_entries
        WHERE user_id=$1 AND tenant_id=$2
-         AND date >= (now() - interval '30 days')::date
-         AND date <= now()::date${discPointFilter}`,
+         AND ${EXPLICIT_ATTENDANCE_SQL}
+         AND date >= (now() AT TIME ZONE $3::text)::date - 30
+         AND date <= (now() AT TIME ZONE $3::text)::date${discPointFilter}`,
       discParams,
     );
     const goodDays = parseInt(discRows[0]?.good) || 0;
@@ -813,22 +817,26 @@ export class EmployeesService {
 
     // disciplineStreak: consecutive schedule_entries days without late/absent.
     // 167 — только дни ЭТОГО филиала (schedule_entries.point_id).
-    const streakParams: unknown[] = [employeeId, tenantID];
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const streakParams: unknown[] = [employeeId, tenantID, timezone];
     const streakPointFilter = pointFilterSql(null, pointId, streakParams);
     const { rows: disc } = await this.pool.query(
-      `SELECT date::date AS day, late_status, is_day_off, actual_arrival
+      `SELECT date::date AS day, late_status, late_minutes, is_day_off, actual_arrival, note
          FROM schedule_entries
         WHERE user_id=$1 AND tenant_id=$2
-          AND date >= now() - interval '180 days'
-          AND date <= now()::date${streakPointFilter}
+          AND ${EXPLICIT_ATTENDANCE_SQL}
+          AND date >= (now() AT TIME ZONE $3::text)::date - 180
+          AND date <= (now() AT TIME ZONE $3::text)::date${streakPointFilter}
         ORDER BY date DESC`,
       streakParams,
     );
     let disciplineStreak = 0;
     for (const r of disc) {
+      if (!hasRecordedAttendance(r)) continue;
       const bad =
+        r.note === 'Прогул' ||
         r.late_status === 'late_major' ||
-        (r.is_day_off === false && r.actual_arrival === null && r.late_status !== 'late_minor');
+        (!r.is_day_off && r.note !== 'Больничный' && r.late_status == null && Number(r.late_minutes) >= 60);
       if (bad) break;
       disciplineStreak++;
     }
@@ -1045,16 +1053,17 @@ export class EmployeesService {
       revRankParams,
     );
     // 167 — рейтинг дисциплины среди тех, кто работал В ЭТОМ филиале.
-    const discRankParams: unknown[] = [tenantID];
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const discRankParams: unknown[] = [tenantID, timezone];
     const discRankPointFilter = pointFilterSql(null, pointId, discRankParams);
     const { rows: discRanks } = await this.pool.query(
       `WITH agg AS (
          SELECT user_id,
-                AVG(CASE WHEN late_status = 'on_time' OR is_day_off = true THEN 1 ELSE 0 END) AS discipline
+                AVG(CASE WHEN (late_status = 'on_time' OR is_day_off = true) AND COALESCE(note, '') <> 'Прогул' THEN 1 ELSE 0 END) AS discipline
            FROM schedule_entries
-          WHERE tenant_id=$1
-            AND date >= (date_trunc('month', now()) - interval '1 month')::date
-            AND date < date_trunc('month', now())::date${discRankPointFilter}
+          WHERE tenant_id=$1 AND ${EXPLICIT_ATTENDANCE_SQL}
+            AND date >= (date_trunc('month', now() AT TIME ZONE $2::text) - interval '1 month')::date
+            AND date < date_trunc('month', now() AT TIME ZONE $2::text)::date${discRankPointFilter}
           GROUP BY user_id
        )
        SELECT user_id, RANK() OVER (ORDER BY discipline DESC) AS rnk FROM agg`,
