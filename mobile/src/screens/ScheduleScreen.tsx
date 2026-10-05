@@ -1972,7 +1972,7 @@ function RatingTab() {
     return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
   })();
 
-  const { data: monthEntries } = useQuery<ScheduleEntry[]>({
+  const { data: monthEntries, dataUpdatedAt } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
     // toArray — a 204 / empty body / non-array (502 window) must not reach
     // calculateAttendanceStats() (which would call array methods on it).
@@ -2002,7 +2002,7 @@ function RatingTab() {
   // toArray guards against a malformed cache value reaching the iterator.
   const stats = useMemo(
     () => calculateAttendanceStats(toArray<ScheduleEntry>(monthEntries), new Date(), tenantTz),
-    [monthEntries, tenantTz],
+    [monthEntries, tenantTz, dataUpdatedAt],
   );
 
   const ranked = useMemo(

@@ -200,6 +200,22 @@ test('blank planned days do not count as absence or interrupt discipline; explic
     {},
   );
   assert.equal((await employees.computeStreaks(randomUUID(), randomUUID(), null)).disciplineStreak, 2);
+  for (const [middle, expected] of [
+    [{ late_minutes: 59 }, 3],
+    [{ late_minutes: 60 }, 1],
+    [{ late_minutes: 90 }, 1],
+    [{ late_minutes: 90, late_status: 'on_time' }, 3],
+    [{ late_minutes: 90, late_status: 'late_minor' }, 3],
+    [{ late_minutes: 90, is_day_off: true }, 3],
+    [{ late_minutes: 90, note: 'Больничный' }, 3],
+  ]) {
+    rows = [{ ...base, late_status: 'on_time' }, { ...base, ...middle }, { ...base, late_status: 'on_time' }];
+    assert.equal(
+      (await employees.computeStreaks(randomUUID(), randomUUID(), null)).disciplineStreak,
+      expected,
+      JSON.stringify(middle),
+    );
+  }
   rows = [{ ...base, actual_arrival: clock.instant, late_status: 'on_time', note: 'Прогул' }];
   assert.equal((await employees.computeStreaks(randomUUID(), randomUUID(), null)).disciplineStreak, 0);
 });

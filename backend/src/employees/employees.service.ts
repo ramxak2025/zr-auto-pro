@@ -833,7 +833,10 @@ export class EmployeesService {
     let disciplineStreak = 0;
     for (const r of disc) {
       if (!hasRecordedAttendance(r)) continue;
-      const bad = r.note === 'Прогул' || r.late_status === 'late_major';
+      const bad =
+        r.note === 'Прогул' ||
+        r.late_status === 'late_major' ||
+        (!r.is_day_off && r.note !== 'Больничный' && r.late_status == null && Number(r.late_minutes) >= 60);
       if (bad) break;
       disciplineStreak++;
     }
