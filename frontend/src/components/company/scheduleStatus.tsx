@@ -1,6 +1,8 @@
-import { AlarmClock, AlertTriangle, Check, Moon, Thermometer, X, type LucideIcon } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Check, Clock, Moon, Thermometer, X, type LucideIcon } from 'lucide-react';
 import type { ScheduleEntry, TodayEmployeeStatus } from '../../types';
 import type { Tone } from '../../ui/tokens';
+import { recordedAttendanceBucket } from '../../../../shared/utils/attendance';
+import { formatTimeShort } from '../../../../shared/utils/formatters';
 
 /**
  * Единый словарь статусов расписания: сетка графика, легенда, быстрый выбор
@@ -25,10 +27,10 @@ export interface ScheduleStatusDef {
 export const SCHEDULE_STATUS: Record<ScheduleStatusKind, ScheduleStatusDef> = {
   planned: {
     label: 'Смена запланирована',
-    short: 'Смена',
-    icon: Check,
-    cell: 'bg-ok-soft text-ok-text border-ok/30',
-    tone: 'ok',
+    short: 'План',
+    icon: Clock,
+    cell: 'bg-surface-3 text-ink-3 border-line-strong',
+    tone: 'neutral',
   },
   onTime: {
     label: 'На смене вовремя',
@@ -83,13 +85,9 @@ export interface ScheduleCell {
   time?: string;
 }
 
-const isSickNote = (note?: string | null) => (note || '').toLowerCase().includes('больнич');
-const isAbsentNote = (note?: string | null) => (note || '').toLowerCase().includes('прогул');
-
 /**
- * Статус ячейки сетки по записи расписания. Логика перенесена без изменений:
- * заметка «больничный»/«прогул» важнее флагов; прошедший день со сменой без
- * факта прихода считается прогулом; будущий — просто запланированной сменой.
+ * Recorded attendance wins over a plan. Unmarked days never imply absence.
+ * Custom plan hours remain visible neutrally, even on today's date.
  */
 export function scheduleCellOf(
   entry: ScheduleEntry | undefined,
@@ -97,40 +95,37 @@ export function scheduleCellOf(
   todayKey: string,
 ): ScheduleCell | null {
   if (!entry) return null;
-  const lateMin = entry.lateMinutes || 0;
-  const isPast = dateStr < todayKey;
-  const isToday = dateStr === todayKey;
-
-  if (isSickNote(entry.note)) return { kind: 'sick' };
-  if (isAbsentNote(entry.note)) return { kind: 'absent' };
-  if (entry.isDayOff) return { kind: 'dayOff' };
-  if (entry.lateStatus === 'late_major' || lateMin >= 60) return { kind: 'lateMajor' };
-  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return { kind: 'lateMinor' };
-  if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
-    return { kind: 'onTime', time: entry.shiftStart.slice(0, 5) };
+  const bucket = recordedAttendanceBucket(entry);
+  if (bucket === 'sick') return { kind: 'sick' };
+  if (bucket === 'absent') return { kind: 'absent' };
+  if (bucket === 'dayOff') return { kind: 'dayOff' };
+  if (bucket === 'lateMajor') return { kind: 'lateMajor' };
+  if (bucket === 'lateMinor') return { kind: 'lateMinor' };
+  if (bucket === 'full') return { kind: 'onTime', time: entry.shiftStart?.slice(0, 5) };
+  if (entry.shiftStart && (dateStr > todayKey || entry.shiftStart.slice(0, 5) !== '09:00')) {
+    return { kind: 'planned', time: entry.shiftStart.slice(0, 5) };
   }
-  if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) return { kind: 'absent' };
-  if (entry.shiftStart) return { kind: 'planned' };
   return null;
 }
 
 /** Статус сотрудника на вкладке «Сегодня» — подпись и тон пилюли. */
 export function todayStatusOf(s: TodayEmployeeStatus): { label: string; tone: Tone } {
-  if (isSickNote(s.note)) return { label: 'Больничный', tone: 'info' };
-  if (s.isDayOff) return { label: 'Выходной', tone: 'neutral' };
-  if (!s.hasSchedule) return { label: 'Нет расписания', tone: 'neutral' };
-  if (s.lateStatus === 'late_major') return { label: 'Опоздание больше часа', tone: 'warn' };
-  if (s.lateStatus === 'late_minor') return { label: 'Опоздание до часа', tone: 'warn' };
-  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time') return { label: 'На смене', tone: 'ok' };
-  if (isAbsentNote(s.note)) return { label: 'Прогул', tone: 'bad' };
-  return { label: 'Не пришёл', tone: 'bad' };
+  const bucket = recordedAttendanceBucket(s);
+  if (bucket === 'sick') return { label: 'Больничный', tone: 'info' };
+  if (bucket === 'absent') return { label: 'Прогул', tone: 'bad' };
+  if (bucket === 'dayOff') return { label: 'Выходной', tone: 'neutral' };
+  if (bucket === 'lateMajor') return { label: 'Опоздание от часа', tone: 'warn' };
+  if (bucket === 'lateMinor') return { label: 'Опоздание до часа', tone: 'warn' };
+  if (bucket === 'full') return { label: 'Смена', tone: 'ok' };
+  if (s.isWorking) return { label: 'На смене', tone: 'ok' };
+  return { label: s.hasSchedule ? 'Не отмечен' : 'Нет расписания', tone: 'neutral' };
 }
 
 /** 'HH:MM' из 'HH:MM:SS' или ISO-строки; пусто → «—». */
-export function shortTime(value?: string | null): string {
+export function shortTime(value?: string | null, timeZone?: string): string {
   if (!value) return '—';
   if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5);
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return formatTimeShort(d, timeZone);
 }

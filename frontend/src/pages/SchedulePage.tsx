@@ -27,6 +27,7 @@ import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { formatDayKey } from '../../../shared/utils/formatters';
+import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import {
   Badge,
@@ -118,7 +119,7 @@ function AttendanceRatingTab({ users }: { users: User[] }) {
   // Месяц рейтинга — текущий У АВТОСЕРВИСА (157): выборка смен уезжает на
   // сервер границами месяца, а он режет сутки поясом тенанта. По часам браузера
   // в ночь на 1-е число вкладка открывалась в пустом следующем месяце.
-  const { month: tenantMonth } = useTenantCalendar();
+  const { month: tenantMonth, timeZone } = useTenantCalendar();
   const [selectedMonth, setSelectedMonth] = useState(tenantMonth);
 
   const monthStart = `${selectedMonth}-01`;
@@ -144,7 +145,10 @@ function AttendanceRatingTab({ users }: { users: User[] }) {
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
   // Статистика по каждому — ОБЩЕЙ утилитой: одна логика везде.
-  const stats = useMemo(() => calculateAttendanceStats((monthEntries ?? []) as any), [monthEntries]);
+  const stats = useMemo(
+    () => calculateAttendanceStats(monthEntries ?? [], new Date(), timeZone),
+    [monthEntries, timeZone],
+  );
 
   const ranked = useMemo(() => {
     return users
@@ -460,6 +464,7 @@ export default function SchedulePage() {
     refetch: refetchSchedule,
   } = useQuery({
     queryKey: ['schedule', dateFrom, dateTo],
+    refetchInterval: 60_000,
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom, dateTo });
       return res.data as ScheduleEntry[];
@@ -474,6 +479,7 @@ export default function SchedulePage() {
     refetch: refetchToday,
   } = useQuery({
     queryKey: ['schedule-today'],
+    refetchInterval: 60_000,
     queryFn: async () => {
       const res = await scheduleApi.getToday();
       return res.data as TodayEmployeeStatus[];
@@ -624,7 +630,7 @@ export default function SchedulePage() {
       // Delayed refetch — let server process first, patched cache is already showing
       setTimeout(() => {
         refetchSchedule();
-        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+        void invalidateAttendanceQueries(queryClient);
       }, 1500);
       closeModal();
     },
@@ -639,7 +645,7 @@ export default function SchedulePage() {
     onSuccess: () => {
       setTimeout(() => {
         refetchSchedule();
-        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+        void invalidateAttendanceQueries(queryClient);
       }, 1500);
       closeModal();
     },
@@ -652,8 +658,7 @@ export default function SchedulePage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scheduleApi.remove(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      void invalidateAttendanceQueries(queryClient);
       toast.success('Запись удалена');
     },
     onError: (err: unknown) => {
@@ -771,25 +776,7 @@ export default function SchedulePage() {
             : undefined;
     const lateMinutes = status === 'late_minor' ? 15 : status === 'late_major' ? 60 : 0;
 
-    // When admin marks "arrived on time" or "late", pin actualArrival to the
-    // SCHEDULED date, not to current moment. Otherwise clicking "Смена" on a
-    // past day records arrival at today's time — which inflates rating counts.
     const shiftStartStr = entry?.shiftStart || '09:00';
-    const arrivalForDate = (offsetMin: number) => {
-      const [h, m] = shiftStartStr.split(':').map(Number);
-      const dt = new Date(`${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
-      dt.setMinutes(dt.getMinutes() + offsetMin);
-      return dt.toISOString();
-    };
-    const actualArrival =
-      status === 'shift' && !isFutureDay
-        ? arrivalForDate(0)
-        : status === 'late_minor'
-          ? arrivalForDate(15)
-          : status === 'late_major'
-            ? arrivalForDate(60)
-            : null;
-
     const payload: any = {
       userId,
       date,
@@ -802,7 +789,7 @@ export default function SchedulePage() {
       // null явно (не опускаем поле): PATCH частичный — Выходной/Больничный/
       // Прогул обязаны СТЕРЕТЬ устаревший факт прихода, иначе зарплата
       // продолжала считать такой день отработанной сменой.
-      actualArrival,
+      ...(isDayOff || status === 'absent' || isFutureDay ? { actualArrival: null } : {}),
     };
 
     if (entry && !isDayOff && entry.shiftStart) {
@@ -845,8 +832,7 @@ export default function SchedulePage() {
     }
 
     setPendingChanges({});
-    queryClient.invalidateQueries({ queryKey: ['schedule'] });
-    queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+    void invalidateAttendanceQueries(queryClient);
 
     if (failures.length === 0) {
       toast.success(`Применено изменений: ${changes.length}`);
@@ -882,9 +868,12 @@ export default function SchedulePage() {
         render: (s) => {
           const st = todayStatusOf(s);
           return (
-            <StatusPill tone={st.tone} live={st.tone === 'ok'}>
-              {st.label}
-            </StatusPill>
+            <span className="flex flex-col items-start gap-1">
+              <StatusPill tone={st.tone} live={s.isWorking && st.tone === 'ok'}>
+                {st.label}
+              </StatusPill>
+              {s.isWorking && <span className="text-xs text-ink-3">Фактическая смена открыта</span>}
+            </span>
           );
         },
       },
@@ -907,7 +896,7 @@ export default function SchedulePage() {
         hideBelow: 'md',
         render: (s) =>
           s.actualArrival ? (
-            <span className="tabular-nums">{shortTime(s.actualArrival)}</span>
+            <span className="tabular-nums">{shortTime(s.actualArrival, timeZone)}</span>
           ) : (
             <span className="text-ink-3">—</span>
           ),
@@ -1147,13 +1136,6 @@ export default function SchedulePage() {
                             ) : (
                               CellIcon && <CellIcon className="h-4 w-4" />
                             )}
-                          </span>
-                        ) : !isWeekend ? (
-                          <span
-                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-dashed border-ok/30 text-ok/50"
-                            aria-hidden="true"
-                          >
-                            <Check className="h-3.5 w-3.5" />
                           </span>
                         ) : null;
                         const cellCls = cn(
@@ -1695,8 +1677,7 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: WorkMode[]; users:
     mutationFn: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) =>
       scheduleApi.applyWorkMode(data),
     onSuccess: (res: any) => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      void invalidateAttendanceQueries(queryClient);
       toast.success(`График применён (записей: ${res.data?.created || 0})`);
     },
     onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Ошибка при применении графика'),

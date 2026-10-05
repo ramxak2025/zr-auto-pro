@@ -432,7 +432,7 @@ test('выручка отчётов считается общим модулем
 // ── 8. Смена, открытая отметкой в графике, получает филиал ──────────────────
 
 test('автооткрытая смена штампуется филиалом, а не NULL', () => {
-  const ensure = bodyBetween(schedule, 'private async ensureShiftOpen(', 'async create(tenantID: string, dto: any');
+  const ensure = bodyBetween(schedule, 'private async ensureShiftOpen(', 'async create(');
 
   assert.ok(
     ensure.includes('INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)'),
@@ -440,7 +440,7 @@ test('автооткрытая смена штампуется филиалом,
   );
   // 167 — филиал смены = филиал СТРОКИ ГРАФИКА, приходит параметром.
   assert.ok(
-    /VALUES \(\$1, \$2, \$3, now\(\), \$4\)/.test(ensure),
+    /VALUES \(\$1, \$2, \$3, \$4, \$5\)/.test(ensure),
     'schedule.ensureShiftOpen: филиал смены обязан приходить готовым параметром (филиал строки графика)',
   );
   assert.ok(

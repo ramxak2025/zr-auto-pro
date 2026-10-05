@@ -72,8 +72,31 @@ describe('classifyEntry', () => {
     expect(classifyEntry(base({ lateStatus: 'on_time' }), NOW)).toBe('full');
   });
 
-  it('marks past day with no arrival as absent', () => {
-    expect(classifyEntry(base({ date: '2026-05-10' }), NOW)).toBe('absent');
+  it('leaves an unmarked past plan out of attendance instead of inferring absence', () => {
+    expect(classifyEntry(base({ date: '2026-05-10' }), NOW)).toBe(null);
+    expect(calculateAttendanceStats([base({ date: '2026-05-10' })], NOW)).toEqual({});
+  });
+
+  it('uses the service day when its midnight differs from the device day', () => {
+    expect(
+      classifyEntry(
+        base({ date: '2026-05-20', lateStatus: 'on_time' }),
+        new Date('2026-05-19T15:00:00Z'),
+        'Asia/Vladivostok',
+      ),
+    ).toBe('full');
+    expect(
+      classifyEntry(
+        base({ date: '2026-05-20', lateStatus: 'on_time' }),
+        new Date('2026-05-20T01:00:00Z'),
+        'America/Los_Angeles',
+      ),
+    ).toBe(null);
+  });
+
+  it('keeps the explicit chosen working status ahead of old minute metadata', () => {
+    expect(classifyEntry(base({ lateStatus: 'on_time', lateMinutes: 90 }), NOW)).toBe('full');
+    expect(classifyEntry(base({ lateStatus: 'late_minor', lateMinutes: 90 }), NOW)).toBe('lateMinor');
   });
 
   it('returns null for today with no arrival yet (still in progress)', () => {
@@ -83,6 +106,39 @@ describe('classifyEntry', () => {
 });
 
 describe('dedupeEntriesByDay', () => {
+  it('keeps legacy minute-only attendance over a newer unmarked plan', () => {
+    const legacy: RawScheduleEntry = {
+      userId: 'u1',
+      date: '2026-05-18',
+      lateMinutes: 30,
+      createdAt: '2026-05-18T06:30:00Z',
+    };
+    const plan: RawScheduleEntry = {
+      userId: 'u1',
+      date: '2026-05-18',
+      isManualOverride: true,
+      createdAt: '2026-05-18T10:00:00Z',
+    };
+    for (const rows of [
+      [legacy, plan],
+      [plan, legacy],
+    ]) {
+      expect(dedupeEntriesByDay(rows)).toEqual([legacy]);
+      expect(calculateAttendanceStats(rows, NOW).u1.lateMinor).toBe(1);
+    }
+  });
+  it('retains the manual absence over a duplicate automatic arrival', () => {
+    const manual: RawScheduleEntry = { userId: 'u1', date: '2026-05-18', note: 'Прогул', isManualOverride: true };
+    const automatic: RawScheduleEntry = {
+      userId: 'u1',
+      date: '2026-05-18',
+      actualArrival: '2026-05-18T09:00:00',
+      lateStatus: 'on_time',
+      isManualOverride: false,
+    };
+    expect(dedupeEntriesByDay([manual, automatic])).toEqual([manual]);
+    expect(dedupeEntriesByDay([automatic, manual])).toEqual([manual]);
+  });
   it('keeps the entry with the most information', () => {
     const entries: RawScheduleEntry[] = [
       { userId: 'u1', date: '2026-05-18' },

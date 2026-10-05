@@ -3450,6 +3450,9 @@ export interface ScheduleEntry {
   pointId?: string | null;
 }
 
+/** Sunday = 0, Saturday = 6, matching WorkMode.weekDays and User.daysOff. */
+export type WorkModeDayTimes = Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, { shiftStart: string; shiftEnd: string }>>;
+
 export interface WorkMode {
   id: string;
   tenantId: string;
@@ -3460,6 +3463,8 @@ export interface WorkMode {
   weekDays: number[];
   shiftStart: string;
   shiftEnd: string;
+  /** Missing weekday override uses shiftStart / shiftEnd. */
+  dayTimes?: WorkModeDayTimes;
 }
 
 export interface TodayEmployeeStatus {

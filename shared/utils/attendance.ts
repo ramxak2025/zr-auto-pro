@@ -8,19 +8,19 @@
 //    1. Only days in the past or today are counted (future days skipped).
 //    2. Per (userId, date) — deduplicate. If duplicate entries exist (from
 //       race conditions, legacy data before the unique constraint), keep the
-//       one with the most information (actualArrival > lateStatus > newer).
+//       a manual choice first, then the one with the most information.
 //    3. Note contains "больнич" → sick (not counted in total).
 //    4. Note contains "прогул"  → absent (counted in total).
 //    5. isDayOff = true         → day off (not counted in total).
-//    6. Otherwise the day IS a working day (total++), then:
-//       - late_major OR lateMinutes ≥ 60  → late major (miss)
-//       - late_minor OR 0 < lateMinutes < 60 → late minor (miss)
-//       - actualArrival set AND lateStatus='on_time' (or no lateness) → FULL
-//       - else (past date, no arrival) → absent
+//    6. An explicit working status wins over old lateness metadata.
+//       Without a status, arrival / lateness minutes remain attendance evidence.
+//    7. No attendance evidence → unmarked, even for a past planned day.
 //
 //  "Full shift" is the numerator for the attendance score:
 //    score = round((full / total) * 100)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+import { formatDayKey } from './formatters';
 
 export interface RawScheduleEntry {
   userId: string;
@@ -31,6 +31,7 @@ export interface RawScheduleEntry {
   lateStatus?: string | null;
   lateMinutes?: number | null;
   createdAt?: string | null;
+  isManualOverride?: boolean;
 }
 
 export interface AttendanceBreakdown {
@@ -76,6 +77,18 @@ export function dedupeEntriesByDay<E extends RawScheduleEntry>(entries: E[]): E[
     const key = `${e.userId}|${String(e.date).slice(0, 10)}`;
     const prev = best.get(key);
     if (!prev) { best.set(key, e); continue; }
+    const manual = !!e.isManualOverride && recordedAttendanceBucket(e) !== null;
+    const prevManual = !!prev.isManualOverride && recordedAttendanceBucket(prev) !== null;
+    if (manual !== prevManual) {
+      if (manual) best.set(key, e);
+      continue;
+    }
+    const recorded = recordedAttendanceBucket(e) !== null;
+    const prevRecorded = recordedAttendanceBucket(prev) !== null;
+    if (recorded !== prevRecorded) {
+      if (recorded) best.set(key, e);
+      continue;
+    }
     const prevScore = entryInfoScore(prev);
     const curScore  = entryInfoScore(e);
     if (curScore > prevScore) { best.set(key, e); continue; }
@@ -90,31 +103,36 @@ export function dedupeEntriesByDay<E extends RawScheduleEntry>(entries: E[]): E[
 
 /**
  * Classify a single entry into exactly one bucket.
- * Returns null if the day should be skipped entirely (future dates).
+ * Returns null for future dates or days without a recorded attendance choice.
  */
 export type AttendanceBucket = 'sick' | 'absent' | 'dayOff' | 'lateMajor' | 'lateMinor' | 'full';
 
-export function classifyEntry(e: RawScheduleEntry, now: Date = new Date()): AttendanceBucket | null {
-  const dateStr = String(e.date || '').slice(0, 10);
-  if (!dateStr) return null;
-  const entryDate = new Date(dateStr + 'T00:00:00');
-  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-  if (entryDate > todayEnd) return null; // future — skip
-
+/** Recorded status without a date cutoff, also used to display future manual choices. */
+export function recordedAttendanceBucket(
+  e: Pick<RawScheduleEntry, 'note' | 'isDayOff' | 'lateStatus' | 'lateMinutes' | 'actualArrival'>,
+): AttendanceBucket | null {
   const note = (e.note || '').toLowerCase();
   if (note.includes('больнич')) return 'sick';
   if (note.includes('прогул'))  return 'absent';
   if (e.isDayOff)               return 'dayOff';
 
   const lateMin = Number(e.lateMinutes) || 0;
-  if (e.lateStatus === 'late_major' || lateMin >= 60) return 'lateMajor';
-  if (e.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return 'lateMinor';
-  if (e.actualArrival || e.lateStatus === 'on_time')  return 'full';
+  if (e.lateStatus === 'late_major') return 'lateMajor';
+  if (e.lateStatus === 'late_minor') return 'lateMinor';
+  if (e.lateStatus === 'on_time') return 'full';
+  if (lateMin >= 60) return 'lateMajor';
+  if (lateMin > 0) return 'lateMinor';
+  return e.actualArrival ? 'full' : null;
+}
 
-  // Past working day, no arrival recorded → absent
-  const entryEnd = new Date(dateStr + 'T23:59:59');
-  if (entryEnd < now) return 'absent';
-  return null; // today but not yet marked — don't count either way
+export function classifyEntry(
+  e: RawScheduleEntry,
+  now: Date = new Date(),
+  timeZone?: string | null,
+): AttendanceBucket | null {
+  const dateStr = String(e.date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || dateStr > formatDayKey(now, timeZone)) return null;
+  return recordedAttendanceBucket(e);
 }
 
 /**
@@ -123,12 +141,13 @@ export function classifyEntry(e: RawScheduleEntry, now: Date = new Date()): Atte
 export function calculateAttendanceStats<E extends RawScheduleEntry>(
   entries: E[],
   now: Date = new Date(),
+  timeZone?: string | null,
 ): Record<string, AttendanceBreakdown> {
   const deduped = dedupeEntriesByDay(entries);
   const map: Record<string, AttendanceBreakdown> = {};
 
   for (const e of deduped) {
-    const bucket = classifyEntry(e, now);
+    const bucket = classifyEntry(e, now, timeZone);
     if (bucket === null) continue;
 
     if (!map[e.userId]) map[e.userId] = EMPTY_BREAKDOWN();

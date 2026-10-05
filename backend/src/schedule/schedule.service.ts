@@ -1,11 +1,22 @@
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { NO_TENANT_ID } from '../common/auth-cache';
 import { getTenantTimezone } from '../common/timezone';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { actorPointId, assertRowPointForWrite, pointFilterSql } from '../common/point-scope';
 import { assignedToPointSql } from '../users/user-points-sql';
+import { staleShiftSql } from '../shifts/shift-auto-close.sql';
+import {
+  AttendanceEntry,
+  AttendanceFields,
+  ScheduleMutation,
+  attendanceClock,
+  isWorkingStatus,
+  lockAttendanceUser,
+  manualAttendance,
+} from '../shifts/attendance';
+import { WorkModeRow, WorkModeMutation, mapWorkMode, workModeFields } from './work-mode';
 
 // Valid statuses for the schedule_settings.shift_statuses array.
 // Anything outside this set is ignored on write so a manipulated DTO can't
@@ -26,7 +37,7 @@ const DEFAULT_SHIFT_STATUSES = ['worked', 'short'];
 // retry can recover from. Validate before the query touches the cast.
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function isIsoDate(s: unknown): s is string {
-  if (typeof s !== 'string' || !ISO_DATE_RE.test(s)) return false;
+  if (typeof s !== 'string' || !ISO_DATE_RE.test(s) || s.startsWith('0000-')) return false;
   const ts = Date.parse(`${s}T00:00:00Z`);
   return !Number.isNaN(ts) && new Date(ts).toISOString().slice(0, 10) === s;
 }
@@ -140,27 +151,12 @@ export class ScheduleService {
           clauses.push(`(late_status = 'late_major')`);
           break;
         case 'absent':
-          // Absent = scheduled work day, didn't show up, not marked day-off.
-          clauses.push(
-            `(is_day_off = false AND actual_arrival IS NULL AND COALESCE(late_status, '') NOT IN ('late_minor','late_major'))`,
-          );
+          // An unmarked planned day is not an absence.
+          clauses.push(`(note = 'Прогул')`);
           break;
       }
     }
     return clauses.length > 0 ? { sql: `(${clauses.join(' OR ')})`, params } : null;
-  }
-
-  private async assertUserInTenant(userID: string, tenantID: string): Promise<void> {
-    if (!userID) {
-      throw new BadRequestException({ message: 'Сотрудник обязателен' });
-    }
-    const { rows } = await this.pool.query('SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
-      userID,
-      tenantID,
-    ]);
-    if (rows.length === 0) {
-      throw new BadRequestException({ message: 'Сотрудник не найден' });
-    }
   }
 
   private mapEntry(row: any) {
@@ -246,14 +242,15 @@ export class ScheduleService {
     // Пояс тенанта — один раз на запрос, для обоих запросов ниже.
     const tz = await getTenantTimezone(this.pool, tenantID);
 
-    // Safety net: if the nightly cron didn't run, sweep any stale open shifts
+    // Safety net: if the background sweep didn't run, close stale open shifts
     // (date earlier than "today" в поясе тенанта) before we render today's
     // status. Idempotent and cheap — only updates rows that actually need
     // closing.
+    const stale = staleShiftSql('$2');
     await this.pool.query(
-      `UPDATE shifts SET closed_at = now(), is_auto_closed = true
+      `UPDATE shifts SET closed_at = ${stale.closedAt}, is_auto_closed = true
        WHERE tenant_id = $1 AND closed_at IS NULL
-         AND date < (now() AT TIME ZONE $2::text)::date`,
+         AND ${stale.predicate}`,
       [tenantID, tz],
     );
 
@@ -359,167 +356,159 @@ export class ScheduleService {
     };
   }
 
-  /**
-   * Смена, которую открывает не сам сотрудник, а отметка «пришёл» в графике.
-   *
-   * ФИЛИАЛ СМЕНЫ = ФИЛИАЛ СТРОКИ ГРАФИКА (167). Отметку ставит администратор
-   * в сетке СВОЕГО филиала, и день графика уже несёт этот филиал
-   * (schedule_entries.point_id, штамп сессии при создании). Значит и смена
-   * рождается там же — без угадывания по назначениям и без фолбэков.
-   *
-   * ПОЧЕМУ НЕ ВЫЧИСЛЯТЬ, КАК РАНЬШЕ. Прежняя редакция брала «единственное
-   * назначение сотрудника, иначе основной сервис» агрегатом MIN(tp.id) по
-   * uuid — а min/max для uuid в PostgreSQL 16 НЕ СУЩЕСТВУЕТ. Каждая отметка
-   * «пришёл/опоздал» падала с 500 после того, как строка графика уже была
-   * записана: клиент откатывал отметку, владелец видел «не сохранилось», а
-   * при следующем обновлении она появлялась. Именно это «расписание перестало
-   * работать». Здесь больше нет ни одного агрегата: филиал приходит готовым.
-   *
-   * NULL — только у тенанта без филиалов (одноточечный автосервис), поведение
-   * прежнее дословно.
-   */
+  /** Both callers hold the employee lock and write the calendar in this transaction. */
   private async ensureShiftOpen(
+    client: PoolClient,
     tenantID: string,
     userID: string,
     date: string,
-    lateStatus: string | null,
+    lateStatus: unknown,
     pointId: string | null,
+    clock: Awaited<ReturnType<typeof attendanceClock>>,
+    timezone: string,
   ) {
-    if (!['on_time', 'late_minor', 'late_major'].includes(lateStatus || '')) return;
-    // Check if shift already exists for this user/date
-    const { rows: existing } = await this.pool.query(
-      `SELECT id FROM shifts WHERE user_id=$1 AND date=$2 AND tenant_id=$3 LIMIT 1`,
-      [userID, date, tenantID],
+    if (!isWorkingStatus(lateStatus) || date !== clock.today) return;
+    const stale = staleShiftSql('$3', '$4');
+    // A manual transfer closes the previous point's active event, preserving its history.
+    await client.query(
+      `UPDATE shifts SET closed_at = CASE WHEN ${stale.predicate} THEN ${stale.closedAt} ELSE $4::timestamptz END,
+         is_auto_closed = true
+       WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL
+         AND (${stale.predicate} OR point_id IS DISTINCT FROM $5::uuid)`,
+      [userID, tenantID, timezone, clock.instant, pointId],
     );
-    if (existing.length > 0) return;
-    await this.pool.query(
-      `INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)
-       VALUES ($1, $2, $3, now(), $4)`,
+    const { rows: existing } = await client.query(
+      `SELECT id FROM shifts WHERE user_id=$1 AND date=$2 AND tenant_id=$3
+         AND point_id IS NOT DISTINCT FROM $4::uuid AND closed_at IS NULL LIMIT 1`,
       [userID, date, tenantID, pointId],
     );
+    if (existing.length > 0) return;
+    await client.query(
+      `INSERT INTO shifts (user_id, date, tenant_id, opened_at, point_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userID, date, tenantID, clock.instant, pointId],
+    );
   }
 
-  /**
-   * Создать / перезаписать день графика.
-   *
-   * 167 — ДЕНЬ ШТАМПУЕТСЯ ФИЛИАЛОМ СЕССИИ. У сотрудника РОВНО ОДНА строка на
-   * дату во всей сети (уникальный индекс tenant_id + user_id + date): человек
-   * физически в один день в одном автосервисе. Поэтому запись дня из филиала
-   * Б, когда день уже стоял в филиале А, ПЕРЕНОСИТ его в Б вместе с новым
-   * содержимым — ровно так же, как этот upsert всегда перезаписывал день
-   * внутри одного филиала («последняя правка побеждает»). Отказывать здесь
-   * нельзя: после привязки истории все дни лежат в основном сервисе, и
-   * владелец должен иметь возможность расставить график филиала, не удаляя
-   * дни по одному в основном.
-   */
-  async create(tenantID: string, dto: any, actor?: JwtPayload) {
-    // Verify the schedule entry references a user inside the caller's tenant.
-    // Otherwise the entry lands with tenant_id from JWT but user_id from a
-    // foreign tenant — the schedule listing then JOIN's against that other
-    // tenant's user row.
-    await this.assertUserInTenant(dto.userId, tenantID);
-    const pointId = actorPointId(actor);
+  private async firstArrival(client: PoolClient, tenantID: string, userID: string, date: string) {
+    const { rows } = await client.query<{ opened_at: Date }>(
+      'SELECT opened_at FROM shifts WHERE tenant_id=$1 AND user_id=$2 AND date=$3 ORDER BY opened_at, id LIMIT 1',
+      [tenantID, userID, date],
+    );
+    return rows[0]?.opened_at ?? null;
+  }
 
-    // Upsert — backed by unique index (tenant_id, user_id, date).
-    // Prevents duplicate entries that caused attendance rating to count
-    // a single day as multiple shifts.
-    const { rows } = await this.pool.query(
-      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, actual_arrival, tenant_id, point_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
-         shift_start     = EXCLUDED.shift_start,
-         shift_end       = EXCLUDED.shift_end,
-         is_day_off      = EXCLUDED.is_day_off,
-         note            = EXCLUDED.note,
-         late_status     = EXCLUDED.late_status,
-         late_minutes    = EXCLUDED.late_minutes,
-         actual_arrival  = EXCLUDED.actual_arrival,
-         point_id        = EXCLUDED.point_id
-       RETURNING *`,
-      [
+  private entryValues(fields: AttendanceFields): unknown[] {
+    return [
+      fields.shift_start,
+      fields.shift_end,
+      fields.is_day_off,
+      fields.note,
+      fields.late_status,
+      fields.late_minutes,
+      fields.actual_arrival,
+      fields.is_manual_override,
+    ];
+  }
+
+  /** 167: an explicit create may transfer the calendar day to the session point. */
+  async create(tenantID: string, dto: ScheduleMutation & { userId: string; date: string }, actor?: JwtPayload) {
+    if (!dto.userId || !isIsoDate(dto.date)) throw new BadRequestException({ message: 'Укажите сотрудника и дату' });
+    const pointId = actorPointId(actor);
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await lockAttendanceUser(client, tenantID, dto.userId);
+      const clock = await attendanceClock(client, timezone);
+      const { rows: previous } = await client.query<AttendanceEntry>(
+        'SELECT *, date::text AS date FROM schedule_entries WHERE tenant_id=$1 AND user_id=$2 AND date=$3 FOR UPDATE',
+        [tenantID, dto.userId, dto.date],
+      );
+      const firstArrival = await this.firstArrival(client, tenantID, dto.userId, dto.date);
+      const fields = manualAttendance(dto, previous[0], dto.date, clock, timezone, firstArrival);
+      // Omitted fields come from the locked row, so plan-only upserts cannot erase an arrival.
+      const { rows } = await client.query<AttendanceEntry>(
+        `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note,
+           late_status, late_minutes, actual_arrival, is_manual_override, tenant_id, point_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
+           shift_start=EXCLUDED.shift_start, shift_end=EXCLUDED.shift_end, is_day_off=EXCLUDED.is_day_off,
+           note=EXCLUDED.note, late_status=EXCLUDED.late_status, late_minutes=EXCLUDED.late_minutes,
+           actual_arrival=EXCLUDED.actual_arrival, is_manual_override=EXCLUDED.is_manual_override,
+           point_id=EXCLUDED.point_id
+         RETURNING *, date::text AS date`,
+        [dto.userId, dto.date, ...this.entryValues(fields), tenantID, pointId],
+      );
+      await this.ensureShiftOpen(
+        client,
+        tenantID,
         dto.userId,
         dto.date,
-        dto.shiftStart,
-        dto.shiftEnd,
-        dto.isDayOff || false,
-        dto.note,
-        dto.lateStatus || null,
-        dto.lateMinutes || 0,
-        dto.actualArrival || null,
-        tenantID,
-        pointId,
-      ],
-    );
-    // Auto-open shift if manually marked as attending — в филиале СТРОКИ.
-    await this.ensureShiftOpen(tenantID, dto.userId, dto.date, dto.lateStatus, rows[0].point_id ?? null);
-    return this.mapEntry(rows[0]);
+        dto.lateStatus,
+        rows[0].point_id ?? null,
+        clock,
+        timezone,
+      );
+      await client.query('COMMIT');
+      return this.mapEntry(rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  /**
-   * Правка дня по id. 167 — ГЕЙТ ЗАПИСИ ПО ФИЛИАЛУ: день чужого филиала
-   * править нельзя (404 «Запись не найдена» — существование чужой строки не
-   * подтверждаем, конвенция common/point-scope.assertRowPointForWrite).
-   * Клиент правит только то, что видит в сетке своего филиала, поэтому для
-   * честного клиента гейт невидим; он закрывает путь «по id из истории».
-   */
-  async update(id: string, tenantID: string, dto: any, actor?: JwtPayload) {
-    await assertRowPointForWrite(this.pool, 'schedule_entries', id, tenantID, actorPointId(actor), 'Запись не найдена');
-    const sets: string[] = [];
-    const vals: any[] = [];
-    let idx = 1;
-
-    if (dto.shiftStart !== undefined) {
-      sets.push(`shift_start=$${idx++}`);
-      vals.push(dto.shiftStart);
-    }
-    if (dto.shiftEnd !== undefined) {
-      sets.push(`shift_end=$${idx++}`);
-      vals.push(dto.shiftEnd);
-    }
-    if (dto.isDayOff !== undefined) {
-      sets.push(`is_day_off=$${idx++}`);
-      vals.push(dto.isDayOff);
-    }
-    if (dto.note !== undefined) {
-      sets.push(`note=$${idx++}`);
-      vals.push(dto.note);
-    }
-    if (dto.lateStatus !== undefined) {
-      sets.push(`late_status=$${idx++}`);
-      vals.push(dto.lateStatus);
-    }
-    if (dto.lateMinutes !== undefined) {
-      sets.push(`late_minutes=$${idx++}`);
-      vals.push(dto.lateMinutes);
-    }
-    if (dto.actualArrival !== undefined) {
-      sets.push(`actual_arrival=$${idx++}`);
-      vals.push(dto.actualArrival);
-    }
-
-    if (sets.length === 0) {
-      const { rows } = await this.pool.query('SELECT * FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [
-        id,
+  /** Update is point-scoped before and after the employee lock; transfers can race this request. */
+  async update(id: string, tenantID: string, dto: ScheduleMutation, actor?: JwtPayload) {
+    const pointId = actorPointId(actor);
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await assertRowPointForWrite(client, 'schedule_entries', id, tenantID, pointId, 'Запись не найдена');
+      const { rows: identity } = await client.query<AttendanceEntry>(
+        'SELECT user_id FROM schedule_entries WHERE id=$1 AND tenant_id=$2',
+        [id, tenantID],
+      );
+      if (!identity[0]) throw new NotFoundException({ message: 'Запись не найдена' });
+      await lockAttendanceUser(client, tenantID, identity[0].user_id);
+      const clock = await attendanceClock(client, timezone);
+      const params: unknown[] = [id, tenantID];
+      const pointFilter = pointFilterSql(null, pointId, params);
+      const { rows: previous } = await client.query<AttendanceEntry>(
+        `SELECT *, date::text AS date FROM schedule_entries WHERE id=$1 AND tenant_id=$2${pointFilter} FOR UPDATE`,
+        params,
+      );
+      if (!previous[0]) throw new NotFoundException({ message: 'Запись не найдена' });
+      const prior = previous[0];
+      const firstArrival = await this.firstArrival(client, tenantID, prior.user_id, prior.date);
+      const fields = manualAttendance(dto, prior, prior.date, clock, timezone, firstArrival);
+      const { rows } = await client.query<AttendanceEntry>(
+        `UPDATE schedule_entries SET shift_start=$1, shift_end=$2, is_day_off=$3, note=$4,
+           late_status=$5, late_minutes=$6, actual_arrival=$7, is_manual_override=$8
+         WHERE id=$9 AND tenant_id=$10 RETURNING *, date::text AS date`,
+        [...this.entryValues(fields), id, tenantID],
+      );
+      await this.ensureShiftOpen(
+        client,
         tenantID,
-      ]);
-      return rows.length > 0 ? this.mapEntry(rows[0]) : null;
+        prior.user_id,
+        prior.date,
+        dto.lateStatus,
+        rows[0].point_id ?? null,
+        clock,
+        timezone,
+      );
+      await client.query('COMMIT');
+      return this.mapEntry(rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    vals.push(id, tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE schedule_entries SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Запись не найдена' });
-    // Auto-open shift if manually marked as attending
-    if (dto.lateStatus && rows[0].user_id && rows[0].date) {
-      const dateStr =
-        typeof rows[0].date === 'string'
-          ? rows[0].date.slice(0, 10)
-          : new Date(rows[0].date).toISOString().slice(0, 10);
-      await this.ensureShiftOpen(tenantID, rows[0].user_id, dateStr, dto.lateStatus, rows[0].point_id ?? null);
-    }
-    return this.mapEntry(rows[0]);
   }
 
   /** Удаление — тем же гейтом филиала, что правка: чужой день не трогаем. */
@@ -533,204 +522,151 @@ export class ScheduleService {
   // Work modes
 
   async getWorkModes(tenantID: string) {
-    const { rows } = await this.pool.query('SELECT * FROM work_modes WHERE tenant_id=$1 ORDER BY name', [tenantID]);
-    return rows.map((r) => ({
-      id: r.id,
-      tenantId: r.tenant_id,
-      name: r.name,
-      type: r.type,
-      workDays: r.work_days,
-      offDays: r.off_days,
-      weekDays: r.week_days || [],
-      shiftStart: r.shift_start,
-      shiftEnd: r.shift_end,
-    }));
+    const { rows } = await this.pool.query<WorkModeRow>('SELECT * FROM work_modes WHERE tenant_id=$1 ORDER BY name', [
+      tenantID,
+    ]);
+    return rows.map(mapWorkMode);
   }
 
-  async createWorkMode(tenantID: string, dto: any) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO work_modes (name, type, work_days, off_days, week_days, shift_start, shift_end, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+  async createWorkMode(tenantID: string, dto: WorkModeMutation) {
+    const fields = workModeFields(dto);
+    const { rows } = await this.pool.query<WorkModeRow>(
+      `INSERT INTO work_modes (name, type, work_days, off_days, week_days, shift_start, shift_end, day_times, tenant_id)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9) RETURNING *`,
       [
-        dto.name,
-        dto.type || 'rotating',
-        dto.workDays || 2,
-        dto.offDays || 2,
-        JSON.stringify(dto.weekDays || []),
-        dto.shiftStart || '09:00',
-        dto.shiftEnd || '18:00',
+        fields.name,
+        fields.type,
+        fields.work_days,
+        fields.off_days,
+        JSON.stringify(fields.week_days),
+        fields.shift_start,
+        fields.shift_end,
+        JSON.stringify(fields.day_times),
         tenantID,
       ],
     );
-    const r = rows[0];
-    return {
-      id: r.id,
-      tenantId: r.tenant_id,
-      name: r.name,
-      type: r.type,
-      workDays: r.work_days,
-      offDays: r.off_days,
-      weekDays: r.week_days || [],
-      shiftStart: r.shift_start,
-      shiftEnd: r.shift_end,
-    };
+    return mapWorkMode(rows[0]);
   }
 
-  /**
-   * Применить режим работы одному или всем мастерам на диапазон дат.
-   *
-   * 167 — «ВСЕ МАСТЕРА» = КОМАНДА ЭТОГО ФИЛИАЛА (user_points, дефолт 156:
-   * сотрудник без назначений входит в команду каждого филиала), а каждый
-   * созданный день штампуется филиалом сессии. День, уже стоявший у
-   * сотрудника в другом филиале, переезжает сюда — та же семантика «последняя
-   * правка побеждает», что у create(); подробности там.
-   */
-  async applyWorkMode(tenantID: string, dto: any, actor?: JwtPayload) {
-    // Apply a work mode schedule to one or all masters for a date range
+  /** Generated future plans may move point (167); explicit calendar choices are preserved. */
+  async applyWorkMode(
+    tenantID: string,
+    dto: { workModeId: string; userId?: string; dateFrom: string; dateTo: string },
+    actor?: JwtPayload,
+  ) {
     const { workModeId, userId, dateFrom, dateTo } = dto;
+    if (!isIsoDate(dateFrom) || !isIsoDate(dateTo) || dateFrom > dateTo) {
+      throw new BadRequestException({ message: 'Укажите верный диапазон дат' });
+    }
     const pointId = actorPointId(actor);
-
-    // Get the work mode
-    const { rows: wmRows } = await this.pool.query('SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2', [
-      workModeId,
-      tenantID,
-    ]);
-    if (wmRows.length === 0) throw new NotFoundException({ message: 'Режим работы не найден' });
-    const wm = wmRows[0];
-
-    // Get target users with their days_off
-    let userRows: Array<{ id: string; days_off: number[] }> = [];
-    if (userId) {
-      const { rows: uRows } = await this.pool.query(
-        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE id=$1 AND tenant_id=$2`,
-        [userId, tenantID],
-      );
-      userRows = uRows.map((r) => ({
-        id: r.id,
-        days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : r.days_off || [],
-      }));
-    } else {
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: modes } = await client.query<WorkModeRow>('SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2', [
+        workModeId,
+        tenantID,
+      ]);
+      if (!modes[0]) throw new NotFoundException({ message: 'Режим работы не найден' });
+      const wm = modes[0];
       const teamParams: unknown[] = [tenantID];
       const teamFilter = assignedToPointSql('u', '$1', pointId, teamParams);
-      const { rows: uRows } = await this.pool.query(
-        `SELECT u.id, COALESCE(u.days_off, '[]') as days_off FROM users u
-          WHERE u.tenant_id=$1 AND u.is_active=true AND u.role IN ('master', 'admin')
-            AND u.dismissed_at IS NULL AND u.purged_at IS NULL${teamFilter}`,
-        teamParams,
-      );
-      userRows = uRows.map((r) => ({
-        id: r.id,
-        days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : r.days_off || [],
-      }));
-    }
-
-    if (userRows.length === 0) return { created: 0 };
-
-    // Generate entries for each day in range (only tomorrow and future — today and past preserved)
-    const tomorrow = new Date();
-    tomorrow.setHours(0, 0, 0, 0);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const start = new Date(dateFrom);
-    const end = new Date(dateTo);
-    let created = 0;
-
-    for (const userInfo of userRows) {
-      const uid = userInfo.id;
-      const userDaysOff: number[] = userInfo.days_off || [];
-      const cursor = new Date(start);
-      while (cursor <= end) {
-        const dateStr = cursor.toISOString().split('T')[0];
-
-        // Skip today and past days — keep existing entries unchanged
-        if (cursor < tomorrow) {
-          cursor.setDate(cursor.getDate() + 1);
-          continue;
-        }
-
-        const dayOfWeek = cursor.getDay(); // 0=Sun, 6=Sat
-
-        // Determine if working day based on weekDays array (if specified) + per-user days off
-        const weekDays: number[] = wm.week_days || [];
-        let isWorkDay = true;
-        if (weekDays.length > 0) {
-          isWorkDay = weekDays.includes(dayOfWeek);
-        }
-        // Per-user days off override
-        if (userDaysOff.includes(dayOfWeek)) {
-          isWorkDay = false;
-        }
-
-        // Delete existing entry for this user/date
-        await this.pool.query('DELETE FROM schedule_entries WHERE user_id=$1 AND date=$2 AND tenant_id=$3', [
-          uid,
-          dateStr,
-          tenantID,
-        ]);
-
-        // Insert new entry — в филиале сессии (167).
-        await this.pool.query(
-          `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id, point_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            uid,
-            dateStr,
-            isWorkDay ? wm.shift_start : null,
-            isWorkDay ? wm.shift_end : null,
-            !isWorkDay,
-            tenantID,
-            pointId,
-          ],
-        );
-        created++;
-
-        cursor.setDate(cursor.getDate() + 1);
+      let userSql = `SELECT u.id FROM users u WHERE u.tenant_id=$1 AND u.is_active=true
+        AND u.role IN ('master', 'admin') AND u.dismissed_at IS NULL AND u.purged_at IS NULL${teamFilter}`;
+      if (userId) {
+        // Preserve explicit single-person application within the tenant (167).
+        userSql = 'SELECT u.id FROM users u WHERE u.tenant_id=$1 AND u.id=$2';
+        teamParams.splice(1, teamParams.length - 1, userId);
       }
+      const { rows: users } = await client.query<{ id: string }>(`${userSql} ORDER BY u.id`, teamParams);
+      // Consistent lock order avoids overlapping group applications deadlocking each other.
+      for (const user of users) await lockAttendanceUser(client, tenantID, user.id);
+      const clock = await attendanceClock(client, timezone);
+      let created = 0;
+      for (const user of users) {
+        const { rows: people } = await client.query<{ days_off: number[] }>(
+          'SELECT days_off FROM users WHERE id=$1 AND tenant_id=$2',
+          [user.id, tenantID],
+        );
+        const daysOff = people[0]?.days_off ?? [];
+        for (
+          let instant = Date.parse(`${dateFrom}T00:00:00Z`);
+          instant <= Date.parse(`${dateTo}T00:00:00Z`);
+          instant += 86_400_000
+        ) {
+          const cursor = new Date(instant);
+          const date = cursor.toISOString().slice(0, 10);
+          if (date <= clock.today) continue;
+          // Calendar dates are not instants in the server timezone. All persisted weekday arrays are Sunday0.
+          const weekday = cursor.getUTCDay();
+          const working = (!wm.week_days?.length || wm.week_days.includes(weekday)) && !daysOff.includes(weekday);
+          const times = wm.day_times?.[weekday as keyof typeof wm.day_times];
+          const result = await client.query(
+            `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id, point_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
+               shift_start=EXCLUDED.shift_start, shift_end=EXCLUDED.shift_end,
+               is_day_off=EXCLUDED.is_day_off, point_id=EXCLUDED.point_id
+             WHERE COALESCE(schedule_entries.is_manual_override, false)=false
+               AND schedule_entries.actual_arrival IS NULL AND schedule_entries.late_status IS NULL
+               AND COALESCE(schedule_entries.late_minutes, 0)=0
+               AND COALESCE(schedule_entries.note, '') NOT IN ('Прогул', 'Больничный')`,
+            [
+              user.id,
+              date,
+              working ? (times?.shiftStart ?? wm.shift_start) : null,
+              working ? (times?.shiftEnd ?? wm.shift_end) : null,
+              !working,
+              tenantID,
+              pointId,
+            ],
+          );
+          created += result.rowCount ?? 0;
+        }
+      }
+      await client.query('COMMIT');
+      return { created };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    return { created };
   }
 
-  async updateWorkMode(id: string, tenantID: string, dto: any) {
-    const sets: string[] = [];
-    const vals: any[] = [];
-    let idx = 1;
-
-    if (dto.name !== undefined) {
-      sets.push(`name=$${idx++}`);
-      vals.push(dto.name);
+  async updateWorkMode(id: string, tenantID: string, dto: WorkModeMutation) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: previous } = await client.query<WorkModeRow>(
+        'SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        [id, tenantID],
+      );
+      if (!previous[0]) throw new NotFoundException({ message: 'Режим не найден' });
+      const fields = workModeFields(dto, previous[0]);
+      const { rows } = await client.query<WorkModeRow>(
+        `UPDATE work_modes SET name=$1, type=$2, work_days=$3, off_days=$4, week_days=$5::jsonb,
+           shift_start=$6, shift_end=$7, day_times=$8::jsonb WHERE id=$9 AND tenant_id=$10 RETURNING *`,
+        [
+          fields.name,
+          fields.type,
+          fields.work_days,
+          fields.off_days,
+          JSON.stringify(fields.week_days),
+          fields.shift_start,
+          fields.shift_end,
+          JSON.stringify(fields.day_times),
+          id,
+          tenantID,
+        ],
+      );
+      await client.query('COMMIT');
+      return mapWorkMode(rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-    if (dto.type !== undefined) {
-      sets.push(`type=$${idx++}`);
-      vals.push(dto.type);
-    }
-    if (dto.shiftStart !== undefined) {
-      sets.push(`shift_start=$${idx++}`);
-      vals.push(dto.shiftStart);
-    }
-    if (dto.shiftEnd !== undefined) {
-      sets.push(`shift_end=$${idx++}`);
-      vals.push(dto.shiftEnd);
-    }
-
-    if (sets.length === 0) return {};
-
-    vals.push(id, tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE work_modes SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Режим не найден' });
-    const r = rows[0];
-    return {
-      id: r.id,
-      tenantId: r.tenant_id,
-      name: r.name,
-      type: r.type,
-      workDays: r.work_days,
-      offDays: r.off_days,
-      weekDays: r.week_days || [],
-      shiftStart: r.shift_start,
-      shiftEnd: r.shift_end,
-    };
   }
 }

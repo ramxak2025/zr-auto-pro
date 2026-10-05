@@ -81,14 +81,14 @@ test('167: привязка истории — тот же порядок сви
 
 test('ensureShiftOpen: без агрегатов, филиал смены = филиал строки графика', () => {
   const from = schedule.indexOf('private async ensureShiftOpen(');
-  const to = schedule.indexOf('async create(tenantID: string, dto: any');
+  const to = schedule.indexOf('async create(');
   assert.ok(from > 0 && to > from, 'ensureShiftOpen / create не найдены');
   const body = stripComments(schedule.slice(from, to));
   assert.ok(!/MIN\(|MAX\(|HAVING/.test(body), 'ensureShiftOpen снова считает филиал агрегатом — min(uuid) в PG16 нет');
-  assert.ok(/VALUES \(\$1, \$2, \$3, now\(\), \$4\)/.test(body), 'филиал смены обязан идти параметром');
+  assert.ok(/VALUES \(\$1, \$2, \$3, \$4, \$5\)/.test(body), 'филиал смены обязан идти параметром');
   // Оба вызывающих передают филиал СТРОКИ (rows[0].point_id), а не актора.
   assert.equal(
-    (schedule.match(/ensureShiftOpen\([^)]*rows\[0\]\.point_id \?\? null\)/g) ?? []).length,
+    (schedule.match(/ensureShiftOpen\([^)]*rows\[0\]\.point_id \?\? null,[^)]*\)/g) ?? []).length,
     2,
     'create и update обязаны передавать филиал строки графика в ensureShiftOpen',
   );
@@ -101,7 +101,7 @@ test('график: чтение/запись по schedule_entries.point_id, с
   assert.ok(/pointFilterSql\('se', actorPointId\(actor\), params\)/.test(code), 'сетка месяца без фильтра по филиалу строки');
   assert.ok(/INSERT INTO schedule_entries \([^)]*point_id\)/.test(code), 'create не штампует филиал');
   assert.ok(/point_id\s*=\s*EXCLUDED\.point_id/.test(code), 'upsert не переносит день в филиал сессии');
-  assert.ok(/assertRowPointForWrite\(this\.pool, 'schedule_entries'/.test(code), 'update без гейта филиала');
+  assert.ok(/assertRowPointForWrite\(client, 'schedule_entries'/.test(code), 'update без гейта филиала');
   assert.ok(/DELETE FROM schedule_entries WHERE id=\$1 AND tenant_id=\$2\$\{pointFilter\}/.test(code), 'remove без гейта филиала');
   // applyWorkMode: команда филиала + штамп.
   assert.ok(/assignedToPointSql\('u', '\$1', pointId, teamParams\)/.test(code), 'applyWorkMode: «все мастера» обязаны быть командой филиала');

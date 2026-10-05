@@ -316,7 +316,7 @@ test('сейф остаётся тенантным и это обоснован�
 
 test('смена штампуется филиалом в момент открытия и режется им в ленте', () => {
   assert.ok(
-    /INSERT INTO shifts \(user_id, date, tenant_id, point_id\)/.test(shifts),
+    /INSERT INTO shifts \(user_id, date, tenant_id, point_id, opened_at\)/.test(shifts),
     'рабочая смена не штампуется филиалом',
   );
   assert.ok(/pointFilterSql\('s', actorPointId\(actor\), params\)/.test(shifts), 'лента смен не режется филиалом');
@@ -355,7 +355,7 @@ test('график: день строки режется своим филиал
     'upsert дня обязан переносить день в филиал сессии (последняя правка побеждает)',
   );
   assert.ok(
-    /assertRowPointForWrite\(this\.pool, 'schedule_entries'/.test(schedule),
+    /assertRowPointForWrite\(client, 'schedule_entries'/.test(schedule),
     'правка дня по id обязана стоять за гейтом филиала',
   );
   // Ни одного литерала филиала в SQL.

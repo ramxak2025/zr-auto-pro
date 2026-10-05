@@ -193,7 +193,7 @@ export default function MasterDashboard() {
 function MasterRankWidget({ userId }: { userId?: string }) {
   // Месяц рейтинга — текущий У АВТОСЕРВИСА (157): границы месяца уезжают на
   // сервер, а он режет сутки поясом тенанта.
-  const { month: tenantMonth } = useTenantCalendar();
+  const { month: tenantMonth, timeZone } = useTenantCalendar();
   const [selectedMonth] = useState(tenantMonth);
   const monthStart = `${selectedMonth}-01`;
   const monthEnd = (() => {
@@ -223,7 +223,7 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 
   // Use SHARED attendance utility — identical logic to RatingTab on schedule.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stats = calculateAttendanceStats((monthEntries as any[]) || []);
+  const stats = calculateAttendanceStats((monthEntries as any[]) || [], new Date(), timeZone);
   const ranked = masters
     .map((u) => {
       const s = stats[u.id] || emptyBreakdown();

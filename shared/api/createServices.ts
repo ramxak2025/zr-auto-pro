@@ -201,6 +201,7 @@ import type {
   DeleteAccountRequest,
   DeleteAccountResponse,
   PaginationParams,
+  ShiftsQuery,
   UsersQuery,
   ChecksParams,
   CarsQuery,
@@ -1623,7 +1624,7 @@ export function createStockMovementsApi(api: HttpClient) {
 
 export function createShiftsApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams) => api.get<Shift[]>('/shifts', { params }),
+    getAll: (params?: ShiftsQuery) => api.get<Shift[]>('/shifts', { params }),
     getMy: () => api.get<Shift[]>('/shifts/my'),
     open: (data?: Record<string, unknown>) => api.post<Shift>('/shifts/open', data),
     close: (id: string) => api.post<Shift>(`/shifts/${id}/close`),

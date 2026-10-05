@@ -6,10 +6,14 @@ import type { Shift } from '../../types';
 import { Card } from '../../ui/Card';
 import { Button } from '../../ui/Button';
 import { StatusPill } from '../../ui/Badge';
+import { useTenantTimezone } from '../../hooks/useTenantTimezone';
+import { formatTimeShort } from '../../../../shared/utils/formatters';
+import { invalidateAttendanceQueries } from '../../../../shared/utils/attendanceQueries';
 
 /** Открыть/закрыть свою смену (сотрудники; владельцу не показывается). */
 export default function ShiftControl() {
   const queryClient = useQueryClient();
+  const timeZone = useTenantTimezone();
   const { data: myShifts } = useQuery<Shift[]>({
     queryKey: ['shifts', 'my'],
     queryFn: async () => {
@@ -17,14 +21,13 @@ export default function ShiftControl() {
       return res.data;
     },
     staleTime: 10_000,
+    refetchInterval: 60_000,
   });
 
   const openShift = useMutation({
     mutationFn: () => shiftsApi.open(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['shifts'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      void invalidateAttendanceQueries(queryClient);
       toast.success('Смена открыта');
     },
     onError: (err: unknown) => toast.error(errorMessage(err)),
@@ -33,8 +36,7 @@ export default function ShiftControl() {
   const closeShift = useMutation({
     mutationFn: (id: string) => shiftsApi.close(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['shifts'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      void invalidateAttendanceQueries(queryClient);
       toast.success('Смена закрыта');
     },
     onError: (err: unknown) => toast.error(errorMessage(err)),
@@ -51,7 +53,7 @@ export default function ShiftControl() {
         </StatusPill>
         {currentShift && (
           <span className="truncate text-sm tabular-nums text-ink-3">
-            с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+            с {formatTimeShort(currentShift.openedAt, timeZone)}
           </span>
         )}
       </div>
