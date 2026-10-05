@@ -14,8 +14,15 @@ jest.mock(
 
 import type { ScheduleEntry, TodayEmployeeStatus } from '../../../../shared/types';
 import { getCellDot, getTodayStatusInfo, gridAttendanceCounts } from '../scheduleAttendance';
-import { scheduleCellOf, shortTime, todayStatusOf } from '../../../../frontend/src/components/company/scheduleStatus';
 import { aggregateAttendance } from '../../../../frontend/src/utils/employeePeriod';
+
+// Exercise the real web consumer through Jest's icon mock without making the
+// mobile TypeScript project depend on the frontend's installed UI packages.
+const { scheduleCellOf, shortTime, todayStatusOf } = jest.requireActual<{
+  scheduleCellOf(entry: ScheduleEntry | undefined, date: string, today: string): { kind: string; time?: string } | null;
+  shortTime(value?: string | null, timeZone?: string): string;
+  todayStatusOf(value: TodayEmployeeStatus): { label: string; tone: string };
+}>('../../../../frontend/src/components/company/scheduleStatus');
 
 const TODAY = '2026-10-06';
 function entry(fields: Partial<ScheduleEntry> = {}): ScheduleEntry {
