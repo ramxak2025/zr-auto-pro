@@ -40,6 +40,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { Text } from '../platform/Typography';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
@@ -157,9 +158,16 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
       style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.rowTopLine}>
-        <LinearGradient colors={avatar} style={styles.rowAvatar} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-          <Text style={styles.rowAvatarText}>{initials}</Text>
-        </LinearGradient>
+        <EmployeeAvatar
+          userId={master.masterId}
+          avatar={master.avatar}
+          style={styles.rowAvatar}
+          imageStyle={styles.rowAvatar}
+        >
+          <LinearGradient colors={avatar} style={styles.rowAvatar} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+            <Text style={styles.rowAvatarText}>{initials}</Text>
+          </LinearGradient>
+        </EmployeeAvatar>
 
         <View style={styles.rowNameCol}>
           <Text style={[styles.rowName, { color: palette.text.primary }]} numberOfLines={1}>

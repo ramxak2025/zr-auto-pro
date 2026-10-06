@@ -104,7 +104,7 @@ export class MotivationService {
       params.push(query.dateTo);
     }
     const { rows } = await this.pool.query(
-      `SELECT ma.*, u.full_name AS employee_name, p.name AS product_name, c.number AS check_number
+      `SELECT ma.*, u.full_name AS employee_name, u.avatar AS employee_avatar, p.name AS product_name, c.number AS check_number
          FROM motivation_accruals ma
          LEFT JOIN users u ON u.id = ma.employee_id
          LEFT JOIN products p ON p.id = ma.product_id
@@ -147,6 +147,7 @@ export class MotivationService {
       id: r.id,
       employeeId: r.employee_id ?? null,
       employeeName: r.employee_name ?? undefined,
+      employeeAvatar: r.employee_avatar ?? null,
       checkId: r.check_id,
       checkNumber: r.check_number ?? undefined,
       productId: r.product_id ?? null,

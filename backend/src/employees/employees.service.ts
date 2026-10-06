@@ -196,7 +196,7 @@ export class EmployeesService {
    */
   async getProfile(tenantID: string, employeeId: string, canSeeNotes = true) {
     const { rows } = await this.pool.query(
-      `SELECT id, full_name, role, hire_date, specializations, position_title, custom_title,
+      `SELECT id, full_name, role, avatar, hire_date, specializations, position_title, custom_title,
               monthly_kpi_revenue, monthly_kpi_checks, owner_notes, photo_url, whatsapp
          FROM users WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
       [employeeId, tenantID],
@@ -209,6 +209,7 @@ export class EmployeesService {
       id: r.id,
       fullName: r.full_name,
       role: r.role,
+      avatar: r.avatar,
       hireDate: r.hire_date,
       specializations: Array.isArray(r.specializations) ? r.specializations : [],
       positionTitle: r.position_title,

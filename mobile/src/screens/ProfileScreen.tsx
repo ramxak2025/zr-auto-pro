@@ -35,6 +35,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import IosScreenHeader from '../components/IosScreenHeader';
 import CachedImage from '../components/CachedImage';
+import EmployeeAvatar from '../components/EmployeeAvatar';
+import { invalidateEmployeeAvatarQueries } from '../utils/employeeAvatarQueries';
 import { KeyboardAwareView } from '../components/KeyboardAware';
 import DeleteAccountModal from '../components/DeleteAccountModal';
 import { Text } from '../platform/Typography';
@@ -51,9 +53,6 @@ import type { UpdateProfileRequest, ChangePasswordRequest, DeleteAccountResponse
 
 const QK_MINE = ['profile-change-request-mine'] as const;
 const QK_LIST = ['profile-change-requests'] as const;
-// User-list keys to refresh after an approval applies a name/phone/avatar change.
-const USER_LIST_KEYS = ['users', 'all-users', 'users-all', 'users-for-filter'];
-
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
   director: 'Владелец',
@@ -165,7 +164,6 @@ const RequestCard = React.memo(function RequestCard({
   const palette = useColors();
   const shadow = useShadow();
   const requester = request.requester;
-  const avatarUrl = getImageUrl(requester?.avatar);
   const initial = requester?.fullName?.charAt(0) || '?';
   const busy = busyAction !== null;
 
@@ -174,13 +172,16 @@ const RequestCard = React.memo(function RequestCard({
       style={[styles.requestCard, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.requesterRow}>
-        {avatarUrl ? (
-          <CachedImage source={{ uri: avatarUrl }} style={styles.requesterAvatar} />
-        ) : (
+        <EmployeeAvatar
+          userId={requester?.id}
+          avatar={requester?.avatar}
+          style={styles.requesterAvatar}
+          imageStyle={styles.requesterAvatar}
+        >
           <View style={[styles.requesterAvatar, styles.requesterAvatarFallback, { backgroundColor: palette.bg.muted }]}>
             <Text style={[styles.requesterInitial, { color: palette.text.secondary }]}>{initial}</Text>
           </View>
-        )}
+        </EmployeeAvatar>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.requesterName, { color: palette.text.primary }]} numberOfLines={1}>
             {requester?.fullName || 'Сотрудник'}
@@ -291,6 +292,7 @@ export default function ProfileScreen() {
         haptic('success');
         // Pull the canonical user (also refreshes the persisted cold-start copy).
         await refreshUser();
+        await invalidateEmployeeAvatarQueries(queryClient, user?.id);
         Alert.alert('Готово', 'Профиль обновлён.');
       } else {
         haptic('success');
@@ -342,12 +344,11 @@ export default function ProfileScreen() {
   const decideMutation = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'approve' | 'reject' }) =>
       action === 'approve' ? profileApi.approveChangeRequest(id) : profileApi.rejectChangeRequest(id),
-    onSuccess: (_res, vars) => {
+    onSuccess: async (res, vars) => {
       haptic('success');
       queryClient.invalidateQueries({ queryKey: QK_LIST });
       if (vars.action === 'approve') {
-        // An employee's name / phone / avatar changed — refresh the lists that show it.
-        USER_LIST_KEYS.forEach((k) => queryClient.invalidateQueries({ queryKey: [k] }));
+        await invalidateEmployeeAvatarQueries(queryClient, res.data.userId);
       }
     },
     onError: (err) => {
@@ -373,8 +374,6 @@ export default function ProfileScreen() {
   const avatarChanged = stagedAvatar !== null;
   const hasChanges = nameChanged || phoneChanged || avatarChanged;
   const canSave = hasChanges && !isLocked && !saveMutation.isPending;
-
-  const displayAvatar = getImageUrl(stagedAvatar ?? user?.avatar);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handlePickAvatar = useCallback(async () => {
@@ -490,15 +489,18 @@ export default function ProfileScreen() {
           {/* Avatar + identity */}
           <View style={styles.avatarBlock}>
             <View style={styles.avatarWrap}>
-              {displayAvatar ? (
-                <CachedImage source={{ uri: displayAvatar }} style={styles.avatarLarge} />
-              ) : (
+              <EmployeeAvatar
+                userId={user?.id}
+                avatar={stagedAvatar ?? user?.avatar}
+                style={styles.avatarLarge}
+                imageStyle={styles.avatarLarge}
+              >
                 <View
                   style={[styles.avatarLarge, styles.avatarFallback, { backgroundColor: palette.accent.primarySoft }]}
                 >
                   <Text style={[styles.avatarLargeText, { color: palette.accent.primaryText }]}>{initial}</Text>
                 </View>
-              )}
+              </EmployeeAvatar>
               <TouchableOpacity
                 style={[
                   styles.cameraBtn,

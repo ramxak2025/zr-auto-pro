@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
-import CachedImage from '../components/CachedImage';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -10,7 +10,6 @@ import { useColors } from '../contexts/ThemeContext';
 import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
-import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
@@ -515,7 +514,6 @@ export default function MoreScreen() {
     palette.mode === 'dark'
       ? (getBadgeColors('dark')[roleBadgeHue[roleKey] ?? 'green'] ?? roleBadgeColors.master)
       : roleBadgeColors[roleKey];
-  const avatarUrl = getImageUrl(user?.avatar);
 
   /**
    * Выход с ЧЕСТНЫМ предупреждением про офлайн-очередь. Неотправленный
@@ -670,16 +668,16 @@ export default function MoreScreen() {
               accessibilityLabel="Мой профиль"
             >
               <View style={styles.avatarWrap}>
-                {avatarUrl ? (
-                  <CachedImage
-                    source={{ uri: avatarUrl }}
-                    style={[styles.avatarImage, { borderColor: palette.border.subtle }]}
-                  />
-                ) : (
+                <EmployeeAvatar
+                  userId={user?.id}
+                  avatar={user?.avatar}
+                  style={styles.avatarImage}
+                  imageStyle={[styles.avatarImage, { borderColor: palette.border.subtle }]}
+                >
                   <View style={[styles.avatar, { backgroundColor: palette.accent.primarySoft }]}>
                     <Text style={[styles.avatarText, { color: palette.accent.primaryText }]}>{userInitial}</Text>
                   </View>
-                )}
+                </EmployeeAvatar>
               </View>
               <View style={{ flex: 1, gap: 4 }}>
                 <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>

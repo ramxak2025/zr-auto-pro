@@ -349,7 +349,7 @@ export class SalaryService {
             AND ${period('ch.date')}${checkPoint}
           GROUP BY ch.master_id
        )${touchedCte}
-       SELECT u.id as master_id, u.full_name as master_name,
+       SELECT u.id as master_id, u.full_name as master_name, u.avatar as master_avatar,
               COALESCE(h.salary_percent, u.salary_percent, 0) as salary_percent,
               COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent,
               COALESCE(svc.service_earnings, 0) as service_earnings,
@@ -616,6 +616,7 @@ export class SalaryService {
       return {
         masterId,
         masterName: r.master_name,
+        avatar: r.master_avatar ?? null,
         salaryPercent: parseFloat(r.salary_percent) || 0,
         productSalaryPercent: parseFloat(r.product_salary_percent) || 0,
         serviceEarnings: parseFloat(r.service_earnings) || 0,

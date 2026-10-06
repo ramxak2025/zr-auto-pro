@@ -3208,6 +3208,7 @@ export interface SalaryPayment {
 export interface MasterSalary {
   masterId: string;
   masterName: string;
+  avatar?: string | null;
   salaryPercent: number;
   productSalaryPercent?: number;
   serviceEarnings?: number;
@@ -3334,6 +3335,7 @@ export interface MotivationAccrual {
   /** Credited master (= checks.master_id). null if the user was later deleted. */
   employeeId?: string | null;
   employeeName?: string;
+  employeeAvatar?: string | null;
   checkId: string;
   checkNumber?: number;
   productId?: string | null;
@@ -3473,6 +3475,7 @@ export interface TodayEmployeeStatus {
   userId: string;
   fullName: string;
   role: string;
+  avatar?: string | null;
   isDayOff: boolean;
   shiftStart?: string | null;
   shiftEnd?: string | null;
@@ -3956,6 +3959,7 @@ export interface EmployeeProfile {
   monthlyKpiRevenue?: number | null;
   monthlyKpiChecks?: number | null;
   ownerNotes?: string | null;
+  avatar?: string | null;
   photoUrl?: string | null;
   whatsapp?: string | null;
 }

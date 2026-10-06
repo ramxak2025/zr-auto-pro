@@ -6,6 +6,7 @@ import { formatDayKey, timezoneLabel, timezoneOption } from '../../../shared/uti
 import { shiftsApi } from '../api/services';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -174,13 +175,18 @@ export default function ShiftAttendanceHistory({ currentMonth, onMonthChange }: 
                   key={shift.id}
                   style={[styles.row, index > 0 && styles.rowSeparator, { borderTopColor: palette.border.subtle }]}
                 >
-                  <View style={[styles.rowIcon, { backgroundColor: palette.bg.muted }]}>
+                  <EmployeeAvatar
+                    userId={shift.user?.id}
+                    avatar={shift.user?.avatar}
+                    style={[styles.rowIcon, { backgroundColor: palette.bg.muted, overflow: 'hidden' }]}
+                    imageStyle={{ width: '100%', height: '100%' }}
+                  >
                     <Ionicons
                       name={shift.closedAt ? 'checkmark-circle-outline' : 'time-outline'}
                       size={20}
                       color={palette.text.secondary}
                     />
-                  </View>
+                  </EmployeeAvatar>
                   <View style={styles.rowBody}>
                     <Text style={[styles.employee, { color: palette.text.primary }]}>
                       {shift.user?.fullName || 'Сотрудник'}
