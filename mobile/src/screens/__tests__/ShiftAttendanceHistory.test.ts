@@ -81,8 +81,10 @@ function todayHandler(node: React.ReactNode): (() => void) | undefined {
   return undefined;
 }
 
+type AvatarOrImageProps = React.ComponentProps<typeof EmployeeAvatar> & { source?: { uri?: string } };
+
 function imageUris(node: React.ReactNode): string[] {
-  if (!React.isValidElement<any>(node)) return [];
+  if (!React.isValidElement<AvatarOrImageProps>(node)) return [];
   if (node.type === EmployeeAvatar) return imageUris(EmployeeAvatar(node.props));
   const uri = node.props.source?.uri;
   return [...(uri ? [uri] : []), ...React.Children.toArray(node.props.children).flatMap(imageUris)];
