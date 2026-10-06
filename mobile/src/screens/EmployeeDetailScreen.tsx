@@ -75,6 +75,7 @@ import { ListSkeleton, Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useAuth } from '../contexts/AuthContext';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -371,6 +372,7 @@ export default function EmployeeDetailScreen() {
         palette={palette}
         fullName={profile.fullName || userRecord.fullName}
         roleLabel={roleLabels[profile.role] || profile.role}
+        avatar={profile.avatar ?? userRecord.avatar ?? null}
         photoUrl={profile.photoUrl ?? null}
         dismissedAt={userRecord.dismissedAt ?? null}
         purged={!!userRecord.purgedAt}
@@ -409,6 +411,7 @@ export default function EmployeeDetailScreen() {
     fullName: profile.fullName,
     className,
     initials,
+    avatar: profile.avatar ?? userRecord?.avatar ?? null,
     photoUrl: profile.photoUrl ?? null,
     rank: rankInfo,
     rings: {
@@ -572,6 +575,7 @@ export default function EmployeeDetailScreen() {
           name={profile.fullName}
           className={className}
           initials={initials}
+          avatar={profile.avatar ?? userRecord?.avatar ?? null}
           photoUrl={profile.photoUrl ?? null}
           rank={rankInfo}
           rankProgress={rankProgress}
@@ -846,6 +850,7 @@ function DismissedReadOnly({
   palette,
   fullName,
   roleLabel,
+  avatar,
   photoUrl,
   dismissedAt,
   purged,
@@ -855,6 +860,7 @@ function DismissedReadOnly({
   palette: ReturnType<typeof useColors>;
   fullName: string;
   roleLabel: string;
+  avatar?: string | null;
   photoUrl: string | null;
   dismissedAt: string | null;
   purged: boolean;
@@ -870,17 +876,18 @@ function DismissedReadOnly({
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.dismissedHeadRow}>
-            <View style={styles.dismissedAvatarWrap}>
-              {photoUrl ? (
-                <PhotoCircle url={photoUrl} size={64} />
-              ) : (
-                <View style={[styles.dismissedAvatar, { backgroundColor: palette.bg.muted }]}>
-                  <Text style={[styles.dismissedInitials, { color: palette.text.secondary }]}>
-                    {getInitials(fullName)}
-                  </Text>
-                </View>
-              )}
-            </View>
+            <EmployeeAvatar
+              avatar={avatar}
+              photoUrl={photoUrl}
+              style={styles.dismissedAvatarWrap}
+              imageStyle={{ width: 64, height: 64, borderRadius: 32 }}
+            >
+              <View style={[styles.dismissedAvatar, { backgroundColor: palette.bg.muted }]}>
+                <Text style={[styles.dismissedInitials, { color: palette.text.secondary }]}>
+                  {getInitials(fullName)}
+                </Text>
+              </View>
+            </EmployeeAvatar>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.dismissedName, { color: palette.text.primary }]} numberOfLines={2}>
                 {fullName || '—'}
@@ -937,6 +944,7 @@ function Hero({
   name,
   className,
   initials,
+  avatar,
   photoUrl,
   rank,
   rankProgress,
@@ -945,6 +953,7 @@ function Hero({
   name: string;
   className: string;
   initials: string;
+  avatar?: string | null;
   photoUrl: string | null;
   rank: ReturnType<typeof rankFromLifetime>;
   rankProgress: number;
@@ -954,13 +963,16 @@ function Hero({
     <LinearGradient colors={rank.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
       <View style={styles.heroTopRow}>
         <View style={styles.heroAvatarWrap}>
-          {photoUrl ? (
-            <PhotoCircle url={photoUrl} size={80} />
-          ) : (
+          <EmployeeAvatar
+            avatar={avatar}
+            photoUrl={photoUrl}
+            style={styles.heroAvatarWrap}
+            imageStyle={{ width: 80, height: 80, borderRadius: 40 }}
+          >
             <View style={[styles.heroAvatar, { backgroundColor: 'rgba(255,255,255,0.18)' }]}>
               <Text style={styles.heroInitials}>{initials}</Text>
             </View>
-          )}
+          </EmployeeAvatar>
           <View style={[styles.heroAvatarRing, { borderColor: rank.accent }]} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -994,22 +1006,6 @@ function Hero({
         <Text style={styles.rankProgressLabel}>{`${Math.round(rankProgress * 100)}%`}</Text>
       </View>
     </LinearGradient>
-  );
-}
-
-function PhotoCircle({ url, size }: { url: string; size: number }) {
-  return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }}>
-      <ExpoImage
-        source={{ uri: url }}
-        style={{ width: size, height: size }}
-        contentFit="cover"
-        transition={200}
-        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
-        placeholderContentFit="cover"
-        cachePolicy="memory-disk"
-      />
-    </View>
   );
 }
 

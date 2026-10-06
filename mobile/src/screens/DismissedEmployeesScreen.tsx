@@ -33,7 +33,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import CachedImage from '../components/CachedImage';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
@@ -45,7 +45,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import { usersApi } from '../api/services';
-import { getImageUrl } from '../api/axios';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, spacing } from '../theme';
 import type { User } from '../../../shared/types';
@@ -123,7 +122,6 @@ interface RowProps {
 }
 const DismissedRow = React.memo(function DismissedRow({ user, palette, onRestore, onPurge, busy }: RowProps) {
   const avatarColors = getAvatarColors(user.fullName);
-  const avatarUrl = getImageUrl(user.avatar);
   const days = daysSince(user.dismissedAt);
   const hint = days !== null ? restoreHint(days) : null;
 
@@ -131,19 +129,11 @@ const DismissedRow = React.memo(function DismissedRow({ user, palette, onRestore
     <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       {/* Avatar (desaturated — dismissed) */}
       <View style={styles.avatarWrap}>
-        {avatarUrl ? (
-          <CachedImage
-            source={{ uri: avatarUrl }}
-            style={[styles.avatar, { backgroundColor: palette.bg.muted }]}
-            resizeMode="cover"
-            variant="thumb"
-            recyclingKey={user.id}
-          />
-        ) : (
+        <EmployeeAvatar userId={user.id} avatar={user.avatar} style={styles.avatarWrap} imageStyle={styles.avatar}>
           <LinearGradient colors={avatarColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatar}>
             <Text style={styles.avatarInitials}>{getInitials(user.fullName)}</Text>
           </LinearGradient>
-        )}
+        </EmployeeAvatar>
       </View>
 
       {/* Name + role + dismissed meta */}

@@ -12,6 +12,7 @@ import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser, isPlatformRole } from '../common/auth-cache';
+import { ttlCache } from '../common/ttl-cache';
 import { DEFAULT_OWNER_SHARE_PERCENT } from '../platform-managers/owner-share';
 import { PushService } from '../push/push.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
@@ -144,6 +145,7 @@ export class ProfileService {
     if (isOwner) {
       await this.applyProfileChanges(this.pool, self.id, diff, self.tenant_id);
       invalidateAuthUser(self.id);
+      ttlCache.invalidatePrefix(`employee:${self.tenant_id}:${self.id}`);
       return { status: 'applied' as const, applied: true, user: await this.fetchUser(self.id) };
     }
 
@@ -277,6 +279,7 @@ export class ProfileService {
     }
 
     invalidateAuthUser(req.user_id);
+    ttlCache.invalidatePrefix(`employee:${req.tenant_id}:${req.user_id}`);
     void this.notifyRequesterDecision(req.user_id, req.tenant_id, id, 'approved');
     return this.fetchRequestById(id, user.tenantID);
   }

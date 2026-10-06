@@ -38,7 +38,6 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -46,6 +45,7 @@ import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import type { SemanticPalette } from '../theme/palette';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -233,8 +233,10 @@ const BoardCard = React.memo(function BoardCard({
               {/* 155: кружки 32pt с ФОТО сотрудника (users.avatar — URL/data-URI),
                   фолбэк — прежние инициалы. До 4 штук, дальше «+N». */}
               {assignees.slice(0, 4).map((a) => (
-                <View
+                <EmployeeAvatar
                   key={a.id}
+                  userId={a.id}
+                  avatar={a.avatar}
                   style={[
                     styles.assigneeCircle,
                     {
@@ -242,17 +244,14 @@ const BoardCard = React.memo(function BoardCard({
                       borderColor: palette.bg.card,
                     },
                   ]}
+                  imageStyle={styles.assigneeAvatar}
                 >
-                  {a.avatar ? (
-                    <Image source={{ uri: a.avatar }} style={styles.assigneeAvatar} contentFit="cover" />
-                  ) : (
-                    <Text
-                      style={[styles.assigneeInitials, { color: isDark ? colors.primary[300] : colors.primary[700] }]}
-                    >
-                      {initials(a.fullName)}
-                    </Text>
-                  )}
-                </View>
+                  <Text
+                    style={[styles.assigneeInitials, { color: isDark ? colors.primary[300] : colors.primary[700] }]}
+                  >
+                    {initials(a.fullName)}
+                  </Text>
+                </EmployeeAvatar>
               ))}
               {assignees.length > 4 && (
                 <Text style={[styles.assigneeMore, { color: palette.text.tertiary }]}>+{assignees.length - 4}</Text>

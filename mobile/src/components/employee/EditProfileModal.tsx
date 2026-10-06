@@ -37,6 +37,7 @@ import { Image as ExpoImage } from 'expo-image';
 import { employeesApi } from '../../api/services';
 import ModalBlurBackdrop from '../ModalBlurBackdrop';
 import { Text } from '../../platform/Typography';
+import EmployeeAvatar from '../EmployeeAvatar';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
 import type { EmployeeProfile } from '../../../../shared/types';
@@ -212,13 +213,15 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
                   <View
                     style={[styles.photoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
                   >
-                    {photoUrl ? (
-                      <View style={styles.photoCircle}>
-                        <NetImage uri={photoUrl} />
-                      </View>
-                    ) : (
+                    <EmployeeAvatar
+                      userId={profile.id}
+                      avatar={profile.avatar}
+                      photoUrl={photoUrl}
+                      style={styles.photoCircle}
+                      imageStyle={{ width: '100%', height: '100%', borderRadius: 30 }}
+                    >
                       <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
-                    )}
+                    </EmployeeAvatar>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.photoBtn, { color: colors.primary[600] }]}>

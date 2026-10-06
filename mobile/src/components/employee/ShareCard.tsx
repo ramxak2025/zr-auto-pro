@@ -20,19 +20,21 @@
  * the on-screen view stays at a comfortable 1:1 device size.
  */
 import React from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Text } from '../../platform/Typography';
 import { colors } from '../../theme';
 import { ActivityRings } from './ActivityRings';
 import type { RankInfo } from './rank';
 import { rankLabelUpper } from './rank';
+import EmployeeAvatar from '../EmployeeAvatar';
 
 export interface ShareCardData {
   fullName: string;
   className: string;
   initials: string;
   photoUrl?: string | null;
+  avatar?: string | null;
   rank: RankInfo;
   rings: {
     efficiency: number;
@@ -62,15 +64,10 @@ interface ShareCardProps {
 }
 
 export const ShareCard = React.forwardRef<View, ShareCardProps>(({ data }, ref) => {
-  const { rank, rings, trophies, streakDays, fullName, className, initials, photoUrl } = data;
+  const { rank, rings, trophies, streakDays, fullName, className, initials, photoUrl, avatar } = data;
   return (
     <View ref={ref} collapsable={false} style={styles.cardOuter}>
-      <LinearGradient
-        colors={rank.gradient}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.card}
-      >
+      <LinearGradient colors={rank.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.card}>
         {/* subtle radial-ish overlay */}
         <View style={styles.overlay} pointerEvents="none" />
 
@@ -82,13 +79,11 @@ export const ShareCard = React.forwardRef<View, ShareCardProps>(({ data }, ref) 
 
         {/* Avatar */}
         <View style={styles.avatarWrap}>
-          {photoUrl ? (
-            <Image source={{ uri: photoUrl }} style={styles.avatarImg} />
-          ) : (
+          <EmployeeAvatar avatar={avatar} photoUrl={photoUrl} style={styles.avatarImg} imageStyle={styles.avatarImg}>
             <View style={[styles.avatarImg, styles.avatarLetters, { backgroundColor: 'rgba(255,255,255,0.18)' }]}>
               <Text style={styles.avatarInitials}>{initials}</Text>
             </View>
-          )}
+          </EmployeeAvatar>
           <View style={[styles.avatarRing, { borderColor: rank.accent }]} />
         </View>
 

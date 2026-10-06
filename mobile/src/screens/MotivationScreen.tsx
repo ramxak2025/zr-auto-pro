@@ -48,6 +48,7 @@ import CachedImage from '../components/CachedImage';
 import ProductPickerModal from '../components/ProductPickerModal';
 import { motivationApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { Text } from '../platform/Typography';
@@ -729,9 +730,14 @@ const AccrualRow = React.memo(function AccrualRow({ accrual, palette }: AccrualR
   const initials = getInitials(accrual.employeeName);
   return (
     <View style={[styles.accrualRow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      <View style={[styles.accrualAvatar, { backgroundColor: palette.accent.primarySoft }]}>
+      <EmployeeAvatar
+        userId={accrual.employeeId ?? undefined}
+        avatar={accrual.employeeAvatar}
+        style={[styles.accrualAvatar, { backgroundColor: palette.accent.primarySoft }]}
+        imageStyle={styles.accrualAvatar}
+      >
         <Text style={[styles.accrualAvatarText, { color: palette.accent.primaryText }]}>{initials}</Text>
-      </View>
+      </EmployeeAvatar>
       <View style={styles.accrualInfo}>
         <View style={styles.accrualTopRow}>
           <Text style={[styles.accrualName, { color: palette.text.primary }]} numberOfLines={1}>

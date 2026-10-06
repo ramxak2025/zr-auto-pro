@@ -26,6 +26,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -290,6 +291,7 @@ function CheckBadge({ size = 18, color = colors.primary[600] }: { size?: number;
 interface EmployeePickerRowProps {
   id: string;
   fullName: string;
+  avatar?: string | null;
   active: boolean;
   /** Round 16 #4б-хвост — статус сотрудника для бейджа в строке пикера. */
   status?: 'inactive' | 'dismissed';
@@ -299,6 +301,7 @@ interface EmployeePickerRowProps {
 const EmployeePickerRow = React.memo(function EmployeePickerRow({
   id,
   fullName,
+  avatar,
   active,
   status,
   onPick,
@@ -313,11 +316,16 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
       ]}
       onPress={() => onPick(id, fullName)}
     >
-      <View style={[styles.employeeAvatar, palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft }]}>
+      <EmployeeAvatar
+        userId={id}
+        avatar={avatar}
+        style={[styles.employeeAvatar, palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft }]}
+        imageStyle={styles.employeeAvatar}
+      >
         <Text style={[styles.employeeAvatarText, palette.mode === 'dark' && { color: palette.accent.primaryText }]}>
           {fullName?.charAt(0) || '?'}
         </Text>
-      </View>
+      </EmployeeAvatar>
       <Text
         style={[
           styles.employeeOptionText,
@@ -1486,6 +1494,7 @@ export default function CashFlowScreen() {
                   key={item.id}
                   id={item.id}
                   fullName={item.fullName}
+                  avatar={item.avatar}
                   active={employeeId === item.id}
                   status={item.dismissedAt ? 'dismissed' : item.isActive ? undefined : 'inactive'}
                   onPick={pickEmployee}

@@ -292,6 +292,7 @@ export class ScheduleService {
       userId: r.user_id,
       fullName: r.full_name,
       role: r.role,
+      avatar: r.avatar,
       isDayOff: r.is_day_off || false,
       shiftStart: r.shift_start,
       shiftEnd: r.shift_end,

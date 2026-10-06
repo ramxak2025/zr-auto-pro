@@ -33,6 +33,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { planningApi, usersApi } from '../api/services';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -533,11 +534,16 @@ export default function PlanningScreen() {
                       activeOpacity={0.65}
                       onPress={() => openComp(u)}
                     >
-                      <View style={[styles.compAvatar, { backgroundColor: palette.accent.primarySoft }]}>
+                      <EmployeeAvatar
+                        userId={u.id}
+                        avatar={u.avatar}
+                        style={[styles.compAvatar, { backgroundColor: palette.accent.primarySoft }]}
+                        imageStyle={styles.compAvatar}
+                      >
                         <Text style={[styles.compAvatarText, { color: palette.accent.primaryText }]}>
                           {initials(u.fullName)}
                         </Text>
-                      </View>
+                      </EmployeeAvatar>
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={[styles.compName, { color: palette.text.primary }]} numberOfLines={1}>
                           {u.fullName}

@@ -47,6 +47,7 @@ import {
 } from '../api/services';
 import { formatInstallmentMoney, dueLabel } from '../components/installments/installmentUi';
 import { getImageUrl } from '../api/axios';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useThemeMode, useColors } from '../contexts/ThemeContext';
@@ -1320,8 +1321,10 @@ function OnShiftSnapshot() {
       )}
       <View style={styles.avatarsRow}>
         {visible.map((s, idx) => (
-          <View
+          <EmployeeAvatar
             key={s.userId}
+            userId={s.userId}
+            avatar={s.avatar}
             style={[
               styles.miniAvatar,
               {
@@ -1331,6 +1334,7 @@ function OnShiftSnapshot() {
                 zIndex: 10 - idx,
               },
             ]}
+            imageStyle={{ width: '100%', height: '100%', borderRadius: 12 }}
           >
             <Text style={styles.miniAvatarText}>
               {/* `fullName` is typed as required `string`, but the API
@@ -1344,7 +1348,7 @@ function OnShiftSnapshot() {
                 .slice(0, 2)
                 .toUpperCase()}
             </Text>
-          </View>
+          </EmployeeAvatar>
         ))}
         {more > 0 && (
           <View
@@ -4308,9 +4312,16 @@ function MasterDashboard() {
       <AnimatedCard index={0}>
         <LinearGradient colors={[colors.primary[600], colors.primary[700]]} style={styles.profileCard}>
           <View style={styles.profileRow}>
-            <View style={styles.profileAvatar}>
-              <Text style={styles.profileInitials}>{initials}</Text>
-            </View>
+            <EmployeeAvatar
+              userId={user?.id}
+              avatar={user?.avatar}
+              style={styles.profileAvatar}
+              imageStyle={styles.profileAvatar}
+            >
+              <View style={styles.profileAvatar}>
+                <Text style={styles.profileInitials}>{initials}</Text>
+              </View>
+            </EmployeeAvatar>
             <View style={{ flex: 1 }}>
               <Text style={styles.profileGreeting}>{getGreeting()}</Text>
               <Text style={styles.profileName} numberOfLines={1}>

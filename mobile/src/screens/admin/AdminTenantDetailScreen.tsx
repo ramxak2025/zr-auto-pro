@@ -69,6 +69,7 @@ import {
 import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
 import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
+import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
@@ -877,7 +878,14 @@ export default function AdminTenantDetailScreen() {
                     }}
                     style={[styles.userRow, surface.card]}
                   >
-                    <InitialAvatar name={u.fullName} palette={palette} size={38} />
+                    <EmployeeAvatar
+                      userId={u.id}
+                      avatar={u.avatar}
+                      style={{ width: 38, height: 38, borderRadius: 19, overflow: 'hidden' }}
+                      imageStyle={{ width: 38, height: 38, borderRadius: 19 }}
+                    >
+                      <InitialAvatar name={u.fullName} palette={palette} size={38} />
+                    </EmployeeAvatar>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
                         {u.fullName}

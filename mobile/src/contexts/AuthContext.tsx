@@ -1,7 +1,7 @@
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 // Same alias style as CheckCreateScreen — expo-image is cross-platform, and
@@ -56,6 +56,7 @@ import {
   type SessionEpochRuntime,
 } from './authSessionRuntime';
 import { createAuthSessionStorage } from './authSessionStorage';
+import { createForegroundProfileRefreshController } from './foregroundProfileRefresh';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 import type { LoginPointOption } from '../../../shared/api/types';
 
@@ -771,6 +772,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   if (!sessionRuntimeRef.current) sessionRuntimeRef.current = createSessionEpochRuntime();
   const sessionRuntime = sessionRuntimeRef.current;
   const recoveryAttemptRef = useRef<Promise<void> | null>(null);
+  const foregroundProfileRefreshRef = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
+  const foregroundProfileInputsRef = useRef<{
+    loading: boolean;
+    token: string | null;
+    user: User | null;
+    refreshUser: () => Promise<void>;
+  } | null>(null);
   const recoveryWakeQueuedRef = useRef(false);
   const recoveryForceQueuedRef = useRef(false);
   const recoveryBackoffRef = useRef(createSessionRecoveryBackoff(SESSION_RECOVERY_BACKOFF_MS));
@@ -1269,18 +1277,48 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
 
   const refreshUser = useCallback(async () => {
     const refreshEpoch = sessionRuntime.capture();
-    try {
-      const res = await authApi.me();
-      const fresh = res.data as User;
-      await sessionRuntime.commit(refreshEpoch, async (isCurrent) => {
-        if (!isCurrent()) return;
-        setUser(fresh);
-        await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
-      });
-    } catch {
-      // ignore — a transient failure keeps the current session intact
-    }
+    const currentFlight = foregroundProfileRefreshRef.current;
+    if (currentFlight?.epoch === refreshEpoch) return currentFlight.promise;
+    const flight = { epoch: refreshEpoch, promise: Promise.resolve() };
+    const work = (async () => {
+      try {
+        const res = await authApi.me();
+        const fresh = res.data as User;
+        await sessionRuntime.commit(refreshEpoch, async (isCurrent) => {
+          if (!isCurrent()) return;
+          setUser(fresh);
+          await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+        });
+      } catch {
+        // A transient failure keeps the cached session; foreground will retry.
+      } finally {
+        if (foregroundProfileRefreshRef.current === flight) foregroundProfileRefreshRef.current = null;
+      }
+    })();
+    flight.promise = work;
+    foregroundProfileRefreshRef.current = flight;
+    return work;
   }, [isImpersonating, sessionRuntime, token]);
+
+  foregroundProfileInputsRef.current = { loading, token, user, refreshUser };
+
+  // Cached profiles are rendered before the single cold-start /auth/me call.
+  // If that call fails, retry the current user's own profile on a genuine
+  // foreground transition, using the same epoch-guarded refresh path as the
+  // explicit profile refresh. A short throttle and shared in-flight promise
+  // collapse rapid AppState events without clearing a valid offline cache.
+  useEffect(() => {
+    const controller = createForegroundProfileRefreshController({
+      getEpoch: () => sessionRuntime.capture(),
+      canRefresh: () => {
+        const current = foregroundProfileInputsRef.current;
+        return !!current && !current.loading && !!current.token && !!current.user;
+      },
+      refresh: () => foregroundProfileInputsRef.current?.refreshUser() ?? Promise.resolve(),
+    });
+    const subscription = AppState.addEventListener('change', controller.onAppState);
+    return () => subscription.remove();
+  }, [sessionRuntime]);
 
   const logout = useCallback(async () => {
     const logoutEpoch = beginSessionTransition();

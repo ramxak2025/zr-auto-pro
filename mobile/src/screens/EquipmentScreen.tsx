@@ -57,6 +57,8 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 
 import CachedImage from '../components/CachedImage';
+import EmployeeAvatar from '../components/EmployeeAvatar';
+import { resolveEquipmentEmployeeIdentity } from './equipmentEmployeeIdentity';
 import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
@@ -431,9 +433,13 @@ function EmployeeCard({ emp, cardWidth, onPress }: { emp: any; cardWidth: number
         },
       ]}
     >
-      {emp.avatar ? (
-        <CachedImage source={{ uri: emp.avatar }} style={StyleSheet.absoluteFillObject as any} resizeMode="cover" />
-      ) : (
+      <EmployeeAvatar
+        userId={emp.userId}
+        avatar={emp.avatar}
+        photoUrl={emp.photoUrl}
+        style={StyleSheet.absoluteFillObject}
+        imageStyle={StyleSheet.absoluteFillObject}
+      >
         <LinearGradient
           colors={[colors.primary[500], colors.primary[700]] as [string, string]}
           start={{ x: 0, y: 0 }}
@@ -444,7 +450,7 @@ function EmployeeCard({ emp, cardWidth, onPress }: { emp: any; cardWidth: number
             <Text style={styles.initialsText}>{initials}</Text>
           </View>
         </LinearGradient>
-      )}
+      </EmployeeAvatar>
 
       <LinearGradient
         colors={['rgba(29,78,216,0.30)', 'rgba(0,0,0,0.00)']}
@@ -647,30 +653,30 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
       }}
     >
       <View style={[styles.empHeader, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-        {emp.avatar ? (
-          <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatar} />
-        ) : (
-          <View
-            style={[
-              styles.empAvatar,
-              {
-                backgroundColor: palette.mode === 'dark' ? palette.accent.primarySoft : colors.primary[100],
-                alignItems: 'center',
-                justifyContent: 'center',
-              },
-            ]}
+        <EmployeeAvatar
+          userId={emp.userId}
+          avatar={emp.avatar}
+          style={[
+            styles.empAvatar,
+            {
+              backgroundColor: palette.mode === 'dark' ? palette.accent.primarySoft : colors.primary[100],
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+            },
+          ]}
+          imageStyle={styles.empAvatar}
+        >
+          <Text
+            style={{
+              fontSize: fontSize.xl,
+              fontWeight: fontWeight.bold,
+              color: palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700],
+            }}
           >
-            <Text
-              style={{
-                fontSize: fontSize.xl,
-                fontWeight: fontWeight.bold,
-                color: palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700],
-              }}
-            >
-              {getInitials(emp.fullName)}
-            </Text>
-          </View>
-        )}
+            {getInitials(emp.fullName)}
+          </Text>
+        </EmployeeAvatar>
         <View style={{ flex: 1 }}>
           <Text style={[styles.empName, { color: palette.text.primary }]}>{emp.fullName}</Text>
           <Text style={[styles.empStats, { color: palette.text.secondary }]}>
@@ -1819,9 +1825,18 @@ export default function EquipmentScreen() {
 export function EquipmentEmployeeScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const palette = useColors();
-  const emp = route.params?.emp;
+  const routeEmp = route.params?.emp;
+  const { data: currentEmployeeSummary = [] } = useQuery({
+    queryKey: ['eq-summary'],
+    queryFn: async () => (await equipmentApi.getSummary()).data,
+    enabled: !!routeEmp?.userId && user?.role !== 'master',
+    staleTime: 5 * 60_000,
+  });
+  const emp = routeEmp
+    ? resolveEquipmentEmployeeIdentity(routeEmp, currentEmployeeSummary as { userId: string; avatar?: string | null }[])
+    : null;
   const canEdit = hasPermission('equipment_manage');
 
   if (!emp) {

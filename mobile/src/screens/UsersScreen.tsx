@@ -11,14 +11,13 @@ import {
   Alert,
   Switch,
 } from 'react-native';
-import CachedImage from '../components/CachedImage';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { usersApi, productsApi, uploadsApi } from '../api/services';
 import { useRoles } from '../hooks/useRoles';
-import { getImageUrl } from '../api/axios';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -100,7 +99,6 @@ interface UserCardProps {
   canDelete: boolean;
   badge: { bg: string; text: string };
   roleLabel: string;
-  avatarUrl?: string | null;
   onEdit: (user: User) => void;
   onCommissions: (user: User) => void;
   onAvatarChange: (userId: string) => void;
@@ -113,7 +111,6 @@ const UserCard = React.memo(function UserCard({
   canDelete,
   badge,
   roleLabel,
-  avatarUrl,
   onEdit,
   onCommissions,
   onAvatarChange,
@@ -128,18 +125,16 @@ const UserCard = React.memo(function UserCard({
     >
       <TouchableOpacity style={styles.userRow} onPress={() => onEdit(user)} activeOpacity={0.7}>
         <View style={styles.avatarWrap}>
-          {avatarUrl ? (
-            <CachedImage
-              source={{ uri: avatarUrl }}
-              style={[styles.avatarImage, { backgroundColor: palette.bg.muted }]}
-              variant="thumb"
-              recyclingKey={user.id}
-            />
-          ) : (
+          <EmployeeAvatar
+            userId={user.id}
+            avatar={user.avatar}
+            style={styles.avatarImage}
+            imageStyle={styles.avatarImage}
+          >
             <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
               <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
             </View>
-          )}
+          </EmployeeAvatar>
           {isDirectorOrSuperadmin && (
             <TouchableOpacity
               style={styles.avatarCameraBtn}
@@ -610,7 +605,6 @@ export default function UsersScreen() {
                 canDelete={canDelete}
                 badge={badge}
                 roleLabel={roleLabels[user.role] || user.role}
-                avatarUrl={getImageUrl(user.avatar)}
                 onEdit={openEdit}
                 onCommissions={openCommissions}
                 onAvatarChange={handleAvatarChange}

@@ -10,6 +10,7 @@ import {
 } from './apiHosts';
 import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
+import { resolveImageUrl } from './imageUrl';
 
 // API URL: hardcoded production server, fallback to dev server
 function getApiBaseUrl(): string {
@@ -741,10 +742,7 @@ export const SERVER_URL = API_BASE_URL.replace(/\/api\/?$/, '');
  * прежнее байт-в-байт.
  */
 export function getImageUrl(path?: string | null): string | undefined {
-  if (!path) return undefined;
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  const origin = activeBaseUrl.replace(/\/api\/?$/, '');
-  return `${origin}${path.startsWith('/') ? '' : '/'}${path}`;
+  return resolveImageUrl(path, activeBaseUrl);
 }
 
 // Budget for ordinary JSON requests. The server answers in ~0.4s, but the

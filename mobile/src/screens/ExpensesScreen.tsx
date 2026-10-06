@@ -63,6 +63,7 @@ import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -2000,11 +2001,16 @@ export default function ExpensesScreen() {
                 },
               ]}
             >
-              <View style={[styles.employeeAvatar, { backgroundColor: palette.bg.muted }]}>
+              <EmployeeAvatar
+                userId={emp.id}
+                avatar={emp.avatar}
+                style={[styles.employeeAvatar, { backgroundColor: palette.bg.muted }]}
+                imageStyle={styles.employeeAvatar}
+              >
                 <Text style={[styles.employeeAvatarText, { color: palette.text.secondary }]}>
                   {emp.fullName?.charAt(0) || '?'}
                 </Text>
-              </View>
+              </EmployeeAvatar>
               <View style={{ flex: 1 }}>
                 <Text
                   style={[

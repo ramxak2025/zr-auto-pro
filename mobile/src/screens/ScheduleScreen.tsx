@@ -45,6 +45,7 @@ import PointIndicator from '../components/PointIndicator';
 import AnimatedCard from '../components/AnimatedCard';
 import QueryErrorState from '../components/QueryErrorState';
 import EmptyState from '../components/EmptyState';
+import EmployeeAvatar from '../components/EmployeeAvatar';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
@@ -1259,14 +1260,21 @@ function GridTab() {
                     ]}
                   >
                     <View style={styles.gridNameInner}>
-                      <LinearGradient
-                        colors={avatarColors as [string, string]}
+                      <EmployeeAvatar
+                        userId={u.id}
+                        avatar={u.avatar}
                         style={styles.gridAvatar}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
+                        imageStyle={styles.gridAvatar}
                       >
-                        <Text style={styles.gridAvatarText}>{getInitials(u.fullName)}</Text>
-                      </LinearGradient>
+                        <LinearGradient
+                          colors={avatarColors as [string, string]}
+                          style={styles.gridAvatar}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                        >
+                          <Text style={styles.gridAvatarText}>{getInitials(u.fullName)}</Text>
+                        </LinearGradient>
+                      </EmployeeAvatar>
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text
                           style={[styles.gridName, { color: palette.text.primary }]}
@@ -2642,14 +2650,21 @@ function SettingsTab() {
               <AnimatedCard key={u.id} index={idx}>
                 <View style={[styles.daysOffCard, buildShadow(palette), { backgroundColor: palette.bg.card }]}>
                   <View style={styles.daysOffHeader}>
-                    <LinearGradient
-                      colors={avatarColors as [string, string]}
+                    <EmployeeAvatar
+                      userId={u.id}
+                      avatar={u.avatar}
                       style={styles.daysOffAvatar}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
+                      imageStyle={styles.daysOffAvatar}
                     >
-                      <Text style={styles.daysOffAvatarText}>{getInitials(u.fullName)}</Text>
-                    </LinearGradient>
+                      <LinearGradient
+                        colors={avatarColors as [string, string]}
+                        style={styles.daysOffAvatar}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                      >
+                        <Text style={styles.daysOffAvatarText}>{getInitials(u.fullName)}</Text>
+                      </LinearGradient>
+                    </EmployeeAvatar>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.daysOffName, { color: palette.text.primary }]}>{u.fullName}</Text>
                       <Text style={[styles.daysOffCount, { color: palette.text.tertiary }]}>

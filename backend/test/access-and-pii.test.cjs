@@ -146,6 +146,7 @@ test('РАНТАЙМ: профиль коллеги закрыт, свой — �
               id: 'emp-1',
               full_name: 'Мастер',
               role: 'master',
+              avatar: '/api/uploads/t-1/new-avatar.webp',
               hire_date: null,
               specializations: [],
               position_title: null,
@@ -177,6 +178,7 @@ test('РАНТАЙМ: профиль коллеги закрыт, свой — �
   // и разные ключи кеша (иначе второй ответ пришёл бы из первого).
   const boss = { userID: 'boss', role: 'director', permissions: {}, currentPointId: 'p-1' };
   const atP1 = await service.fullProfile(boss, 't-1', 'emp-1');
+  assert.equal(atP1.profile.avatar, '/api/uploads/t-1/new-avatar.webp');
   const atP2 = await service.fullProfile({ ...boss, currentPointId: 'p-2' }, 't-1', 'emp-1');
   assert.notEqual(atP1.profile.ownerNotes, atP2.profile.ownerNotes, 'филиал не участвует в ключе кеша');
 

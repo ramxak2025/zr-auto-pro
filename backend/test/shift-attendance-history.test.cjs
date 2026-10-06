@@ -64,6 +64,34 @@ test('history rejects malformed, repeated, structured and impossible dates befor
   assert.equal(pool.calls.length, 0);
 });
 
+test('schedule/today maps the selected canonical users.avatar into employee statuses', async () => {
+  const pool = {
+    async query(sql) {
+      if (sql.includes('SELECT timezone FROM tenants')) return { rows: [{ timezone: 'Europe/Moscow' }] };
+      if (sql.includes('SELECT DISTINCT ON (u.id)')) {
+        return {
+          rows: [
+            {
+              user_id: 'employee-1',
+              full_name: 'Алексей',
+              role: 'master',
+              avatar: '/api/uploads/tenant/new-avatar.webp',
+              is_day_off: false,
+              late_minutes: 0,
+              is_working: true,
+              has_schedule: true,
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  };
+
+  const statuses = await new ScheduleService(pool).getToday(TENANT, actor());
+  assert.equal(statuses[0].avatar, '/api/uploads/tenant/new-avatar.webp');
+});
+
 test('day history retains exact events, binds date and session scope, and leaves the legacy limit intact', async () => {
   const row = {
     id: randomUUID(),
