@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.autexa.mobile",
+      "sha256_cert_fingerprints": [
+        "4A:81:76:9B:51:00:A1:44:F4:D6:87:55:ED:00:E3:92:FB:B1:00:C9:18:01:50:B1:31:3B:E5:DB:9E:63:67:11"
+      ]
+    }
+  }
+]

@@ -167,6 +167,7 @@ const BOOL_ACTIONS: Record<string, readonly string[]> = {
   employees: ['manage', 'approveProfile'],
   settings: ['manage', 'company'],
   knowledge: ['view', 'manage'],
+  templates: ['manageShared'],
 };
 
 /** Все известные секции матрицы (стабильный порядок для sanitize). */
@@ -187,6 +188,7 @@ const MATRIX_SECTIONS: readonly string[] = [
   'employees',
   'settings',
   'knowledge',
+  'templates',
 ];
 
 function readScope(matrix: RawRoleMatrix, section: string, action: string): RoleScopeValue {
@@ -310,6 +312,7 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
     // категории/курсы/статьи/troubleshooting). manage ⇒ view.
     knowledge_view: readBool(matrix, 'knowledge', 'view') || knowledgeManage,
     knowledge_manage: knowledgeManage,
+    templates_shared_manage: readBool(matrix, 'templates', 'manageShared'),
   };
 }
 

@@ -21,6 +21,8 @@ import { ttlCache } from './ttl-cache';
  *   - reports:ranking:<tenant>:<point>                  (checks.service)
  *   - reports:points-summary:<tenant>                   (points.service)
  *
+ *   - reports-builder:<tenant>:<point>:<user>:<...>      (report-builder.service)
+ *
  * Callers: ChecksService (check create/update/delete) and ExpensesService
  * (expense create/approve/reject/delete) — anything that moves revenue,
  * profit, cash-position or the alert set.
@@ -31,4 +33,5 @@ export function invalidateReportsForTenant(tenantID: string): void {
   ttlCache.invalidatePrefix(`reports:ranking:${tenantID}`);
   ttlCache.invalidatePrefix(`reports:alerts:${tenantID}`);
   ttlCache.invalidatePrefix(`reports:points-summary:${tenantID}`);
+  ttlCache.invalidatePrefix(`reports-builder:${tenantID}:`);
 }

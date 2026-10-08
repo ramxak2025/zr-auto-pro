@@ -4,7 +4,7 @@ import { Response, Request } from 'express';
 // `@sentry/nestjs` directly) also guarantees Sentry.init() has already run and
 // gives us the `isSentryEnabled` DSN flag for the capture guard below.
 import * as Sentry from '@sentry/nestjs';
-import { isSentryEnabled } from '../sentry';
+import { isPublicBookingUrl, isSentryEnabled } from '../sentry';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -99,6 +99,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
     try {
       const method = request?.method ?? '?';
       const url = request?.originalUrl || request?.url || '?';
+      if (isPublicBookingUrl(url)) {
+        // The database/SDK exception can contain submitted contact values.
+        // Keep the failure observable without exporting the form or capability.
+        this.logger.error(`5xx ${status} [${method} /api/public/bookings/[redacted]]`);
+        if (isSentryEnabled) Sentry.captureException(new Error('Public booking request failed'));
+        return;
+      }
       const stack = exception instanceof Error ? exception.stack : undefined;
       const detail = exception instanceof Error ? exception.message : String(message ?? '');
       this.logger.error(`5xx ${status} [${method} ${url}]: ${detail}`, stack);

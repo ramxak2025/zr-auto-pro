@@ -13,10 +13,11 @@ import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
 import { normalizePhone } from '../common/normalize-phone';
-import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
+import { invalidateAuthUser, isTenantLess, NO_TENANT_ID } from '../common/auth-cache';
 import { assignedToPointSql } from './user-points-sql';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { isOwnerClass } from '../reports/builder/report-access';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { assertRoleAssignable } from '../roles/privilege-ceiling';
 import {
@@ -27,6 +28,7 @@ import {
   zonedMonthKey,
 } from '../common/timezone';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { MAX_EMPLOYEE_DIRECTION_NAME_LENGTH } from './dto/create-employee-direction.dto';
 
 // Roles that may be assigned through this service. Anything outside this set
 // is rejected up front so a manipulated DTO can't sneak a role string past
@@ -53,6 +55,165 @@ const DIRECTOR_GRANTING_ROLES = new Set(['director', 'superadmin']);
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger('UsersService');
+
+  private assertCanManageDirections(actor: JwtPayload) {
+    if (!isOwnerClass(actor)) {
+      throw new ForbiddenException({ message: 'Направлениями может управлять только владелец автосервиса' });
+    }
+    if (isTenantLess(actor)) {
+      throw new ForbiddenException({ message: 'Выберите автосервис' });
+    }
+  }
+
+  private assertCanAssignDirection(actorRole: string, tenantID: string) {
+    if (!isOwnerClass({ role: actorRole })) {
+      throw new ForbiddenException({ message: 'Назначать направления может только владелец автосервиса' });
+    }
+    if (isTenantLess({ role: actorRole, tenantID })) {
+      throw new ForbiddenException({ message: 'Выберите автосервис' });
+    }
+  }
+
+  private normalizeDirectionName(value: unknown): string {
+    const name = typeof value === 'string' ? value.trim() : '';
+    if (!name || name.length > MAX_EMPLOYEE_DIRECTION_NAME_LENGTH) {
+      throw new BadRequestException({
+        message: `Название направления должно быть от 1 до ${MAX_EMPLOYEE_DIRECTION_NAME_LENGTH} символов`,
+      });
+    }
+    return name;
+  }
+
+  private async assertDirectionInTenant(tenantID: string, directionId: string): Promise<string> {
+    const { rows } = await this.pool.query<{ name: string }>(
+      `SELECT name FROM employee_directions WHERE id=$1 AND tenant_id=$2`,
+      [directionId, tenantID],
+    );
+    if (rows.length === 0) throw new BadRequestException({ message: 'Направление не найдено' });
+    return rows[0].name;
+  }
+
+  async listDirections(actor: JwtPayload) {
+    if (isTenantLess(actor)) throw new ForbiddenException({ message: 'Выберите автосервис' });
+    const tenantID = actor.tenantID;
+    const { rows } = await this.pool.query<{
+      id: string;
+      tenant_id: string;
+      name: string;
+      sort_order: number;
+    }>(
+      `SELECT id, tenant_id, name, sort_order
+         FROM employee_directions
+        WHERE tenant_id=$1
+        ORDER BY sort_order, name, id`,
+      [tenantID],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      tenantId: row.tenant_id,
+      name: row.name,
+      sortOrder: row.sort_order,
+    }));
+  }
+
+  async createDirection(actor: JwtPayload, input: { name: string }) {
+    this.assertCanManageDirections(actor);
+    const name = this.normalizeDirectionName(input?.name);
+    try {
+      const { rows } = await this.pool.query<{
+        id: string;
+        tenant_id: string;
+        name: string;
+        sort_order: number;
+      }>(
+        `INSERT INTO employee_directions (tenant_id, name, sort_order)
+         SELECT $1, $2, COALESCE(MAX(sort_order), -1) + 1
+           FROM employee_directions
+          WHERE tenant_id=$1
+         RETURNING id, tenant_id, name, sort_order`,
+        [actor.tenantID, name],
+      );
+      return {
+        id: rows[0].id,
+        tenantId: rows[0].tenant_id,
+        name: rows[0].name,
+        sortOrder: rows[0].sort_order,
+      };
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new ConflictException({ message: 'Направление с таким названием уже существует' });
+      }
+      throw error;
+    }
+  }
+
+  async updateDirection(actor: JwtPayload, id: string, input: { name?: string }) {
+    this.assertCanManageDirections(actor);
+    if (input?.name === undefined) {
+      const { rows } = await this.pool.query<{
+        id: string;
+        tenant_id: string;
+        name: string;
+        sort_order: number;
+      }>(`SELECT id, tenant_id, name, sort_order FROM employee_directions WHERE id=$1 AND tenant_id=$2`, [
+        id,
+        actor.tenantID,
+      ]);
+      if (rows.length === 0) throw new NotFoundException({ message: 'Направление не найдено' });
+      return { id: rows[0].id, tenantId: rows[0].tenant_id, name: rows[0].name, sortOrder: rows[0].sort_order };
+    }
+
+    const name = this.normalizeDirectionName(input.name);
+    try {
+      const { rows } = await this.pool.query<{
+        id: string;
+        tenant_id: string;
+        name: string;
+        sort_order: number;
+      }>(
+        `UPDATE employee_directions SET name=$1
+          WHERE id=$2 AND tenant_id=$3
+          RETURNING id, tenant_id, name, sort_order`,
+        [name, id, actor.tenantID],
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Направление не найдено' });
+      return { id: rows[0].id, tenantId: rows[0].tenant_id, name: rows[0].name, sortOrder: rows[0].sort_order };
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new ConflictException({ message: 'Направление с таким названием уже существует' });
+      }
+      throw error;
+    }
+  }
+
+  async deleteDirection(actor: JwtPayload, id: string) {
+    this.assertCanManageDirections(actor);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: directions } = await client.query<{ id: string }>(
+        `SELECT id FROM employee_directions WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [id, actor.tenantID],
+      );
+      if (directions.length === 0) throw new NotFoundException({ message: 'Направление не найдено' });
+      await client.query(`UPDATE users SET direction_id=NULL WHERE tenant_id=$1 AND direction_id=$2`, [
+        actor.tenantID,
+        id,
+      ]);
+      await client.query(`DELETE FROM employee_directions WHERE id=$1 AND tenant_id=$2`, [id, actor.tenantID]);
+      await client.query('COMMIT');
+      return { message: 'Направление удалено' };
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        this.logger.warn(`Direction deletion rollback failed: ${String(rollbackError)}`);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
   constructor(
     @Inject(PG_POOL) private pool: Pool,
@@ -204,6 +365,8 @@ export class UsersService {
       fullName: row.full_name,
       avatar: row.avatar,
       role: row.role,
+      directionId: row.direction_id ?? null,
+      directionName: row.direction_name ?? null,
       // 114 — назначенная роль (Bitrix24-style). NULL = легаси-дефолты строковой роли.
       roleId: row.role_id ?? null,
       daysOff,
@@ -274,22 +437,24 @@ export class UsersService {
     const params: unknown[] = [tenantID];
     const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT id, phone, full_name, username, avatar, role,
+      `SELECT u.id, u.phone, u.full_name, u.username, u.avatar, u.role,
               COALESCE(salary_percent, 0) as salary_percent,
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
-              COALESCE(sort_order, 0) as sort_order,
+              COALESCE(u.sort_order, 0) as sort_order,
               is_active, team,
               COALESCE(can_add_expenses, false) as can_add_expenses,
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
               dismissed_at, purged_at, role_id,
-              tenant_id, created_at
+              u.direction_id, ed.name AS direction_name,
+              u.tenant_id, u.created_at
        FROM users u
-       WHERE tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL${pointFilter}
-       ORDER BY sort_order, created_at`,
+       LEFT JOIN employee_directions ed ON ed.id=u.direction_id AND ed.tenant_id=u.tenant_id
+       WHERE u.tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL${pointFilter}
+       ORDER BY u.sort_order, u.created_at`,
       params,
     );
     return rows.map((r) => this.mapUser(r, this.canSeeFullUser(actor, r.id)));
@@ -313,7 +478,7 @@ export class UsersService {
     const params: unknown[] = [tenantID];
     const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
-      `SELECT id, phone, full_name, username, avatar, role,
+      `SELECT u.id, u.phone, u.full_name, u.username, u.avatar, u.role,
               COALESCE(salary_percent, 0) as salary_percent,
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
@@ -324,9 +489,11 @@ export class UsersService {
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
               dismissed_at, purged_at, role_id,
-              tenant_id, created_at
+              u.direction_id, ed.name AS direction_name,
+              u.tenant_id, u.created_at
        FROM users u
-       WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
+       LEFT JOIN employee_directions ed ON ed.id=u.direction_id AND ed.tenant_id=u.tenant_id
+       WHERE u.tenant_id = $1 AND is_active = true AND role IN ('master','admin')
          AND dismissed_at IS NULL AND purged_at IS NULL${pointFilter}
        ORDER BY full_name`,
       params,
@@ -355,7 +522,7 @@ export class UsersService {
 
   private async loadUserRow(id: string, tenantID: string) {
     const { rows } = await this.pool.query(
-      `SELECT id, phone, full_name, username, avatar, role,
+      `SELECT u.id, u.phone, u.full_name, u.username, u.avatar, u.role,
               COALESCE(salary_percent, 0) as salary_percent,
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
@@ -366,8 +533,11 @@ export class UsersService {
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
               dismissed_at, purged_at, role_id,
-              tenant_id, created_at
-       FROM users WHERE id = $1 AND tenant_id = $2`,
+              u.direction_id,
+              (SELECT ed.name FROM employee_directions ed WHERE ed.id=u.direction_id AND ed.tenant_id=u.tenant_id) AS direction_name,
+              u.tenant_id, u.created_at
+       FROM users u
+       WHERE id = $1 AND tenant_id = $2`,
       [id, tenantID],
     );
     // NOTE: intentionally NOT filtered by dismissed_at / purged_at. A dismissed
@@ -404,6 +574,11 @@ export class UsersService {
 
     const role = dto.role || 'master';
     this.assertCanAssignRole(actorRole, role);
+    let directionName: string | null = null;
+    if (dto.directionId !== undefined) {
+      this.assertCanAssignDirection(actorRole, tenantID);
+      if (dto.directionId !== null) directionName = await this.assertDirectionInTenant(tenantID, dto.directionId);
+    }
 
     const phone = normalizePhone(dto.phone);
 
@@ -477,10 +652,10 @@ export class UsersService {
 
     try {
       const { rows } = await this.pool.query(
-        `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, role_id, is_active, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`,
-        [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, roleId, tenantID],
+        `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, role_id, is_active, tenant_id, direction_id)
+         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, true, $7, $8)
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at, direction_id`,
+        [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, roleId, tenantID, dto.directionId ?? null],
       );
       // 168 — приписка к филиалу сессии. Живой филиал СВОЕГО тенанта — иначе
       // строка молча не вставится (JOIN), и сотрудник останется «везде».
@@ -495,11 +670,15 @@ export class UsersService {
       }
       // Создание/правка/корзина живут под 'user_management' — актору полный
       // состав строки положен по определению.
+      rows[0].direction_name = directionName;
       return this.mapUser(rows[0], true);
     } catch (err: any) {
       this.logger.error(`User create error: code=${err.code} detail=${err.detail}`);
       if (err.code === '23505') {
         throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
+      }
+      if (err.code === '23503' && dto.directionId) {
+        throw new BadRequestException({ message: 'Направление не найдено в этом автосервисе' });
       }
       if (err.code === '23503') {
         throw new BadRequestException({ message: 'Ошибка: автосервис не найден' });
@@ -528,7 +707,9 @@ export class UsersService {
     const { rows: targetRows } = await this.pool.query(
       `SELECT role, COALESCE(salary_percent, 0) AS salary_percent,
               COALESCE(product_salary_percent, 0) AS product_salary_percent,
-              COALESCE(permissions, '{}') AS permissions
+              COALESCE(permissions, '{}') AS permissions,
+              direction_id,
+              (SELECT ed.name FROM employee_directions ed WHERE ed.id=users.direction_id AND ed.tenant_id=users.tenant_id) AS direction_name
          FROM users WHERE id=$1 AND tenant_id=$2`,
       [id, tenantID],
     );
@@ -539,6 +720,11 @@ export class UsersService {
     // save, or an unrelated profile edit, stays a no-op and byte-identical).
     const oldSalaryPercent = parseFloat(targetRows[0].salary_percent) || 0;
     const oldProductSalaryPercent = parseFloat(targetRows[0].product_salary_percent) || 0;
+    let directionName: string | null = targetRows[0].direction_name ?? null;
+    if (dto.directionId !== undefined) {
+      this.assertCanAssignDirection(actorRole, tenantID);
+      directionName = dto.directionId === null ? null : await this.assertDirectionInTenant(tenantID, dto.directionId);
+    }
 
     // No one — not even superadmin — can demote the only director left in a
     // tenant, and a non-superadmin cannot edit a superadmin / director other
@@ -669,6 +855,10 @@ export class UsersService {
       sets.push(`role_id=$${idx++}`);
       vals.push(dto.roleId);
     }
+    if (dto.directionId !== undefined) {
+      sets.push(`direction_id=$${idx++}`);
+      vals.push(dto.directionId ?? null);
+    }
     if (dto.password) {
       const hash = await bcrypt.hash(dto.password, 10);
       sets.push(`password=$${idx++}`);
@@ -697,7 +887,7 @@ export class UsersService {
     vals.push(id, tenantID);
 
     const updateSql = `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`;
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at, direction_id`;
 
     let updatedRow: any;
     if (pctChanged) {
@@ -744,6 +934,9 @@ export class UsersService {
           /* already rolled back */
         }
         client.release();
+        if ((err as { code?: string }).code === '23503' && dto.directionId) {
+          throw new BadRequestException({ message: 'Направление не найдено в этом автосервисе' });
+        }
         throw this.mapDuplicatePhone(err);
       }
       client.release();
@@ -756,6 +949,9 @@ export class UsersService {
       try {
         ({ rows } = await this.pool.query(updateSql, vals));
       } catch (err) {
+        if ((err as { code?: string }).code === '23503' && dto.directionId) {
+          throw new BadRequestException({ message: 'Направление не найдено в этом автосервисе' });
+        }
         throw this.mapDuplicatePhone(err);
       }
       if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
@@ -766,6 +962,7 @@ export class UsersService {
     // user's cached JWT validations so the change takes effect on their next
     // request rather than after the auth-cache TTL.
     invalidateAuthUser(id);
+    updatedRow.direction_name = directionName;
 
     // Only generated future plans follow profile weekdays. Explicit calendar
     // choices and recorded attendance take precedence, including a concurrent edit.

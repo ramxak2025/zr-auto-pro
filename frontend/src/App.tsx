@@ -110,6 +110,7 @@ const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
 const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
+const NfcAttendanceLandingPage = lazyWithRetry(() => import('./pages/NfcAttendanceLandingPage'));
 const PrivacyPage = lazyWithRetry(() => import('./pages/PrivacyPage'));
 const TermsPage = lazyWithRetry(() => import('./pages/TermsPage'));
 const NotificationSettingsPage = lazyWithRetry(() => import('./pages/NotificationSettingsPage'));
@@ -237,6 +238,10 @@ export default function App() {
         }
       >
         <Routes>
+          {/* Static NFC tag fallback: public while signed in or out; it only
+              forwards a validated bearer after an explicit app-open action. */}
+          <Route path="/nfc/attendance" element={<NfcAttendanceLandingPage />} />
+
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />
 

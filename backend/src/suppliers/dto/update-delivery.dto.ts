@@ -17,8 +17,8 @@ export class UpdateDeliveryItemInputDto {
   @IsUUID('4', { message: 'Некорректный товар' })
   productId!: string;
 
-  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Некорректное количество' })
-  @Min(0.0001, { message: 'Количество должно быть положительным' })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Некорректное количество' })
+  @Min(0.001, { message: 'Количество должно быть положительным' })
   quantity!: number;
 
   @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Некорректная цена' })

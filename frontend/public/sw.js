@@ -97,9 +97,23 @@ self.addEventListener('fetch', (event) => {
     // Auth: always bypass — must never get stale auth data
     if (url.pathname.startsWith('/api/auth')) return;
 
+    // Attendance NFC has a durable, session-bound request-id protocol in the
+    // app. Never cache its status/recovery reads or put tag scans in the generic
+    // offline mutation queue (a replay could mark a later shift).
+    if (url.pathname === '/api/shifts/nfc' || url.pathname.startsWith('/api/shifts/nfc/')) return;
+
     // Integration keys/configuration must never be queued or returned stale.
     // A lost create/rotate response requires an explicit owner retry.
     if (url.pathname === '/api/one-c' || url.pathname.startsWith('/api/one-c/')) return;
+
+    // These financial writes own a durable exact-payload recovery protocol.
+    // A synthetic queued 202 is not a confirmed invoice/return. Never enqueue
+    // new intents here; existing queue entries retain their original lifecycle.
+    if (request.method === 'POST' && (
+      /^\/api\/purchase-orders\/[^/]+\/receive$/.test(url.pathname) ||
+      url.pathname === '/api/suppliers/deliveries' ||
+      /^\/api\/suppliers\/deliveries\/[^/]+\/returns$/.test(url.pathname)
+    )) return;
 
     // Mutations: network with offline queue
     if (request.method !== 'GET') {

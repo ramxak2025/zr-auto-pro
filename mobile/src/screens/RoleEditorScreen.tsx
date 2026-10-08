@@ -69,6 +69,7 @@ const GROUP_ICONS: Record<PermissionGroupTitle, keyof typeof Ionicons.glyphMap> 
   Управление: 'shield-checkmark-outline',
   Настройки: 'settings-outline',
   'База знаний': 'book-outline',
+  Шаблоны: 'copy-outline',
 };
 
 // Подсказки под строками, где название не раскрывает нюанс. Контекст —

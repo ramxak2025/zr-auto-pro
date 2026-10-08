@@ -1,3 +1,5 @@
+import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
+import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 /**
  * PurchaseOrderDetailScreen — карточка заказа поставщику.
  *
@@ -67,6 +69,7 @@ export default function PurchaseOrderDetailScreen() {
   const tenantTz = useTenantTimezone();
 
   const id: string = route.params?.id;
+  const recovery = useProcurementRecovery({ operation: 'po-receive', sourceId: id });
   const seedPo: PurchaseOrder | undefined = route.params?.po;
 
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -205,6 +208,23 @@ export default function PurchaseOrderDetailScreen() {
   if (!po) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        {canWrite && (
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={() => {
+              for (const key of [
+                'purchase-order',
+                'purchase-orders',
+                'supplier',
+                'supplier-deliveries',
+                'suppliers',
+                'products',
+                'stock-movements',
+              ])
+                void queryClient.invalidateQueries({ queryKey: [key] });
+            }}
+          />
+        )}
         <IosScreenHeader title="Заказ" onBack={() => navigation.goBack()} />
         {isError ? (
           <QueryErrorState
@@ -226,6 +246,23 @@ export default function PurchaseOrderDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      {canWrite && (
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            for (const key of [
+              'purchase-order',
+              'purchase-orders',
+              'supplier',
+              'supplier-deliveries',
+              'suppliers',
+              'products',
+              'stock-movements',
+            ])
+              void queryClient.invalidateQueries({ queryKey: [key] });
+          }}
+        />
+      )}
       <IosScreenHeader title={po.supplierName || 'Заказ'} subtitle={meta?.label} onBack={() => navigation.goBack()} />
 
       <ScrollView
@@ -262,6 +299,36 @@ export default function PurchaseOrderDetailScreen() {
             <View style={[styles.noteBox, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="document-text-outline" size={14} color={palette.text.tertiary} />
               <Text style={[styles.noteText, { color: palette.text.secondary }]}>{po.note}</Text>
+            </View>
+          ) : null}
+          {po.financialReturnUnavailableReason ? (
+            <View style={[styles.noteBox, { backgroundColor: palette.bg.muted, marginTop: spacing[2] }]}>
+              <Ionicons name="information-circle-outline" size={15} color={colors.orange[600]} />
+              <Text style={[styles.noteText, { color: palette.text.secondary }]}>
+                {po.financialReturnUnavailableReason}
+              </Text>
+            </View>
+          ) : null}
+          {po.sourceDeliveryIds?.length ? (
+            <View style={{ gap: spacing[2], marginTop: spacing[2] }}>
+              <Text style={[styles.noteText, { color: palette.text.secondary }]}>
+                Возврат оформляется по конкретной принятой поставке:
+              </Text>
+              {po.sourceDeliveryIds.map((deliveryId, index) => (
+                <TouchableOpacity
+                  key={deliveryId}
+                  style={[styles.requestBtn, { borderColor: palette.border.strong, backgroundColor: palette.bg.card }]}
+                  onPress={() =>
+                    navigation.navigate('SupplierDetail', { id: po.supplierId, openDeliveryReturnId: deliveryId })
+                  }
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="arrow-undo-outline" size={17} color={colors.primary[600]} />
+                  <Text style={[styles.requestBtnText, { color: palette.text.primary }]}>
+                    Поставка {index + 1} · {deliveryId.slice(0, 8)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
           ) : null}
         </View>

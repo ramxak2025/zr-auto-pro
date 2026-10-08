@@ -152,8 +152,9 @@ test('записи: список по bookings.point_id, штамп при со�
   const code = stripComments(bookings);
   assert.ok(/sql \+= ` AND b\.point_id = \$\$\{idx\+\+\}`/.test(code), 'список записей не режется своим филиалом');
   assert.ok(!/up_none\.user_id = b\.master_id/.test(code), 'старый предикат по назначениям мастера остался');
-  assert.ok(/notify_on_create, point_id\)/.test(code) && /actorPointId\(user\),\s*\]/.test(code), 'запись не штампуется филиалом сессии');
-  assert.equal((code.match(/await this\.assertOwnPoint\(id, user\)/g) ?? []).length, 2, 'правка и отмена записи без гейта филиала');
+  assert.ok(/notify_on_create, point_id,\s*duration_minutes\)/.test(code) && /actorPointId\(user\)/.test(code), 'запись не штампуется филиалом сессии');
+  assert.equal((code.match(/await assertRowPointForWrite\(client,\s*'bookings'/g) ?? []).length, 3, 'правка, finish (отмена/конвертация) и явная связь клиента обязаны проверять филиал внутри TX');
+  assert.ok(code.includes("this.finishBooking(user, id, 'cancel'") || code.includes("this.finishBooking(user,id,'cancel'"), 'cancel обязан использовать общий TX finish с гейтом филиала');
 });
 
 // ── 6. Производные срезы графика тоже по филиалу ───────────────────────────

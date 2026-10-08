@@ -396,7 +396,41 @@ function CompensationSection() {
     queryKey: ['users', 'point'],
     queryFn: async () => (await usersApi.getAll({ scope: 'point' })).data,
   });
-  const employees: User[] = (usersQuery.data ?? []).filter((u) => u.isActive && !u.dismissedAt && !u.purgedAt);
+  const employees: User[] = (usersQuery.data ?? [])
+    .filter((u) => u.isActive && !u.dismissedAt && !u.purgedAt)
+    .slice()
+    .sort((a, b) => {
+      const aUnassigned = a.directionId == null;
+      const bUnassigned = b.directionId == null;
+      if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
+      const group = (a.directionName?.trim() || '\uffff').localeCompare(b.directionName?.trim() || '\uffff', 'ru');
+      if (group !== 0) return group;
+      const groupId = (a.directionId ?? '').localeCompare(b.directionId ?? '');
+      if (groupId !== 0) return groupId;
+      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.fullName.localeCompare(b.fullName, 'ru');
+    });
+  const compensationGroups = (() => {
+    const directionByUserId = new Map(
+      (usersQuery.data ?? []).map((user) => [
+        user.id,
+        { id: user.directionId ?? null, label: user.directionName?.trim() || null },
+      ]),
+    );
+    const grouped = new Map<string | null, { id: string | null; label: string; rows: EmployeeCompensation[] }>();
+    rows.forEach((row) => {
+      const direction = directionByUserId.get(row.userId);
+      const id = direction?.id ?? null;
+      const label = id === null ? 'Без направления' : direction?.label || 'Без названия';
+      const group = grouped.get(id) ?? { id, label, rows: [] };
+      group.rows.push(row);
+      grouped.set(id, group);
+    });
+    return [...grouped.values()].sort((a, b) => {
+      if (a.id === null) return b.id === null ? 0 : 1;
+      if (b.id === null) return -1;
+      return a.label.localeCompare(b.label, 'ru') || a.id.localeCompare(b.id);
+    });
+  })();
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['planning', 'compensation'] });
@@ -595,26 +629,45 @@ function CompensationSection() {
         </p>
       </div>
 
-      <DataTable<EmployeeCompensation>
-        columns={columns}
-        rows={rows}
-        rowKey={(r) => r.id}
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={() => refetch()}
-        isFetching={isFetching}
-        errorTitle="Не удалось загрузить мотивацию"
-        emptyState={{
-          icon: Users,
-          title: 'Мотивация не настроена',
-          description: 'Добавьте оклад или процент сотрудникам вне сдельной оплаты, чтобы прибыль считалась точнее.',
-          action: available.length ? { label: 'Добавить сотрудника', onClick: openCreate } : undefined,
-        }}
-        rowClassName={(r) => (r.active ? undefined : inactiveRow)}
-        caption="Мотивация сотрудников"
-        bare
-        className="overflow-x-auto"
-      />
+      {isLoading || isError || !usersQuery.data || compensationGroups.length === 0 ? (
+        <DataTable<EmployeeCompensation>
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={() => refetch()}
+          isFetching={isFetching}
+          errorTitle="Не удалось загрузить мотивацию"
+          emptyState={{
+            icon: Users,
+            title: 'Мотивация не настроена',
+            description: 'Добавьте оклад или процент сотрудникам вне сдельной оплаты, чтобы прибыль считалась точнее.',
+            action: available.length ? { label: 'Добавить сотрудника', onClick: openCreate } : undefined,
+          }}
+          rowClassName={(r) => (r.active ? undefined : inactiveRow)}
+          caption="Мотивация сотрудников"
+          bare
+          className="overflow-x-auto"
+        />
+      ) : (
+        compensationGroups.map((group) => (
+          <section key={JSON.stringify([group.id === null, group.id])} aria-label={group.label}>
+            <h3 className="border-y border-line bg-surface-2 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-ink-3">
+              {group.label}
+            </h3>
+            <DataTable<EmployeeCompensation>
+              columns={columns}
+              rows={group.rows}
+              rowKey={(r) => r.id}
+              rowClassName={(r) => (r.active ? undefined : inactiveRow)}
+              caption={`Мотивация сотрудников — ${group.label}`}
+              bare
+              className="overflow-x-auto"
+            />
+          </section>
+        ))
+      )}
 
       <Modal
         isOpen={modalOpen}
@@ -651,7 +704,7 @@ function CompensationSection() {
                     ? [{ value: '', label: 'Нет доступных сотрудников' }]
                     : available.map((u) => ({
                         value: u.id,
-                        label: `${u.fullName}${u.role ? ` — ${roleLabels[u.role] || u.role}` : ''}`,
+                        label: `${u.directionName ? `${u.directionName} · ` : ''}${u.fullName}${u.role ? ` — ${roleLabels[u.role] || u.role}` : ''}`,
                       }))
                 }
               />

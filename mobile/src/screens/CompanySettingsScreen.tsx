@@ -407,6 +407,20 @@ export default function CompanySettingsScreen() {
                     ios_backgroundColor={palette.border.subtle}
                   />
                 </View>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => navigation.navigate('NfcTags')}
+                  style={[styles.nfcTagsLink, { borderColor: palette.border.subtle }]}
+                >
+                  <Ionicons name="radio-outline" size={18} color={palette.accent.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>NFC-метки</Text>
+                    <Text style={[styles.hint, { color: palette.text.secondary }]}>
+                      Создать, записать и отозвать метку присутствия
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
               </View>
             </AnimatedCard>
           )}
@@ -1659,4 +1673,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[4],
   },
   saveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
+  nfcTagsLink: {
+    marginTop: spacing[3],
+    minHeight: 56,
+    borderWidth: 1,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
 });

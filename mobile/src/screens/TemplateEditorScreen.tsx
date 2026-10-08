@@ -46,9 +46,9 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
 
 /** RU-дружественный парсер цены: запятая → точка, мусор → 0. */
@@ -81,8 +81,9 @@ export default function TemplateEditorScreen() {
   const isDark = palette.mode === 'dark';
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  const { user, hasPermission } = useAuth();
+  const catalogOwner = user?.role === 'director' || user?.role === 'superadmin';
+  const canManageShared = hasPermission('templates_shared_manage');
 
   const templateId: string | undefined = route.params?.templateId;
   const isEditing = !!templateId;
@@ -101,13 +102,13 @@ export default function TemplateEditorScreen() {
   const template = useMemo(() => templates.find((t) => t.id === templateId), [templates, templateId]);
   const isSharedTpl = !!template && isSharedTemplate(template);
   // Мастер открыл общий шаблон → просмотр без правок (backend всё равно 403).
-  const viewOnly = isEditing && isSharedTpl && !isOwnerClass;
+  const viewOnly = isEditing && isSharedTpl && !canManageShared;
 
   const [name, setName] = useState('');
   const [serviceLines, setServiceLines] = useState<EditorServiceLine[]>([]);
   const [productLines, setProductLines] = useState<EditorProductLine[]>([]);
   const [folderId, setFolderId] = useState<string | null>(route.params?.initialFolderId ?? null);
-  const [shared, setShared] = useState(false); // только create + owner-class
+  const [shared, setShared] = useState(!!route.params?.initialShared);
   const [saving, setSaving] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
 
@@ -139,26 +140,42 @@ export default function TemplateEditorScreen() {
       })),
     );
     setFolderId(template.folderId ?? null);
+    setShared(isSharedTemplate(template));
   }, [isEditing, template]);
 
   // ── Пикеры состава ──────────────────────────────────────────────────────────
 
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [serviceSearch, setServiceSearch] = useState('');
-  const { data: allServices } = useQuery<Service[]>({
-    queryKey: ['all-services'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 500 });
-      return res.data.data || res.data;
-    },
-    enabled: showServicePicker,
+  const [showAllCatalogServices, setShowAllCatalogServices] = useState(false);
+  const allServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: false }],
+    queryFn: () => loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit })).data, 500),
+    enabled: showServicePicker && (catalogOwner || showAllCatalogServices),
   });
+  const allServices = allServicesQuery.data;
+  const preferredServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: true }],
+    queryFn: () =>
+      loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly: true })).data, 500),
+    enabled: showServicePicker && !catalogOwner && !showAllCatalogServices,
+    staleTime: 60_000,
+  });
+  const preferredServices = preferredServicesQuery.data;
+  const activeServicesLoading =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isLoading : allServicesQuery.isLoading;
+  const activeServicesError =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isError : allServicesQuery.isError;
+  const refetchActiveServices =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
+  const selectableServices = !catalogOwner && !showAllCatalogServices ? (preferredServices ?? []) : (allServices ?? []);
+
   const filteredServices = useMemo(() => {
-    const list = allServices || [];
+    const list = selectableServices;
     if (!serviceSearch.trim()) return list;
     const q = serviceSearch.trim().toLowerCase();
     return list.filter((s) => s.name.toLowerCase().includes(q));
-  }, [allServices, serviceSearch]);
+  }, [selectableServices, serviceSearch]);
 
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [productSearch, setProductSearch] = useState('');
@@ -239,15 +256,14 @@ export default function TemplateEditorScreen() {
           name: name.trim(),
           services,
           products,
-          // Общий шаблон вне папок — folderId у него не трогаем вовсе.
-          ...(isSharedTpl ? {} : { folderId }),
+          ...(isSharedTpl || shared ? { folderId, shared: true } : { folderId, shared: false }),
         });
       } else {
         await checkTemplatesApi.create({
           name: name.trim(),
           services,
           products,
-          folderId: shared ? null : folderId,
+          folderId,
           shared: shared || undefined,
         });
       }
@@ -395,12 +411,12 @@ export default function TemplateEditorScreen() {
           {/* Размещение: папка (личные) / признак «Общий» */}
           {!viewOnly && (
             <View style={cardStyle}>
-              {!isEditing && isOwnerClass && (
+              {canManageShared && !isSharedTpl && (
                 <View style={styles.sharedRow}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={[styles.sharedTitle, { color: palette.text.primary }]}>Общий шаблон</Text>
                     <Text style={[styles.sharedHint, { color: palette.text.tertiary }]}>
-                      Виден всем сотрудникам, изменяет только руководитель
+                      Доступен всем сотрудникам; управление задаётся правом роли
                     </Text>
                   </View>
                   <Switch
@@ -408,26 +424,47 @@ export default function TemplateEditorScreen() {
                     onValueChange={(v) => {
                       haptic('select');
                       setShared(v);
+                      setFolderId(null);
                     }}
                     trackColor={{ true: colors.primary[500] }}
                   />
                 </View>
               )}
               {isEditing && isSharedTpl ? (
-                <View style={styles.sharedRow}>
-                  <View style={[styles.sharedStaticBadge, { backgroundColor: sharedBadge.bg }]}>
-                    <Text style={[styles.sharedStaticBadgeText, { color: sharedBadge.text }]}>Общий шаблон</Text>
+                <>
+                  <View style={styles.sharedRow}>
+                    <View style={[styles.sharedStaticBadge, { backgroundColor: sharedBadge.bg }]}>
+                      <Text style={[styles.sharedStaticBadgeText, { color: sharedBadge.text }]}>Общий шаблон</Text>
+                    </View>
+                    <Text style={[styles.sharedHint, { color: palette.text.tertiary, flex: 1 }]}>
+                      Общий шаблон остаётся в общем дереве
+                    </Text>
                   </View>
-                  <Text style={[styles.sharedHint, { color: palette.text.tertiary, flex: 1 }]}>
-                    Общие шаблоны живут вне личных папок
-                  </Text>
-                </View>
+                  {canManageShared && (
+                    <TouchableOpacity
+                      style={[styles.folderRow, styles.folderRowDivider, { borderTopColor: palette.border.subtle }]}
+                      activeOpacity={0.6}
+                      onPress={() => setShowFolderPicker(true)}
+                    >
+                      <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={[styles.fieldLabel, { color: palette.text.secondary, marginBottom: 0 }]}>
+                          Общая папка
+                        </Text>
+                        <Text style={[styles.folderValue, { color: palette.text.primary }]} numberOfLines={1}>
+                          {folderLabel}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  )}
+                </>
               ) : (
-                !shared && (
+                !(isSharedTpl || shared) && (
                   <TouchableOpacity
                     style={[
                       styles.folderRow,
-                      !isEditing && isOwnerClass && styles.folderRowDivider,
+                      canManageShared && styles.folderRowDivider,
                       { borderTopColor: palette.border.subtle },
                     ]}
                     activeOpacity={0.6}
@@ -446,6 +483,24 @@ export default function TemplateEditorScreen() {
                     <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </TouchableOpacity>
                 )
+              )}
+              {!isEditing && shared && (
+                <TouchableOpacity
+                  style={[styles.folderRow, styles.folderRowDivider, { borderTopColor: palette.border.subtle }]}
+                  activeOpacity={0.6}
+                  onPress={() => setShowFolderPicker(true)}
+                >
+                  <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[styles.fieldLabel, { color: palette.text.secondary, marginBottom: 0 }]}>
+                      Общая папка
+                    </Text>
+                    <Text style={[styles.folderValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {folderLabel}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
               )}
             </View>
           )}
@@ -657,10 +712,11 @@ export default function TemplateEditorScreen() {
       {/* Выбор папки размещения */}
       <Modal visible={showFolderPicker} onClose={() => setShowFolderPicker(false)} title="Папка шаблона">
         <FolderPickerList
-          folders={folders}
+          folders={folders.filter((f) => !!f.isShared === (isSharedTpl || shared))}
           selectedId={folderId}
           onSelect={(id) => {
             setFolderId(id);
+            if (id) setShared(!!folders.find((f) => f.id === id)?.isShared);
             setShowFolderPicker(false);
           }}
         />
@@ -671,6 +727,28 @@ export default function TemplateEditorScreen() {
           тап добавляет новую строку, а не количество). */}
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
         <View style={{ gap: spacing[3] }}>
+          {!catalogOwner && (
+            <TouchableOpacity
+              onPress={() => setShowAllCatalogServices((value) => !value)}
+              style={{
+                paddingVertical: spacing[2],
+                alignSelf: 'flex-start',
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing[1],
+              }}
+              accessibilityRole="button"
+            >
+              <Ionicons
+                name={showAllCatalogServices ? 'eye-off-outline' : 'eye-outline'}
+                size={18}
+                color={colors.primary[600]}
+              />
+              <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                {showAllCatalogServices ? 'Показывать по роли' : 'Показать все услуги'}
+              </Text>
+            </TouchableOpacity>
+          )}
           <TextInput
             value={serviceSearch}
             onChangeText={setServiceSearch}
@@ -716,10 +794,29 @@ export default function TemplateEditorScreen() {
                 </TouchableOpacity>
               );
             })}
-            {allServices && filteredServices.length === 0 && (
-              <Text style={[styles.pickEmpty, { color: palette.text.tertiary }]}>Ничего не найдено</Text>
+            {activeServicesError && (
+              <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[3] }}>
+                <Text style={[styles.pickEmpty, { color: colors.red[500] }]}>Не удалось загрузить каталог услуг</Text>
+                <TouchableOpacity onPress={() => void refetchActiveServices()} accessibilityRole="button">
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
+                </TouchableOpacity>
+              </View>
             )}
-            {!allServices && (
+            {!activeServicesError && !activeServicesLoading && filteredServices.length === 0 && (
+              <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[2] }}>
+                <Text style={[styles.pickEmpty, { color: palette.text.tertiary }]}>
+                  {serviceSearch ? 'Ничего не найдено' : 'Нет услуг по вашей роли'}
+                </Text>
+                {!serviceSearch && !catalogOwner && !showAllCatalogServices && (
+                  <TouchableOpacity onPress={() => setShowAllCatalogServices(true)} accessibilityRole="button">
+                    <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                      Показать все услуги
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {activeServicesLoading && selectableServices.length === 0 && (
               <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
                 <ActivityIndicator color={colors.primary[500]} size="small" />
               </View>

@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 
 import { onAuthExpired } from './api/axios';
+import { isNfcTelemetry, scrubNfcTelemetryString, scrubNfcTelemetryValue } from './utils/nfcTelemetryRedaction';
 
 /**
  * Crash + error reporting for the mobile app.
@@ -63,6 +64,14 @@ const CONNECTIVITY_MESSAGE_PREFIX = 'Нет соединения с сервер
 // native-слоя): expo-notifications формулирует сетевые падения получения
 // Expo-токена как «... error occurred while fetching Expo token ...».
 const PUSH_TOKEN_FETCH_MESSAGE = /fetching Expo token/i;
+function scrubNfcEvent<T extends Sentry.Event>(event: T): T {
+  const urls = [event.request?.url, ...(event.breadcrumbs ?? []).map((breadcrumb) => breadcrumb.data?.url)].filter(
+    (value): value is string => typeof value === 'string',
+  );
+  const hasNfcContext = urls.some(isNfcTelemetry);
+  if (!hasNfcContext) return event;
+  return scrubNfcTelemetryValue(event) as T;
+}
 
 /**
  * Transient expo-notifications failure while fetching the Expo push token
@@ -126,9 +135,21 @@ export function initSentry(): void {
     enabled,
     tracesSampleRate: 0.1,
     enableNativeCrashHandling: true,
+    beforeBreadcrumb(breadcrumb) {
+      const context = [breadcrumb.message, breadcrumb.data?.url].some(isNfcTelemetry);
+      if (!context) return breadcrumb;
+      return {
+        ...breadcrumb,
+        message: breadcrumb.message ? scrubNfcTelemetryString(breadcrumb.message) : breadcrumb.message,
+        data: breadcrumb.data ? (scrubNfcTelemetryValue(breadcrumb.data) as Record<string, unknown>) : breadcrumb.data,
+      };
+    },
     beforeSend(event, hint) {
       if (isTransientNetworkError(hint.originalException, event.exception?.values?.[0])) return null;
-      return event;
+      return scrubNfcEvent(event);
+    },
+    beforeSendTransaction(event) {
+      return scrubNfcEvent(event);
     },
   });
 

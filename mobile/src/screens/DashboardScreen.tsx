@@ -4630,6 +4630,7 @@ function CashierShiftCard() {
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
   useAttendanceRefresh();
+  const navigation = useNavigation<any>();
   const { user, refreshUser } = useAuth();
   const { palette } = useThemeMode();
   const queryClient = useQueryClient();
@@ -4749,6 +4750,27 @@ export default function DashboardScreen() {
         {/* 155 — карточка кассира: видна только при включённом режиме
             кассовой смены и только кассиру (внутри сама рендерит null). */}
         <CashierShiftCard />
+        {shiftsEnabled && (
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('NfcAttendance')}
+            style={[
+              styles.nfcAttendanceEntry,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
+            <View style={styles.nfcAttendanceIcon}>
+              <Ionicons name="radio-outline" size={22} color={colors.primary[700]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.nfcAttendanceTitle, { color: palette.text.primary }]}>Рабочая смена</Text>
+              <Text style={[styles.nfcAttendanceSubtitle, { color: palette.text.secondary }]}>
+                Отметиться по NFC-метке
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
         {/* Owner = new 6-block layout. Master = unchanged previous experience. */}
         {isMaster ? (
           <>
@@ -4775,6 +4797,26 @@ export default function DashboardScreen() {
 // ════════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  nfcAttendanceEntry: {
+    minHeight: 68,
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  nfcAttendanceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nfcAttendanceTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  nfcAttendanceSubtitle: { fontSize: fontSize.sm, marginTop: 2 },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[4] },
   // OwnerFreshnessBadge slot — sits above the hero card, right-aligned.

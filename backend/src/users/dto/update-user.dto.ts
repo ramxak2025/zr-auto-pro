@@ -75,4 +75,9 @@ export class UpdateUserDto {
   @IsUUID()
   @IsOptional()
   roleId?: string | null;
+
+  /** Tenant-owned grouping; null clears it and only owner-class may change it. */
+  @IsUUID()
+  @IsOptional()
+  directionId?: string | null;
 }

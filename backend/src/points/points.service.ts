@@ -283,6 +283,60 @@ const HISTORY_ATTACH_SQL: ReadonlyArray<readonly [string, string, string]> = [
       WHERE d.point_id IS NULL AND d.tenant_id = mp.tenant_id`,
   ],
   [
+    'public_booking_pages',
+    'bp',
+    `UPDATE public_booking_pages bp SET point_id = mp.main_id
+       FROM ${MAIN_FACTS_SQL}
+      WHERE bp.point_id IS NULL AND bp.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'public_booking_requests',
+    'br',
+    `UPDATE public_booking_requests br
+        SET point_id = COALESCE(
+              (SELECT bp.point_id FROM public_booking_pages bp
+                WHERE bp.id = br.page_id AND bp.tenant_id = br.tenant_id AND bp.point_id IS NOT NULL),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE br.point_id IS NULL AND br.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'booking_operation_keys',
+    'bk',
+    `UPDATE booking_operation_keys bk SET point_id = mp.main_id
+       FROM ${MAIN_FACTS_SQL}
+      WHERE bk.point_id IS NULL AND bk.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'attendance_nfc_tags',
+    'nt',
+    `UPDATE attendance_nfc_tags nt SET point_id = mp.main_id
+       FROM ${MAIN_FACTS_SQL}
+      WHERE nt.point_id IS NULL AND nt.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'attendance_nfc_requests',
+    'nr',
+    `UPDATE attendance_nfc_requests nr
+        SET point_id = COALESCE(
+              (SELECT nt.point_id FROM attendance_nfc_tags nt
+                WHERE nt.id = nr.tag_id AND nt.tenant_id = nr.tenant_id AND nt.point_id IS NOT NULL),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE nr.point_id IS NULL AND nr.tenant_id = mp.tenant_id`,
+  ],
+  [
+    'supplier_returns',
+    'sr',
+    `UPDATE supplier_returns sr
+        SET point_id = COALESCE(
+              (SELECT d.point_id FROM deliveries d
+                WHERE d.id = sr.delivery_id AND d.tenant_id = sr.tenant_id AND d.point_id IS NOT NULL),
+              mp.main_id)
+       FROM ${MAIN_FACTS_SQL}
+      WHERE sr.point_id IS NULL AND sr.tenant_id = mp.tenant_id`,
+  ],
+  [
     'purchase_orders',
     'po',
     `UPDATE purchase_orders po
@@ -585,6 +639,9 @@ export class PointsService {
     let result: string[] = [];
     try {
       await client.query('BEGIN');
+      // Public/internal bookings share one tenant resource gate. A membership
+      // removal must not commit between choosing an employee and reserving it.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`bookings:${tenantID}`]);
       let before: string[];
       let after: string[];
       if ('pointId' in scope) {

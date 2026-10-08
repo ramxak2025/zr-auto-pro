@@ -11,8 +11,8 @@ export class ReceivePurchaseOrderItemDto {
    * Quantity received in THIS operation (a delta, not a cumulative total).
    * Added to the line's received_quantity and credited to product stock.
    */
-  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Некорректное количество' })
-  @Min(0.0001, { message: 'Количество должно быть положительным' })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Некорректное количество' })
+  @Min(0.001, { message: 'Количество должно быть положительным' })
   receivedQuantity!: number;
 
   /**
@@ -26,6 +26,11 @@ export class ReceivePurchaseOrderItemDto {
   @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Некорректная цена закупки' })
   @Min(0, { message: 'Цена закупки не может быть отрицательной' })
   purchasePrice?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  sellPrice?: number;
 }
 
 /**
@@ -49,6 +54,10 @@ export class ReceivePurchaseOrderItemDto {
  * отклоняет (400).
  */
 export class ReceivePurchaseOrderDto {
+  @IsOptional()
+  @IsUUID()
+  requestId?: string;
+
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

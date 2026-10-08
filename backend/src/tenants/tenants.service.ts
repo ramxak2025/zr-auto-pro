@@ -1474,6 +1474,19 @@ export class TenantsService {
     try {
       await client.query('BEGIN');
 
+      // Public request snapshots are retained while a booking references them.
+      // Delete only this tenant, in dependency order, before clients/users/checks.
+      await client.query('DELETE FROM booking_operation_keys WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM bookings WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM public_booking_requests WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM public_booking_services WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM public_booking_resources WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM public_booking_pages WHERE tenant_id=$1', [id]);
+
+      // NFC request snapshots reference tags; remove both before employees.
+      await client.query('DELETE FROM attendance_nfc_requests WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM attendance_nfc_tags WHERE tenant_id=$1', [id]);
+
       // 1. Remove check line items (reference services/products/users without CASCADE)
       await client.query(
         `DELETE FROM check_service_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`,
@@ -1483,6 +1496,11 @@ export class TenantsService {
         `DELETE FROM check_product_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`,
         [id],
       );
+
+      // Return ledger references immutable source lines; remove tenant-owned
+      // returns first, in this transaction, keeping the source FK restrictive.
+      await client.query('DELETE FROM supplier_return_items WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM supplier_returns WHERE tenant_id=$1', [id]);
 
       // 2. Remove delivery items (reference products without CASCADE)
       await client.query(

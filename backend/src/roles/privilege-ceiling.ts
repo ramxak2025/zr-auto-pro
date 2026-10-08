@@ -84,6 +84,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   settings_manage: 'Настройки',
   company_manage: 'Настройки компании',
   knowledge_manage: 'База знаний',
+  templates_shared_manage: 'Общие шаблоны и папки',
   knowledge_view: 'База знаний: просмотр',
 };
 

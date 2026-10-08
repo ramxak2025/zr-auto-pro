@@ -94,16 +94,23 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
              LIMIT 200
              FOR UPDATE SKIP LOCKED
           )
-          RETURNING b.id, b.tenant_id, b.scheduled_at, b.client_id, b.master_id`,
+          RETURNING b.id, b.tenant_id, b.scheduled_at, b.client_id, b.master_id, b.public_request_id`,
       );
 
       if (rows.length === 0) return;
 
       for (const row of rows) {
         try {
-          const { rows: clientRows } = await this.pool.query(`SELECT full_name, phone FROM clients WHERE id = $1`, [
-            row.client_id,
-          ]);
+          const { rows: clientRows } = row.public_request_id
+            ? await this.pool.query(
+                `SELECT contact_name AS full_name, contact_phone AS phone
+                FROM public_booking_requests WHERE id=$1 AND tenant_id=$2`,
+                [row.public_request_id, row.tenant_id],
+              )
+            : await this.pool.query(`SELECT full_name, phone FROM clients WHERE id=$1 AND tenant_id=$2`, [
+                row.client_id,
+                row.tenant_id,
+              ]);
           const phone = clientRows[0]?.phone;
           if (!phone) {
             // Claimed but unsendable (no phone). Stays stamped — we won't retry

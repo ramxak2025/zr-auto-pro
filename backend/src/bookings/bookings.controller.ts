@@ -8,6 +8,7 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { ConvertBookingDto } from './dto/convert-booking.dto';
 import { UpdateBookingSettingsDto } from './dto/update-booking-settings.dto';
+import { LinkBookingClientDto, OptionalBookingOperationDto } from './dto/public-booking.dto';
 
 /**
  * Internal «Записи» (appointments) API — staff-side only. Every route requires
@@ -51,13 +52,18 @@ export class BookingsController {
 
   // ─── Cancel ────────────────────────────────────────────────────────
   @Post(':id/cancel')
-  cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.bookings.cancel(user, id);
+  cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: OptionalBookingOperationDto) {
+    return this.bookings.cancel(user, id, dto?.requestId);
+  }
+
+  @Post(':id/link-client')
+  linkClient(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: LinkBookingClientDto) {
+    return this.bookings.linkClient(user, id, dto);
   }
 
   // ─── Convert (link a saved check) ──────────────────────────────────
   @Post(':id/convert')
   convert(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ConvertBookingDto) {
-    return this.bookings.convert(user, id, dto.checkId);
+    return this.bookings.convert(user, id, dto.checkId, dto.requestId);
   }
 }

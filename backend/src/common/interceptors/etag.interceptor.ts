@@ -3,6 +3,7 @@ import { Observable, EMPTY } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { Response, Request } from 'express';
 import * as crypto from 'crypto';
+import { isPublicBookingUrl } from '../sentry';
 
 /**
  * ETag Interceptor
@@ -22,7 +23,7 @@ export class ETagInterceptor implements NestInterceptor {
     const response = httpCtx.getResponse<Response>();
 
     // Only apply to GET requests
-    if (request.method !== 'GET') {
+    if (request.method !== 'GET' || isPublicBookingUrl(request.originalUrl || request.url)) {
       return next.handle();
     }
 

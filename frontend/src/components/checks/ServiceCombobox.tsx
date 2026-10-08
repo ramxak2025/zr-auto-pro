@@ -45,7 +45,7 @@ export default function ServiceCombobox({
   const listRef = useRef<HTMLUListElement>(null);
 
   const selected = useMemo(() => services.find((s) => s.id === value) ?? null, [services, value]);
-  const selectedLabel = selected?.name ?? (value ? '' : (fallbackName ?? ''));
+  const selectedLabel = selected?.name ?? fallbackName ?? '';
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');

@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Wrench, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Wrench, Pencil, Trash2, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Badge,
   Button,
+  Checkbox,
   ConfirmDialog,
   DataTable,
   Field,
@@ -20,7 +21,8 @@ import {
   Toolbar,
 } from '../ui';
 import type { DataTableColumn } from '../ui';
-import type { Service, PaginatedResponse } from '../types';
+import type { Service, PaginatedResponse, ServiceVisibilityConfig } from '../types';
+import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
 import { countLabel, formatPercent, parseNumberInput } from '../components/warehouse/format';
 import { pageParam, useUrlParams } from '../components/warehouse/useUrlParams';
 
@@ -37,12 +39,15 @@ interface ServicePayload {
 
 export default function ServicesPage() {
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   // ROLE-ONLY: управление каталогом (add/edit/delete + %/гарантия) — только с
   // services_manage (байпас superadmin/director — внутри hasPermission; admin —
   // по матрице роли). services_view (просмотр + в чек) — у всех, кто сюда
   // попал; backend всё равно вернёт 403 без права.
   const canManage = hasPermission('services_manage');
+  const isOwner = user?.role === 'director' || user?.role === 'superadmin';
+  const [showAllServices, setShowAllServices] = useState(false);
+  const preferredOnly = !isOwner && !showAllServices;
 
   // Поиск и страница — в URL: F5 и «Назад» сохраняют список.
   const [params, setParam] = useUrlParams();
@@ -59,15 +64,84 @@ export default function ServicesPage() {
   const [warrantyDays, setWarrantyDays] = useState('');
 
   const [deleteTarget, setDeleteTarget] = useState<Service | null>(null);
+  const [visibilityTarget, setVisibilityTarget] = useState<
+    { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string } | null
+  >(null);
+  const [visibilityRoleIds, setVisibilityRoleIds] = useState<string[]>([]);
+  const [visibilityRuleActive, setVisibilityRuleActive] = useState(false);
+  const [folderListOpen, setFolderListOpen] = useState(false);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery<PaginatedResponse<Service>>({
-    // Ключ прежний: фильтр по категории в UI не заведён → category: undefined.
-    queryKey: ['services', { search, page, limit: LIMIT, category: undefined }],
+    queryKey: ['services', { search, page, limit: LIMIT, category: undefined, preferredOnly }],
     queryFn: async () => {
-      const res = await servicesApi.getAll({ search, page, limit: LIMIT });
+      const res = await servicesApi.getAll({ search, page, limit: LIMIT, preferredOnly });
       return res.data;
     },
   });
+
+  const visibilityConfigQuery = useQuery<ServiceVisibilityConfig>({
+    queryKey: ['service-visibility-config'],
+    queryFn: async () => (await servicesApi.getVisibilityConfig()).data,
+    enabled: canManage,
+  });
+
+  const invalidateServiceLists = () => {
+    void queryClient.invalidateQueries({ queryKey: ['services'] });
+    void queryClient.invalidateQueries({ queryKey: ['services-all'] });
+  };
+  const saveVisibilityRule = useMutation({
+    mutationFn: ({
+      target,
+      roleIds,
+    }: {
+      target: { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string };
+      roleIds: string[];
+    }) =>
+      servicesApi.putVisibilityRule(
+        target.kind === 'service'
+          ? { serviceId: target.id, visibleRoleIds: roleIds }
+          : { categoryPath: target.path, visibleRoleIds: roleIds },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['service-visibility-config'] });
+      invalidateServiceLists();
+      toast.success('Предпочтительная видимость сохранена');
+      setVisibilityTarget(null);
+    },
+    onError: () => toast.error('Не удалось сохранить видимость'),
+  });
+  const resetVisibilityRule = useMutation({
+    mutationFn: (target: { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string }) =>
+      target.kind === 'service'
+        ? servicesApi.deleteServiceVisibilityRule(target.id)
+        : servicesApi.deleteCategoryVisibilityRule(target.path),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['service-visibility-config'] });
+      invalidateServiceLists();
+      toast.success('Правило сброшено, действует наследование');
+      setVisibilityTarget(null);
+    },
+    onError: () => toast.error('Не удалось сбросить правило'),
+  });
+  const openVisibilityEditor = (
+    target: { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string },
+  ) => {
+    if (!visibilityConfigQuery.isSuccess) {
+      toast.error('Сначала загрузите настройки видимости');
+      void visibilityConfigQuery.refetch();
+      return;
+    }
+    const canonicalTarget =
+      target.kind === 'category' ? { ...target, path: normalizeServiceCategoryPath(target.path) } : target;
+    const rules = visibilityConfigQuery.data.rules;
+    const rule =
+      canonicalTarget.kind === 'service'
+        ? rules.find((item) => item.serviceId === canonicalTarget.id)
+        : rules.find((item) => normalizeServiceCategoryPath(item.categoryPath ?? '') === canonicalTarget.path);
+    setVisibilityRoleIds(rule ? [...rule.visibleRoleIds] : []);
+    setVisibilityRuleActive(!!rule);
+    setVisibilityTarget(canonicalTarget);
+  };
 
   const createMutation = useMutation({
     mutationFn: (payload: ServicePayload) => servicesApi.create(payload),
@@ -179,7 +253,23 @@ export default function ServicesPage() {
       key: 'category',
       header: 'Категория',
       hideBelow: 'sm',
-      render: (s) => (s.category ? <Badge outline>{s.category}</Badge> : <span className="text-ink-3">—</span>),
+      render: (s) =>
+        s.category ? (
+          <span className="inline-flex max-w-full items-center gap-1.5">
+            <Badge outline>{s.category}</Badge>
+            {canManage && (
+              <IconButton
+                label={`Настроить видимость папки ${s.category}`}
+                icon={ShieldCheck}
+                size="sm"
+                disabled={!visibilityConfigQuery.isSuccess}
+                onClick={() => openVisibilityEditor({ kind: 'category', path: s.category! })}
+              />
+            )}
+          </span>
+        ) : (
+          <span className="text-ink-3">—</span>
+        ),
     },
     {
       key: 'defaultPrice',
@@ -223,9 +313,16 @@ export default function ServicesPage() {
             header: <span className="sr-only">Действия</span>,
             interactive: true,
             align: 'right',
-            width: 96,
+            width: 148,
             render: (s) => (
               <span className="inline-flex items-center justify-end gap-1">
+                <IconButton
+                  label={`Настроить видимость: ${s.name}`}
+                  icon={ShieldCheck}
+                  size="sm"
+                  disabled={!visibilityConfigQuery.isSuccess}
+                  onClick={() => openVisibilityEditor({ kind: 'service', id: s.id, label: s.name })}
+                />
                 <IconButton label={`Изменить: ${s.name}`} icon={Pencil} size="sm" onClick={() => openEdit(s)} />
                 <IconButton
                   label={`Удалить: ${s.name}`}
@@ -263,7 +360,42 @@ export default function ServicesPage() {
           placeholder="Название услуги…"
           className="w-full sm:w-72"
         />
+        {canManage && (
+          <Button
+            variant="secondary"
+            icon={ShieldCheck}
+            disabled={!visibilityConfigQuery.isSuccess}
+            onClick={() => setFolderListOpen(true)}
+          >
+            Папки
+          </Button>
+        )}
+        {!isOwner && (
+          <Button
+            variant="secondary"
+            icon={showAllServices ? EyeOff : Eye}
+            onClick={() => {
+              setShowAllServices((value) => !value);
+              setParam({ page: null }, { replace: true });
+            }}
+            aria-pressed={showAllServices}
+          >
+            {showAllServices ? 'По роли' : 'Все услуги'}
+          </Button>
+        )}
       </Toolbar>
+
+      {canManage && visibilityConfigQuery.isError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-lg bg-bad-soft px-4 py-3 text-sm text-bad-text"
+        >
+          Не удалось загрузить настройки ролей и папок.
+          <Button variant="secondary" size="sm" onClick={() => void visibilityConfigQuery.refetch()}>
+            Повторить
+          </Button>
+        </div>
+      )}
 
       <DataTable
         rows={services}
@@ -276,15 +408,126 @@ export default function ServicesPage() {
         isFetching={isFetching}
         emptyState={{
           icon: Wrench,
-          title: search ? 'Ничего не найдено' : 'Услуг пока нет',
+          title: search
+            ? 'Ничего не найдено'
+            : preferredOnly
+              ? 'Для вашей роли пока нет предпочтительных услуг'
+              : 'Услуг пока нет',
           description: search
             ? `По запросу «${search}» услуг нет — попробуйте другое название`
-            : 'Добавьте первую услугу, чтобы выбирать её в чеке',
-          action: canManage && !search ? { label: 'Добавить услугу', onClick: openCreate } : undefined,
+            : preferredOnly
+              ? 'Покажите полный каталог или попросите владельца настроить видимость.'
+              : 'Добавьте первую услугу, чтобы выбирать её в чеке',
+          action:
+            !search && preferredOnly
+              ? { label: 'Показать все услуги', onClick: () => setShowAllServices(true) }
+              : canManage && !search
+                ? { label: 'Добавить услугу', onClick: openCreate }
+                : undefined,
         }}
       />
 
       <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParam({ page: p === 1 ? null : p })} />
+
+      <Modal
+        isOpen={folderListOpen}
+        onClose={() => setFolderListOpen(false)}
+        title="Папки услуг"
+        description="Выберите папку, чтобы настроить роли для неё и вложенных папок."
+      >
+        <div className="max-h-[60vh] overflow-y-auto">
+          {(visibilityConfigQuery.data?.categoryPaths ?? []).map((path) => (
+            <button
+              key={path}
+              type="button"
+              onClick={() => {
+                setFolderListOpen(false);
+                openVisibilityEditor({ kind: 'category', path });
+              }}
+              className="flex w-full items-center gap-2 border-b border-line py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus-ring"
+              style={{ paddingLeft: `${12 + Math.max(0, path.split('/').length - 1) * 16}px` }}
+            >
+              <ShieldCheck className="h-4 w-4 flex-shrink-0 text-accent" aria-hidden="true" />
+              <span className="truncate">{path.split('/').pop()}</span>
+              <span className="ml-auto text-xs text-ink-3">{path}</span>
+            </button>
+          ))}
+          {(visibilityConfigQuery.data?.categoryPaths.length ?? 0) === 0 && (
+            <p className="py-4 text-sm text-ink-3">Папок пока нет</p>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!visibilityTarget}
+        onClose={() => setVisibilityTarget(null)}
+        title="Предпочтительная видимость"
+        description={visibilityTarget?.kind === 'service' ? visibilityTarget.label : visibilityTarget?.path}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setVisibilityTarget(null)}>
+              Отмена
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={
+                !visibilityRuleActive ||
+                !visibilityConfigQuery.isSuccess ||
+                saveVisibilityRule.isPending ||
+                resetVisibilityRule.isPending
+              }
+              onClick={() => visibilityTarget && resetVisibilityRule.mutate(visibilityTarget)}
+            >
+              Наследовать / Все роли
+            </Button>
+            <Button
+              loading={saveVisibilityRule.isPending}
+              disabled={!visibilityRuleActive || !visibilityConfigQuery.isSuccess || resetVisibilityRule.isPending}
+              onClick={() =>
+                visibilityTarget && saveVisibilityRule.mutate({ target: visibilityTarget, roleIds: visibilityRoleIds })
+              }
+            >
+              Сохранить
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-ink-2">
+            Правило меняет только список каталога: любая услуга остаётся доступна для добавления в чек.
+            {visibilityTarget?.kind === 'category'
+              ? ' Вложенные папки наследуют правило; ближайшая папка важнее родителя.'
+              : ''}
+          </p>
+          {visibilityConfigQuery.isLoading ? <p className="text-sm text-ink-3">Загружаем роли…</p> : null}
+          {visibilityConfigQuery.isError ? (
+            <p className="text-sm text-danger">Не удалось загрузить роли для настройки.</p>
+          ) : null}
+          <Checkbox
+            label="Задать список ролей для этого объекта"
+            checked={visibilityRuleActive}
+            onChange={(event) => setVisibilityRuleActive(event.target.checked)}
+          />
+          <div className="grid gap-2 sm:grid-cols-2">
+            {(visibilityConfigQuery.data?.roles ?? []).map((role) => (
+              <Checkbox
+                key={role.id}
+                label={role.name}
+                checked={visibilityRoleIds.includes(role.id)}
+                disabled={!visibilityRuleActive}
+                onChange={(event) =>
+                  setVisibilityRoleIds((current) =>
+                    event.target.checked ? [...current, role.id] : current.filter((id) => id !== role.id),
+                  )
+                }
+              />
+            ))}
+          </div>
+          {visibilityRuleActive && visibilityRoleIds.length === 0 && (
+            <p className="text-sm text-ink-3">Пустой список скроет объект из режима «По роли» для всех сотрудников.</p>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         isOpen={modalOpen}

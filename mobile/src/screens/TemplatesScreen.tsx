@@ -1,13 +1,13 @@
 /**
  * TemplatesScreen — раздел «Шаблоны» (Ещё → Работа).
  *
- * Личные шаблоны чеков с личными вложенными папками + общие шаблоны
- * (userId NULL — legacy или опубликованные owner-class'ом). Правила зеркалят
+ * Личные шаблоны чеков с личными папками и общие шаблоны в общем дереве
+ * (userId NULL — legacy или опубликованные permission-holder'ом). Правила зеркалят
  * backend `check-templates.service.ts` (единственный настоящий страж):
  *   • личный шаблон — полный CRUD автору, любая роль;
- *   • общий шаблон — update/delete только owner-class (director/admin/
- *     superadmin); для остальных действия скрыты, тап открывает просмотр;
- *   • папки строго личные (дерево через parentId), общие шаблоны вне папок;
+ *   • общий шаблон — update/delete только с templates_shared_manage;
+ *     для остальных действия скрыты, тап открывает просмотр;
+ *   • личное и общее деревья папок разделены по области доступа;
  *   • удаление папки каскадно удаляет подпапки, шаблоны при этом остаются
  *     и переезжают в корень (backend nulls folder_id в одной транзакции).
  *
@@ -45,7 +45,6 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { CheckTemplate, CheckTemplateFolder } from '../../../shared/types';
 import { serviceLineTotal } from '../../../shared/utils/checkLines';
 
@@ -212,7 +211,7 @@ const pickerStyles = StyleSheet.create({
 // Экран
 // ─────────────────────────────────────────────────────────────────────────────
 
-type FolderModalState = { mode: 'create' } | { mode: 'rename'; folder: CheckTemplateFolder } | null;
+type FolderModalState = { mode: 'create'; isShared: boolean } | { mode: 'rename'; folder: CheckTemplateFolder } | null;
 
 export default function TemplatesScreen() {
   const navigation = useNavigation<any>();
@@ -221,9 +220,8 @@ export default function TemplatesScreen() {
   const isDark = palette.mode === 'dark';
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  // Owner-class — как в backend OWNER_CLASS_ROLES: правка/удаление общих шаблонов.
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  const { hasPermission } = useAuth();
+  const canManageShared = hasPermission('templates_shared_manage');
 
   // Drill-down: стек id папок, последний элемент — текущий уровень.
   const [folderStack, setFolderStack] = useState<string[]>([]);
@@ -234,6 +232,8 @@ export default function TemplatesScreen() {
   const [folderNameDraft, setFolderNameDraft] = useState('');
   const [folderSaving, setFolderSaving] = useState(false);
   const [moveTemplate, setMoveTemplate] = useState<CheckTemplate | null>(null);
+  const [folderActionTarget, setFolderActionTarget] = useState<CheckTemplateFolder | null>(null);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
 
   const { data: templates = [], isLoading: templatesLoading } = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
@@ -270,19 +270,30 @@ export default function TemplatesScreen() {
   const childFolders = useMemo(
     () =>
       folders
-        .filter((f) => (f.parentId ?? null) === currentFolderId)
+        .filter((f) => (f.parentId ?? null) === currentFolderId && !!f.isShared === !!currentFolder?.isShared)
         .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
-    [folders, currentFolderId],
+    [folders, currentFolderId, currentFolder?.isShared],
   );
   const levelTemplates = useMemo(
-    () => myTemplates.filter((t) => (t.folderId ?? null) === currentFolderId),
-    [myTemplates, currentFolderId],
+    () =>
+      templates.filter(
+        (t) => (t.folderId ?? null) === currentFolderId && isSharedTemplate(t) === !!currentFolder?.isShared,
+      ),
+    [templates, currentFolderId, currentFolder?.isShared],
   );
+  const sharedRootFolders = useMemo(
+    () =>
+      folders
+        .filter((f) => f.isShared && !f.parentId)
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [folders],
+  );
+  const sharedRootTemplates = useMemo(() => sharedTemplates.filter((t) => !t.folderId), [sharedTemplates]);
 
   // Счётчики для подписи строки папки: прямые шаблоны + прямые подпапки.
   const folderStats = useMemo(() => {
     const tplCount = new Map<string, number>();
-    for (const t of myTemplates) {
+    for (const t of templates) {
       if (t.folderId) tplCount.set(t.folderId, (tplCount.get(t.folderId) ?? 0) + 1);
     }
     const subCount = new Map<string, number>();
@@ -290,7 +301,7 @@ export default function TemplatesScreen() {
       if (f.parentId) subCount.set(f.parentId, (subCount.get(f.parentId) ?? 0) + 1);
     }
     return { tplCount, subCount };
-  }, [myTemplates, folders]);
+  }, [templates, folders]);
 
   const goUp = useCallback(() => {
     haptic('tap');
@@ -327,9 +338,10 @@ export default function TemplatesScreen() {
 
   // ── Папки: создание / переименование / удаление ────────────────────────────
 
-  const openCreateFolder = () => {
+  const openCreateFolder = (isShared = !!currentFolder?.isShared) => {
+    if (isShared && !canManageShared) return;
     setFolderNameDraft('');
-    setFolderModal({ mode: 'create' });
+    setFolderModal({ mode: 'create', isShared });
   };
 
   const openRenameFolder = (folder: CheckTemplateFolder) => {
@@ -340,10 +352,20 @@ export default function TemplatesScreen() {
   const submitFolderModal = async () => {
     const name = folderNameDraft.trim();
     if (!name || !folderModal || folderSaving) return;
+    if (
+      (folderModal.mode === 'create' && folderModal.isShared) ||
+      (folderModal.mode === 'rename' && folderModal.folder.isShared)
+    ) {
+      if (!canManageShared) return;
+    }
     setFolderSaving(true);
     try {
       if (folderModal.mode === 'create') {
-        await checkTemplatesApi.folders.create({ name, parentId: currentFolderId });
+        await checkTemplatesApi.folders.create({
+          name,
+          parentId: currentFolderId,
+          isShared: folderModal.isShared || undefined,
+        });
       } else {
         await checkTemplatesApi.folders.update(folderModal.folder.id, { name });
       }
@@ -382,20 +404,31 @@ export default function TemplatesScreen() {
 
   const showFolderActions = (folder: CheckTemplateFolder) => {
     haptic('tap');
-    Alert.alert(folder.name, undefined, [
-      { text: 'Переименовать', onPress: () => openRenameFolder(folder) },
-      { text: 'Удалить', style: 'destructive', onPress: () => confirmDeleteFolder(folder) },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
+    setFolderActionTarget(folder);
+  };
+
+  const publishFolderTree = async () => {
+    const folder = folderActionTarget;
+    setFolderActionTarget(null);
+    if (!folder || folder.isShared || !canManageShared) return;
+    try {
+      await checkTemplatesApi.folders.update(folder.id, { name: folder.name, isShared: true });
+      await invalidateAll();
+      haptic('success');
+    } catch (err: any) {
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось опубликовать папку');
+    }
   };
 
   // ── Шаблоны: открытие / перемещение / удаление ─────────────────────────────
 
   const openEditor = (template?: CheckTemplate) => {
+    if (!template && currentFolder?.isShared && !canManageShared) return;
     haptic('tap');
     navigation.navigate('TemplateEditor', {
       templateId: template?.id,
       initialFolderId: template ? (template.folderId ?? null) : currentFolderId,
+      initialShared: template ? isSharedTemplate(template) : !!currentFolder?.isShared,
     });
   };
 
@@ -434,10 +467,12 @@ export default function TemplatesScreen() {
   const submitMove = async (folderId: string | null) => {
     if (!moveTemplate) return;
     const tpl = moveTemplate;
+    const targetShared = folderId ? !!foldersById.get(folderId)?.isShared : isSharedTemplate(tpl);
+    if ((isSharedTemplate(tpl) || targetShared) && !canManageShared) return;
     setMoveTemplate(null);
-    if ((tpl.folderId ?? null) === folderId) return;
+    if ((tpl.folderId ?? null) === folderId && targetShared === isSharedTemplate(tpl)) return;
     try {
-      await checkTemplatesApi.update(tpl.id, { folderId });
+      await checkTemplatesApi.update(tpl.id, { folderId, shared: targetShared });
       await queryClient.invalidateQueries({ queryKey: ['check-templates'] });
       haptic('success');
     } catch (err: any) {
@@ -446,12 +481,9 @@ export default function TemplatesScreen() {
   };
 
   const openCreateMenu = () => {
+    if (currentFolder?.isShared && !canManageShared) return;
     haptic('tap');
-    Alert.alert('Создать', undefined, [
-      { text: 'Новый шаблон', onPress: () => openEditor() },
-      { text: 'Новую папку', onPress: openCreateFolder },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
+    setCreateMenuOpen(true);
   };
 
   // ── Рендер ──────────────────────────────────────────────────────────────────
@@ -462,7 +494,8 @@ export default function TemplatesScreen() {
     currentFolderId === null &&
     childFolders.length === 0 &&
     levelTemplates.length === 0 &&
-    sharedTemplates.length === 0;
+    sharedTemplates.length === 0 &&
+    sharedRootFolders.length === 0;
   const folderEmpty =
     !initialLoading && currentFolderId !== null && childFolders.length === 0 && levelTemplates.length === 0;
 
@@ -497,9 +530,11 @@ export default function TemplatesScreen() {
               {subtitleParts.length > 0 ? subtitleParts.join(' · ') : 'Пустая папка'}
             </Text>
           </View>
-          <TouchableOpacity hitSlop={10} onPress={() => showFolderActions(folder)} style={styles.ellipsisBtn}>
-            <Ionicons name="ellipsis-horizontal" size={18} color={palette.text.tertiary} />
-          </TouchableOpacity>
+          {(!folder.isShared || canManageShared) && (
+            <TouchableOpacity hitSlop={10} onPress={() => showFolderActions(folder)} style={styles.ellipsisBtn}>
+              <Ionicons name="ellipsis-horizontal" size={18} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          )}
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
         {idx < count - 1 && <View style={[styles.separator, { backgroundColor: palette.border.subtle }]} />}
@@ -509,7 +544,7 @@ export default function TemplatesScreen() {
 
   const renderTemplateRow = (template: CheckTemplate, idx: number, count: number) => {
     const shared = isSharedTemplate(template);
-    const canManage = !shared || isOwnerClass;
+    const canManage = !shared || canManageShared;
     return (
       <React.Fragment key={template.id}>
         <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => openEditor(template)}>
@@ -554,15 +589,17 @@ export default function TemplatesScreen() {
         }
         onBack={folderStack.length > 0 ? goUp : () => navigation.goBack()}
         trailing={
-          <TouchableOpacity
-            onPress={openCreateMenu}
-            hitSlop={10}
-            style={[styles.addBtn, { backgroundColor: palette.bg.muted }]}
-            accessibilityRole="button"
-            accessibilityLabel="Создать шаблон или папку"
-          >
-            <Ionicons name="add" size={22} color={isDark ? colors.primary[300] : colors.primary[600]} />
-          </TouchableOpacity>
+          !currentFolder?.isShared || canManageShared ? (
+            <TouchableOpacity
+              onPress={openCreateMenu}
+              hitSlop={10}
+              style={[styles.addBtn, { backgroundColor: palette.bg.muted }]}
+              accessibilityRole="button"
+              accessibilityLabel="Создать шаблон или папку"
+            >
+              <Ionicons name="add" size={22} color={isDark ? colors.primary[300] : colors.primary[600]} />
+            </TouchableOpacity>
+          ) : undefined
         }
       />
 
@@ -597,6 +634,23 @@ export default function TemplatesScreen() {
               </View>
             )}
 
+            {currentFolderId === null && sharedRootFolders.length > 0 && (
+              <View style={styles.section}>
+                <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
+                  Общие папки
+                </Text>
+                <View
+                  style={[
+                    styles.card,
+                    shadow,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  {sharedRootFolders.map((f, idx) => renderFolderRow(f, idx, sharedRootFolders.length))}
+                </View>
+              </View>
+            )}
+
             {levelTemplates.length > 0 && (
               <View style={styles.section}>
                 <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
@@ -619,12 +673,14 @@ export default function TemplatesScreen() {
                 <Ionicons name="folder-open-outline" size={34} color={palette.text.tertiary} />
                 <Text style={[styles.folderEmptyTitle, { color: palette.text.secondary }]}>В этой папке пусто</Text>
                 <Text style={[styles.folderEmptyHint, { color: palette.text.tertiary }]}>
-                  «+» создаст шаблон или подпапку прямо здесь
+                  {currentFolder?.isShared && !canManageShared
+                    ? 'Общая папка доступна для просмотра и применения'
+                    : '«+» создаст шаблон или подпапку прямо здесь'}
                 </Text>
               </View>
             )}
 
-            {currentFolderId === null && sharedTemplates.length > 0 && (
+            {currentFolderId === null && sharedRootTemplates.length > 0 && (
               <View style={styles.section}>
                 <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
                   Общие шаблоны
@@ -636,9 +692,9 @@ export default function TemplatesScreen() {
                     { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
                   ]}
                 >
-                  {sharedTemplates.map((t, idx) => renderTemplateRow(t, idx, sharedTemplates.length))}
+                  {sharedRootTemplates.map((t, idx) => renderTemplateRow(t, idx, sharedRootTemplates.length))}
                 </View>
-                {!isOwnerClass && (
+                {!canManageShared && (
                   <Text style={[styles.sectionFootnote, { color: palette.text.tertiary }]}>
                     Общие шаблоны видны всем сотрудникам, изменяет их руководитель
                   </Text>
@@ -651,6 +707,88 @@ export default function TemplatesScreen() {
 
       {/* Создание / переименование папки — свой модал с TextInput:
           Alert.prompt есть только на iOS, Android получил бы заглушку. */}
+      <Modal visible={createMenuOpen} onClose={() => setCreateMenuOpen(false)} title="Создать">
+        <View style={{ gap: spacing[2] }}>
+          {(!currentFolder?.isShared || canManageShared) && (
+            <TouchableOpacity
+              style={styles.modalPrimaryBtn}
+              onPress={() => {
+                setCreateMenuOpen(false);
+                openEditor();
+              }}
+            >
+              <Text style={styles.modalPrimaryBtnText}>Новый шаблон</Text>
+            </TouchableOpacity>
+          )}
+          {(!currentFolder?.isShared || canManageShared) && (
+            <TouchableOpacity
+              style={styles.modalPrimaryBtn}
+              onPress={() => {
+                setCreateMenuOpen(false);
+                openCreateFolder(currentFolderId ? !!currentFolder?.isShared : false);
+              }}
+            >
+              <Text style={styles.modalPrimaryBtnText}>Новую папку</Text>
+            </TouchableOpacity>
+          )}
+          {canManageShared && currentFolderId === null && (
+            <TouchableOpacity
+              style={styles.modalPrimaryBtn}
+              onPress={() => {
+                setCreateMenuOpen(false);
+                openCreateFolder(true);
+              }}
+            >
+              <Text style={styles.modalPrimaryBtnText}>Новую общую папку</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={folderActionTarget !== null}
+        onClose={() => setFolderActionTarget(null)}
+        title={folderActionTarget?.name ?? 'Папка'}
+      >
+        <View style={{ gap: spacing[2] }}>
+          {folderActionTarget && (!folderActionTarget.isShared || canManageShared) && (
+            <>
+              <TouchableOpacity
+                style={styles.modalPrimaryBtn}
+                onPress={() => {
+                  const target = folderActionTarget;
+                  setFolderActionTarget(null);
+                  if (target) openRenameFolder(target);
+                }}
+              >
+                <Text style={styles.modalPrimaryBtnText}>Переименовать</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalPrimaryBtn, { backgroundColor: colors.red[600] }]}
+                onPress={() => {
+                  const target = folderActionTarget;
+                  setFolderActionTarget(null);
+                  if (target) confirmDeleteFolder(target);
+                }}
+              >
+                <Text style={styles.modalPrimaryBtnText}>Удалить</Text>
+              </TouchableOpacity>
+              {!folderActionTarget.isShared && canManageShared && (
+                <TouchableOpacity style={styles.modalPrimaryBtn} onPress={() => void publishFolderTree()}>
+                  <Text style={styles.modalPrimaryBtnText}>Опубликовать всё дерево</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+          <TouchableOpacity
+            style={[styles.modalPrimaryBtn, { backgroundColor: palette.bg.muted }]}
+            onPress={() => setFolderActionTarget(null)}
+          >
+            <Text style={[styles.modalPrimaryBtnText, { color: palette.text.primary }]}>Отмена</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       <Modal
         visible={folderModal !== null}
         onClose={() => setFolderModal(null)}
@@ -699,7 +837,7 @@ export default function TemplatesScreen() {
             </Text>
           )}
           <FolderPickerList
-            folders={folders}
+            folders={folders.filter((folder) => !folder.isShared || canManageShared)}
             selectedId={moveTemplate?.folderId ?? null}
             onSelect={(folderId) => void submitMove(folderId)}
           />

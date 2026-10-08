@@ -1,10 +1,12 @@
-import { IsISO8601, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsISO8601, IsOptional, IsString, IsUUID, MaxLength, IsInt, Min, Max } from 'class-validator';
 
 /**
  * Write DTO for PATCH /bookings/:id — reschedule / edit comment / reassign
  * master. All fields optional; only the provided ones are updated.
  */
 export class UpdateBookingDto {
+  @IsOptional() @IsUUID('4') requestId?: string;
+  @IsOptional() @IsInt() @Min(5) @Max(1440) durationMinutes?: number;
   @IsOptional()
   @IsISO8601({}, { message: 'Некорректная дата записи' })
   scheduledAt?: string;

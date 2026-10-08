@@ -97,6 +97,7 @@ interface UserFormData {
   roleId: string | null;
   salaryPercent: number;
   isActive: boolean;
+  directionId: string | null;
 }
 
 const emptyForm: UserFormData = {
@@ -107,6 +108,7 @@ const emptyForm: UserFormData = {
   roleId: null,
   salaryPercent: 0,
   isActive: true,
+  directionId: null,
 };
 
 const ROLE_OPTIONS = [
@@ -133,6 +135,10 @@ export default function UsersPage() {
   // матрицы — гейт честный и для admin, и для кастомных ролей. Ручной
   // owner-class-байпас снят: superadmin/director проходят внутри hasPermission.
   const canManageUsers = hasPermission('user_management');
+  const directionTenantAvailable =
+    !!currentUser?.tenantId && currentUser.tenantId !== '00000000-0000-0000-0000-000000000000';
+  const canManageDirections =
+    directionTenantAvailable && (currentUser?.role === 'director' || currentUser?.role === 'superadmin');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -173,6 +179,38 @@ export default function UsersPage() {
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users'],
     queryFn: async () => (await usersApi.getAll()).data as User[],
+  });
+  const { data: directions = [] } = useQuery({
+    queryKey: ['employee-directions'],
+    queryFn: async () => (await usersApi.getDirections()).data,
+    enabled: directionTenantAvailable,
+  });
+  const saveDirection = useMutation({
+    mutationFn: (name: string) => usersApi.createDirection({ name }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['employee-directions'] });
+      toast.success('Направление добавлено');
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Не удалось сохранить направление'),
+  });
+  const renameDirection = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => usersApi.updateDirection(id, { name }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['employee-directions'] });
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast.success('Направление обновлено');
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Не удалось обновить направление'),
+  });
+  const removeDirection = useMutation({
+    mutationFn: (id: string) => usersApi.deleteDirection(id),
+    onSuccess: (_data, id) => {
+      void queryClient.invalidateQueries({ queryKey: ['employee-directions'] });
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      setForm((current) => (current.directionId === id ? { ...current, directionId: null } : current));
+      toast.success('Направление удалено');
+    },
+    onError: (err: unknown) => toast.error(apiErrorMessage(err) ?? 'Не удалось удалить направление'),
   });
 
   // Список ролей — для select'а «Роль (доступ)» в карточке сотрудника и для
@@ -259,6 +297,7 @@ export default function UsersPage() {
       password: '',
       role: user.role,
       roleId: user.roleId ?? null,
+      directionId: user.directionId ?? null,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
     });
@@ -408,6 +447,7 @@ export default function UsersPage() {
       salaryPercent: Number(form.salaryPercent),
       isActive: form.isActive,
     };
+    if (canManageDirections) payload.directionId = form.directionId;
 
     if (!editingUser) {
       payload.password = form.password;
@@ -438,6 +478,15 @@ export default function UsersPage() {
       «Роли»
     </button>
   );
+  const manageDirectionPrompt = (direction?: { id: string; name: string }) => {
+    const name = window.prompt(
+      direction ? 'Новое название направления' : 'Название направления',
+      direction?.name ?? '',
+    );
+    if (name === null) return;
+    if (direction) renameDirection.mutate({ id: direction.id, name });
+    else saveDirection.mutate(name);
+  };
 
   return (
     <div className="space-y-5">
@@ -447,6 +496,11 @@ export default function UsersPage() {
         subtitle={isLoading ? 'Доступ и роли сотрудников' : `${users.length} активных · доступ задаётся ролью`}
         actions={
           <>
+            {canManageDirections && (
+              <Button variant="secondary" onClick={() => manageDirectionPrompt()}>
+                Направления
+              </Button>
+            )}
             <Button variant="secondary" icon={KeyRound} onClick={() => setRolesOpen(true)}>
               Роли
             </Button>
@@ -576,6 +630,56 @@ export default function UsersPage() {
               />
             </Field>
           </div>
+          {canManageDirections && (
+            <Field
+              label="Направление"
+              htmlFor={`${formId}-direction`}
+              hint="Сотрудник может состоять в одном направлении."
+            >
+              <Select
+                id={`${formId}-direction`}
+                value={form.directionId ?? ''}
+                onChange={(e) => setForm({ ...form, directionId: e.target.value || null })}
+              >
+                <option value="">Без направления</option>
+                {directions.map((direction) => (
+                  <option key={direction.id} value={direction.id}>
+                    {direction.name}
+                  </option>
+                ))}
+              </Select>
+              {directions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {directions.map((direction) => (
+                    <button
+                      key={direction.id}
+                      type="button"
+                      onClick={() => manageDirectionPrompt(direction)}
+                      className="text-xs text-accent underline"
+                    >
+                      Изменить «{direction.name}»
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={!form.directionId}
+                    onClick={() => {
+                      const selected = directions.find((item) => item.id === form.directionId);
+                      const target = selected;
+                      if (
+                        target &&
+                        window.confirm(`Удалить направление «${target.name}»? Сотрудники станут без направления.`)
+                      )
+                        removeDirection.mutate(target.id);
+                    }}
+                    className="text-xs text-danger underline"
+                  >
+                    Удалить выбранное
+                  </button>
+                </div>
+              )}
+            </Field>
+          )}
           {editingUser && (
             <p className="-mt-2 text-xs text-ink-3">
               Ставка меняется с текущего месяца. Задним числом или на будущее —{' '}

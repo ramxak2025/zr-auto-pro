@@ -107,6 +107,7 @@ import type {
 // для этого пикера, редактора и раздела «Ещё → Шаблоны».
 import { FolderPickerList, isSharedTemplate, templateSummary, pluralRu } from './TemplatesScreen';
 import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../shared/validation/phone';
+import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
@@ -409,6 +410,8 @@ const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
 const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
 export default function CheckCreateScreen() {
+  const { user: catalogActor } = useAuth();
+  const catalogOwner = catalogActor?.role === 'director' || catalogActor?.role === 'superadmin';
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -616,6 +619,7 @@ export default function CheckCreateScreen() {
   }, []);
   const [showPlatePicker, setShowPlatePicker] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
+  const [showAllCatalogServices, setShowAllCatalogServices] = useState(false);
   // Пикер товаров — теперь ПОЛНОЭКРАННЫЙ роут `ProductPicker` на корневом
   // стеке (Round 8 #2, Склад-паттерн с папками), а не модалка: локального
   // show-state больше нет, открытие — openProductPicker() ниже.
@@ -868,26 +872,37 @@ export default function CheckCreateScreen() {
     [pointMasterIds],
   );
 
-  const {
-    data: allServices,
-    isError: isErrorServices,
-    fetchStatus: fetchStatusServices,
-    refetch: refetchServices,
-  } = useQuery<Service[]>({
-    queryKey: ['all-services'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 500 });
-      return res.data.data || res.data;
-    },
-    enabled: showServicePicker,
+  const allServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: false }],
+    queryFn: () => loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit })).data, 500),
+    enabled: showServicePicker && (catalogOwner || showAllCatalogServices),
+    staleTime: 60_000,
   });
+  const allServices = allServicesQuery.data;
+  const preferredServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: true }],
+    queryFn: () =>
+      loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly: true })).data, 500),
+    enabled: showServicePicker && !catalogOwner && !showAllCatalogServices,
+    staleTime: 60_000,
+  });
+  const preferredServices = preferredServicesQuery.data;
+  const activeServicesLoading =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isLoading : allServicesQuery.isLoading;
+  const activeServicesError =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isError : allServicesQuery.isError;
+  const refetchActiveServices =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
+  const activeServiceFetchStatus =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.fetchStatus : allServicesQuery.fetchStatus;
+  const selectableServices = !catalogOwner && !showAllCatalogServices ? (preferredServices ?? []) : (allServices ?? []);
 
   // Тот же сетевой сбой, что и в поиске клиента: список услуг не загрузился
   // из-за сети (упал / приостановлен офлайном) → показываем «Нет связи» +
   // «Повторить», а не пустоту / ложное «Ничего не найдено».
   const servicePickerNetworkError =
-    (isErrorServices || fetchStatusServices === 'paused' || !onlineManager.isOnline()) &&
-    (allServices?.length ?? 0) === 0;
+    (activeServicesError || activeServiceFetchStatus === 'paused' || !onlineManager.isOnline()) &&
+    selectableServices.length === 0;
 
   // Products cache for bundle expansion + the oversell guard — CRITICAL
   // screen. Stock numbers must NEVER be stale here: picking a product is
@@ -1080,11 +1095,11 @@ export default function CheckCreateScreen() {
 
   // Filtered services
   const filteredServices = useMemo(() => {
-    const services = allServices || [];
+    const services = selectableServices;
     if (!serviceSearch) return services;
     const q = serviceSearch.toLowerCase();
     return services.filter((s) => s.name.toLowerCase().includes(q));
-  }, [allServices, serviceSearch]);
+  }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────
   const { data: templates = [] } = useQuery<CheckTemplate[]>({
@@ -1103,37 +1118,53 @@ export default function CheckCreateScreen() {
   // Группировка пикера: мои шаблоны по папкам текущего уровня + «Общие»
   // отдельной плоской секцией на корне.
   const myTemplates = useMemo(() => templates.filter((t) => !isSharedTemplate(t)), [templates]);
-  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t)), [templates]);
-  const pickerFolders = useMemo(
-    () =>
-      templateFolders
-        .filter((f) => (f.parentId ?? null) === templatesPickerFolderId)
-        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
-    [templateFolders, templatesPickerFolderId],
-  );
-  const pickerTemplates = useMemo(
-    () => myTemplates.filter((t) => (t.folderId ?? null) === templatesPickerFolderId),
-    [myTemplates, templatesPickerFolderId],
-  );
+  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t) && !t.folderId), [templates]);
   const pickerCurrentFolder = useMemo(
     () => (templatesPickerFolderId ? templateFolders.find((f) => f.id === templatesPickerFolderId) : undefined),
     [templateFolders, templatesPickerFolderId],
   );
+  const pickerFolders = useMemo(
+    () =>
+      templateFolders
+        .filter(
+          (f) =>
+            (f.parentId ?? null) === templatesPickerFolderId &&
+            !!f.isShared === !!(templatesPickerFolderId ? pickerCurrentFolder?.isShared : false),
+        )
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [templateFolders, templatesPickerFolderId, pickerCurrentFolder?.isShared],
+  );
+  const pickerTemplates = useMemo(
+    () =>
+      templates.filter(
+        (t) =>
+          (t.folderId ?? null) === templatesPickerFolderId &&
+          isSharedTemplate(t) === !!(templatesPickerFolderId ? pickerCurrentFolder?.isShared : false),
+      ),
+    [templates, templatesPickerFolderId, pickerCurrentFolder?.isShared],
+  );
   // Счётчик прямых шаблонов в папке — подпись строки папки в пикере.
   const pickerFolderTplCount = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of myTemplates) {
+    for (const t of templates) {
       if (t.folderId) counts.set(t.folderId, (counts.get(t.folderId) ?? 0) + 1);
     }
     return counts;
-  }, [myTemplates]);
+  }, [templates]);
+  const sharedRootFolders = useMemo(
+    () =>
+      templateFolders
+        .filter((f) => f.isShared && !f.parentId)
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [templateFolders],
+  );
 
   // Owner-class (director/admin/superadmin) — зеркало backend
   // OWNER_CLASS_ROLES: правка/удаление ОБЩИХ шаблонов и публикация общих.
   // Отдельный вызов useAuth(): основной деструктур (`authUser`) объявлен ниже
   // по файлу, ссылаться на него отсюда — temporal dead zone.
-  const { user: templatesActor } = useAuth();
-  const isOwnerClassRole = !!templatesActor?.role && ['superadmin', 'director', 'admin'].includes(templatesActor.role);
+  const { hasPermission: hasTemplatePermission } = useAuth();
+  const canManageSharedTemplates = hasTemplatePermission('templates_shared_manage');
 
   const openTemplatesPicker = () => {
     setTemplatesPickerFolderId(null);
@@ -1217,8 +1248,7 @@ export default function CheckCreateScreen() {
             costPrice: l.costPrice,
             quantity: l.quantity,
           })),
-        // Общий шаблон живёт вне личных папок (сервер вернул бы 400).
-        folderId: saveTplShared ? null : saveTplFolderId,
+        folderId: saveTplFolderId,
         shared: saveTplShared || undefined,
       });
       queryClient.invalidateQueries({ queryKey: ['check-templates'] });
@@ -4751,6 +4781,28 @@ export default function CheckCreateScreen() {
 
       {/* Service Picker */}
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
+        {!catalogOwner && (
+          <TouchableOpacity
+            onPress={() => setShowAllCatalogServices((value) => !value)}
+            style={{
+              paddingVertical: spacing[2],
+              alignSelf: 'flex-start',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing[1],
+            }}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name={showAllCatalogServices ? 'eye-off-outline' : 'eye-outline'}
+              size={18}
+              color={colors.primary[600]}
+            />
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+              {showAllCatalogServices ? 'Показывать по роли' : 'Показать все услуги'}
+            </Text>
+          </TouchableOpacity>
+        )}
         <TextInput
           value={serviceSearch}
           onChangeText={setServiceSearch}
@@ -4780,7 +4832,11 @@ export default function CheckCreateScreen() {
               <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
             </TouchableOpacity>
           ))}
-          {servicePickerNetworkError ? (
+          {activeServicesLoading && filteredServices.length === 0 ? (
+            <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] }}>
+              <ActivityIndicator color={colors.primary[500]} size="small" />
+            </View>
+          ) : servicePickerNetworkError ? (
             <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] }}>
               <Ionicons name="cloud-offline-outline" size={22} color={palette.text.tertiary} />
               <Text style={{ textAlign: 'center', color: palette.text.tertiary }}>
@@ -4789,17 +4845,26 @@ export default function CheckCreateScreen() {
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
-                  void refetchServices();
+                  void refetchActiveServices();
                 }}
                 activeOpacity={0.8}
               >
                 <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
               </TouchableOpacity>
             </View>
-          ) : serviceSearch && filteredServices.length === 0 ? (
-            <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[4] }}>
-              Ничего не найдено
-            </Text>
+          ) : !activeServicesError && !activeServicesLoading && filteredServices.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[4], gap: spacing[2] }}>
+              <Text style={{ textAlign: 'center', color: palette.text.tertiary }}>
+                {serviceSearch ? 'Ничего не найдено' : 'Нет услуг по вашей роли'}
+              </Text>
+              {!serviceSearch && !showAllCatalogServices && !catalogOwner && (
+                <TouchableOpacity onPress={() => setShowAllCatalogServices(true)} accessibilityRole="button">
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                    Показать все услуги
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ) : null}
         </ScrollView>
       </Modal>
@@ -4884,6 +4949,34 @@ export default function CheckCreateScreen() {
               </TouchableOpacity>
             );
           })}
+          {templatesPickerFolderId === null &&
+            sharedRootFolders.map((folder) => {
+              const count = pickerFolderTplCount.get(folder.id) ?? 0;
+              return (
+                <TouchableOpacity
+                  key={folder.id}
+                  style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+                  onPress={() => {
+                    haptic('tap');
+                    setTemplatesPickerFolderId(folder.id);
+                  }}
+                  activeOpacity={0.6}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 }}>
+                    <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.pickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {folder.name}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
+                        {count > 0 ? `${count} ${pluralRu(count, 'шаблон', 'шаблона', 'шаблонов')}` : 'Общая папка'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              );
+            })}
 
           {/* Мои шаблоны текущего уровня */}
           {pickerTemplates.map((tpl) => (
@@ -4917,17 +5010,19 @@ export default function CheckCreateScreen() {
                     Применить
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() =>
-                    Alert.alert('Удалить шаблон?', tpl.name, [
-                      { text: 'Отмена', style: 'cancel' },
-                      { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
-                    ])
-                  }
-                  hitSlop={8}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-                </TouchableOpacity>
+                {(!isSharedTemplate(tpl) || canManageSharedTemplates) && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert('Удалить шаблон?', tpl.name, [
+                        { text: 'Отмена', style: 'cancel' },
+                        { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
+                      ])
+                    }
+                    hitSlop={8}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           ))}
@@ -5013,7 +5108,7 @@ export default function CheckCreateScreen() {
                       </Text>
                     </TouchableOpacity>
                     {/* Удаление общего — только owner-class (сервер всё равно 403). */}
-                    {isOwnerClassRole && (
+                    {canManageSharedTemplates && (
                       <TouchableOpacity
                         onPress={() =>
                           Alert.alert('Удалить шаблон?', tpl.name, [
@@ -5051,7 +5146,7 @@ export default function CheckCreateScreen() {
             onSubmitEditing={submitSaveTemplate}
           />
 
-          {isOwnerClassRole && (
+          {canManageSharedTemplates && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text.primary }}>Общий шаблон</Text>
@@ -5064,48 +5159,47 @@ export default function CheckCreateScreen() {
                 onValueChange={(v) => {
                   haptic('select');
                   setSaveTplShared(v);
+                  setSaveTplFolderId(null);
                 }}
                 trackColor={{ true: colors.primary[500] }}
               />
             </View>
           )}
 
-          {!saveTplShared && (
-            <View>
-              <TouchableOpacity
-                style={[styles.tplFolderRow, { borderColor: palette.border.subtle }]}
-                onPress={() => {
-                  haptic('tap');
-                  setSaveTplFolderOpen((o) => !o);
-                }}
-                activeOpacity={0.6}
-              >
-                <Ionicons name="folder-open-outline" size={16} color={colors.primary[500]} />
-                <Text style={{ flex: 1, fontSize: 14, color: palette.text.primary }} numberOfLines={1}>
-                  {saveTplFolderId
-                    ? (templateFolders.find((f) => f.id === saveTplFolderId)?.name ?? 'Папка')
-                    : 'Без папки'}
-                </Text>
-                <Ionicons
-                  name={saveTplFolderOpen ? 'chevron-up' : 'chevron-down'}
-                  size={15}
-                  color={palette.text.tertiary}
-                />
-              </TouchableOpacity>
-              {/* Инлайн-список вместо второй модалки: вложенные RN Modal на
+          <View>
+            <TouchableOpacity
+              style={[styles.tplFolderRow, { borderColor: palette.border.subtle }]}
+              onPress={() => {
+                haptic('tap');
+                setSaveTplFolderOpen((o) => !o);
+              }}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="folder-open-outline" size={16} color={colors.primary[500]} />
+              <Text style={{ flex: 1, fontSize: 14, color: palette.text.primary }} numberOfLines={1}>
+                {saveTplFolderId
+                  ? (templateFolders.find((f) => f.id === saveTplFolderId)?.name ?? 'Папка')
+                  : 'Без папки'}
+              </Text>
+              <Ionicons
+                name={saveTplFolderOpen ? 'chevron-up' : 'chevron-down'}
+                size={15}
+                color={palette.text.tertiary}
+              />
+            </TouchableOpacity>
+            {/* Инлайн-список вместо второй модалки: вложенные RN Modal на
                   iOS ведут себя непредсказуемо. */}
-              {saveTplFolderOpen && (
-                <FolderPickerList
-                  folders={templateFolders}
-                  selectedId={saveTplFolderId}
-                  onSelect={(id) => {
-                    setSaveTplFolderId(id);
-                    setSaveTplFolderOpen(false);
-                  }}
-                />
-              )}
-            </View>
-          )}
+            {saveTplFolderOpen && (
+              <FolderPickerList
+                folders={templateFolders.filter((f) => !!f.isShared === saveTplShared)}
+                selectedId={saveTplFolderId}
+                onSelect={(id) => {
+                  setSaveTplFolderId(id);
+                  setSaveTplFolderOpen(false);
+                }}
+              />
+            )}
+          </View>
 
           <TouchableOpacity
             style={[styles.tplSaveBtn, { opacity: saveTplName.trim() && !savingTemplate ? 1 : 0.5 }]}

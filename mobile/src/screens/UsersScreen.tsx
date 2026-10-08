@@ -85,6 +85,7 @@ interface UserForm {
   isActive: boolean;
   hiddenFromSchedule: boolean;
   hiddenEverywhere: boolean;
+  directionId: string | null;
 }
 
 // ── UserCard ──────────────────────────────────────────────────────────
@@ -209,6 +210,7 @@ const emptyForm: UserForm = {
   isActive: true,
   hiddenFromSchedule: false,
   hiddenEverywhere: false,
+  directionId: null,
 };
 
 interface CommissionItem {
@@ -238,6 +240,9 @@ export default function UsersScreen() {
   const [form, setForm] = useState<UserForm>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [directionsModalOpen, setDirectionsModalOpen] = useState(false);
+  const [directionName, setDirectionName] = useState('');
+  const [editingDirectionId, setEditingDirectionId] = useState<string | null>(null);
 
   // ── Роль (ROLE-ONLY, консолидация 2026-07) ─────────────────────────────────
   // `roleSheetOpen` — шит выбора роли из поля «Роль» в edit-форме. `roleTouched`
@@ -269,6 +274,40 @@ export default function UsersScreen() {
   });
 
   const users = Array.isArray(data) ? data : [];
+  const directionTenantAvailable =
+    !!currentUser?.tenantId && currentUser.tenantId !== '00000000-0000-0000-0000-000000000000';
+  const canManageDirections =
+    directionTenantAvailable && (currentUser?.role === 'director' || currentUser?.role === 'superadmin');
+  const { data: directions = [] } = useQuery({
+    queryKey: ['employee-directions'],
+    queryFn: async () => (await usersApi.getDirections()).data,
+    enabled: directionTenantAvailable,
+  });
+  const directionMutation = useMutation({
+    mutationFn: () =>
+      editingDirectionId
+        ? usersApi.updateDirection(editingDirectionId, { name: directionName })
+        : usersApi.createDirection({ name: directionName }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['employee-directions'] });
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      setDirectionName('');
+      setEditingDirectionId(null);
+      Alert.alert('Готово', 'Направление сохранено');
+    },
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить направление'),
+  });
+  const deleteDirectionMutation = useMutation({
+    mutationFn: (id: string) => usersApi.deleteDirection(id),
+    onSuccess: (_data, id) => {
+      void queryClient.invalidateQueries({ queryKey: ['employee-directions'] });
+      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      setForm((current) => (current.directionId === id ? { ...current, directionId: null } : current));
+      setDirectionName('');
+      setEditingDirectionId(null);
+    },
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить направление'),
+  });
 
   // Дискриминация loading / error / empty / list (чистая, юнит-тестируемая —
   // hooks/useUsers.ts). «Нет сотрудников» рисуем ТОЛЬКО при подтверждённом
@@ -377,6 +416,7 @@ export default function UsersScreen() {
       isActive: user.isActive,
       hiddenFromSchedule: !!user.hiddenFromSchedule,
       hiddenEverywhere: !!user.hiddenEverywhere,
+      directionId: user.directionId ?? null,
     });
     setModalOpen(true);
   }, []);
@@ -471,6 +511,7 @@ export default function UsersScreen() {
       hiddenFromSchedule: form.hiddenFromSchedule,
       hiddenEverywhere: form.hiddenEverywhere,
     };
+    if (canManageDirections) payload.directionId = form.directionId;
 
     if (!editingUser) {
       payload.password = form.password;
@@ -579,6 +620,19 @@ export default function UsersScreen() {
                 <Ionicons name="key-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
             )}
+            {canManageDirections && (
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('tap');
+                  setDirectionsModalOpen(true);
+                }}
+                style={[styles.rolesBtn, { backgroundColor: palette.bg.muted }]}
+                accessibilityRole="button"
+                accessibilityLabel="Направления сотрудников"
+              >
+                <Ionicons name="git-network-outline" size={18} color={colors.primary[600]} />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
               <Ionicons name="add" size={20} color={colors.white} />
             </TouchableOpacity>
@@ -634,6 +688,89 @@ export default function UsersScreen() {
           <LoadingSpinner />
         )}
       </ScrollView>
+
+      <Modal
+        visible={directionsModalOpen}
+        onClose={() => setDirectionsModalOpen(false)}
+        title="Направления сотрудников"
+      >
+        <ScrollView contentContainerStyle={styles.formContent}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            Одно направление на сотрудника. Удаление сбросит назначения.
+          </Text>
+          {directions.map((direction) => (
+            <View
+              key={direction.id}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: spacing[2] }}
+            >
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: spacing[3] }}
+                onPress={() => {
+                  setEditingDirectionId(direction.id);
+                  setDirectionName(direction.name);
+                }}
+              >
+                <Text style={{ color: palette.text.primary, fontSize: fontSize.base }}>{direction.name}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() =>
+                  Alert.alert('Удалить направление?', `Сотрудники из «${direction.name}» останутся без направления.`, [
+                    { text: 'Отмена', style: 'cancel' },
+                    {
+                      text: 'Удалить',
+                      style: 'destructive',
+                      onPress: () => deleteDirectionMutation.mutate(direction.id),
+                    },
+                  ])
+                }
+                accessibilityRole="button"
+                accessibilityLabel={`Удалить ${direction.name}`}
+              >
+                <Ionicons name="trash-outline" size={19} color={colors.red[500]} />
+              </TouchableOpacity>
+            </View>
+          ))}
+          <TextInput
+            value={directionName}
+            onChangeText={setDirectionName}
+            style={[
+              styles.formInput,
+              {
+                marginTop: spacing[4],
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            placeholder={editingDirectionId ? 'Новое название' : 'Новое направление'}
+            placeholderTextColor={palette.text.tertiary}
+            maxLength={64}
+          />
+          <TouchableOpacity
+            onPress={() => directionName.trim() && directionMutation.mutate()}
+            disabled={!directionName.trim() || directionMutation.isPending}
+            style={[
+              styles.addBtn,
+              { alignSelf: 'flex-start', marginTop: spacing[3], opacity: directionName.trim() ? 1 : 0.5 },
+            ]}
+          >
+            <Text style={{ color: colors.white, fontWeight: '700' }}>
+              {editingDirectionId ? 'Сохранить' : 'Добавить направление'}
+            </Text>
+          </TouchableOpacity>
+          {editingDirectionId && (
+            <TouchableOpacity
+              onPress={() => {
+                setEditingDirectionId(null);
+                setDirectionName('');
+              }}
+              style={{ paddingVertical: spacing[3] }}
+            >
+              <Text style={{ color: colors.primary[600] }}>Отмена переименования</Text>
+            </TouchableOpacity>
+          )}
+        </ScrollView>
+      </Modal>
 
       {/* Create/Edit Modal */}
       <Modal visible={modalOpen} onClose={closeModal} title={editingUser ? 'Редактировать' : 'Новый сотрудник'}>
@@ -752,6 +889,35 @@ export default function UsersScreen() {
               />
             </View>
           </View>
+
+          {canManageDirections && (
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Направление</Text>
+              <View style={styles.roleRow}>
+                {[{ id: null, name: 'Без направления' }, ...directions].map((item) => (
+                  <TouchableOpacity
+                    key={item.id ?? 'none'}
+                    onPress={() => setForm((prev) => ({ ...prev, directionId: item.id }))}
+                    style={[
+                      styles.roleChip,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      form.directionId === item.id && styles.roleChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.roleChipText,
+                        { color: palette.text.secondary },
+                        form.directionId === item.id && styles.roleChipTextActive,
+                      ]}
+                    >
+                      {item.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* 150 — смена ставки задним числом / на будущее + история. Поля выше
               меняют ставку С ТЕКУЩЕГО месяца (как раньше). */}

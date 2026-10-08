@@ -9,6 +9,7 @@ import {
   Copy,
   Info,
   KeyRound,
+  FileText,
   Lock,
   Package,
   Plus,
@@ -136,6 +137,7 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   // База знаний: view (смотреть базу) / manage (мутации). manage ⇒ view.
   knowledge_view: { section: 'knowledge', action: 'view', kind: 'bool' },
   knowledge_manage: { section: 'knowledge', action: 'manage', kind: 'bool' },
+  templates_shared_manage: { section: 'templates', action: 'manageShared', kind: 'bool' },
 };
 
 /**
@@ -198,6 +200,7 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   company_manage: 'Управляет данными компании',
   knowledge_view: 'Доступ к базе знаний',
   knowledge_manage: 'Управляет базой знаний',
+  templates_shared_manage: 'Управляет общими шаблонами и папками',
 };
 
 /** Пояснения к неочевидным строкам. */
@@ -219,6 +222,7 @@ const MATRIX_HINTS: Partial<Record<PermissionKey, string>> = {
   marketing_manage: 'Управление включает просмотр: интеграции, площадки, настройки и отправку рассылок.',
   knowledge_view: 'Разрешает открыть базу знаний. Без него роль раздел не видит.',
   knowledge_manage: 'Управление включает просмотр: создание и редактирование курсов, статей и регламентов.',
+  templates_shared_manage: 'Создаёт и изменяет общие шаблоны и папки, а также публикует свои шаблоны и папки.',
   salary_payouts_manage: 'Владельческое право: включить его в роли может только директор.',
   equipment_permanent_delete: 'Владельческое право: включить его в роли может только директор.',
   employees_approve_profile: 'Владельческое право: включить его в роли может только директор.',
@@ -237,6 +241,7 @@ const GROUP_ICONS: Record<string, LucideIcon> = {
   Управление: ShieldCheck,
   Настройки: Settings,
   'База знаний': BookOpen,
+  Шаблоны: FileText,
 };
 
 /**

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, Platform, StatusBar, StyleSheet } from 'react-native';
+import { Alert, AppState, Linking, Platform, StatusBar, StyleSheet } from 'react-native';
 import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { MutationCache, QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -34,6 +34,10 @@ import {
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
 import { ensureApiHostReady, onNetworkClassFailure, onRequestSucceeded, reselectApiHost } from './src/api/axios';
 import { checksApi, clientsApi, loyaltyApi } from './src/api/services';
+import { useAuth } from './src/contexts/AuthContext';
+import { parseAttendanceNfcUri } from '../shared/utils/attendanceNfcUri';
+import { clearPendingAttendanceLink, setPendingAttendanceLink } from './src/utils/nfcLinkInbox';
+import { captureNfcSessionGeneration } from './src/utils/nfcSessionGeneration';
 
 // NetInfo's DEFAULT reachability probe hits clients3.google.com in the
 // background. The `isInternetReachable` verdict it produces is IGNORED
@@ -327,6 +331,88 @@ function alertQueuedCheckRejected(entry: QueuedCheck, message: string): void {
 // bar stays visible, exactly like opening a check from Журнал by hand.
 const navigationRef = createNavigationContainerRef();
 
+function NfcDeepLinkRouter({ navigationReady }: { navigationReady: boolean }) {
+  const { user, token, loading, recoveringSession } = useAuth();
+  const [queuedLinkRevision, setQueuedLinkRevision] = useState(0);
+  const queuedUrl = useRef<{ url: string; sessionToken: string | null; sessionScope: string } | null>(null);
+  const previousSessionToken = useRef(token);
+  const currentSessionToken = useRef(token);
+  const sessionIdentity = JSON.stringify([
+    user?.tenantId ?? user?.tenant?.id ?? '',
+    user?.id ?? '',
+    user?.currentPointId ?? null,
+    token,
+  ]);
+  const sessionScope = captureNfcSessionGeneration(sessionIdentity);
+  const currentSessionScope = useRef(sessionScope.id);
+  currentSessionToken.current = token;
+  currentSessionScope.current = sessionScope.id;
+
+  useEffect(() => {
+    if (previousSessionToken.current !== token) {
+      clearPendingAttendanceLink();
+      previousSessionToken.current = token;
+    }
+  }, [token]);
+
+  useEffect(() => {
+    let active = true;
+    const initialSessionToken = currentSessionToken.current;
+    const initialSessionScope = currentSessionScope.current;
+    let receivedRuntimeLink = false;
+    const queue = (url: string, sessionToken = currentSessionToken.current, scope = currentSessionScope.current) => {
+      queuedUrl.current = { url, sessionToken, sessionScope: scope };
+      setQueuedLinkRevision((revision) => revision + 1);
+    };
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      receivedRuntimeLink = true;
+      queue(url);
+    });
+    void Linking.getInitialURL()
+      .then((url) => {
+        if (active && url && !receivedRuntimeLink) queue(url, initialSessionToken, initialSessionScope);
+      })
+      .catch(() => {
+        if (active) showToast('Не удалось прочитать ссылку NFC. Откройте её ещё раз.', 'error');
+      });
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!navigationReady || loading || recoveringSession || !queuedUrl.current) return;
+    const queued = queuedUrl.current;
+    queuedUrl.current = null;
+    if (queued.sessionToken === null) {
+      clearPendingAttendanceLink();
+      showToast('Войдите в Autexa и снова приложите NFC-метку.', 'error');
+      return;
+    }
+    if (queued.sessionScope !== sessionScope.id || queued.sessionToken !== token) {
+      clearPendingAttendanceLink();
+      showToast('Сессия изменилась. Снова откройте ссылку NFC под текущим аккаунтом.', 'error');
+      return;
+    }
+    if (!token || !user) {
+      clearPendingAttendanceLink();
+      showToast('Войдите в Autexa и снова приложите NFC-метку.', 'error');
+      return;
+    }
+    const parsed = parseAttendanceNfcUri(queued.url);
+    if (!parsed) {
+      clearPendingAttendanceLink();
+      showToast('Ссылка NFC недействительна или больше не поддерживается.', 'error');
+      return;
+    }
+    setPendingAttendanceLink(parsed.token, token, sessionScope.id);
+    navigationRef.dispatch(CommonActions.navigate('NfcAttendance'));
+  }, [loading, navigationReady, queuedLinkRevision, recoveringSession, sessionScope.id, token, user]);
+
+  return null;
+}
+
 // Cold-start queue: a tap on a push can arrive before the navigator has
 // mounted (auth still resolving). Park the checkId and flush it in onReady.
 let pendingCheckId: string | null = null;
@@ -368,6 +454,7 @@ export default function App() {
   const [cacheReady, setCacheReady] = useState(false);
   const [priorityHydrated, setPriorityHydrated] = useState(false);
   const [authResolved, setAuthResolved] = useState(false);
+  const [navigationReady, setNavigationReady] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
   const persistenceCleanup = useRef<(() => void) | null>(null);
   const foregroundCleanup = useRef<(() => void) | null>(null);
@@ -587,6 +674,8 @@ export default function App() {
             cacheReady={cacheReady}
             fontsReady={fontsReady}
             showSplash={showSplash}
+            navigationReady={navigationReady}
+            onNavigationReady={() => setNavigationReady(true)}
             onAuthResolve={() => setAuthResolved(true)}
           />
         </GestureRoot>
@@ -623,6 +712,8 @@ interface ThemedRootProps {
   cacheReady: boolean;
   fontsReady: boolean;
   showSplash: boolean;
+  navigationReady: boolean;
+  onNavigationReady: () => void;
   onAuthResolve: () => void;
 }
 
@@ -632,7 +723,15 @@ interface ThemedRootProps {
  * style all flip with the dark-mode toggle. Living one level inside
  * <ThemeProvider> is the cleanest way to subscribe.
  */
-function ThemedRoot({ apiRoutingReady, cacheReady, fontsReady, showSplash, onAuthResolve }: ThemedRootProps) {
+function ThemedRoot({
+  apiRoutingReady,
+  cacheReady,
+  fontsReady,
+  showSplash,
+  navigationReady,
+  onNavigationReady,
+  onAuthResolve,
+}: ThemedRootProps) {
   const { mode, palette } = useThemeMode();
   return (
     <SafeAreaProvider style={{ backgroundColor: palette.bg.canvas }}>
@@ -659,6 +758,7 @@ function ThemedRoot({ apiRoutingReady, cacheReady, fontsReady, showSplash, onAut
                 <NavigationContainer
                   ref={navigationRef}
                   onReady={() => {
+                    onNavigationReady();
                     // Flush a push-tap that arrived before the navigator
                     // mounted (cold start from a notification).
                     if (pendingCheckId) {
@@ -685,6 +785,7 @@ function ThemedRoot({ apiRoutingReady, cacheReady, fontsReady, showSplash, onAut
                     },
                   }}
                 >
+                  <NfcDeepLinkRouter navigationReady={navigationReady} />
                   <StatusBar
                     barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
                     backgroundColor="transparent"

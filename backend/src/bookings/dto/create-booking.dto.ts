@@ -1,7 +1,9 @@
-import { IsBoolean, IsISO8601, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsBoolean, IsISO8601, IsOptional, IsString, IsUUID, MaxLength, IsInt, Min, Max } from 'class-validator';
 
 /** Write DTO for POST /bookings. */
 export class CreateBookingDto {
+  @IsOptional() @IsUUID('4') requestId?: string;
+  @IsOptional() @IsInt() @Min(5) @Max(1440) durationMinutes?: number;
   /** Client the appointment is for — must exist in the caller's tenant. */
   @IsUUID('4', { message: 'Некорректный клиент' })
   clientId!: string;

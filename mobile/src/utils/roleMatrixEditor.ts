@@ -143,6 +143,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   // База знаний
   knowledge_view: 'Доступ к базе знаний',
   knowledge_manage: 'Управляет базой знаний',
+  templates_shared_manage: 'Управляет общими шаблонами и папками',
 };
 
 /**
@@ -211,6 +212,7 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   // База знаний
   knowledge_view: 'bool',
   knowledge_manage: 'bool',
+  templates_shared_manage: 'bool',
 };
 
 /** Все ключи редактора (стабильный порядок CELL_KIND) — для сводок и тестов. */
@@ -245,6 +247,7 @@ const GROUP_SPECS: readonly [
   { title: 'Управление'; keys: readonly EditorKeysOf<'Управление'>[] },
   { title: 'Настройки'; keys: readonly EditorKeysOf<'Настройки'>[] },
   { title: 'База знаний'; keys: readonly EditorKeysOf<'База знаний'>[] },
+  { title: 'Шаблоны'; keys: readonly EditorKeysOf<'Шаблоны'>[] },
 ] = [
   {
     title: 'Касса',
@@ -300,6 +303,7 @@ const GROUP_SPECS: readonly [
   { title: 'Управление', keys: ['user_management', 'employees_approve_profile'] },
   { title: 'Настройки', keys: ['settings_manage', 'company_manage'] },
   { title: 'База знаний', keys: ['knowledge_view', 'knowledge_manage'] },
+  { title: 'Шаблоны', keys: ['templates_shared_manage'] },
 ];
 
 /** Секции редактора, готовые к рендеру. */
@@ -396,6 +400,7 @@ export function draftFromMatrix(matrix: RoleMatrix | null | undefined): RoleMatr
       company_manage: readBool(m.settings?.company),
       knowledge_view: readBool(m.knowledge?.view),
       knowledge_manage: readBool(m.knowledge?.manage),
+      templates_shared_manage: readBool(m.templates?.manageShared),
     },
   };
 }
@@ -447,6 +452,7 @@ export function matrixFromDraft(draft: RoleMatrixDraft): RoleMatrix {
     employees: { manage: b.user_management, approveProfile: b.employees_approve_profile },
     settings: { manage: b.settings_manage, company: b.company_manage },
     knowledge: { view: b.knowledge_view, manage: b.knowledge_manage },
+    templates: { manageShared: b.templates_shared_manage },
   };
 }
 

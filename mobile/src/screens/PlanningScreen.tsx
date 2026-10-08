@@ -327,7 +327,38 @@ export default function PlanningScreen() {
 
   // Сотрудники для мотивации: реальные сотрудники автосервиса (без платформенного
   // суперадмина). Владелец/директор виден — на случай собственного оклада.
-  const staff = useMemo(() => (users ?? []).filter((u) => u.role !== UserRole.SUPERADMIN), [users]);
+  const staff = useMemo(
+    () =>
+      (users ?? [])
+        .filter((u) => u.role !== UserRole.SUPERADMIN)
+        .slice()
+        .sort((a, b) => {
+          const aUnassigned = a.directionId == null;
+          const bUnassigned = b.directionId == null;
+          if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
+          const group = (a.directionName?.trim() || '\uffff').localeCompare(b.directionName?.trim() || '\uffff', 'ru');
+          if (group !== 0) return group;
+          const groupId = (a.directionId ?? '').localeCompare(b.directionId ?? '');
+          if (groupId !== 0) return groupId;
+          return (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.fullName.localeCompare(b.fullName, 'ru');
+        }),
+    [users],
+  );
+  const staffGroups = useMemo(() => {
+    const groups = new Map<string | null, { id: string | null; label: string; users: User[] }>();
+    staff.forEach((employee) => {
+      const id = employee.directionId ?? null;
+      const label = id === null ? 'Без направления' : employee.directionName?.trim() || 'Без названия';
+      const group = groups.get(id) ?? { id, label, users: [] };
+      group.users.push(employee);
+      groups.set(id, group);
+    });
+    return [...groups.values()].sort((a, b) => {
+      if (a.id === null) return b.id === null ? 0 : 1;
+      if (b.id === null) return -1;
+      return a.label.localeCompare(b.label, 'ru') || a.id.localeCompare(b.id);
+    });
+  }, [staff]);
 
   // Сумма постоянных расходов в месяц (только активные) + амортизация по дням.
   const fixedTotal = useMemo(
@@ -519,66 +550,91 @@ export default function PlanningScreen() {
               </View>
             ) : (
               <View style={[cardBase, { paddingVertical: 0, paddingHorizontal: 0 }]}>
-                {staff.map((u, idx) => {
-                  const comp = compByUser.get(u.id);
-                  return (
-                    <TouchableOpacity
-                      key={u.id}
-                      style={[
-                        styles.compRow,
-                        idx < staff.length - 1 && {
-                          borderBottomWidth: StyleSheet.hairlineWidth,
-                          borderBottomColor: palette.border.subtle,
-                        },
-                      ]}
-                      activeOpacity={0.65}
-                      onPress={() => openComp(u)}
+                {staffGroups.map((group) => (
+                  <View key={JSON.stringify([group.id === null, group.id])}>
+                    <View
+                      style={{
+                        paddingHorizontal: spacing[4],
+                        paddingVertical: spacing[2],
+                        backgroundColor: palette.bg.muted,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: palette.border.subtle,
+                      }}
                     >
-                      <EmployeeAvatar
-                        userId={u.id}
-                        avatar={u.avatar}
-                        style={[styles.compAvatar, { backgroundColor: palette.accent.primarySoft }]}
-                        imageStyle={styles.compAvatar}
+                      <Text
+                        style={{
+                          color: palette.text.tertiary,
+                          fontSize: fontSize.xs,
+                          fontWeight: fontWeight.bold,
+                          letterSpacing: 0.6,
+                          textTransform: 'uppercase',
+                        }}
                       >
-                        <Text style={[styles.compAvatarText, { color: palette.accent.primaryText }]}>
-                          {initials(u.fullName)}
-                        </Text>
-                      </EmployeeAvatar>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={[styles.compName, { color: palette.text.primary }]} numberOfLines={1}>
-                          {u.fullName}
-                        </Text>
-                        <Text style={[styles.compRole, { color: palette.text.tertiary }]} numberOfLines={1}>
-                          {roleLabels[u.role] || u.role}
-                        </Text>
-                      </View>
-                      {comp && comp.active ? (
-                        <View style={styles.compValueCol}>
-                          <Text style={[styles.compType, { color: palette.text.tertiary }]}>
-                            {COMP_META[comp.type].short}
-                          </Text>
-                          <Text style={[styles.compValue, { color: colors.green[600] }]} numberOfLines={1}>
-                            {compValueLabel(comp)}
-                          </Text>
-                        </View>
-                      ) : comp ? (
-                        <View style={[styles.compNotSet, { backgroundColor: palette.bg.muted }]}>
-                          <Text style={[styles.compNotSetText, { color: palette.text.tertiary }]}>Пауза</Text>
-                        </View>
-                      ) : (
-                        <View style={[styles.compNotSet, { backgroundColor: palette.bg.muted }]}>
-                          <Text style={[styles.compNotSetText, { color: palette.text.tertiary }]}>Задать</Text>
-                        </View>
-                      )}
-                      <Ionicons
-                        name="chevron-forward"
-                        size={16}
-                        color={palette.text.tertiary}
-                        style={{ marginLeft: 2 }}
-                      />
-                    </TouchableOpacity>
-                  );
-                })}
+                        {group.label}
+                      </Text>
+                    </View>
+                    {group.users.map((u, idx) => {
+                      const comp = compByUser.get(u.id);
+                      return (
+                        <TouchableOpacity
+                          key={u.id}
+                          style={[
+                            styles.compRow,
+                            idx < group.users.length - 1 && {
+                              borderBottomWidth: StyleSheet.hairlineWidth,
+                              borderBottomColor: palette.border.subtle,
+                            },
+                          ]}
+                          activeOpacity={0.65}
+                          onPress={() => openComp(u)}
+                        >
+                          <EmployeeAvatar
+                            userId={u.id}
+                            avatar={u.avatar}
+                            style={[styles.compAvatar, { backgroundColor: palette.accent.primarySoft }]}
+                            imageStyle={styles.compAvatar}
+                          >
+                            <Text style={[styles.compAvatarText, { color: palette.accent.primaryText }]}>
+                              {initials(u.fullName)}
+                            </Text>
+                          </EmployeeAvatar>
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={[styles.compName, { color: palette.text.primary }]} numberOfLines={1}>
+                              {u.fullName}
+                            </Text>
+                            <Text style={[styles.compRole, { color: palette.text.tertiary }]} numberOfLines={1}>
+                              {roleLabels[u.role] || u.role}
+                            </Text>
+                          </View>
+                          {comp && comp.active ? (
+                            <View style={styles.compValueCol}>
+                              <Text style={[styles.compType, { color: palette.text.tertiary }]}>
+                                {COMP_META[comp.type].short}
+                              </Text>
+                              <Text style={[styles.compValue, { color: colors.green[600] }]} numberOfLines={1}>
+                                {compValueLabel(comp)}
+                              </Text>
+                            </View>
+                          ) : comp ? (
+                            <View style={[styles.compNotSet, { backgroundColor: palette.bg.muted }]}>
+                              <Text style={[styles.compNotSetText, { color: palette.text.tertiary }]}>Пауза</Text>
+                            </View>
+                          ) : (
+                            <View style={[styles.compNotSet, { backgroundColor: palette.bg.muted }]}>
+                              <Text style={[styles.compNotSetText, { color: palette.text.tertiary }]}>Задать</Text>
+                            </View>
+                          )}
+                          <Ionicons
+                            name="chevron-forward"
+                            size={16}
+                            color={palette.text.tertiary}
+                            style={{ marginLeft: 2 }}
+                          />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
               </View>
             )}
           </View>

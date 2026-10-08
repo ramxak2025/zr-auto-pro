@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
+import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
+  Eye,
+  EyeOff,
   Trash2,
   Search,
   Package,
@@ -351,6 +354,8 @@ export default function CheckCreatePage() {
   const [installmentComment, setInstallmentComment] = useState('');
 
   const [serviceLines, setServiceLines] = useState<ServiceLineForm[]>([]);
+  const [showAllCatalogServices, setShowAllCatalogServices] = useState(false);
+  const isCatalogOwner = user?.role === 'director' || user?.role === 'superadmin';
   const [productLines, setProductLines] = useState<ProductLineForm[]>([]);
 
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -440,19 +445,28 @@ export default function CheckCreatePage() {
   });
 
   // Fetch all services (cached 60s — catalog data)
-  const {
-    data: allServices,
-    isLoading: servicesLoading,
-    isError: servicesError,
-    refetch: refetchServices,
-  } = useQuery<Service[]>({
-    queryKey: ['services-all'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 1000 });
-      return res.data?.data ?? res.data;
-    },
+  const allServicesQuery = useQuery<Service[]>({
+    queryKey: ['services-all', { preferredOnly: false }],
+    queryFn: () => loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit })).data, 1000),
+    enabled: isCatalogOwner || showAllCatalogServices,
     staleTime: 60_000,
   });
+  const allServices = allServicesQuery.data;
+  const preferredServicesQuery = useQuery<Service[]>({
+    queryKey: ['services-all', { preferredOnly: true }],
+    queryFn: () =>
+      loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly: true })).data, 1000),
+    enabled: !isCatalogOwner && !showAllCatalogServices,
+    staleTime: 60_000,
+  });
+  const activeServicesLoading =
+    !isCatalogOwner && !showAllCatalogServices ? preferredServicesQuery.isLoading : allServicesQuery.isLoading;
+  const activeServicesError =
+    !isCatalogOwner && !showAllCatalogServices ? preferredServicesQuery.isError : allServicesQuery.isError;
+  const refetchActiveServices =
+    !isCatalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
+  const selectableCatalogServices =
+    !isCatalogOwner && !showAllCatalogServices ? (preferredServicesQuery.data ?? []) : (allServices ?? []);
 
   // Fetch all products (cached 60s — catalog data). Полный каталог; пикер
   // фильтруется по складу на клиенте, поэтому переключение складов мгновенное.
@@ -957,8 +971,10 @@ export default function CheckCreatePage() {
       prev.map((line, i) => {
         if (i !== index) return line;
         const updated = { ...line, [field]: value };
-        if (field === 'serviceId' && allServices) {
-          const svc = allServices.find((s) => s.id === value);
+        if (field === 'serviceId') {
+          const svc =
+            selectableCatalogServices.find((service) => service.id === value) ??
+            allServices?.find((service) => service.id === value);
           if (svc) {
             updated.name = svc.name;
             updated.price = svc.defaultPrice;
@@ -1633,26 +1649,66 @@ export default function CheckCreatePage() {
               actions={
                 <>
                   {serviceLines.length > 0 && <Money value={serviceTotal} className="text-sm font-semibold text-ink" />}
-                  <Button variant="secondary" size="sm" icon={Plus} onClick={addServiceLine} disabled={servicesLoading}>
+                  {!isCatalogOwner && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={showAllCatalogServices ? EyeOff : Eye}
+                      aria-pressed={showAllCatalogServices}
+                      onClick={() => setShowAllCatalogServices((value) => !value)}
+                    >
+                      {showAllCatalogServices ? 'По роли' : 'Все услуги'}
+                    </Button>
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={Plus}
+                    onClick={addServiceLine}
+                    disabled={activeServicesLoading}
+                  >
                     Добавить
                   </Button>
                 </>
               }
             />
             <CardBody className="space-y-2" padding="sm">
-              {servicesError && (
+              {activeServicesError && (
                 <p
                   role="alert"
                   className="flex items-center justify-between gap-3 rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad-text"
                 >
                   Не удалось загрузить справочник услуг
-                  <Button variant="secondary" size="sm" onClick={() => refetchServices()}>
+                  <Button variant="secondary" size="sm" onClick={() => refetchActiveServices()}>
                     Повторить
                   </Button>
                 </p>
               )}
-              {serviceLines.length === 0 ? (
-                <p className="py-4 text-center text-sm text-ink-3">Услуг нет — добавьте первую</p>
+              {serviceLines.length === 0 && !activeServicesLoading && !activeServicesError ? (
+                <div className="py-4 text-center text-sm text-ink-3">
+                  <p>
+                    {!isCatalogOwner &&
+                    !showAllCatalogServices &&
+                    preferredServicesQuery.data &&
+                    selectableCatalogServices.length === 0
+                      ? 'Для вашей роли пока нет предпочтительных услуг'
+                      : 'Услуг нет — добавьте первую'}
+                  </p>
+                  {!isCatalogOwner &&
+                    !showAllCatalogServices &&
+                    preferredServicesQuery.data &&
+                    selectableCatalogServices.length === 0 && (
+                      <Button
+                        className="mt-2"
+                        variant="secondary"
+                        size="sm"
+                        icon={Eye}
+                        onClick={() => setShowAllCatalogServices(true)}
+                      >
+                        Показать все услуги
+                      </Button>
+                    )}
+                </div>
               ) : (
                 serviceLines.map((line, index) => {
                   // Количество есть только у legacy-строки старого чека («Мойка ×3»): чип рядом с названием
@@ -1666,11 +1722,11 @@ export default function CheckCreatePage() {
                       <div className="flex min-w-0 items-center gap-2">
                         <ServiceCombobox
                           className="min-w-0 flex-1"
-                          services={allServices ?? []}
+                          services={selectableCatalogServices}
                           value={line.serviceId}
                           fallbackName={line.name}
                           onChange={(id) => updateServiceLine(index, 'serviceId', id)}
-                          placeholder={servicesLoading ? 'Загружаем услуги…' : 'Найти услугу…'}
+                          placeholder={activeServicesLoading ? 'Загружаем услуги…' : 'Найти услугу…'}
                         />
                         {legacyQty && (
                           <Badge

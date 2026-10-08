@@ -28,6 +28,11 @@ export class CreateUserDto {
   @IsOptional()
   roleId?: string;
 
+  /** Tenant-owned grouping; the service allows assignment only for owner-class actors. */
+  @IsUUID()
+  @IsOptional()
+  directionId?: string | null;
+
   // Target tenant for the new user. Declared here so the global whitelisting
   // ValidationPipe does not strip it. Only a superadmin caller may target
   // another tenant (enforced in the controller); ignored for everyone else.

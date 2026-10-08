@@ -43,9 +43,13 @@ import {
   type PurchaseOrder,
   type PurchaseOrderSuggestionGroup,
   type UpdateDeliveryRequest,
+  type SupplierReturn,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { addMonths, formatMonthKey, monthLabelFull } from '../components/salary/salaryFormat';
+import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
+import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
+import { parseReturnQuantity } from '../../../shared/utils/procurementInput';
 
 function formatMoney(v: number) {
   return (
@@ -112,7 +116,12 @@ export default function SupplierDetailScreen() {
     }),
     [palette],
   );
-  const { id, openDefectReturn } = (route.params ?? {}) as { id: string; openDefectReturn?: boolean };
+  const { id, openDefectReturn, openDeliveryReturnId } = (route.params ?? {}) as {
+    id: string;
+    openDefectReturn?: boolean;
+    openDeliveryReturnId?: string;
+  };
+  const recovery = useProcurementRecovery({ contextId: id });
   // Плавающий таб-бар: iOS — contentInset, Android — paddingBottom (см.
   // useTabBarScrollInsets + референс SupplyReceiveScreen). Без этого последняя
   // карточка истории упирается в стекло бара.
@@ -120,6 +129,9 @@ export default function SupplierDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'deliveries' | 'payments' | 'returns'>('deliveries');
   const [expandedDelivery, setExpandedDelivery] = useState<string | null>(null);
+  const [normalReturnTarget, setNormalReturnTarget] = useState<string | null>(null);
+  const [normalReturnReason, setNormalReturnReason] = useState('');
+  const [normalReturnQty, setNormalReturnQty] = useState<Record<string, string>>({});
   // Latch — consume the route param once. Without this, re-running the
   // useEffect (e.g. on focus, on a query refetch that toggles defect
   // warehouse identity) would re-open the modal after the user
@@ -214,6 +226,27 @@ export default function SupplierDetailScreen() {
           ? (body as { data: Delivery[] }).data
           : [];
     },
+  });
+
+  useEffect(() => {
+    if (!openDeliveryReturnId || !canManageSuppliers || !supplier) return;
+    setNormalReturnQty({});
+    setNormalReturnReason('');
+
+    setNormalReturnTarget(openDeliveryReturnId);
+    navigation.setParams({ openDeliveryReturnId: undefined });
+  }, [openDeliveryReturnId, canManageSuppliers, supplier, navigation]);
+
+  const { data: normalReturns } = useQuery<SupplierReturn[]>({
+    queryKey: ['supplier-financial-returns', id],
+    queryFn: async () => (await suppliersApi.getReturns({ supplierId: id })).data,
+    staleTime: 30_000,
+  });
+  const normalReturnSourceQuery = useQuery<Delivery>({
+    queryKey: ['supplier-delivery-return-source', normalReturnTarget],
+    queryFn: async () => (await suppliersApi.getDeliveryById(normalReturnTarget as string)).data,
+    enabled: !!normalReturnTarget,
+    staleTime: 0,
   });
 
   const { data: payments } = useQuery<SupplierPayment[]>({
@@ -389,6 +422,7 @@ export default function SupplierDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] }),
       queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] }),
       queryClient.invalidateQueries({ queryKey: ['supplier-defect-returns', id] }),
+      queryClient.invalidateQueries({ queryKey: ['supplier-financial-returns', id] }),
       queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
       // «Закупка товара» в Расходах (getPaymentsReport) — сторно исключает
       // строку из отчёта, возврат добавляет минус; кэш обязан догнать.
@@ -410,6 +444,75 @@ export default function SupplierDetailScreen() {
       // used purchases and payments must land there without pull-to-refresh.
       queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] }),
     ]);
+
+  const normalReturnMutation = useMutation({
+    mutationFn: (vars: {
+      deliveryId: string;
+      requestId?: string;
+      reason: string;
+      items: Array<{ deliveryItemId: string; quantity: number }>;
+    }) =>
+      recovery.execute<Awaited<ReturnType<typeof suppliersApi.returnDelivery>>['data']>(
+        { operation: 'delivery-return', sourceId: vars.deliveryId, contextId: id },
+        { reason: vars.reason, items: vars.items },
+      ),
+    onSuccess: (res) => {
+      if (!recovery.owns(res)) return;
+
+      void invalidateAll();
+      void queryClient.invalidateQueries({ queryKey: ['supplier-financial-returns', id] });
+      void queryClient.invalidateQueries({ queryKey: ['supplier-delivery-return-source', normalReturnTarget] });
+      setNormalReturnTarget(null);
+      Alert.alert(
+        'Возврат оформлен',
+        'Создан отдельный документ возврата. Исходная поставка и оплата не изменены; возврат наличных оформляется отдельно.',
+      );
+    },
+    onError: (err: any) => {
+      if (!recovery.owns(err)) return;
+      if (err?.code) {
+        Alert.alert('Операция не подтверждена', err.message);
+        return;
+      }
+
+      const raw = err?.response?.data?.message;
+      const message = Array.isArray(raw) ? raw.join('\n') : raw;
+      Alert.alert(
+        'Возврат не подтверждён',
+        err?.response?.status === 409
+          ? 'Ключ операции связан с другими данными. Проверьте историю возвратов.'
+          : /остат|склад|количеств/i.test(String(message ?? ''))
+            ? `${message}\nПроверьте актуальный остаток.`
+            : `${message || 'Поля сохранены.'}\nДля безопасного повтора оставьте их без изменений.`,
+      );
+    },
+  });
+
+  const submitNormalReturn = () => {
+    const source = normalReturnSourceQuery.data;
+    if (!source || !normalReturnTarget || normalReturnMutation.isPending) return;
+    const invalidLine = source.items.find((line) => {
+      const raw = normalReturnQty[line.id] ?? '';
+      return raw.trim() !== '' && parseReturnQuantity(raw, line.returnableQuantity ?? 0) === null;
+    });
+    if (invalidLine) {
+      Alert.alert(
+        'Проверьте количество',
+        'Укажите количество не больше доступного остатка и не более чем с 3 знаками после запятой.',
+      );
+      return;
+    }
+    const items = source.items.flatMap((line) => {
+      const quantity = parseReturnQuantity(normalReturnQty[line.id] ?? '', line.returnableQuantity ?? 0);
+      return quantity ? [{ deliveryItemId: line.id, quantity }] : [];
+    });
+    if (!items.length || !normalReturnReason.trim()) {
+      Alert.alert('Заполните возврат', 'Выберите количество по строкам и укажите причину.');
+      return;
+    }
+    const payload = { deliveryId: normalReturnTarget, reason: normalReturnReason.trim(), items };
+    normalReturnMutation.mutate({ ...payload });
+  };
 
   const createPaymentMutation = useMutation({
     mutationFn: (d: any) => suppliersApi.createPayment(d),
@@ -820,10 +923,29 @@ export default function SupplierDetailScreen() {
     });
   };
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading)
+    return (
+      <View>
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            void invalidateAll();
+            Alert.alert('Готово', 'Результат возврата восстановлен');
+          }}
+        />
+        <LoadingSpinner />
+      </View>
+    );
   if (!supplier)
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            void invalidateAll();
+            Alert.alert('Готово', 'Результат возврата восстановлен');
+          }}
+        />
         <Text style={{ padding: 20, textAlign: 'center', color: palette.text.primary }}>Поставщик не найден</Text>
       </View>
     );
@@ -835,6 +957,13 @@ export default function SupplierDetailScreen() {
           screen a visually distinct header treatment without having
           to fork IosScreenHeader. Regular contractors keep the plain
           name title. */}
+      <ProcurementRecoveryPanel
+        recovery={recovery}
+        onRecovered={() => {
+          void invalidateAll();
+          Alert.alert('Готово', 'Результат возврата восстановлен');
+        }}
+      />
       <IosScreenHeader
         title={supplier.name}
         subtitle={isUsedPurchaseSupplier ? 'Приём б/у запчастей от клиентов: долг поставщику растёт' : undefined}
@@ -1148,7 +1277,7 @@ export default function SupplierDetailScreen() {
                   tab === 'returns' && [styles.tabTextActive, { color: palette.text.primary }],
                 ]}
               >
-                Возвраты ({defectReturns?.length || 0})
+                Возвраты {(defectReturns?.length || 0) + (normalReturns?.length || 0)}
               </Text>
             </TouchableOpacity>
           )}
@@ -1358,6 +1487,27 @@ export default function SupplierDetailScreen() {
                             (сервер дублирует проверку); у удалённой скрыты. */}
                         {canManageSuppliers && !isDeleted && (
                           <View style={[styles.deliveryActionsRow, { borderTopColor: palette.border.subtle }]}>
+                            {!isUsedPurchaseSupplier && (
+                              <TouchableOpacity
+                                style={[
+                                  styles.deliveryActionBtn,
+                                  { borderColor: palette.border.strong, backgroundColor: palette.bg.muted },
+                                ]}
+                                onPress={() => {
+                                  haptic('tap');
+                                  setNormalReturnQty({});
+                                  setNormalReturnReason('');
+
+                                  setNormalReturnTarget(d.id);
+                                }}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="arrow-undo-outline" size={14} color={accentIconColor} />
+                                <Text style={[styles.deliveryActionText, { color: palette.text.primary }]}>
+                                  Оформить возврат
+                                </Text>
+                              </TouchableOpacity>
+                            )}
                             <TouchableOpacity
                               style={[
                                 styles.deliveryActionBtn,
@@ -1569,7 +1719,42 @@ export default function SupplierDetailScreen() {
               </TouchableOpacity>
             )}
 
-            {(defectReturns || []).length === 0 && (
+            {(normalReturns || []).map((doc) => (
+              <View
+                key={doc.id}
+                style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <View style={[styles.deliveryAccent, { backgroundColor: colors.blue[500] }]} />
+                <View style={styles.paymentContent}>
+                  <View style={styles.paymentTop}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.paymentDate, { color: palette.text.primary }]} numberOfLines={1}>
+                        Возврат из поставки · {formatDate(doc.date)}
+                      </Text>
+                      <Text style={[styles.commentText, { color: palette.text.tertiary }]}>
+                        Источник {doc.deliveryId.slice(0, 8)} · исходная накладная {formatMoney(doc.sourceTotalAmount)}
+                      </Text>
+                      <Text style={[styles.commentText, { color: palette.text.tertiary }]}>
+                        {doc.items.map((line) => `${line.name} × ${line.quantity}`).join(', ')}
+                      </Text>
+                      {doc.reason ? (
+                        <Text style={[styles.commentText, { color: palette.text.tertiary }]}>
+                          Причина: {doc.reason}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Text style={[styles.paymentAmount, { color: colors.blue[600] }]}>
+                      {formatMoney(doc.totalAmount)}
+                    </Text>
+                  </View>
+                  <Text style={[styles.commentText, { color: palette.text.tertiary }]}>
+                    Отдельный документ · наличный возврат денег не выполнен
+                  </Text>
+                </View>
+              </View>
+            ))}
+
+            {(defectReturns || []).length === 0 && (normalReturns || []).length === 0 && (
               <View style={styles.emptyState}>
                 <Ionicons name="arrow-undo-outline" size={36} color={palette.text.tertiary} />
                 <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Возвратов нет</Text>
@@ -2181,6 +2366,105 @@ export default function SupplierDetailScreen() {
             )}
           </TouchableOpacity>
         </View>
+      </Modal>
+
+      <Modal
+        visible={!!normalReturnTarget}
+        onClose={() => {
+          if (normalReturnMutation.isPending) return;
+          setNormalReturnTarget(null);
+        }}
+        title="Возврат из поставки"
+      >
+        {normalReturnSourceQuery.isLoading ? (
+          <ActivityIndicator color={colors.primary[600]} style={{ padding: spacing[4] }} />
+        ) : normalReturnSourceQuery.isError ? (
+          <TouchableOpacity style={styles.actionBtn} onPress={() => void normalReturnSourceQuery.refetch()}>
+            <Text style={styles.actionBtnText}>Повторить загрузку состава</Text>
+          </TouchableOpacity>
+        ) : normalReturnSourceQuery.data ? (
+          <>
+            <Text style={[styles.commentText, { color: palette.text.tertiary, marginBottom: spacing[2] }]}>
+              Источник: {formatDate(normalReturnSourceQuery.data.date)} · исходная сумма{' '}
+              {formatMoney(normalReturnSourceQuery.data.totalAmount)} · возвраты{' '}
+              {formatMoney(normalReturnSourceQuery.data.returnedAmount ?? 0)} · нетто{' '}
+              {formatMoney(normalReturnSourceQuery.data.netAmount ?? normalReturnSourceQuery.data.totalAmount)} · кредит
+              поставщика {formatMoney(supplier?.creditBalance ?? 0)}
+            </Text>
+            {normalReturnSourceQuery.data.items.map((line) => (
+              <View
+                key={line.id}
+                style={[
+                  styles.formField,
+                  {
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: palette.border.subtle,
+                    paddingBottom: spacing[2],
+                  },
+                ]}
+              >
+                <Text style={[styles.formLabel, f.label]}>
+                  {line.product?.name || 'Товар'} · получено {line.quantity}, возвращено {line.returnedQuantity ?? 0},
+                  доступно {line.returnableQuantity ?? 0} · {formatMoney(line.price)}/шт
+                </Text>
+                <TextInput
+                  value={normalReturnQty[line.id] ?? ''}
+                  onChangeText={(value) =>
+                    setNormalReturnQty((prev) => ({ ...prev, [line.id]: value.replace(/[^0-9.,]/g, '') }))
+                  }
+                  style={[styles.formInput, f.input]}
+                  keyboardType="decimal-pad"
+                  placeholder={`Количество, максимум ${line.returnableQuantity ?? 0}`}
+                  placeholderTextColor={palette.text.tertiary}
+                  editable={!normalReturnMutation.isPending && (line.returnableQuantity ?? 0) > 0}
+                />
+              </View>
+            ))}
+            {(normalReturnSourceQuery.data.returns ?? []).map((doc) => (
+              <Text key={doc.id} style={[styles.commentText, { color: palette.text.tertiary }]}>
+                Ранее: {formatDate(doc.date)} · {formatMoney(doc.totalAmount)} · {doc.reason || 'без причины'}
+              </Text>
+            ))}
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, f.label]}>Причина возврата *</Text>
+              <TextInput
+                value={normalReturnReason}
+                onChangeText={setNormalReturnReason}
+                style={[styles.formInput, f.input, { height: 64, textAlignVertical: 'top' }]}
+                multiline
+                placeholder="Например: неподходящая деталь"
+                placeholderTextColor={palette.text.tertiary}
+                editable={!normalReturnMutation.isPending}
+              />
+            </View>
+            <Text style={[styles.commentText, { color: palette.text.tertiary, marginBottom: spacing[2] }]}>
+              Создаётся отдельный документ и кредит поставщика. Исходная накладная и платёж неизменны; возврат наличных
+              оформляется отдельно.
+            </Text>
+            <View style={[styles.formActions, f.actions]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, f.cancel]}
+                onPress={() => {
+                  setNormalReturnTarget(null);
+                }}
+                disabled={normalReturnMutation.isPending}
+              >
+                <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, (!canManageSuppliers || normalReturnMutation.isPending) && { opacity: 0.55 }]}
+                onPress={submitNormalReturn}
+                disabled={!canManageSuppliers || normalReturnMutation.isPending}
+              >
+                {normalReturnMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Оформить</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : null}
       </Modal>
 
       {/* Return defective stock modal */}
