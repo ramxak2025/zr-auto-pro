@@ -1,3 +1,4 @@
+import { withIntentWrite } from '../contexts/intentWriteBarrier';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createDurableProcurement,
@@ -8,8 +9,8 @@ import { generateClientRequestId } from './offlineCheckQueue';
 
 export const procurementStorage: ProcurementStorage = {
   getItem: (key) => AsyncStorage.getItem(key),
-  setItem: (key, value) => AsyncStorage.setItem(key, value),
-  removeItem: (key) => AsyncStorage.removeItem(key),
+  setItem: (key, value) => withIntentWrite(key, () => AsyncStorage.setItem(key, value)),
+  removeItem: (key) => withIntentWrite(key, () => AsyncStorage.removeItem(key)),
   keys: () => AsyncStorage.getAllKeys(),
   exclusive: createProcurementMutex(),
 };

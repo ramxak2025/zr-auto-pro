@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * AcceptPaymentScreen — приём оплаты по отложенному заказ-наряду
  * (Round 14, режим «Кассир», CASHIER_MODE_SPEC).
@@ -181,9 +182,11 @@ export default function AcceptPaymentScreen() {
       });
     },
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       // Деталь — по подтверждённой правде; списки/доска/деньги — фоново.
       await queryClient.refetchQueries({ queryKey: ['check', id] });
+      if (!continuation.isCurrent()) return;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });

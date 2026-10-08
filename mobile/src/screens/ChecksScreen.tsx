@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -1111,9 +1112,11 @@ export default function ChecksScreen() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
     onMutate: async (id: string) => {
+      const continuation = captureDataSession();
       // Cancel anything in-flight against this list — otherwise the
       // refetch lands after our local mutation and resurrects the row.
       await queryClient.cancelQueries({ queryKey: ['checks-infinite'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueriesData<{ pages?: { data?: Check[]; total?: number }[] }>({
         queryKey: ['checks-infinite'],
       });

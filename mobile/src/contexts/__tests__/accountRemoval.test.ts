@@ -52,3 +52,29 @@ it('storage failure or malformed own ledger never authorizes destructive cleanup
   await expect(inspectSavedAccountRemoval(f.storage, { scopes: [A] })).rejects.toThrow('locked');
   expect(f.map.size).toBe(1);
 });
+
+it('counts remaining photo URIs for already saved checks and blocks only their proved owner', async () => {
+  const key =
+    'autexa:pending-check-photos:v1:' +
+    encodeURIComponent(JSON.stringify([A.tenantId, A.userId, A.pointId])) +
+    ':saved-check';
+  const raw = JSON.stringify({
+    version: 1,
+    owner: A,
+    checkId: 'saved-check',
+    photos: [
+      { uri: 'file:first', state: 'uncertain' },
+      { uri: 'file:second', state: 'pending' },
+    ],
+  });
+  const f = fixture({ [key]: raw });
+  expect(await inspectSavedAccountRemoval(f.storage, { scopes: [A] })).toMatchObject({
+    canRemove: false,
+    pendingPhotos: 2,
+  });
+  expect(await inspectSavedAccountRemoval(f.storage, { scopes: [B] })).toMatchObject({
+    canRemove: true,
+    pendingPhotos: 0,
+  });
+  expect(f.map.get(key)).toBe(raw);
+});

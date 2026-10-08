@@ -23,7 +23,13 @@ import api, {
 } from '../api/axios';
 import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
-import { clearAccountCaches, setPersistentCacheSession } from '../utils/persistentCache';
+import {
+  clearAccountCaches,
+  setPersistentCacheSession,
+  hydratePriorityCache,
+  hydrateCache,
+} from '../utils/persistentCache';
+import { withFrozenIntentOwners } from './intentWriteBarrier';
 import { inspectSavedAccountRemoval, type AccountRemovalInspection } from './accountRemoval';
 import {
   adoptOfflineCheckQueue,
@@ -1232,7 +1238,15 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setRegistry(saved);
       if (next?.user) {
         await adoptTenantStorage(queueOwnerOf(next.user)).catch(() => {});
-        if (sessionRuntime.isCurrent(epoch) && queryClient) prefetchAfterLogin(queryClient, next.user);
+        if (!sessionRuntime.isCurrent(epoch)) return;
+        if (queryClient) {
+          await hydratePriorityCache(queryClient);
+          if (!sessionRuntime.isCurrent(epoch)) return;
+          // Both passes capture the active secure registry/scope generation.
+          // Full hydration is background work and fences every native await.
+          void hydrateCache(queryClient);
+          prefetchAfterLogin(queryClient, next.user);
+        }
       }
     },
     [beginSessionTransition, queryClient, sessionRuntime],
@@ -1384,15 +1398,28 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         const saved = await authAccounts.read();
         const account = saved.accounts.find((item) => item.id === id);
         if (!account || !isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Аккаунт изменился.');
-        const inspection = await inspectSavedAccountRemoval(AsyncStorage, account);
-        if (!inspection.canRemove)
-          throw new AccountRegistryError(
-            'UNRESOLVED_INTENTS',
-            'В аккаунте остались неотправленные или неподтверждённые операции. Завершите их перед удалением.',
-          );
-        if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
-        const next = await authAccounts.remove(id, saved.generation, isCurrent);
-        if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+        let removalEpoch = source;
+        const next = await withFrozenIntentOwners(account.scopes, async () => {
+          const inspection = await inspectSavedAccountRemoval(AsyncStorage, account);
+          if (!inspection.canRemove)
+            throw new AccountRegistryError(
+              'UNRESOLVED_INTENTS',
+              'В аккаунте остались неотправленные или неподтверждённые операции. Завершите их перед удалением.',
+            );
+          if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+          const removed = await authAccounts.remove(id, saved.generation, isCurrent);
+          if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+          // Invalidate the old active writers while the freeze is still held.
+          if (saved.activeId === id) {
+            removalEpoch = beginSessionTransition();
+            setDataSession(null);
+            setPersistentCacheSession(null);
+            setAuthToken(null, true);
+          } else activeRegistryRef.current.generation = removed.registry.generation;
+          return removed;
+        });
+        if (!sessionRuntime.isCurrent(removalEpoch))
+          throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
         // No financial, NFC or queue ledger is ever deleted, including a request
         // that was persisted concurrently with this final inspection.
         const otherScopes = new Set(
@@ -1401,14 +1428,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         const scopes = account.scopes.filter((scope) => !otherScopes.has(JSON.stringify(scope)));
         if (account.session) void pushLifecycle.logout(account.session.token, saved.activeId === id).catch(() => {});
         if (saved.activeId === id) await applyRegistrySession(next.registry);
-        else activeRegistryRef.current.generation = next.registry.generation;
         const cleanupEpoch = sessionRuntime.capture();
         await clearAccountCaches(scopes, () => sessionRuntime.isCurrent(cleanupEpoch));
       } finally {
         installingRef.current = false;
       }
     },
-    [applyRegistrySession, sessionRuntime],
+    [applyRegistrySession, beginSessionTransition, sessionRuntime],
   );
 
   /** Server-authorized point reissue retains the original account slot.

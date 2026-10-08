@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * WorkBoardScreen — «Доска заказ-нарядов» (kanban board 082 + 091).
  *
@@ -353,7 +354,9 @@ export default function WorkBoardScreen() {
   const moveMutation = useMutation({
     mutationFn: ({ id, target }: MoveVars) => checksApi.setWorkStatus(id, target),
     onMutate: async ({ id, target }) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: boardKey });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<ChecksBoard>(boardKey);
       if (prev) {
         const groups: Record<string, Check[]> = {};

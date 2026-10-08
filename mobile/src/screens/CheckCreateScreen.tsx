@@ -1,3 +1,6 @@
+import { captureCheckSaveSession } from './checkCreate/saveSession';
+import { updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
+import { captureDataSession } from '../contexts/dataSession';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
@@ -1689,6 +1692,7 @@ export default function CheckCreateScreen() {
    *  tile) the new photo is appended. */
   type ReplaceTarget = { kind: 'pending'; uri: string } | { kind: 'existing'; photo: CheckPhoto };
   const pickAndAddPhoto = async (replace?: ReplaceTarget) => {
+    const operation = captureCheckSaveSession();
     if (!replace) {
       const totalCount = pendingPhotos.length + existingPhotos.length;
       if (totalCount >= MAX_PHOTOS) {
@@ -1698,6 +1702,7 @@ export default function CheckCreateScreen() {
     }
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!operation.isCurrent()) return;
       if (!perm.granted) {
         Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках iPhone.');
         return;
@@ -1707,9 +1712,11 @@ export default function CheckCreateScreen() {
         quality: 1, // we re-compress below — picker quality just controls source decode
         allowsEditing: false,
       });
+      if (!operation.isCurrent()) return;
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       const compressedUri = await compressPhoto(asset.uri);
+      if (!operation.isCurrent()) return;
 
       // ── Replace flows ──
       if (replace?.kind === 'pending') {
@@ -1726,17 +1733,21 @@ export default function CheckCreateScreen() {
           return next;
         });
         try {
-          await checkPhotosApi.upload(replace.photo.checkId, buildPhotoFormData(compressedUri));
-          await checkPhotosApi.remove(replace.photo.id);
+          await operation.photos.upload(replace.photo.checkId, buildPhotoFormData(compressedUri));
+          if (!operation.isCurrent()) return;
+          await operation.photos.remove(replace.photo.id);
+          if (!operation.isCurrent()) return;
           await refetchEditPhotos();
         } catch {
+          if (!operation.isCurrent()) return;
           Alert.alert('Ошибка', 'Не удалось заменить фото');
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(compressedUri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(compressedUri);
+              return next;
+            });
         }
         return;
       }
@@ -1750,22 +1761,26 @@ export default function CheckCreateScreen() {
           return next;
         });
         try {
-          await checkPhotosApi.upload(editId, buildPhotoFormData(compressedUri));
+          await operation.photos.upload(editId, buildPhotoFormData(compressedUri));
+          if (!operation.isCurrent()) return;
           await refetchEditPhotos();
         } catch {
+          if (!operation.isCurrent()) return;
           Alert.alert('Ошибка', 'Не удалось загрузить фото');
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(compressedUri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(compressedUri);
+              return next;
+            });
         }
       } else {
         // Create mode: defer the upload until the check is saved.
         setPendingPhotos((prev) => [...prev, compressedUri]);
       }
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.warn('[CheckCreate] pickAndAddPhoto error', err);
       Alert.alert('Ошибка', 'Не удалось выбрать фото');
     }
@@ -1783,17 +1798,21 @@ export default function CheckCreateScreen() {
   };
 
   const removeExistingPhoto = (photoId: string) => {
+    const operation = captureCheckSaveSession();
     Alert.alert('Удалить фото?', 'Это действие необратимо', [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Удалить',
         style: 'destructive',
         onPress: async () => {
+          if (!operation.isCurrent()) return;
           try {
-            await checkPhotosApi.remove(photoId);
+            await operation.photos.remove(photoId);
+            if (!operation.isCurrent()) return;
             setExistingPhotos((prev) => prev.filter((p) => p.id !== photoId));
             if (editId) refetchEditPhotos();
           } catch {
+            if (!operation.isCurrent()) return;
             Alert.alert('Ошибка', 'Не удалось удалить фото');
           }
         },
@@ -1803,32 +1822,55 @@ export default function CheckCreateScreen() {
 
   /** Upload every pending local URI to a freshly-created check. Returns
    *  the URIs that failed so the caller can offer a retry. */
-  const uploadPendingForCheck = async (checkId: string, uris: string[]): Promise<string[]> => {
-    if (uris.length === 0) return [];
+  const uploadPendingForCheck = async (
+    checkId: string,
+    uris: string[],
+    operation: ReturnType<typeof captureCheckSaveSession>,
+  ): Promise<string[]> => {
+    if (!operation.isCurrent() || uris.length === 0) return uris;
+    // Save references to the already created check before the first upload.
+    // On cancellation the exact owner can inspect/retry them from CheckDetail.
+    await updatePendingCheckPhotos(checkId, operation.data, (previous) => [
+      ...previous,
+      ...uris.filter((uri) => !previous.some((p) => p.uri === uri)).map((uri) => ({ uri, state: 'pending' as const })),
+    ]);
+    if (!operation.isCurrent()) return uris;
     const failed: string[] = [];
     setUploadingUris(new Set(uris));
     try {
-      for (const uri of uris) {
+      for (let index = 0; index < uris.length; index += 1) {
+        const uri = uris[index];
+        if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
+        await updatePendingCheckPhotos(checkId, operation.data, (photos) =>
+          photos.map((p) => (p.uri === uri ? { ...p, state: 'uncertain' } : p)),
+        );
+        if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
         try {
-          await checkPhotosApi.upload(checkId, buildPhotoFormData(uri));
+          await operation.photos.upload(checkId, buildPhotoFormData(uri));
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
+          await updatePendingCheckPhotos(checkId, operation.data, (photos) => photos.filter((p) => p.uri !== uri));
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index + 1)];
         } catch (err) {
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
           console.warn('[CheckCreate] photo upload failed', err);
           failed.push(uri);
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(uri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(uri);
+              return next;
+            });
         }
       }
     } finally {
-      setUploadingUris(new Set());
+      if (operation.isCurrent()) setUploadingUris(new Set());
     }
     return failed;
   };
 
   const resetForm = () => {
+    confirmedSavedCheckRef.current = null;
     setClientId('');
     setCarId('');
     setMileage('');
@@ -1854,6 +1896,7 @@ export default function CheckCreateScreen() {
   // isPending alone is not enough because there's a micro-gap between the
   // press and the mutation entering its pending state. The ref closes it.
   const submittingRef = useRef(false);
+  const confirmedSavedCheckRef = useRef<string | null>(null);
 
   // If the previous submit attempt was interrupted (component unmount,
   // navigation pop with mutation still in flight, dev fast-refresh), the
@@ -1984,6 +2027,8 @@ export default function CheckCreateScreen() {
       submittingRef.current = false;
     },
     onSuccess: async (res: any) => {
+      const operation = captureCheckSaveSession();
+      if (!operation.isCurrent()) return;
       submittingRef.current = false;
       // Чек записан — гвард «несохранённое» больше не нужен, иначе навигация
       // после сохранения упёрлась бы в вопрос «выйти без сохранения?».
@@ -2059,6 +2104,7 @@ export default function CheckCreateScreen() {
       // BEFORE resetting the form / navigating away.
       const uris = pendingPhotos;
       const savedCheckId: string | undefined = editId || res?.data?.id;
+      if (!editId && savedCheckId) confirmedSavedCheckRef.current = savedCheckId;
 
       // ── Order-mode: припарковать новый заказ-наряд на доску ───────────────
       // С Round 14 ПАРКОВКУ ГАРАНТИРУЕТ СЕРВЕР: create() при включённом режиме
@@ -2069,9 +2115,10 @@ export default function CheckCreateScreen() {
       // же инвалидирует кеш доски, на которую мастер вернётся по goBack().
       // Best-effort / fire-and-forget: заказ уже сохранён и уже на доске.
       if (orderMode && !editId && savedCheckId && firstBoardColumnKey) {
-        checksApi
+        operation.checks
           .setWorkStatus(savedCheckId, firstBoardColumnKey)
           .then(() => {
+            if (!operation.isCurrent()) return;
             queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });
           })
           .catch(() => {
@@ -2089,9 +2136,10 @@ export default function CheckCreateScreen() {
       if (!editId && savedCheckId && clientId && !selectedClient?.isRetail) {
         const accrueClientId = clientId;
         const accrueCheckId = savedCheckId;
-        loyaltyApi
+        operation.loyalty
           .accrue({ clientId: accrueClientId, checkId: accrueCheckId })
           .then(() => {
+            if (!operation.isCurrent()) return;
             // Обновляем баланс бонусов клиента, если карточка уже открыта.
             queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', accrueClientId] });
           })
@@ -2102,19 +2150,29 @@ export default function CheckCreateScreen() {
 
       if (!editId && savedCheckId && uris.length > 0) {
         try {
-          const failed = await uploadPendingForCheck(savedCheckId, uris);
+          const failed = await uploadPendingForCheck(savedCheckId, uris, operation);
+          if (!operation.isCurrent()) return;
           if (failed.length > 0) {
             Alert.alert(
               'Чек создан, но не все фото загружены',
-              `Не удалось загрузить ${failed.length} из ${uris.length} фото. Повторить попытку?`,
+              `Не удалось подтвердить ${failed.length} из ${uris.length} фото. Перед повтором проверьте галерею чека: фото могло уже загрузиться. Повторить?`,
               [
                 { text: 'Отмена', style: 'cancel' },
                 {
                   text: 'Повторить',
                   onPress: async () => {
-                    const stillFailed = await uploadPendingForCheck(savedCheckId, failed);
-                    if (stillFailed.length > 0) {
-                      Alert.alert('Ошибка', 'Не удалось загрузить часть фото. Откройте чек и добавьте их вручную.');
+                    if (!operation.isCurrent()) return;
+                    try {
+                      const stillFailed = await uploadPendingForCheck(savedCheckId, failed, operation);
+                      if (!operation.isCurrent()) return;
+                      if (stillFailed.length > 0)
+                        Alert.alert('Ошибка', 'Не удалось загрузить часть фото. Повтор сохранён в карточке чека.');
+                    } catch {
+                      if (operation.isCurrent())
+                        Alert.alert(
+                          'Чек уже создан',
+                          'Не удалось сохранить фото для повтора. Добавьте их вручную к существующему чеку.',
+                        );
                     }
                   },
                 },
@@ -2122,7 +2180,13 @@ export default function CheckCreateScreen() {
             );
           }
         } catch (err) {
+          if (!operation.isCurrent()) return;
           console.warn('[CheckCreate] pending photo upload sequence failed', err);
+          Alert.alert(
+            'Чек создан',
+            'Не удалось сохранить фото для повтора. Чек уже существует: повторное нажатие «Сохранить» откроет его карточку. Фото потребуется добавить вручную.',
+          );
+          return;
         }
       }
 
@@ -2135,15 +2199,18 @@ export default function CheckCreateScreen() {
       // блокировки навигации.
       if (isFromBooking && bookingId && !editId && savedCheckId) {
         try {
-          await bookingsApi.convert(bookingId, { checkId: savedCheckId });
+          await operation.bookings.convert(bookingId, { checkId: savedCheckId });
+          if (!operation.isCurrent()) return;
           queryClient.invalidateQueries({ queryKey: ['bookings'] });
           queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
         } catch (err) {
+          if (!operation.isCurrent()) return;
           // eslint-disable-next-line no-console
           console.warn('[CheckCreate] booking convert failed (check saved anyway)', err);
         }
       }
 
+      if (!operation.isCurrent()) return;
       if (isFromBooking) {
         // Приход проведён → возвращаем пользователя на список Записей (запись
         // теперь в «Прошедших» со ссылкой на чек). Явная навигация надёжнее
@@ -2158,7 +2225,12 @@ export default function CheckCreateScreen() {
           // деталку (она перезапросит свежие итоги на mount). Отложенный/
           // обычный edit — тихий goBack, как прежде (draft-поток не трогаем).
           Alert.alert('Чек обновлён', 'Изменения сохранены, всё пересчитано.', [
-            { text: 'OK', onPress: () => navigation.goBack() },
+            {
+              text: 'OK',
+              onPress: () => {
+                if (operation.isCurrent()) navigation.goBack();
+              },
+            },
           ]);
         } else {
           navigation.goBack();
@@ -2215,6 +2287,7 @@ export default function CheckCreateScreen() {
    * (притворяться, что чек сохранён, нельзя).
    */
   const stashCheckOffline = async (payload: any, err: any) => {
+    const lease = captureDataSession();
     // Время чека = момент ПРОБИТИЯ. Живой сабмит поля `date` не несёт и сервер
     // штампует now() при приёме запроса — но офлайн-очередь может пролежать до
     // возврата сети, и тогда now() был бы временем ДОСТАВКИ. Поэтому именно
@@ -2232,9 +2305,10 @@ export default function CheckCreateScreen() {
           : undefined,
       });
     } catch {
-      showSubmitError(err);
+      if (lease.isCurrent()) showSubmitError(err);
       return;
     }
+    if (!lease.isCurrent()) return;
     // Чек лежит на телефоне и уйдёт сам — это сохранение, а не потеря:
     // гвард «несохранённое» снимаем, чтобы уход с экрана не спрашивал.
     markFormSaved();
@@ -2468,6 +2542,12 @@ export default function CheckCreateScreen() {
     // Double-fire guard: bail out immediately if a submission is already
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
+    // A photo/storage failure after confirmed creation must never create a
+    // second financial document when the user presses Save again.
+    if (!editId && confirmedSavedCheckRef.current) {
+      navigation.navigate('CheckDetail', { id: confirmedSavedCheckRef.current });
+      return;
+    }
 
     // СБП-успех проводит чек как электронную (карточную) оплату через
     // `paymentOverride='card'`. Без override поведение байт-в-байт прежнее —

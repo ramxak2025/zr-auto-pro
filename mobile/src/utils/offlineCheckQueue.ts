@@ -59,6 +59,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { withIntentWrite } from '../contexts/intentWriteBarrier';
 import { captureDataSession, dataOwnerKey } from '../contexts/dataSession';
 import { extractApiErrorMessage } from './apiError';
 
@@ -462,7 +463,10 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     const serialized = serializeQueue(snapshot, owner);
     const key = activeStorageKey;
     if (!key) return Promise.reject(new Error('Нет активного владельца очереди'));
-    const write = storageWriteTail.catch(() => {}).then(() => deps.storage.setItem(key, serialized));
+    const preceding = storageWriteTail;
+    const write = withIntentWrite(key, () =>
+      preceding.catch(() => {}).then(() => deps.storage.setItem(key, serialized)),
+    );
     storageWriteTail = write.catch(() => {});
     return write;
   }
@@ -474,7 +478,8 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     notify();
     try {
       await persistSnapshot(next);
-    } catch {
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'UNRESOLVED_INTENTS') return false;
       // Диск отказал ПОСЛЕ обновления памяти: очередь этой сессии живёт, при
       // рестарте вернётся последняя удачная запись. Благодаря идемпотентному
       // clientRequestId возможный повтор отправки безопасен (дубля не будет).

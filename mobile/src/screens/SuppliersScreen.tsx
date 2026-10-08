@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
@@ -391,7 +392,9 @@ export default function SuppliersScreen() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => suppliersApi.remove(id),
     onMutate: async (id: string) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: ['suppliers'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueriesData<Supplier[]>({ queryKey: ['suppliers'] });
       queryClient.setQueriesData<Supplier[] | undefined>({ queryKey: ['suppliers'] }, (old) =>
         old ? old.filter((s) => s.id !== id) : old,

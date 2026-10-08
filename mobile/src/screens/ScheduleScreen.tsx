@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
   Animated as RNAnimated,
@@ -756,9 +757,11 @@ function GridTab() {
   const updateOrderMut = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
     onMutate: async (orderedIds: string[]) => {
+      const continuation = captureDataSession();
       // Оптимистично правим слот команды филиала — им и рисуется сетка;
       // onSettled ниже инвалидирует префикс ['users'], то есть оба слота.
       await queryClient.cancelQueries({ queryKey: USERS_POINT_QUERY_KEY });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<any>(USERS_POINT_QUERY_KEY);
       queryClient.setQueryData<any>(USERS_POINT_QUERY_KEY, (old: unknown) => {
         // toArray: never .map a poisoned non-array users cache value.
@@ -869,7 +872,9 @@ function GridTab() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scheduleApi.remove(id),
     onMutate: async (id: string) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const previous = queryClient.getQueryData(scheduleQueryKey);
       queryClient.setQueryData(scheduleQueryKey, (old: unknown) =>
         toArray<ScheduleEntry>(old).filter((e) => e.id !== id),

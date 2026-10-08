@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * «Мой профиль» — self profile management, reachable by tapping the profile
  * header at the top of the «Ещё» (MoreScreen) screen.
@@ -286,13 +287,16 @@ export default function ProfileScreen() {
   const saveMutation = useMutation({
     mutationFn: (body: UpdateProfileRequest) => profileApi.updateProfile(body),
     onSuccess: async (res) => {
+      const continuation = captureDataSession();
       const data = res.data;
       setStagedAvatar(null);
       if (data.status === 'applied') {
         haptic('success');
         // Pull the canonical user (also refreshes the persisted cold-start copy).
         await refreshUser();
+        if (!continuation.isCurrent()) return;
         await invalidateEmployeeAvatarQueries(queryClient, user?.id);
+        if (!continuation.isCurrent()) return;
         Alert.alert('Готово', 'Профиль обновлён.');
       } else {
         haptic('success');

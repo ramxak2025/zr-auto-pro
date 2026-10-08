@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
@@ -989,7 +990,9 @@ export default function ProductsScreen() {
       data: { type: 'income' | 'expense' | 'writeoff' | 'inventory'; quantity: number; reason?: string };
     }) => productsApi.updateStock(id, data),
     onMutate: async ({ id, data }) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: ['products'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueriesData<PaginatedResponse<Product> | undefined>({ queryKey: ['products'] });
       // Compute the optimistic delta for the row matching `id`. Inventory
       // sets stock absolutely; income adds; expense / writeoff subtract.

@@ -1,3 +1,6 @@
+import { captureCheckSaveSession } from './checkCreate/saveSession';
+import { readPendingCheckPhotos, updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   View,
@@ -131,7 +134,8 @@ export default function CheckDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, user, token, sessionGeneration } = useAuth();
+  const photoSession = useMemo(() => captureCheckSaveSession(), [token, sessionGeneration]);
   const palette = useColors();
   // Дата/время чека — в поясе автосервиса, как их считает сервер.
   const tenantTz = useTenantTimezone();
@@ -269,21 +273,88 @@ export default function CheckDetailScreen() {
 
   const uploadPhotoMutation = useMutation({
     mutationFn: async () => {
+      const operation = captureCheckSaveSession();
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.8,
       });
-      if (result.canceled) return;
+      if (!operation.isCurrent() || result.canceled) return;
       const asset = result.assets[0];
       const uri = asset.uri;
       const filename = uri.split('/').pop() || 'photo.jpg';
       const formData = new FormData();
       formData.append('photo', { uri, name: filename, type: 'image/jpeg' } as any);
-      await checkPhotosApi.upload(id, formData);
+      await operation.photos.upload(id, formData);
     },
     onSuccess: () => refetchPhotos(),
     onError: () => Alert.alert('Ошибка', 'Не удалось загрузить фото'),
   });
+
+  const { data: pendingPhotoRecord, refetch: refetchPendingPhotos } = useQuery({
+    queryKey: ['pending-check-photos', id],
+    queryFn: () => readPendingCheckPhotos(id, photoSession.data),
+    enabled: !!photoSession.data.owner,
+  });
+  const recoverPhotoMutation = useMutation({
+    mutationFn: async ({ uri, discard }: { uri: string; discard: boolean }) => {
+      const operation = photoSession;
+      if (!operation.isCurrent()) return;
+      const record = await readPendingCheckPhotos(id, operation.data);
+      if (!operation.isCurrent() || !record?.photos.some((p) => p.uri === uri)) return;
+      if (!discard) {
+        await updatePendingCheckPhotos(id, operation.data, (photos) =>
+          photos.map((p) => (p.uri === uri ? { ...p, state: 'uncertain' } : p)),
+        );
+        if (!operation.isCurrent()) return;
+        const formData = new FormData();
+        formData.append('photo', {
+          uri,
+          name: uri.split('/').pop() || 'photo.jpg',
+          type: 'image/jpeg',
+        } as unknown as Blob);
+        await operation.photos.upload(id, formData);
+        if (!operation.isCurrent()) return;
+      }
+      await updatePendingCheckPhotos(id, operation.data, (photos) => photos.filter((p) => p.uri !== uri));
+    },
+    onSuccess: () => {
+      if (photoSession.isCurrent()) {
+        void refetchPendingPhotos();
+        void refetchPhotos();
+      }
+    },
+    onError: () => {
+      if (photoSession.isCurrent())
+        Alert.alert(
+          'Фото не загружено',
+          'Сохранённая ссылка оставлена для повтора. Если файл больше недоступен, выберите фото заново через «+».',
+        );
+    },
+  });
+  const retrySavedPhoto = (uri: string, uncertain: boolean) => {
+    if (!photoSession.isCurrent()) return;
+    Alert.alert(
+      'Фото к сохранённому чеку',
+      uncertain
+        ? 'Ответ о загрузке не получен. Сначала проверьте галерею этого чека: повтор может добавить вторую копию.'
+        : 'Загрузить сохранённое фото к этому чеку?',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Убрать из повтора',
+          onPress: () => {
+            if (photoSession.isCurrent()) recoverPhotoMutation.mutate({ uri, discard: true });
+          },
+        },
+        {
+          text: 'Загрузить',
+          onPress: () => {
+            if (photoSession.isCurrent()) recoverPhotoMutation.mutate({ uri, discard: false });
+          },
+        },
+      ],
+    );
+  };
 
   const deletePhotoMutation = useMutation({
     mutationFn: (photoId: string) => checkPhotosApi.remove(photoId),
@@ -294,7 +365,13 @@ export default function CheckDetailScreen() {
   const handleDeletePhoto = (photoId: string) => {
     Alert.alert('Удалить фото?', 'Это действие необратимо', [
       { text: 'Отмена', style: 'cancel' },
-      { text: 'Удалить', style: 'destructive', onPress: () => deletePhotoMutation.mutate(photoId) },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: () => {
+          if (photoSession.isCurrent()) deletePhotoMutation.mutate(photoId);
+        },
+      },
     ]);
   };
 
@@ -351,6 +428,7 @@ export default function CheckDetailScreen() {
     mutationFn: () =>
       hasPermission('accept_payment') ? checksApi.acceptPayment(id, {}) : checksApi.update(id, { isDeferred: false }),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       // The ON-SCREEN check is refetched (awaited) rather than a bare
       // invalidate: the detail must re-render on the CONFIRMED-fresh payload
@@ -358,6 +436,7 @@ export default function CheckDetailScreen() {
       // `getById` always returns the full check (backend activateDeferred →
       // getById), so the screen never drops to a content-less state.
       await queryClient.refetchQueries({ queryKey: ['check', id] });
+      if (!continuation.isCurrent()) return;
       // Lists / dashboards are off-screen — fire-and-forget invalidation is
       // enough; they refetch lazily on their next focus.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
@@ -401,8 +480,10 @@ export default function CheckDetailScreen() {
   const workStatusMutation = useMutation({
     mutationFn: (target: string) => checksApi.setWorkStatus(id, target),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       await queryClient.refetchQueries({ queryKey: ['check', id] });
+      if (!continuation.isCurrent()) return;
       queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
     },
@@ -427,9 +508,11 @@ export default function CheckDetailScreen() {
   const commentMutation = useMutation({
     mutationFn: (comment: string) => checksApi.updateComment(id, comment),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       setCommentModalOpen(false);
       await queryClient.refetchQueries({ queryKey: ['check', id] });
+      if (!continuation.isCurrent()) return;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
     },
@@ -1680,6 +1763,20 @@ export default function CheckDetailScreen() {
                 <Ionicons name="add" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
             </View>
+            {pendingPhotoRecord?.photos.map((photo, index) => (
+              <TouchableOpacity
+                key={photo.uri}
+                disabled={recoverPhotoMutation.isPending}
+                onPress={() => retrySavedPhoto(photo.uri, photo.state === 'uncertain')}
+                style={styles.photoEmpty}
+                accessibilityLabel={`Проверить сохранённое фото ${index + 1}`}
+              >
+                <Image source={{ uri: photo.uri }} style={styles.photoThumb} contentFit="cover" />
+                <Text style={[styles.photoEmptyText, { color: palette.text.primary }]}>
+                  {photo.state === 'uncertain' ? 'Проверить загрузку фото' : 'Фото ожидает ручной загрузки'}
+                </Text>
+              </TouchableOpacity>
+            ))}
             {photos.length === 0 ? (
               <View style={styles.photoEmpty}>
                 <Ionicons name="images-outline" size={28} color={palette.text.tertiary} />

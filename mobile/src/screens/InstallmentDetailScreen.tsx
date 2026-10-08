@@ -1,3 +1,4 @@
+import { captureCheckSaveSession } from './checkCreate/saveSession';
 /**
  * InstallmentDetailScreen — карточка одной рассрочки (Round 13 редизайн).
  * Открыта тапом по строке в InstallmentsScreen (план приходит параметром
@@ -188,23 +189,23 @@ export default function InstallmentDetailScreen() {
   });
 
   /** Системный пикер → FormData → POST в чек рассрочки (носитель фото — чек). */
-  const pickAndUploadPhoto = async (): Promise<boolean> => {
+  const pickAndUploadPhoto = async (operation = captureCheckSaveSession()): Promise<boolean> => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.8,
     });
-    if (result.canceled || !checkId) return false;
+    if (!operation.isCurrent() || result.canceled || !checkId) return false;
     const asset = result.assets[0];
     const uri = asset.uri;
     const filename = uri.split('/').pop() || 'photo.jpg';
     const formData = new FormData();
     formData.append('photo', { uri, name: filename, type: 'image/jpeg' } as any);
-    await checkPhotosApi.upload(checkId, formData);
-    return true;
+    await operation.photos.upload(checkId, formData);
+    return operation.isCurrent();
   };
 
   const uploadPhotoMutation = useMutation({
-    mutationFn: pickAndUploadPhoto,
+    mutationFn: () => pickAndUploadPhoto(),
     onSuccess: (uploaded) => {
       if (uploaded) {
         haptic('success');
@@ -224,8 +225,9 @@ export default function InstallmentDetailScreen() {
   // отменён или аплоад упал, старое остаётся на месте.
   const replacePhotoMutation = useMutation({
     mutationFn: async (photoId: string) => {
-      const uploaded = await pickAndUploadPhoto();
-      if (uploaded) await checkPhotosApi.remove(photoId);
+      const operation = captureCheckSaveSession();
+      const uploaded = await pickAndUploadPhoto(operation);
+      if (uploaded && operation.isCurrent()) await operation.photos.remove(photoId);
       return uploaded;
     },
     onSuccess: (replaced) => {
@@ -239,17 +241,30 @@ export default function InstallmentDetailScreen() {
   });
 
   const onPhotoLongPress = (photoId: string) => {
+    const operation = captureCheckSaveSession();
     haptic('tap');
     Alert.alert('Фото заказ-наряда', 'Что сделать с этим фото?', [
       { text: 'Отмена', style: 'cancel' },
-      { text: 'Заменить', onPress: () => replacePhotoMutation.mutate(photoId) },
+      {
+        text: 'Заменить',
+        onPress: () => {
+          if (operation.isCurrent()) replacePhotoMutation.mutate(photoId);
+        },
+      },
       {
         text: 'Удалить',
         style: 'destructive',
         onPress: () =>
+          operation.isCurrent() &&
           Alert.alert('Удалить фото?', 'Это действие необратимо', [
             { text: 'Отмена', style: 'cancel' },
-            { text: 'Удалить', style: 'destructive', onPress: () => deletePhotoMutation.mutate(photoId) },
+            {
+              text: 'Удалить',
+              style: 'destructive',
+              onPress: () => {
+                if (operation.isCurrent()) deletePhotoMutation.mutate(photoId);
+              },
+            },
           ]),
       },
     ]);

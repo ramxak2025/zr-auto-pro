@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * PlanningScreen — «Постоянные расходы и мотивация» (v3.0.1 ФИЧА 1).
  *
@@ -205,7 +206,9 @@ export default function PlanningScreen() {
   const toggleFixedMutation = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => planningApi.fixedCosts.update(id, { active }),
     onMutate: async ({ id, active }) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: ['planning', 'fixed-costs'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<FixedCost[]>(['planning', 'fixed-costs']);
       queryClient.setQueryData<FixedCost[]>(['planning', 'fixed-costs'], (old) =>
         old ? old.map((c) => (c.id === id ? { ...c, active } : c)) : old,

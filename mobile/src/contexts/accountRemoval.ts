@@ -1,3 +1,5 @@
+import { PENDING_CHECK_PHOTOS_PREFIX, parsePendingCheckPhotos } from '../utils/pendingCheckPhotoRecord';
+import { dataOwnerKey } from './dataSession';
 import type { AccountDataScope, SavedAccount } from './accountRegistry';
 import {
   parseStoredQueue,
@@ -12,6 +14,8 @@ export interface AccountRemovalInspection {
   offlineChecks: number;
   financialIntents: number;
   nfcScans: number;
+  /** Remaining local photo URIs for already saved checks (including uncertain uploads). */
+  pendingPhotos: number;
   /** Unattributed legacy records remain on device, never assigned to this account. */
   legacyQuarantined: number;
 }
@@ -31,6 +35,7 @@ export async function inspectSavedAccountRemoval(
   let offlineChecks = 0;
   let financialIntents = 0;
   let nfcScans = 0;
+  let pendingPhotos = 0;
   for (const scope of account.scopes) {
     const raw = await storage.getItem(scopedQueueKey(scope));
     if (raw) {
@@ -42,6 +47,10 @@ export async function inspectSavedAccountRemoval(
     const prefix = sourcePrefix(scope);
     financialIntents += keys.filter((key) => key.startsWith(`${PROCUREMENT_PREFIX}${prefix}/`)).length;
     nfcScans += keys.filter((key) => key === `autexa:nfc:v1:${prefix}`).length;
+    for (const key of keys.filter((item) => item.startsWith(`${PENDING_CHECK_PHOTOS_PREFIX}${dataOwnerKey(scope)}:`))) {
+      const raw = await storage.getItem(key);
+      if (raw) pendingPhotos += parsePendingCheckPhotos(raw, scope).photos.length;
+    }
   }
   const legacy = await storage.getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY);
   const legacyOwner = parseStoredQueueOwner(legacy);
@@ -69,10 +78,11 @@ export async function inspectSavedAccountRemoval(
       legacyQuarantined += 1;
   }
   return {
-    canRemove: offlineChecks + financialIntents + nfcScans === 0,
+    canRemove: offlineChecks + financialIntents + nfcScans + pendingPhotos === 0,
     offlineChecks,
     financialIntents,
     nfcScans,
+    pendingPhotos,
     legacyQuarantined,
   };
 }

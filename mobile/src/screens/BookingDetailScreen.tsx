@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * BookingDetailScreen — карточка записи + действия.
  *
@@ -109,9 +110,12 @@ export default function BookingDetailScreen() {
   const cancelMutation = useMutation({
     mutationFn: () => bookingsApi.cancel(bookingId),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      if (!continuation.isCurrent()) return;
       await queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
+      if (!continuation.isCurrent()) return;
       navigation.goBack();
     },
     onError: (err: any) => {
@@ -128,8 +132,10 @@ export default function BookingDetailScreen() {
   const rescheduleMutation = useMutation({
     mutationFn: (iso: string) => bookingsApi.update(bookingId, { scheduledAt: iso }),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      if (!continuation.isCurrent()) return;
       await queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
     },
     onError: (err: any) => {
@@ -147,9 +153,11 @@ export default function BookingDetailScreen() {
   const commentMutation = useMutation({
     mutationFn: (comment: string) => bookingsApi.update(bookingId, { comment }),
     onSuccess: async () => {
+      const continuation = captureDataSession();
       haptic('success');
       setCommentModalOpen(false);
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      if (!continuation.isCurrent()) return;
       await queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
     },
     onError: (err: any) => {

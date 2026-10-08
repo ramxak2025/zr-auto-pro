@@ -49,6 +49,12 @@ const mockStore = (map: Map<string, string>) => ({
     map.delete(k);
   }),
   getAllKeys: jest.fn(async () => [...map.keys()]),
+  multiGet: jest.fn(async (keys: readonly string[]) =>
+    keys.map((key) => [key, map.get(key) ?? null] as [string, string | null]),
+  ),
+  multiRemove: jest.fn(async (keys: readonly string[]) => {
+    keys.forEach((key) => map.delete(key));
+  }),
 });
 const mockLegacy = mockStore(mockLegacyMap);
 const mockSecure = mockStore(mockSecureMap);
@@ -74,6 +80,12 @@ jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
   AppState: { addEventListener: () => ({ remove: () => {} }) },
+  InteractionManager: {
+    runAfterInteractions: (work: () => void) => {
+      work();
+      return { cancel: () => {} };
+    },
+  },
 }));
 jest.mock('expo-constants', () => ({
   __esModule: true,
@@ -93,19 +105,18 @@ jest.mock('../../sentry', () => ({
 }));
 jest.mock('../../utils/widgetBridge', () => ({ clearWidgetData: jest.fn() }));
 jest.mock('../../utils/liveActivityStore', () => ({ resetLiveActivitySession: async () => {} }));
-jest.mock('../../utils/persistentCache', () => ({
-  setPersistentCacheSession: jest.fn(),
-  clearAccountCaches: async () => {},
-}));
+jest.mock('../../utils/persistentCache', () => jest.requireActual('../../utils/persistentCache'));
 jest.mock('../../utils/offlineCheckQueue', () => ({
+  ...jest.requireActual('../../utils/offlineCheckQueue'),
   adoptOfflineCheckQueue: async () => {},
   endOfflineCheckQueueSession: async () => {},
   setOfflineCheckQueuePointId: () => {},
   stampOfflineCheckQueuePoint: async () => {},
-  parseStoredQueue: () => [],
-  parseStoredQueueOwner: () => null,
-  scopedQueueKey: () => '',
-  OFFLINE_CHECK_QUEUE_STORAGE_KEY: 'legacyQueue',
+}));
+jest.mock('expo-crypto', () => ({
+  randomUUID: () => '55555555-5555-4555-8555-555555555555',
+  digestStringAsync: async () => 'a'.repeat(64),
+  CryptoDigestAlgorithm: { SHA256: 'SHA-256' },
 }));
 const user = (id: string, tenantId = 'tenant-' + id): User =>
   ({ id, tenantId, fullName: id, role: 'master', currentPointId: 'point-' + id }) as User;
@@ -120,7 +131,7 @@ const response = (config: InternalAxiosRequestConfig, data: unknown): AxiosRespo
   statusText: 'OK',
   headers: {},
 });
-async function setup() {
+async function setup(withCache = false, initialUser = user('a')) {
   jest.resetModules();
   mockSlots.length = 0;
   mockEffects.length = 0;
@@ -128,6 +139,25 @@ async function setup() {
   mockLegacyMap.clear();
   mockSecureMap.clear();
   jest.clearAllMocks();
+  for (const [store, map] of [
+    [mockLegacy, mockLegacyMap],
+    [mockSecure, mockSecureMap],
+  ] as const) {
+    store.getItem.mockImplementation(async (key) => map.get(key) ?? null);
+    store.setItem.mockImplementation(async (key, value) => {
+      map.set(key, value);
+    });
+    store.removeItem.mockImplementation(async (key) => {
+      map.delete(key);
+    });
+    store.getAllKeys.mockImplementation(async () => [...map.keys()]);
+    store.multiGet.mockImplementation(async (keys) =>
+      keys.map((key) => [key, map.get(key) ?? null] as [string, string | null]),
+    );
+    store.multiRemove.mockImplementation(async (keys) => {
+      keys.forEach((key) => map.delete(key));
+    });
+  }
   const registryMod = jest.requireActual('../accountRegistry') as typeof import('../accountRegistry');
   mockRegistry = registryMod.createAccountRegistry<User>(
     mockSecure,
@@ -135,15 +165,20 @@ async function setup() {
     (v): v is User => !!v && typeof (v as User).id === 'string',
   );
   const state = await mockRegistry.read();
-  const a = user('a');
+  const a = initialUser;
   await mockRegistry.install({ token: jwt(a), user: a, impersonating: false }, state.generation);
   const transport = jest.requireActual('../../api/axios') as typeof import('../../api/axios');
   transport.default.defaults.adapter = async (cfg) => response(cfg, a);
   const { AuthProvider } = jest.requireActual('../AuthContext') as typeof import('../AuthContext');
+  const query = jest.requireActual('@tanstack/react-query') as typeof import('@tanstack/react-query');
+  const queryClient = withCache
+    ? new query.QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    : undefined;
+  if (queryClient) mockCleanups.push(() => queryClient.clear());
   type Api = ReturnType<typeof import('../AuthContext').useAuth>;
   const render = () => {
     mockCursor = 0;
-    const element = AuthProvider({ children: null });
+    const element = AuthProvider({ children: null, queryClient });
     while (mockEffects.length) mockEffects.shift()?.();
     return element.props.value as Api;
   };
@@ -152,7 +187,7 @@ async function setup() {
   let api = render();
   await flush();
   api = render();
-  return { transport, render, api, a, registryMod };
+  return { transport, render, api, a, registryMod, queryClient, query };
 }
 afterEach(() => {
   for (const cleanup of mockCleanups.splice(0)) cleanup();
@@ -254,7 +289,8 @@ it('logout during secure Add native write stays logged out and retains B as inac
     await original(k, v);
   });
   const add = f.api.addAccount('B', 'pw').catch((e) => e.code);
-  while (!entered) await Promise.resolve();
+  for (let i = 0; i < 1000 && !entered; i++) await Promise.resolve();
+  expect(entered).toBe(true);
   const logout = f.api.logout();
   release();
   expect(await add).toBe('SESSION_CHANGED');
@@ -268,4 +304,193 @@ it('logout during secure Add native write stays logged out and retains B as inac
   expect(saved.accounts.find((a) => a.identity.userId === 'b')?.session?.token).toBe(jwt(b));
   expect(saved.accounts.find((a) => a.identity.userId === 'a')?.needsReauth).toBe(true);
   mockSecure.setItem.mockImplementation(original);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+const intentUser: User = {
+  ...user('a'),
+  id: '11111111-1111-4111-8111-111111111111',
+  tenantId: '22222222-2222-4222-8222-222222222222',
+  currentPointId: '33333333-3333-4333-8333-333333333333',
+};
+it.each(['procurement', 'nfc', 'offline', 'photos'])(
+  'actual removeAccount drains an already started %s adapter write and retains the slot',
+  async (kind) => {
+    const f = await setup(false, intentUser);
+    const data = jest.requireActual('../dataSession') as typeof import('../dataSession');
+    const owner = { tenantId: f.a.tenantId!, userId: f.a.id, pointId: f.a.currentPointId! };
+    data.setDataSession(owner);
+    const lease = data.captureDataSession();
+    const gate = deferred<void>();
+    let entered = false;
+    const original = mockLegacy.setItem.getMockImplementation()!;
+    mockLegacy.setItem.mockImplementation(async (key, value) => {
+      if (
+        key.startsWith('autexa:procurement:') ||
+        key.startsWith('autexa:nfc:') ||
+        key.startsWith('autexa:pending-check-photos:') ||
+        (key.startsWith('offline_check_queue_v2:') && value.includes('clientRequestId'))
+      ) {
+        entered = true;
+        await gate.promise;
+      }
+      await original(key, value);
+    });
+    const send = jest.fn(async () => {
+      throw new Error('ambiguous offline');
+    });
+    let work: Promise<unknown>;
+    if (kind === 'procurement') {
+      const { durableProcurement } = jest.requireActual(
+        '../../utils/procurementStorage',
+      ) as typeof import('../../utils/procurementStorage');
+      work = durableProcurement.execute({
+        owner,
+        target: { operation: 'delivery-return', sourceId: '44444444-4444-4444-8444-444444444444' },
+        payload: {},
+        isCurrent: lease.isCurrent,
+        send,
+      });
+    } else if (kind === 'nfc') {
+      const { nativePendingNfc } = jest.requireActual(
+        '../../utils/nativePendingNfc',
+      ) as typeof import('../../utils/nativePendingNfc');
+      work = nativePendingNfc.scan({
+        owner,
+        token: 'a'.repeat(43),
+        lease,
+        isCurrent: lease.isCurrent,
+        refreshCurrent: async () => {},
+        send,
+      });
+    } else if (kind === 'photos') {
+      const photos = jest.requireActual(
+        '../../utils/pendingCheckPhotos',
+      ) as typeof import('../../utils/pendingCheckPhotos');
+      work = photos.updatePendingCheckPhotos('saved-check', lease, () => [
+        { uri: 'file:unsent.jpg', state: 'pending' },
+      ]);
+    } else {
+      const queue = jest.requireActual(
+        '../../utils/offlineCheckQueue',
+      ) as typeof import('../../utils/offlineCheckQueue');
+      await queue.adoptOfflineCheckQueue(owner);
+      work = queue.enqueueOfflineCheck({ clientRequestId: '55555555-5555-4555-8555-555555555555' });
+    }
+    const outcome = work.catch(() => undefined);
+    for (let i = 0; i < 1000 && !entered; i++) await Promise.resolve();
+    expect(entered).toBe(true);
+    let removed = false;
+    const removing = f.api.removeAccount(f.api.activeAccountId!).then(
+      () => {
+        removed = true;
+        return 'removed';
+      },
+      (e) => e.code,
+    );
+    await flush();
+    expect(removed).toBe(false);
+    gate.resolve();
+    expect(await removing).toBe('UNRESOLVED_INTENTS');
+    await outcome;
+    expect((await mockRegistry.read()).accounts).toHaveLength(1);
+    expect(f.render().activeAccountId).toBe(f.api.activeAccountId);
+    expect(
+      [...mockLegacyMap.keys()].some((key) =>
+        key.startsWith(
+          kind === 'procurement'
+            ? 'autexa:procurement:'
+            : kind === 'nfc'
+              ? 'autexa:nfc:'
+              : kind === 'photos'
+                ? 'autexa:pending-check-photos:'
+                : 'offline_check_queue_v2:',
+        ),
+      ),
+    ).toBe(true);
+    mockLegacy.setItem.mockImplementation(original);
+  },
+);
+
+it('actual removeAccount freezes new writes during a stale getAllKeys snapshot; foreign-owner writes remain allowed', async () => {
+  const f = await setup(false, intentUser);
+  const owner = { tenantId: f.a.tenantId!, userId: f.a.id, pointId: f.a.currentPointId! };
+  const { procurementStorage, durableProcurement } = jest.requireActual(
+    '../../utils/procurementStorage',
+  ) as typeof import('../../utils/procurementStorage');
+  const gate = deferred<void>();
+  let entered = false;
+  const original = mockLegacy.getAllKeys.getMockImplementation()!;
+  mockLegacy.getAllKeys.mockImplementation(async () => {
+    const keys = await original();
+    entered = true;
+    await gate.promise;
+    return keys;
+  });
+  const removing = f.api.removeAccount(f.api.activeAccountId!);
+  for (let i = 0; i < 1000 && !entered; i++) await Promise.resolve();
+  expect(entered).toBe(true);
+  const key = `autexa:procurement:v1:${owner.tenantId}/${owner.userId}/${owner.pointId}/delivery-return/delivery`;
+  await expect(procurementStorage.setItem(key, 'pending')).rejects.toMatchObject({ code: 'UNRESOLVED_INTENTS' });
+  await procurementStorage.setItem('autexa:procurement:v1:other/user/point/delivery-return/delivery', 'other-pending');
+  const send = jest.fn(async () => ({ status: 200, data: {} }));
+  await expect(
+    durableProcurement.execute({
+      owner,
+      target: { operation: 'delivery-return', sourceId: '44444444-4444-4444-8444-444444444444' },
+      payload: {},
+      isCurrent: () => true,
+      send,
+    }),
+  ).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+  expect(send).not.toHaveBeenCalled();
+  gate.resolve();
+  await removing;
+  expect((await mockRegistry.read()).accounts).toHaveLength(0);
+  expect(mockLegacyMap.has(key)).toBe(false);
+  expect(mockLegacyMap.get('autexa:procurement:v1:other/user/point/delivery-return/delivery')).toBe('other-pending');
+  mockLegacy.getAllKeys.mockImplementation(original);
+});
+
+it('actual AuthProvider restores only selected saved-account disk cache while switching offline', async () => {
+  const f = await setup(true);
+  const qc = f.queryClient!;
+  const b = user('b');
+  f.transport.default.defaults.adapter = async (cfg) => response(cfg, { token: jwt(b), user: b });
+  await f.api.addAccount('B', 'pw');
+  await flush();
+  const current = f.render();
+  for (const u of [f.a, b])
+    for (const key of [['products'], ['suppliers']]) {
+      const prefix = 'rqcache:v2:' + encodeURIComponent(JSON.stringify([u.tenantId, u.id, u.currentPointId])) + ':';
+      mockLegacyMap.set(
+        prefix + JSON.stringify(key),
+        JSON.stringify({ queryKey: key, data: [{ owner: u.id }], storedAt: Date.now() }),
+      );
+    }
+  f.query.onlineManager.setOnline(false);
+  f.transport.default.defaults.adapter = async () => {
+    throw new Error('offline');
+  };
+  try {
+    await current.switchAccount(current.savedAccounts.find((a) => a.identity.userId === 'a')!.id);
+    await flush();
+    expect(qc.getQueryData(['products'])).toEqual([{ owner: 'a' }]);
+    expect(qc.getQueryData(['suppliers'])).toEqual([{ owner: 'a' }]);
+    const a = f.render();
+    await a.switchAccount(a.savedAccounts.find((slot) => slot.identity.userId === 'b')!.id);
+    await flush();
+    expect(qc.getQueryData(['products'])).toEqual([{ owner: 'b' }]);
+    expect(qc.getQueryData(['suppliers'])).toEqual([{ owner: 'b' }]);
+  } finally {
+    qc.clear();
+    f.query.onlineManager.setOnline(true);
+  }
 });

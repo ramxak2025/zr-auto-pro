@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * BookingCreateScreen — «+ Новая запись».
  *
@@ -187,9 +188,11 @@ export default function BookingCreateScreen() {
         comment: comment.trim() || undefined,
       }),
     onSuccess: async (res) => {
+      const continuation = captureDataSession();
       const result = res.data;
       // Инвалидация списка обеих вкладок (новая запись — в Предстоящих).
       await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      if (!continuation.isCurrent()) return;
       if (result.conflictWarning) {
         // Сохранение УЖЕ прошло — это НЕ блокирующее предупреждение. Не
         // улетаем назад мгновенно: показываем заметку и переводим кнопку в
