@@ -15,6 +15,8 @@ export class PublicBookingIntentError extends Error {
   definitiveRejected: boolean;
 }
 
+export function validatePublicBookingDto(body: SubmitPublicBookingRequest): string | null;
+
 export function parsePublicBookingIntent(raw: string, slug: string): PublicBookingSavedIntent;
 export function dispatchPublicBookingIntent(options: {
   slug: string;
@@ -30,6 +32,21 @@ export function dispatchPublicBookingIntent(options: {
 }): Promise<
   | { kind: 'ambiguous'; record: PublicBookingSavedIntent }
   | { kind: 'confirmed'; record: PublicBookingSavedIntent; result: PublicBookingReceipt }
+>;
+
+type PublicBookingDispatchResult =
+  | { kind: 'ambiguous'; record: PublicBookingSavedIntent }
+  | { kind: 'confirmed'; record: PublicBookingSavedIntent; result: PublicBookingReceipt };
+type PublicBookingCurrentResult = { status: 'unknown' } | { status: 'completed'; result: PublicBookingReceipt } | null;
+export function dispatchAndReadCurrentPublicBooking(options: {
+  dispatch: () => Promise<PublicBookingDispatchResult>;
+  readCurrent: (record: PublicBookingSavedIntent) => Promise<PublicBookingCurrentResult>;
+  onAcknowledged?: (record: PublicBookingSavedIntent) => void;
+  isCurrent?: () => boolean;
+}): Promise<
+  | { kind: 'ambiguous'; record: PublicBookingSavedIntent }
+  | { kind: 'current'; record: PublicBookingSavedIntent; result: PublicBookingReceipt }
+  | { kind: 'unverified'; record: PublicBookingSavedIntent; error?: unknown }
 >;
 export function minimizePublicBookingIntent(options: {
   slug: string;

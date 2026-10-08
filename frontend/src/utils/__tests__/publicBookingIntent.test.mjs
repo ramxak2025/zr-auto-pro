@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clearPublicBookingIntent,
+  dispatchAndReadCurrentPublicBooking,
   dispatchPublicBookingIntent,
   parsePublicBookingIntent,
   recoverPublicBookingIntent,
+  validatePublicBookingDto,
 } from '../publicBookingIntent.js';
 
 const requestId = '50d7f0e8-fefa-4c38-8933-5e9648f3889f';
@@ -158,6 +160,143 @@ test('only a first proven correctable rejection clears; rejection after ambiguit
     }),
   );
   assert.equal(parsePublicBookingIntent(ambiguous.values.get(key), slug).requestId, requestId);
+});
+
+test('actual DTO preflight blocks invalid name, phone, and comment before durable claim', async () => {
+  const env = fakeEnvironment();
+  let sends = 0;
+  for (const invalid of [
+    body('x'.repeat(101)),
+    { ...body(), name: 'Alex\u0001' },
+    { ...body(), phone: '123456789' },
+    { ...body(), phone: '123456789012345678901234567890123' },
+    { ...body(), comment: '<script>' },
+    { ...body(), comment: 'x'.repeat(1001) },
+  ]) {
+    assert.ok(validatePublicBookingDto(invalid));
+    await assert.rejects(
+      dispatch(env, {
+        body: invalid,
+        send: async () => {
+          sends += 1;
+          return { status: 201, data: { requestId, status: 'pending' } };
+        },
+      }),
+      { code: 'INVALID_REQUEST' },
+    );
+  }
+  assert.equal(sends, 0);
+  assert.equal(env.values.has(key), false);
+});
+
+test('first flattened DTO 400 and typed booking-disabled 404 clear; rejection after an ambiguous send does not', async () => {
+  for (const rejection of [
+    { response: { status: 400, data: { message: 'phone must match regular expression' } } },
+    { response: { status: 404, data: { code: 'BOOKING_DISABLED', message: 'disabled' } } },
+  ]) {
+    const env = fakeEnvironment();
+    await assert.rejects(dispatch(env, { send: async () => Promise.reject(rejection) }), { definitiveRejected: true });
+    assert.equal(env.values.has(key), false);
+  }
+
+  const env = fakeEnvironment();
+  await assert.rejects(dispatch(env, { send: async () => Promise.reject(new Error('timeout')) }));
+  const saved = parsePublicBookingIntent(env.values.get(key), slug);
+  await assert.rejects(
+    dispatch(env, {
+      saved,
+      send: async () => Promise.reject({ response: { status: 400, data: { message: 'name is too long' } } }),
+    }),
+  );
+  assert.equal(parsePublicBookingIntent(env.values.get(key), slug).requestId, requestId);
+});
+
+test('lost initial response then retry reads current capability status, not historical ledger receipt', async () => {
+  const env = fakeEnvironment();
+  await assert.rejects(dispatch(env, { send: async () => Promise.reject(new Error('lost response')) }));
+  const saved = parsePublicBookingIntent(env.values.get(key), slug);
+  const historicalAcknowledgement = { requestId, status: 'pending' };
+  const currentReceipt = { requestId, status: 'confirmed', startsAt: '2026-10-09T11:00:00.000Z' };
+  let posts = 0;
+  let gets = 0;
+  const result = await dispatchAndReadCurrentPublicBooking({
+    dispatch: () =>
+      dispatchPublicBookingIntent({
+        slug,
+        key,
+        storage: env.storage,
+        locks: env.locks,
+        body: saved.body,
+        saved,
+        parseReceipt: (response, expectedId) =>
+          response.status === 201 && response.data.requestId === expectedId ? response.data : null,
+        send: async () => {
+          posts += 1;
+          return { status: 201, data: historicalAcknowledgement };
+        },
+      }),
+    readCurrent: (record) =>
+      recoverPublicBookingIntent({
+        slug,
+        key,
+        storage: env.storage,
+        locks: env.locks,
+        requestId: record.requestId,
+        recoveryToken: record.recoveryToken,
+        recover: async (targetSlug, targetId, recoveryToken) => {
+          gets += 1;
+          assert.equal(targetSlug, slug);
+          assert.equal(targetId, requestId);
+          assert.equal(recoveryToken, token);
+          return { status: 200, data: { status: 'completed', result: currentReceipt } };
+        },
+        parseRecovery: (_response, expectedId) =>
+          expectedId === requestId ? { status: 'completed', result: currentReceipt } : null,
+      }),
+  });
+  assert.equal(posts, 1);
+  assert.equal(gets, 1);
+  assert.equal(result.kind, 'current');
+  assert.equal(result.result.status, 'confirmed');
+  assert.equal(parsePublicBookingIntent(env.values.get(key), slug).body, null);
+});
+
+test('failed current-status GET remains recoverable and does not present historical receipt as current', async () => {
+  const env = fakeEnvironment();
+  let posts = 0;
+  const result = await dispatchAndReadCurrentPublicBooking({
+    dispatch: () =>
+      dispatchPublicBookingIntent({
+        slug,
+        key,
+        storage: env.storage,
+        locks: env.locks,
+        body: body(),
+        parseReceipt,
+        send: async () => {
+          posts += 1;
+          return { status: 201, data: { requestId, status: 'pending' } };
+        },
+      }),
+    readCurrent: async () => {
+      throw new Error('status GET unavailable');
+    },
+  });
+  assert.equal(result.kind, 'unverified');
+  assert.equal(posts, 1);
+  assert.equal(parsePublicBookingIntent(env.values.get(key), slug).body, null);
+  const recovered = await recoverPublicBookingIntent({
+    slug,
+    key,
+    storage: env.storage,
+    locks: env.locks,
+    requestId,
+    recoveryToken: token,
+    recover: async () => ({ status: 200, data: { status: 'completed', result: {} } }),
+    parseRecovery: () => ({ status: 'completed', result: { requestId, status: 'cancelled' } }),
+  });
+  assert.equal(recovered.status, 'completed');
+  assert.equal(posts, 1);
 });
 
 test('unpublished landing does not block capability recovery; completed receipt is minimized', async () => {

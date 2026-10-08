@@ -10,6 +10,19 @@ const CORRECTABLE = new Set([
   'PUBLICATION_INCOMPLETE',
 ]);
 
+export function validatePublicBookingDto(body) {
+  if (typeof body?.name !== 'string' || !body.name.trim() || body.name.length > 100 || /[<>\p{Cc}]/u.test(body.name))
+    return 'Укажите имя длиной до 100 символов без знаков < и >.';
+  if (typeof body?.phone !== 'string' || !/^[+()\d\s-]{10,32}$/.test(body.phone))
+    return 'Проверьте номер телефона: используйте от 10 до 32 цифр, пробелы и символы + ( ) -.';
+  if (
+    body.comment !== undefined &&
+    (typeof body.comment !== 'string' || body.comment.length > 1000 || /[<>]/.test(body.comment))
+  )
+    return 'Комментарий должен быть не длиннее 1000 символов и не содержать знаки < и >.';
+  return null;
+}
+
 export class PublicBookingIntentError extends Error {
   constructor(code, message, definitiveRejected = false) {
     super(message);
@@ -134,11 +147,34 @@ function responseCode(error) {
   return error?.response?.data?.code;
 }
 
+function isValidationPipeRejection(error) {
+  const data = error?.response?.data;
+  return (
+    responseStatus(error) === 400 &&
+    data &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    Object.keys(data).length === 1 &&
+    typeof data.message === 'string' &&
+    data.message.length > 0
+  );
+}
+
+function isFirstDefinitiveRejection(error) {
+  const status = responseStatus(error);
+  const code = responseCode(error);
+  if (status === 400) return code === 'INVALID_REQUEST' || isValidationPipeRejection(error);
+  if (status === 404) return code === 'BOOKING_DISABLED';
+  return status === 409 && CORRECTABLE.has(code);
+}
+
 /** Claims one slug-scoped immutable intent under Web Locks, writes and reads it
  * back before dispatch, and keeps the lock through the request. */
 export async function dispatchPublicBookingIntent(options) {
   const { slug, key, storage, locks, body, saved, parseReceipt, send, onPersisted, isCurrent = () => true } = options;
   if (!slug || !key || typeof parseReceipt !== 'function' || typeof send !== 'function') throw unavailable();
+  const inputError = validatePublicBookingDto(body);
+  if (inputError) throw new PublicBookingIntentError('INVALID_REQUEST', inputError);
   return environment(
     storage,
     locks,
@@ -194,9 +230,7 @@ export async function dispatchPublicBookingIntent(options) {
         }
         return { kind: 'confirmed', record: { ...record, body: null }, result };
       } catch (error) {
-        const status = responseStatus(error);
-        const code = responseCode(error);
-        const canClear = firstDispatch && (status === 400 || status === 409) && CORRECTABLE.has(code);
+        const canClear = firstDispatch && isFirstDefinitiveRejection(error);
         if (canClear) {
           const latest = await readChecked(storage, key, slug, isCurrent);
           if (latest?.requestId === record.requestId && latest.dispatches === 1) {
@@ -207,7 +241,7 @@ export async function dispatchPublicBookingIntent(options) {
             }
           }
           throw new PublicBookingIntentError(
-            code,
+            responseCode(error) ?? 'INVALID_REQUEST',
             error?.message || 'Проверьте данные заявки и попробуйте ещё раз.',
             true,
           );
@@ -217,6 +251,28 @@ export async function dispatchPublicBookingIntent(options) {
     },
     options.isCurrent,
   );
+}
+
+/** Shared submit/retry handler: a successful POST is only an acknowledgement.
+ * Always read capability state before presenting a receipt as current. */
+export async function dispatchAndReadCurrentPublicBooking(options) {
+  const { dispatch, readCurrent, onAcknowledged, isCurrent = () => true } = options;
+  const dispatched = await dispatch();
+  if (!isCurrent()) throw new PublicBookingIntentError('LEASE_CHANGED', 'Откройте страницу записи снова.');
+  if (dispatched.kind !== 'confirmed') return dispatched;
+
+  onAcknowledged?.(dispatched.record);
+  try {
+    const current = await readCurrent(dispatched.record);
+    if (!isCurrent()) throw new PublicBookingIntentError('LEASE_CHANGED', 'Откройте страницу записи снова.');
+    if (current?.status === 'completed') {
+      return { kind: 'current', record: dispatched.record, result: current.result };
+    }
+    return { kind: 'unverified', record: dispatched.record };
+  } catch (error) {
+    if (!isCurrent()) throw new PublicBookingIntentError('LEASE_CHANGED', 'Откройте страницу записи снова.');
+    return { kind: 'unverified', record: dispatched.record, error };
+  }
 }
 
 /** Minimize completed-recovery persistence without changing the recovery key. */

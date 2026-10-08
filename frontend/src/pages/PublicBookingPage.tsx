@@ -10,6 +10,7 @@ import {
 import { publicBookingsApi } from '../api/publicBookings';
 import {
   clearPublicBookingIntent,
+  dispatchAndReadCurrentPublicBooking,
   dispatchPublicBookingIntent,
   parsePublicBookingIntent,
   recoverPublicBookingIntent,
@@ -221,6 +222,7 @@ function PublicBookingView({ slug }: { slug: string }) {
     actionInFlightRef.current = true;
     setBusy(true);
     setError('');
+    setReceipt(null);
     try {
       const result = await recoverPublicBookingIntent({
         slug,
@@ -257,26 +259,50 @@ function PublicBookingView({ slug }: { slug: string }) {
 
   const retrySaved = async () => {
     if (!saved?.body || actionInFlightRef.current || !isCurrent()) return;
+    const savedBody = saved.body;
     const capturedLease = lease;
     const current = () => isCurrent() && leaseRef.current === capturedLease;
     actionInFlightRef.current = true;
     setBusy(true);
     setError('');
     try {
-      const result = await dispatchPublicBookingIntent({
-        slug,
-        key: storageKey(slug),
-        storage: intentStorage,
-        locks: intentLocks,
-        body: saved.body,
-        saved,
-        parseReceipt: readPublicBookingReceipt,
+      const result = await dispatchAndReadCurrentPublicBooking({
+        dispatch: () =>
+          dispatchPublicBookingIntent({
+            slug,
+            key: storageKey(slug),
+            storage: intentStorage,
+            locks: intentLocks,
+            body: savedBody,
+            saved,
+            parseReceipt: readPublicBookingReceipt,
+            isCurrent: current,
+            send: (body) => publicBookingsApi.submit(slug, body),
+          }),
+        readCurrent: (record) =>
+          recoverPublicBookingIntent({
+            slug,
+            key: storageKey(slug),
+            storage: intentStorage,
+            locks: intentLocks,
+            requestId: record.requestId,
+            recoveryToken: record.recoveryToken,
+            recover: (targetSlug, requestId, token) => publicBookingsApi.recover(targetSlug, requestId, token),
+            parseRecovery: readPublicBookingRecovery,
+            isCurrent: current,
+          }),
+        onAcknowledged: (record) => {
+          if (current()) setSaved(record);
+        },
         isCurrent: current,
-        send: (body) => publicBookingsApi.submit(slug, body),
       });
       if (!current()) return;
       setSaved(result.record);
-      if (result.kind === 'confirmed') setReceipt(result.result);
+      if (result.kind === 'current') setReceipt(result.result);
+      else if (result.kind === 'unverified')
+        setError(
+          'Повторный запрос получил подтверждение, но текущий статус проверить не удалось. Проверьте его ещё раз.',
+        );
       else setError('Ответ неоднозначен. Заявка остаётся сохранённой; сначала проверьте её статус.');
     } catch (cause) {
       if (!current()) return;
@@ -326,22 +352,43 @@ function PublicBookingView({ slug }: { slug: string }) {
         consentVersion: landing.consentVersion,
         consentAccepted: true,
       };
-      const result = await dispatchPublicBookingIntent({
-        slug: capturedSlug,
-        key: storageKey(capturedSlug),
-        storage: intentStorage,
-        locks: intentLocks,
-        body,
-        parseReceipt: readPublicBookingReceipt,
-        isCurrent: current,
-        onPersisted: (record) => {
+      const result = await dispatchAndReadCurrentPublicBooking({
+        dispatch: () =>
+          dispatchPublicBookingIntent({
+            slug: capturedSlug,
+            key: storageKey(capturedSlug),
+            storage: intentStorage,
+            locks: intentLocks,
+            body,
+            parseReceipt: readPublicBookingReceipt,
+            isCurrent: current,
+            onPersisted: (record) => {
+              if (current()) setSaved(record);
+            },
+            send: (payload) => publicBookingsApi.submit(capturedSlug, payload),
+          }),
+        readCurrent: (record) =>
+          recoverPublicBookingIntent({
+            slug: capturedSlug,
+            key: storageKey(capturedSlug),
+            storage: intentStorage,
+            locks: intentLocks,
+            requestId: record.requestId,
+            recoveryToken: record.recoveryToken,
+            recover: (targetSlug, requestId, token) => publicBookingsApi.recover(targetSlug, requestId, token),
+            parseRecovery: readPublicBookingRecovery,
+            isCurrent: current,
+          }),
+        onAcknowledged: (record) => {
           if (current()) setSaved(record);
         },
-        send: (payload) => publicBookingsApi.submit(capturedSlug, payload),
+        isCurrent: current,
       });
       if (!current()) return;
       setSaved(result.record);
-      if (result.kind === 'confirmed') setReceipt(result.result);
+      if (result.kind === 'current') setReceipt(result.result);
+      else if (result.kind === 'unverified')
+        setError('Заявка получила ответ, но её актуальный статус проверить не удалось. Проверьте его ещё раз.');
       else setError('Ответ неоднозначен. Проверьте статус сохранённой заявки, не отправляйте новую.');
     } catch (cause) {
       if (!current()) return;
@@ -405,7 +452,12 @@ function PublicBookingView({ slug }: { slug: string }) {
         )}
         {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
         {receipt && saved && (
-          <ReceiptPanel receipt={receipt} busy={busy} onNew={() => void startNewRequestAfterReceipt()} />
+          <ReceiptPanel
+            receipt={receipt}
+            busy={busy}
+            onRefresh={recover}
+            onNew={() => void startNewRequestAfterReceipt()}
+          />
         )}
         <button className="mt-4 rounded-xl bg-blue-600 px-5 py-3 text-white" onClick={() => void loadLanding()}>
           Повторить
@@ -443,7 +495,12 @@ function PublicBookingView({ slug }: { slug: string }) {
         {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
 
         {receipt ? (
-          <ReceiptPanel receipt={receipt} busy={busy} onNew={() => void startNewRequestAfterReceipt()} />
+          <ReceiptPanel
+            receipt={receipt}
+            busy={busy}
+            onRefresh={recover}
+            onNew={() => void startNewRequestAfterReceipt()}
+          />
         ) : (
           <form onSubmit={submit} className="space-y-5">
             <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
@@ -536,7 +593,7 @@ function PublicBookingView({ slug }: { slug: string }) {
                   Имя
                   <input
                     required
-                    maxLength={120}
+                    maxLength={100}
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                     className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-base font-normal"
@@ -547,7 +604,7 @@ function PublicBookingView({ slug }: { slug: string }) {
                   Телефон
                   <input
                     required
-                    maxLength={40}
+                    maxLength={32}
                     value={phone}
                     onChange={(event) => setPhone(event.target.value)}
                     className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-base font-normal"
@@ -673,7 +730,17 @@ function RecoveryPanel({
   );
 }
 
-function ReceiptPanel({ receipt, busy, onNew }: { receipt: PublicBookingReceipt; busy: boolean; onNew: () => void }) {
+function ReceiptPanel({
+  receipt,
+  busy,
+  onRefresh,
+  onNew,
+}: {
+  receipt: PublicBookingReceipt;
+  busy: boolean;
+  onRefresh: () => void;
+  onNew: () => void;
+}) {
   return (
     <section className="my-5 rounded-3xl bg-white p-7 shadow-sm" aria-live="polite">
       <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
@@ -705,6 +772,15 @@ function ReceiptPanel({ receipt, busy, onNew }: { receipt: PublicBookingReceipt;
           : 'Сохраните номер заявки для обращения в сервис.'}
       </p>
       <button
+        type="button"
+        disabled={busy}
+        className="mt-5 rounded-xl border border-slate-300 px-5 py-3 font-semibold disabled:opacity-50"
+        onClick={onRefresh}
+      >
+        {busy ? 'Проверяем…' : 'Обновить статус'}
+      </button>
+      <button
+        type="button"
         disabled={busy}
         className="mt-5 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
         onClick={onNew}
