@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { motion, useReducedMotion } from 'framer-motion';
 import type { PublicBookingLanding, PublicBookingReceipt, PublicBookingSlotPage } from '../../../shared/types';
 import type { SubmitPublicBookingRequest } from '../../../shared/api/types';
 import {
@@ -75,6 +76,7 @@ export default function PublicBookingPage() {
 }
 
 function PublicBookingView({ slug }: { slug: string }) {
+  const reduceMotion = useReducedMotion();
   const [landing, setLanding] = useState<PublicBookingLanding | null>(null);
   const [date, setDate] = useState('');
   const [slots, setSlots] = useState<PublicBookingSlotPage | null>(null);
@@ -509,7 +511,7 @@ function PublicBookingView({ slug }: { slug: string }) {
                 {landing.services.map((service) => (
                   <label
                     key={service.id}
-                    className={`flex cursor-pointer items-center justify-between gap-4 rounded-2xl border p-4 transition ${selected.includes(service.id) ? 'border-blue-500 bg-blue-50/60' : 'border-slate-200 hover:border-slate-300'}`}
+                    className={`flex cursor-pointer items-center justify-between gap-4 rounded-2xl border p-4 transition-colors duration-150 focus-within:ring-2 focus-within:ring-blue-600 focus-within:ring-offset-2 ${selected.includes(service.id) ? 'border-blue-500 bg-blue-50/60' : 'border-slate-200 hover:border-slate-300'}`}
                   >
                     <span>
                       <span className="block font-semibold">{service.name}</span>
@@ -563,7 +565,8 @@ function PublicBookingView({ slug }: { slug: string }) {
                         type="button"
                         key={slot.startsAt}
                         onClick={() => setSelectedSlot(slot.startsAt)}
-                        className={`rounded-xl border px-3 py-3 font-semibold ${selectedSlot === slot.startsAt ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white hover:border-blue-400'}`}
+                        aria-pressed={selectedSlot === slot.startsAt}
+                        className={`rounded-xl border px-3 py-3 font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${selectedSlot === slot.startsAt ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white hover:border-blue-400'}`}
                       >
                         {clock(slot.startsAt, landing.timezone)}
                       </button>
@@ -741,20 +744,47 @@ function ReceiptPanel({
   onRefresh: () => void;
   onNew: () => void;
 }) {
+  const reduceMotion = useReducedMotion();
+  const confirmed = receipt.status === 'confirmed';
+  const rejected = receipt.status === 'rejected' || receipt.status === 'cancelled';
+  const statusColor = confirmed ? '#2563eb' : rejected ? '#e11d48' : '#64748b';
+  const path = confirmed ? 'M6 12.5l4 4L18.5 8' : rejected ? 'M7 7l10 10M17 7L7 17' : '';
   return (
     <section className="my-5 rounded-3xl bg-white p-7 shadow-sm" aria-live="polite">
-      <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
-        Заявка {receipt.requestId.slice(0, 8)}
-      </p>
-      <h2 className="mt-2 text-2xl font-bold">
-        {receipt.status === 'confirmed'
-          ? 'Запись подтверждена'
-          : receipt.status === 'pending'
-            ? 'Заявка отправлена на подтверждение'
-            : receipt.status === 'rejected'
-              ? 'Заявка отклонена'
-              : 'Запись отменена'}
-      </h2>
+      <div className="mb-4 flex items-center gap-3">
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-50" aria-hidden="true">
+          <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none">
+            {confirmed || rejected ? (
+              <motion.path
+                d={path}
+                stroke={statusColor}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={reduceMotion ? false : { pathLength: 0, opacity: 0.6 }}
+                animate={{ pathLength: 1, opacity: 1 }}
+                transition={{ duration: reduceMotion ? 0 : 0.32, ease: 'easeOut' }}
+              />
+            ) : (
+              <circle cx="12" cy="12" r="8" stroke={statusColor} strokeWidth="2" />
+            )}
+          </svg>
+        </span>
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
+            Заявка {receipt.requestId.slice(0, 8)}
+          </p>
+          <h2 className="mt-2 text-2xl font-bold">
+            {receipt.status === 'confirmed'
+              ? 'Запись подтверждена'
+              : receipt.status === 'pending'
+                ? 'Заявка отправлена на подтверждение'
+                : receipt.status === 'rejected'
+                  ? 'Заявка отклонена'
+                  : 'Запись отменена'}
+          </h2>
+        </div>
+      </div>
       <p className="mt-2 text-slate-600">
         {dateLabel(tenantDate(receipt.startsAt, 'UTC'))}, {clock(receipt.startsAt, 'UTC')} · UTC
       </p>

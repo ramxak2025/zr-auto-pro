@@ -1533,8 +1533,7 @@ export default function SupplierDetailPage() {
                           return (
                             <p className="self-end text-xs text-ink-3">
                               Ранее: {new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(prior.price)}{' '}
-                              ₽ · {fmtDay(prior.date)} · источник {prior.deliveryId.slice(0, 8)} · разница{' '}
-                              {delta > 0 ? '+' : delta < 0 ? '−' : ''}
+                              ₽ · {fmtDay(prior.date)} · разница {delta > 0 ? '+' : delta < 0 ? '−' : ''}
                               {rub} ₽{percent}
                             </p>
                           );

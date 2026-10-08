@@ -198,8 +198,7 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
       .then((inspection) => {
         if (!mounted.current || sequence.current !== id || !sessionLease.isCurrent()) return;
         setBusy(null);
-        const pendingPhotos =
-          'pendingPhotos' in inspection && typeof inspection.pendingPhotos === 'number' ? inspection.pendingPhotos : 0;
+        const pendingPhotos = inspection.pendingPhotos;
         const legacy = inspection.legacyQuarantined;
         if (!inspection.canRemove || pendingPhotos > 0) {
           Alert.alert(

@@ -97,7 +97,7 @@ const navGroups: NavGroup[] = [
       { label: 'Главная', path: '/dashboard', icon: LayoutDashboard, end: true },
       { label: 'Касса', path: '/checks/new', icon: Receipt, permission: 'checks_create', end: true },
       {
-        label: 'Онлайн-запись',
+        label: 'Записи',
         path: '/bookings',
         icon: CalendarDays,
         anyPermission: ['bookings_access', 'company_manage'],

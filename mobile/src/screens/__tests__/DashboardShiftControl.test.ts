@@ -30,7 +30,11 @@ jest.mock('react-native-svg', () => ({ Line: 'Line', Circle: 'Circle' }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 48 }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
-jest.mock('@react-navigation/native', () => ({ useFocusEffect: jest.fn(), useIsFocused: () => true }));
+jest.mock('@react-navigation/native', () => ({
+  useFocusEffect: jest.fn(),
+  useIsFocused: () => true,
+  useNavigation: () => ({ navigate: jest.fn(), addListener: jest.fn(() => jest.fn()) }),
+}));
 
 const mockQueryError = jest.fn();
 const mockInvalidateQueries = jest.fn(async (_filters: { queryKey: readonly string[] }) => undefined);

@@ -25,7 +25,8 @@ const test = require('node:test');
  *    только сам факт привязки, её транзакционность и состав таблиц.
  *
  * Тест статический (читает исходники) + поведенческий на собранном dist с
- * фейковым пулом: живой БД в CI нет. Конвенция — points-write-gate.
+ * фейковым пулом; отдельные интеграционные наборы проверяют поведение на PG.
+ * Конвенция — points-write-gate.
  */
 
 const backendRoot = join(__dirname, '..');
@@ -37,6 +38,9 @@ const migration161 = read('migrations/161_points_scoping_modules.sql');
 const migration167 = read('migrations/167_schedule_planning_bookings_point.sql');
 const migration168 = read('migrations/168_staff_and_storage_per_point.sql');
 const migration169 = read('migrations/169_warehouses_per_point.sql');
+const migration180 = read('migrations/180_supplier_receipts_returns.sql');
+const migration181 = read('migrations/181_attendance_nfc.sql');
+const migration182 = read('migrations/182_public_booking.sql');
 
 const { PointsService } = require('../dist/points/points.service');
 
@@ -129,10 +133,7 @@ test('переименование НЕ берёт строку тенанта �
 
   await service.adminUpdate('t-1', POINT_ID, { name: 'Новое имя' });
 
-  assert.ok(
-    !pool.calls.some((c) => /FOR UPDATE/.test(c.text)),
-    'переименование не имеет права лочить строку тенанта',
-  );
+  assert.ok(!pool.calls.some((c) => /FOR UPDATE/.test(c.text)), 'переименование не имеет права лочить строку тенанта');
 });
 
 test('последствия смены состава живых филиалов живут в одном хелпере', () => {
@@ -162,9 +163,17 @@ test('последствия смены состава живых филиало
  *     (`SET point_id = mp.main_id` — до 167 план был один на тенант).
  */
 function historyTablesOfMigration(sql) {
-  return [
-    ...sql.matchAll(/UPDATE\s+(\w+)\s+\w+\s*\n?\s*SET point_id = (?:mp\.point_id|mp\.main_id|COALESCE\()/g),
-  ].map((m) => m[1]);
+  return [...sql.matchAll(/UPDATE\s+(\w+)\s+\w+\s*\n?\s*SET point_id = (?:mp\.point_id|mp\.main_id|COALESCE\()/g)].map(
+    (m) => m[1],
+  );
+}
+
+/** New ledgers created after 169 have no historical UPDATE. Parse only actual
+ * CREATE TABLE bodies that declare point_id, rather than copying the service list. */
+function pointScopedCreatedTablesOfMigration(sql) {
+  return [...sql.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\(([\s\S]*?)\n\);/gi)]
+    .filter(([, , body]) => /\bpoint_id\s+UUID\b/i.test(body))
+    .map(([, table]) => table);
 }
 
 test('состав привязки один в один с миграциями 160, 161, 167, 168 и 169', () => {
@@ -176,10 +185,30 @@ test('состав привязки один в один с миграциями
     ...historyTablesOfMigration(migration169),
   ];
   assert.ok(fromMigrations.length >= 12, 'парсер миграций сломался — сверять список не с чем');
+  const actualHistoryTables = [...new Set(PointsService.HISTORY_TABLES)].sort();
   assert.deepEqual(
-    [...PointsService.HISTORY_TABLES].sort(),
+    actualHistoryTables.filter((table) => fromMigrations.includes(table)),
     [...new Set(fromMigrations)].sort(),
-    'список таблиц разъехался с миграциями: тенант, которому точку заводят СЕГОДНЯ, увидит по забытой таблице пустоту',
+    'таблицы с историческим point_id из миграций 160–169 должны остаться в привязке первой точки',
+  );
+  const createdPointTables = [migration180, migration181, migration182].flatMap(pointScopedCreatedTablesOfMigration);
+  const expectedNewTables = [
+    'attendance_nfc_requests',
+    'attendance_nfc_tags',
+    'booking_operation_keys',
+    'public_booking_pages',
+    'public_booking_requests',
+    'supplier_returns',
+  ];
+  assert.deepEqual(
+    [...new Set(createdPointTables)].sort(),
+    expectedNewTables,
+    'parser must discover the six actual new point-scoped table definitions, including their migration fixtures',
+  );
+  assert.deepEqual(
+    actualHistoryTables,
+    [...new Set([...fromMigrations, ...createdPointTables])].sort(),
+    'first-point history attachment must cover the historical migrations and every newly created point-scoped ledger',
   );
 });
 

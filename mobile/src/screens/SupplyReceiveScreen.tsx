@@ -693,8 +693,7 @@ export default function SupplyReceiveScreen() {
                       const sign = delta > 0 ? '+' : '';
                       return (
                         <Text style={[styles.excludedHint, { color: palette.text.tertiary }]}>
-                          Последняя закупка: {formatMoney(prior.price)} · {formatPoDate(prior.date)} · источник{' '}
-                          {prior.deliveryId.slice(0, 8)} · поставщик {prior.supplierId.slice(0, 8)} · разница {sign}
+                          Последняя закупка: {formatMoney(prior.price)} · {formatPoDate(prior.date)} · разница {sign}
                           {formatMoney(delta)}
                           {pct}
                         </Text>

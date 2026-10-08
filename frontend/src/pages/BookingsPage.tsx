@@ -8,6 +8,7 @@ import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, Select, T
 import type { PublicBookingResource, Service, StaffPublicBookingRequest } from '../../../shared/types';
 import type { PutPublicBookingSettingsRequest } from '../../../shared/api/types';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
+import { roleLabels } from '../../../shared/utils/formatters';
 import { createBookingsApi, createClientsApi, createServicesApi } from '../../../shared/api/createServices';
 import { readStoredToken } from '../utils/sessionToken';
 
@@ -408,7 +409,7 @@ export default function BookingsPage() {
                             onChange={(event) => toggleResource(resource.id, event.target.checked)}
                           />
                           <span>{resource.name}</span>
-                          <span className="ml-auto text-slate-500">{resource.role}</span>
+                          <span className="ml-auto text-slate-500">{roleLabels[resource.role] ?? resource.role}</span>
                         </label>
                       ))
                     )}

@@ -518,10 +518,7 @@ export default function PurchaseOrderDetailPage() {
               const pct = previous.price > 0 ? ` · ${((delta / previous.price) * 100).toFixed(1)}%` : '';
               const sign = delta > 0 ? '+' : '';
               return (
-                <span
-                  className="text-xs text-ink-3"
-                  title={`Источник ${previous.deliveryId} · поставщик ${previous.supplierId}`}
-                >
+                <span className="text-xs text-ink-3">
                   {formatMoney(previous.price)} · {formatDateShort(previous.date)}
                   <br />
                   Разница {sign}
