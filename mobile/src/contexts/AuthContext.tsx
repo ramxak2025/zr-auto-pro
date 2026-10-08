@@ -1,35 +1,20 @@
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 // Same alias style as CheckCreateScreen — expo-image is cross-platform, and
 // its static cache-clear methods are the only thing this file needs.
 import { Image as ExpoImage } from 'expo-image';
 import type { QueryClient } from '@tanstack/react-query';
-import {
-  authApi,
-  productsApi,
-  servicesApi,
-  usersApi,
-  warehouseCategoriesApi,
-  warehousesApi,
-  suppliersApi,
-  clientsApi,
-  carsApi,
-  equipmentApi,
-  checksApi,
-  callsApi,
-  subscriptionApi,
-  scheduleApi,
-  pushApi,
-  pointsApi,
-} from '../api/services';
+import { authApi } from '../api/services';
+import * as serviceFactories from '../../../shared/api/createServices';
 import api, {
   beginSessionReissueWindow,
+  captureAuthSession,
+  createSessionBoundClient,
   createCapturedAuthRequester,
-  isSessionCleared,
   onApiRouteReady,
   onAuthExpired,
   onRequestSucceeded,
@@ -38,7 +23,14 @@ import api, {
 } from '../api/axios';
 import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
-import { clearPersistentCache } from '../utils/persistentCache';
+import {
+  clearAccountCaches,
+  setPersistentCacheSession,
+  hydratePriorityCache,
+  hydrateCache,
+} from '../utils/persistentCache';
+import { withFrozenIntentOwners } from './intentWriteBarrier';
+import { inspectSavedAccountRemoval, type AccountRemovalInspection } from './accountRemoval';
 import {
   adoptOfflineCheckQueue,
   endOfflineCheckQueueSession,
@@ -49,13 +41,23 @@ import {
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import {
-  commitAuthenticatedSession,
   createSessionEpochRuntime,
   createSessionRecoveryBackoff,
   runSessionRecoveryAttempt,
   type SessionEpochRuntime,
 } from './authSessionRuntime';
-import { createAuthSessionStorage } from './authSessionStorage';
+import { authAccounts, readStoredAccountSession, secureAccountStorage } from './authAccountStorage';
+import { createPushSessionLifecycle } from './pushSessionLifecycle';
+import { attachSessionMutationBoundary } from './sessionQueryBoundary';
+import { resetLiveActivitySession } from '../utils/liveActivityStore';
+import {
+  AccountRegistryError,
+  accountSummaries,
+  activeAccount,
+  type AccountRegistry,
+  type SavedAccountSummary,
+} from './accountRegistry';
+import { setDataSession, userDataOwner } from './dataSession';
 import { createForegroundProfileRefreshController } from './foregroundProfileRefresh';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 import type { LoginPointOption } from '../../../shared/api/types';
@@ -73,6 +75,8 @@ export type LoginStepResult =
   | { status: 'authenticated' }
   | {
       status: 'point-required';
+      /** In-memory immutable attempt ownership; never persist this or the select token. */
+      operation: AccountLoginHandle;
       /** Одноразовый промежуточный токен; живёт минуты, в обычные ручки не ходит. */
       selectToken: string;
       /** Момент, после которого сервер откажет: считаем из expiresIn при получении. */
@@ -83,7 +87,22 @@ export type LoginStepResult =
       defaultPointId: string;
     };
 
+export interface AccountLoginHandle {
+  readonly id: number;
+}
+export interface AccountLoginOptions {
+  reauthAccountId?: string;
+}
 interface AuthContextType {
+  savedAccounts: readonly SavedAccountSummary[];
+  activeAccountId: string | null;
+  sessionGeneration: number;
+  addAccount: (phone: string, password: string, options?: AccountLoginOptions) => Promise<LoginStepResult>;
+  completeAccountLogin: (operation: AccountLoginHandle, pointId: string) => Promise<void>;
+  cancelAccountLogin: (operation: AccountLoginHandle) => void;
+  switchAccount: (accountId: string) => Promise<void>;
+  inspectAccountRemoval: (accountId: string) => Promise<AccountRemovalInspection>;
+  removeAccount: (accountId: string) => Promise<void>;
   user: User | null;
   token: string | null;
   loading: boolean;
@@ -111,8 +130,8 @@ interface AuthContextType {
    * сервер лишь перевыпускает токен на другой филиал, к которому у человека
    * уже есть доступ, и НЕМЕДЛЕННО гасит прежний. Поэтому новый токен
    * применяется ровно тем же атомарным путём, что и после входа: кеш прошлого
-   * филиала (память + диск) стирается ДО того, как новый токен попадёт на
-   * диск, иначе на главной первым кадром мелькнут чужие деньги.
+   * филиала в памяти очищается, а диск остаётся в отдельном пространстве
+   * исходного tenant/user/point. Новый bearer всегда получает новую эпоху.
    *
    * Зовётся ТОЛЬКО из раздела «Филиалы» (требование владельца). Право
    * `user_management` перепроверяет сервер — клиентский гейт лишь прячет
@@ -159,56 +178,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const authSessionStorage = createAuthSessionStorage<User>(AsyncStorage, {
-  isUser: (value): value is User =>
-    !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string',
-});
-
-/**
- * Start both tenant-scoped durable operations in the same tick. allSettled keeps
- * a rejection handler attached immediately, but we still reject after both have
- * settled so a cross-tenant login never persists B after a failed A clear.
- */
-async function settleBoth(a: () => Promise<unknown>, b: () => Promise<unknown>): Promise<void> {
-  const start = (operation: () => Promise<unknown>): Promise<unknown> => {
-    try {
-      return Promise.resolve(operation());
-    } catch (error) {
-      return Promise.reject(error);
-    }
-  };
-  const results = await Promise.allSettled([start(a), start(b)]);
-  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-  if (failed) throw failed.reason;
-}
-
-/**
- * ВХОД: отдать долговременное хранилище новой сессии.
- *
- * Персистентный кеш query'ей стирается ВСЕГДА — это картинка экранов, и мелькнуть
- * вчерашними цифрами чужого филиала она не имеет права. А вот офлайн-очередь
- * чеков — это ДЕНЬГИ, а не картинка: она усыновляется, если за телефон сел тот
- * же человек в том же автосервисе, и стирается только при смене владельца.
- */
+/** Ordinary switches retain the previous owner's durable queue and cache. */
 function adoptTenantStorage(owner: QueueOwner): Promise<void> {
-  return settleBoth(() => adoptOfflineCheckQueue(owner), clearPersistentCache);
+  return adoptOfflineCheckQueue(owner);
 }
-
-/**
- * ВЫХОД / ИСТЁКШИЙ ТОКЕН: закрыть сессию.
- *
- * Раньше здесь стоял тот же безусловный wipe, что и на входе, и набитые в
- * офлайне заказ-наряды исчезали при ЛЮБОМ разлогине — включая два новых частых
- * (сняли доступ к филиалу, филиал заархивировали). Теперь очередь остаётся на
- * диске за своим владельцем и дошлётся, когда он снова войдёт.
- */
 function endTenantStorage(): Promise<void> {
-  return settleBoth(endOfflineCheckQueueSession, clearPersistentCache);
+  setPersistentCacheSession(null);
+  return endOfflineCheckQueueSession();
 }
 
 /** Владелец офлайн-очереди по профилю сессии. */
 function queueOwnerOf(u: User): QueueOwner {
-  return { userId: u.id, tenantId: u.tenantId ?? null };
+  return { userId: u.id, tenantId: u.tenantId ?? null, pointId: u.currentPointId };
 }
 
 /** True when an axios error is a genuine 401 (session expired / revoked). */
@@ -234,7 +215,7 @@ const SESSION_REFRESH_RETRY_DELAYS_MS = [150, 400];
  * гарантированный проигрыш одного из них с «Токен отозван». Держим
  * единственный полёт и отдаём его всем желающим.
  */
-let sessionRefreshInFlight: Promise<string | null> | null = null;
+let sessionRefreshInFlight: { epoch: number; promise: Promise<string | null> } | null = null;
 
 /**
  * Продлить сессию. Возвращает новый токен или null.
@@ -253,24 +234,27 @@ let sessionRefreshInFlight: Promise<string | null> | null = null;
  * уже заклеймён, второй раз его не обменять.
  */
 async function refreshSessionToken(): Promise<string | null> {
-  if (!sessionRefreshInFlight) {
-    sessionRefreshInFlight = (async () => {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const res = await authApi.refresh();
-          const next = res.data?.token;
-          return typeof next === 'string' && next ? next : null;
-        } catch (err) {
-          if (isAuthExpiry(err)) return null;
-          if (attempt >= SESSION_REFRESH_RETRY_DELAYS_MS.length) return null;
-          await sleep(SESSION_REFRESH_RETRY_DELAYS_MS[attempt]);
-        }
+  const lease = captureAuthSession();
+  if (!lease.token) return null;
+  if (sessionRefreshInFlight?.epoch === lease.epoch) return sessionRefreshInFlight.promise;
+  const bound = createSessionBoundClient(lease.token);
+  const flight = { epoch: lease.epoch, promise: Promise.resolve<string | null>(null) };
+  flight.promise = (async () => {
+    for (let attempt = 0; lease.isCurrent(); attempt++) {
+      try {
+        const res = await bound.post<{ token?: string }>('/auth/refresh');
+        return lease.isCurrent() && typeof res.data?.token === 'string' ? res.data.token : null;
+      } catch (err) {
+        if (!lease.isCurrent() || isAuthExpiry(err) || attempt >= SESSION_REFRESH_RETRY_DELAYS_MS.length) return null;
+        await sleep(SESSION_REFRESH_RETRY_DELAYS_MS[attempt]);
       }
-    })().finally(() => {
-      sessionRefreshInFlight = null;
-    });
-  }
-  return sessionRefreshInFlight;
+    }
+    return null;
+  })().finally(() => {
+    if (sessionRefreshInFlight === flight) sessionRefreshInFlight = null;
+  });
+  sessionRefreshInFlight = flight;
+  return flight.promise;
 }
 
 /**
@@ -336,6 +320,24 @@ interface AuthProviderProps {
  * ZERO requests it isn't allowed to make or has no screen for.
  */
 function prefetchAfterLogin(qc: QueryClient, user: User): void {
+  const lease = captureAuthSession();
+  if (!lease.token || !lease.isCurrent()) return;
+  const bound = createSessionBoundClient(lease.token);
+  const productsApi = serviceFactories.createProductsApi(bound);
+  const servicesApi = serviceFactories.createServicesApi(bound);
+  const usersApi = serviceFactories.createUsersApi(bound);
+  const warehouseCategoriesApi = serviceFactories.createWarehouseCategoriesApi(bound);
+  const warehousesApi = serviceFactories.createWarehousesApi(bound);
+  const suppliersApi = serviceFactories.createSuppliersApi(bound);
+  const clientsApi = serviceFactories.createClientsApi(bound);
+  const carsApi = serviceFactories.createCarsApi(bound);
+  const equipmentApi = serviceFactories.createEquipmentApi(bound);
+  const checksApi = serviceFactories.createChecksApi(bound);
+  const callsApi = serviceFactories.createCallsApi(bound);
+  const subscriptionApi = serviceFactories.createSubscriptionApi(bound);
+  const scheduleApi = serviceFactories.createScheduleApi(bound);
+  const pointsApi = serviceFactories.createPointsApi(bound);
+
   // Менеджер платформы без своего автосервиса: складу/клиентам/чекам нечего греть — каждый запрос ниже был бы 403.
   if (user.role === 'manager') return;
   // Mirror of AuthContext.hasPermission (the canonical helper): director and
@@ -595,13 +597,22 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   registerPushToken().catch(() => {});
 }
 
-/**
- * The Expo push token this device registered for the CURRENT session.
- * Cached at register time so logout() can unregister the exact same token —
- * otherwise the previous user keeps receiving pushes for their old tenant
- * after someone else signs in on this device.
- */
-let registeredPushToken: string | null = null;
+const pushLifecycle = createPushSessionLifecycle(secureAccountStorage, {
+  register: async ({ bearer, deviceToken, platform }) => {
+    const response = await createCapturedAuthRequester(bearer)<{ registered?: boolean }>({
+      method: 'post',
+      url: '/push/token',
+      data: { token: deviceToken, platform },
+    });
+    return response.data;
+  },
+  logout: async (bearer) => {
+    await createCapturedAuthRequester(bearer)({ method: 'post', url: '/auth/logout' });
+  },
+  unregister: async ({ bearer, deviceToken }) => {
+    await createCapturedAuthRequester(bearer)({ method: 'delete', url: '/push/token', data: { token: deviceToken } });
+  },
+});
 
 // Тихий ретрай получения Expo push-токена: ТОЛЬКО для transient-кодов
 // expo-notifications (сеть/5xx до Expo push service — isTransientPushError).
@@ -639,6 +650,8 @@ export function isAndroidPushConfigured(): boolean {
  * token rotated after a restore).
  */
 export async function registerPushToken(): Promise<void> {
+  const lease = captureAuthSession();
+  if (!lease.token) return;
   try {
     if (Platform.OS === 'android') {
       // The local notification channel is FCM-independent and cheap — keep it
@@ -660,10 +673,13 @@ export async function registerPushToken(): Promise<void> {
         return;
       }
     }
+    if (!lease.isCurrent()) return;
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    if (!lease.isCurrent()) return;
     let finalStatus = existingStatus;
     if (existingStatus !== 'granted') {
       const { status } = await Notifications.requestPermissionsAsync();
+      if (!lease.isCurrent()) return;
       finalStatus = status;
     }
     if (finalStatus !== 'granted') return;
@@ -686,7 +702,7 @@ export async function registerPushToken(): Promise<void> {
     // Прилетал 401, и он уходил в Sentry как ошибка приложения: 71 событие,
     // которые три с половиной месяца маскировали настоящую историю с
     // разлогинами. Проверяем перед каждым дорогим шагом.
-    if (isSessionCleared()) return;
+    if (!lease.isCurrent()) return;
     // Transient-ретрай вокруг ОДНОГО шага — похода к Expo push service за
     // токеном. Не-transient ошибки (APNs entitlement, projectId mismatch)
     // пробрасываются с первой попытки и уходят в catch как раньше.
@@ -698,29 +714,12 @@ export async function registerPushToken(): Promise<void> {
       } catch (err) {
         if (!isTransientPushError(err) || attempt >= PUSH_TOKEN_RETRY_DELAYS_MS.length) throw err;
         await sleep(PUSH_TOKEN_RETRY_DELAYS_MS[attempt]);
-        if (isSessionCleared()) return;
+        if (!lease.isCurrent()) return;
       }
     }
-    if (isSessionCleared()) return;
+    if (!lease.isCurrent()) return;
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
-    const response = await pushApi.register(tokenData.data, platform);
-    // A 200 is NOT proof of registration: the server's token-hijack guard can
-    // refuse the row (token still owned by an ACTIVE user of another tenant)
-    // and used to answer 200 anyway — the device then never received a push and
-    // nothing anywhere said why. `registered:false` is now explicit; older
-    // servers omit the field, and `!== false` keeps them working unchanged.
-    if (response?.data?.registered === false) {
-      registeredPushToken = null;
-      console.warn('[push] server refused token registration', response.data.reason);
-      addSentryBreadcrumb({
-        category: 'push',
-        message: 'push token registration refused by server',
-        level: 'warning',
-        data: { reason: response.data.reason ?? 'unknown' },
-      });
-      return;
-    }
-    registeredPushToken = tokenData.data;
+    await pushLifecycle.register(lease.token, tokenData.data, platform, lease.isCurrent);
   } catch (err) {
     if (isTransientPushError(err)) {
       // Сеть/Expo-5xx после всех ретраев — это НЕ клиентский баг и не событие
@@ -760,6 +759,7 @@ export async function registerPushToken(): Promise<void> {
 
 export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
+  useEffect(() => (queryClient ? attachSessionMutationBoundary(queryClient) : undefined), [queryClient]);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isImpersonating, setIsImpersonating] = useState(false);
@@ -771,6 +771,32 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const sessionRuntimeRef = useRef<SessionEpochRuntime | null>(null);
   if (!sessionRuntimeRef.current) sessionRuntimeRef.current = createSessionEpochRuntime();
   const sessionRuntime = sessionRuntimeRef.current;
+  const [registry, setRegistry] = useState<AccountRegistry<User> | null>(null);
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const activeRegistryRef = useRef<{ id: string | null; generation: number }>({ id: null, generation: 0 });
+  const loginAttemptRef = useRef(0);
+  const installingRef = useRef(false);
+  type PendingLogin = {
+    handle: AccountLoginHandle;
+    selectToken: string;
+    expiresAt: number;
+    generation: number;
+    isCurrent: () => boolean;
+    options: AccountLoginOptions;
+  };
+  const loginHandles = useRef(new Map<AccountLoginHandle, PendingLogin>());
+  useEffect(() => authAccounts.subscribe(() => setRegistry(authAccounts.snapshot())), []);
+  const persistCurrentSession = useCallback(
+    async (
+      session: { token: string; user: User | null; impersonating: boolean },
+      epoch: number,
+      generation: number,
+    ) => {
+      if (!sessionRuntime.isCurrent(epoch)) return;
+      await authAccounts.update(session, generation, () => sessionRuntime.isCurrent(epoch));
+    },
+    [sessionRuntime],
+  );
   const recoveryAttemptRef = useRef<Promise<void> | null>(null);
   const foregroundProfileRefreshRef = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
   const foregroundProfileInputsRef = useRef<{
@@ -838,9 +864,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     }, AUTH_BOOTSTRAP_BUDGET_MS);
 
     (async () => {
-      // The versioned envelope is authoritative; legacy token/user/flag keys
-      // are read only as a migration fallback by authSessionStorage.
-      const storedSession = await authSessionStorage.read();
+      // Secure registry is authoritative; legacy credentials are migrated once.
+      const storedSession = await readStoredAccountSession();
+      const restoredRegistry = authAccounts.snapshot();
+      const bootstrapRegistryGeneration = restoredRegistry?.generation ?? 0;
       const stored = storedSession.token;
       const cachedUser = storedSession.user;
       // A native storage bridge can itself stall. Never let a value captured
@@ -850,12 +877,12 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // Restore the impersonation banner state for the (short) life of the
       // director token. If the token has already expired, the /me below 401s
       // and the whole session — flag included — is wiped.
+      activeRegistryRef.current = { id: restoredRegistry?.activeId ?? null, generation: bootstrapRegistryGeneration };
       if (storedSession.impersonating) setIsImpersonating(true);
 
       if (!stored) {
         // No token → logged out. Drop any stray cached user (tenant safety)
         // and the impersonation flag (it must never outlive its token).
-        void authSessionStorage.write({ token: null, user: null, impersonating: false });
         setRecoveringSession(false);
         setIsImpersonating(false);
         clearTimeout(deadlineTimer);
@@ -866,8 +893,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // Prime the axios in-memory token cache so the very first wave of
       // post-mount requests (the `me()` below + any eager screen queries)
       // skip the per-request AsyncStorage bridge read.
-      setAuthToken(stored);
+      void resetLiveActivitySession();
+      setAuthToken(stored, true);
       setToken(stored);
+      const scope = cachedUser ? userDataOwner(cachedUser) : null;
+      setDataSession(scope);
+      setSessionGeneration((value) => value + 1);
+      setPersistentCacheSession(scope);
+      if (cachedUser) void adoptTenantStorage(queueOwnerOf(cachedUser)).catch(() => {});
 
       // Optimistic restore: if we also have a cached user, render the shell
       // immediately from cache. This kills the "flash of Login" on cold
@@ -896,14 +929,22 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         let applied = false;
         await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
           if (!isCurrent() || budgetExpired) return;
+          const initializeOwner = !cachedUser || !userDataOwner(cachedUser);
+          if (initializeOwner) {
+            const scope = userDataOwner(fresh);
+            setDataSession(scope);
+            setPersistentCacheSession(scope);
+            setSessionGeneration((value) => value + 1);
+          }
           setUser(fresh);
           setRecoveringSession(false);
           applied = true;
-          await authSessionStorage.write({
-            token: stored,
-            user: fresh,
-            impersonating: storedSession.impersonating,
-          });
+          await persistCurrentSession(
+            { token: stored, user: fresh, impersonating: storedSession.impersonating },
+            bootstrapEpoch,
+            bootstrapRegistryGeneration,
+          );
+          if (isCurrent() && initializeOwner) await adoptTenantStorage(queueOwnerOf(fresh));
         });
         // Token still valid — kick off prefetch for a warm session.
         if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && queryClient) {
@@ -928,13 +969,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
                 if (!newToken) return;
                 await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
                   if (!isCurrent()) return;
+                  await persistCurrentSession(
+                    { token: newToken, user: fresh, impersonating: storedSession.impersonating },
+                    bootstrapEpoch,
+                    bootstrapRegistryGeneration,
+                  );
+                  if (!isCurrent()) return;
                   setAuthToken(newToken);
                   setToken(newToken);
-                  await authSessionStorage.write({
-                    token: newToken,
-                    user: fresh,
-                    impersonating: storedSession.impersonating,
-                  });
                 });
               } catch {
                 // Сюда доходит только сбой записи сессии: сам обмен свои
@@ -956,7 +998,12 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           // covers an expired impersonation (30-min director) token: the
           // banner flag is cleared and the superadmin lands on Login.
           setAuthToken(null);
-          void authSessionStorage.write({ token: null, user: null, impersonating: false });
+          void authAccounts
+            .deactivate(activeRegistryRef.current.id, () => sessionRuntime.isCurrent(bootstrapEpoch))
+            .catch(() => {});
+          setDataSession(null);
+          setPersistentCacheSession(null);
+          void endOfflineCheckQueueSession();
           setToken(null);
           setUser(null);
           setRecoveringSession(false);
@@ -972,7 +1019,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         // user) this is where the splash finally dismisses.
         finish();
       }
-    })();
+    })().catch(() => {
+      if (!cancelled && sessionRuntime.isCurrent(bootstrapEpoch)) {
+        setSessionEndedNotice(
+          'Не удалось прочитать защищённое хранилище. Повторите вход после восстановления доступа.',
+        );
+        finish();
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -1007,6 +1061,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       recoveryCooldownTimerRef.current = null;
 
       const recoveryEpoch = sessionRuntime.capture();
+      const recoveryRegistryGeneration = activeRegistryRef.current.generation;
       const recoveryAbort = new AbortController();
       const untrackRecoveryAbort = sessionRuntime.trackAbort(recoveryEpoch, recoveryAbort);
       let budgetExpired = false;
@@ -1038,12 +1093,21 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           let applied = false;
           await sessionRuntime.commit(recoveryEpoch, async (isCurrent) => {
             if (!isCurrent() || budgetExpired) return;
+            const scope = userDataOwner(fresh);
+            setDataSession(scope);
+            setPersistentCacheSession(scope);
+            setSessionGeneration((value) => value + 1);
             setUser(fresh);
             setRecoveringSession(false);
             applied = true;
             recovered = true;
             recoveryBackoffRef.current.reset();
-            await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+            await persistCurrentSession(
+              { token, user: fresh, impersonating: isImpersonating },
+              recoveryEpoch,
+              recoveryRegistryGeneration,
+            );
+            if (isCurrent()) await adoptTenantStorage(queueOwnerOf(fresh));
           });
           if (applied && !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch) && queryClient) {
             prefetchAfterLogin(queryClient, fresh);
@@ -1097,6 +1161,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   useEffect(() => {
     return onAuthExpired((reason) => {
       const expiredEpoch = beginSessionTransition();
+      void pushLifecycle.detach().catch(() => {});
+      void resetLiveActivitySession();
       // Причину ставим ДО гашения сессии: экран входа отрисуется тем же
       // кадром, что и разлогин, и должен уже знать, что сказать человеку.
       setSessionEndedNotice(reason ?? null);
@@ -1110,14 +1176,18 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setRecoveringSession(false);
       setSessionRecoveryPending(false);
       setIsImpersonating(false);
-      const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
+      setDataSession(null);
+      setSessionGeneration((value) => value + 1);
+      const tombstoneWrite = authAccounts
+        .deactivate(activeRegistryRef.current.id, () => sessionRuntime.isCurrent(expiredEpoch))
+        .catch(() => {});
       // ОЧЕРЕДЬ ЧЕКОВ ПЕРЕЖИВАЕТ ИСТЁКШИЙ ТОКЕН. Сама очередь трактует 401 как
       // ВРЕМЕННУЮ ошибку (isPermanentServerRejection) и рассчитана дослать чек
       // после повторного входа — а здесь она стиралась безусловно, и три
       // набитых в офлайне заказ-наряда исчезали молча. Особенно больно после
       // волны филиалов: снятие доступа к филиалу и его архивация выкидывают
       // мастера посреди смены тем же 401. Диск остаётся за владельцем очереди;
-      // чужую сотрёт следующий вход (adoptTenantStorage).
+      // другие сохранённые аккаунты получают отдельные пространства на диске.
       const tenantDiskClear = endTenantStorage().catch(() => {});
 
       void sessionRuntime.commit(expiredEpoch, async (isCurrent) => {
@@ -1139,116 +1209,246 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // them downstream. Wrapping in `useCallback` keeps the identities
   // stable across renders, so re-renders only fire on actual auth-state
   // change (login, logout, 401, refreshUser).
-  /**
-   * УСТАНОВИТЬ СЕССИЮ по выданному сервером токену — общее тело обоих шагов
-   * входа (163). Один экземпляр, потому что изоляция прошлого тенанта здесь
-   * не «желательна», а обязательна: вход в ДРУГОЙ филиал обязан стирать кеш
-   * прошлой сессии так же жёстко, как вход в другой автосервис. Иначе на
-   * главной первым кадром мелькнут вчерашние цифры чужого филиала — и это
-   * прочитается как «деньги пропали».
-   */
-  const commitSession = useCallback(
-    async (t: string, u: User) => {
-      const loginEpoch = beginSessionTransition();
-      const applied = await commitAuthenticatedSession(sessionRuntime, loginEpoch, {
-        clearPreviousTenant: () => {
-          queryClient?.cancelQueries().catch(() => {});
-          queryClient?.clear();
-          clearWidgetData();
-          // Долговременное хранилище отдаётся новой сессии ДО того, как токен B
-          // попадёт на диск: иначе убитый процесс восстановил бы B рядом с
-          // данными A. Очередь чеков при этом усыновляется, если вошёл тот же
-          // человек в тот же автосервис (его офлайн-чеки обязаны дослаться), и
-          // стирается, если владелец сменился.
-          return adoptTenantStorage(queueOwnerOf(u));
-        },
-        applyInMemory: () => {
-          setAuthToken(t);
-          setToken(t);
-          setUser(u);
-          setRecoveringSession(false);
-          setSessionRecoveryPending(false);
-          setIsImpersonating(false);
-          // Вход состоялся — прошлая причина разлогина больше не актуальна.
-          setSessionEndedNotice(null);
-        },
-        persist: async () => {
-          await authSessionStorage.write({ token: t, user: u, impersonating: false });
-        },
-      });
-      if (applied && sessionRuntime.isCurrent(loginEpoch) && queryClient) prefetchAfterLogin(queryClient, u);
+  /** Commit one logical active session after secure readback. All volatile
+   * leases change synchronously before a new bearer can dispatch work. */
+  const applyRegistrySession = useCallback(
+    async (saved: AccountRegistry<User>) => {
+      const epoch = beginSessionTransition();
+      void pushLifecycle.detach().catch(() => {});
+      loginAttemptRef.current += 1;
+      loginHandles.current.clear();
+      const next = activeAccount(saved)?.session;
+      activeRegistryRef.current = { id: saved.activeId, generation: saved.generation };
+      queryClient?.cancelQueries().catch(() => {});
+      queryClient?.clear();
+      clearWidgetData();
+      void resetLiveActivitySession();
+      void endTenantStorage().catch(() => {});
+      const scope = next?.user ? userDataOwner(next.user) : null;
+      setDataSession(scope);
+      setPersistentCacheSession(scope);
+      setAuthToken(next?.token ?? null, true);
+      setToken(next?.token ?? null);
+      setUser(next?.user ?? null);
+      setSessionGeneration((value) => value + 1);
+      setRecoveringSession(!!next?.token && !next.user);
+      setSessionRecoveryPending(false);
+      setIsImpersonating(next?.impersonating ?? false);
+      setSessionEndedNotice(null);
+      setRegistry(saved);
+      if (next?.user) {
+        await adoptTenantStorage(queueOwnerOf(next.user)).catch(() => {});
+        if (!sessionRuntime.isCurrent(epoch)) return;
+        if (queryClient) {
+          await hydratePriorityCache(queryClient);
+          if (!sessionRuntime.isCurrent(epoch)) return;
+          // Both passes capture the active secure registry/scope generation.
+          // Full hydration is background work and fences every native await.
+          void hydrateCache(queryClient);
+          prefetchAfterLogin(queryClient, next.user);
+        }
+      }
     },
     [beginSessionTransition, queryClient, sessionRuntime],
   );
 
-  /**
-   * ШАГ 1 ВХОДА (163). Зовём loginWithPointSelect, а не login: этой сборке
-   * ответ со списком филиалов ПОНЯТЕН, и получить вместо него молча
-   * подставленный сервером филиал — значит вернуть ровно ту ошибку, из-за
-   * которой волна и делалась (человек работает не там, где думает).
-   *
-   * Сессия здесь создаётся ТОЛЬКО если сервер отдал токен — то есть выбора не
-   * было (одноточечный автосервис или ровно один доступный филиал).
-   */
-  const login = useCallback(
-    async (phone: string, password: string): Promise<LoginStepResult> => {
-      // Network stays outside the commit queue: a slow login A must not hold
-      // up a newer login B or logout. Only its result is serialised below.
+  const commitSession = useCallback(
+    async (
+      t: string,
+      u: User,
+      plan: {
+        generation: number;
+        isCurrent: () => boolean;
+        originalAccountId?: string;
+        reauthAccountId?: string;
+        impersonating?: boolean;
+      },
+    ) => {
+      if (!plan.isCurrent() || installingRef.current)
+        throw new AccountRegistryError('SESSION_CHANGED', 'Другой вход уже выполняется.');
+      installingRef.current = true;
+      try {
+        const saved = await authAccounts.install(
+          { token: t, user: u, impersonating: !!plan.impersonating },
+          plan.generation,
+          plan,
+        );
+        // An explicit logout may overtake a native write. Its queued deactivate
+        // owns the final durable state, and this older install cannot revive UI.
+        if (!plan.isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась во время входа.');
+        await applyRegistrySession(saved.registry);
+      } finally {
+        installingRef.current = false;
+      }
+    },
+    [applyRegistrySession],
+  );
+
+  const addAccount = useCallback(
+    async (phone: string, password: string, options: AccountLoginOptions = {}): Promise<LoginStepResult> => {
+      if (installingRef.current) throw new AccountRegistryError('SESSION_CHANGED', 'Дождитесь завершения входа.');
+      const attempt = ++loginAttemptRef.current;
+      loginHandles.current.clear();
+      const epoch = sessionRuntime.capture();
+      const isCurrent = () => attempt === loginAttemptRef.current && sessionRuntime.isCurrent(epoch);
+      const saved = await authAccounts.read();
+      if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Попытка входа отменена.');
       const res = await authApi.loginWithPointSelect({ phone, password });
+      if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Попытка входа отменена.');
       const data = res.data;
       if ('pointSelectionRequired' in data) {
+        const handle = Object.freeze({ id: attempt });
+        const expiresAt = Date.now() + data.expiresIn * 1000;
+        loginHandles.current.set(handle, {
+          handle,
+          selectToken: data.selectToken,
+          expiresAt,
+          generation: saved.generation,
+          isCurrent,
+          options: { ...options },
+        });
         return {
           status: 'point-required',
+          operation: handle,
           selectToken: data.selectToken,
-          // Дедлайн считаем от МОМЕНТА ОТВЕТА, а не храним expiresIn: экран
-          // должен уметь ответить «уже поздно» без похода в сеть.
-          expiresAt: Date.now() + data.expiresIn * 1000,
+          expiresAt,
           points: data.points,
           defaultPointId: data.defaultPointId,
         };
       }
-      await commitSession(data.token, data.user);
+      await commitSession(data.token, data.user, { generation: saved.generation, isCurrent, ...options });
       return { status: 'authenticated' };
     },
-    [commitSession],
+    [commitSession, sessionRuntime],
   );
-
-  /** ШАГ 2 ВХОДА (163): выбранный филиал + промежуточный токен → сессия. */
-  const loginWithPoint = useCallback(
-    async (selectToken: string, pointId: string) => {
-      const res = await authApi.selectPoint({ selectToken, pointId });
-      await commitSession(res.data.token, res.data.user);
+  const completeAccountLogin = useCallback(
+    async (handle: AccountLoginHandle, pointId: string) => {
+      const pending = loginHandles.current.get(handle);
+      if (!pending || !pending.isCurrent() || pending.expiresAt <= Date.now())
+        throw new AccountRegistryError('SESSION_CHANGED', 'Выбор филиала истёк. Повторите вход.');
+      // One exchange per operation; a lost response requires a fresh login, never
+      // a second exchange of a one-use select token.
+      loginHandles.current.delete(handle);
+      const res = await authApi.selectPoint({ selectToken: pending.selectToken, pointId });
+      if (!pending.isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Попытка входа отменена.');
+      await commitSession(res.data.token, res.data.user, {
+        generation: pending.generation,
+        isCurrent: pending.isCurrent,
+        ...pending.options,
+      });
     },
     [commitSession],
   );
+  const cancelAccountLogin = useCallback((handle: AccountLoginHandle) => {
+    if (installingRef.current) return;
+    if (handle.id === loginAttemptRef.current) loginAttemptRef.current += 1;
+    loginHandles.current.delete(handle);
+  }, []);
+  const login = useCallback((phone: string, password: string) => addAccount(phone, password), [addAccount]);
+  const loginWithPoint = useCallback(
+    async (selectToken: string, pointId: string) => {
+      const pending = [...loginHandles.current.values()].find((p) => p.selectToken === selectToken);
+      if (!pending) throw new AccountRegistryError('SESSION_CHANGED', 'Попытка входа отменена.');
+      await completeAccountLogin(pending.handle, pointId);
+    },
+    [completeAccountLogin],
+  );
+  const switchAccount = useCallback(
+    async (id: string) => {
+      if (installingRef.current) throw new AccountRegistryError('SESSION_CHANGED', 'Дождитесь завершения входа.');
+      const source = sessionRuntime.capture();
+      const saved = await authAccounts.read();
+      if (!sessionRuntime.isCurrent(source)) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+      installingRef.current = true;
+      try {
+        const next = await authAccounts.activate(id, saved.generation, () => sessionRuntime.isCurrent(source));
+        if (!sessionRuntime.isCurrent(source)) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+        if (!next.result) {
+          if (saved.activeId === id) await applyRegistrySession(next.registry);
+          throw new AccountRegistryError('REAUTH_REQUIRED', 'Войдите в этот аккаунт снова.');
+        }
+        await applyRegistrySession(next.registry);
+      } finally {
+        installingRef.current = false;
+      }
+    },
+    [applyRegistrySession, sessionRuntime],
+  );
 
-  /**
-   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167). Порядок шагов здесь — не стиль, а защита
-   * денег; каждый шаг закрывает конкретный способ их потерять.
-   *
-   * 1. ФИЛИАЛ ОТЛОЖЕННЫХ ЧЕКОВ ПРИБИВАЕМ ПЕРВЫМ, ещё ДО запроса. Чек, набитый
-   *    без связи, штампуется филиалом на «Пробить», но штамп best-effort:
-   *    сбой чтения сессии оставляет запись без него, и тогда филиал
-   *    подставляет сервер в момент ДОСЫЛКИ. До 167 это было безопасно (филиал
-   *    менялся только выходом и новым входом), а теперь молча увело бы выручку
-   *    филиала А в филиал Б. Штампуем ДО запроса, а не после ответа, потому что
-   *    сервер гасит старый токен раньше, чем ответ доедет до телефона:
-   *    потерянный ответ не должен оставить чеки без филиала.
-   * 2. СЕТЬ — ВНЕ очереди переходов сессии (как в login): медленный ответ не
-   *    имеет права держать выход или более новый переход.
-   * 3. КОММИТ — тот же самый, что после входа (commitSession): кеш прошлого
-   *    филиала стирается в памяти и на диске ДО того, как новый токен попадёт
-   *    на диск. Ветку «switched: false» отдельно не обрабатываем: сервер в ней
-   *    возвращает ТОТ ЖЕ токен, и коммит безопасен без условий.
-   * 4. ФИЛИАЛ ОЧЕРЕДИ сообщаем явно — иначе до первого ответа GET /points она
-   *    читала бы филиал из конверта сессии, а его переписывает шаг 3.
-   *
-   * Офлайн-очередь при этом НЕ стирается: владелец (человек + тенант) не
-   * изменился, adoptOfflineCheckQueue её усыновляет. Чеки прошлого филиала
-   * остаются на телефоне и уходят туда, где их набрали.
-   */
+  const inspectAccountRemoval = useCallback(
+    async (id: string) => {
+      const source = sessionRuntime.capture();
+      const saved = await authAccounts.read();
+      const account = saved.accounts.find((item) => item.id === id);
+      if (!account || !sessionRuntime.isCurrent(source))
+        throw new AccountRegistryError('SESSION_CHANGED', 'Аккаунт уже удалён.');
+      const result = await inspectSavedAccountRemoval(AsyncStorage, account);
+      if (!sessionRuntime.isCurrent(source)) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+      return result;
+    },
+    [sessionRuntime],
+  );
+  const removeAccount = useCallback(
+    async (id: string) => {
+      if (installingRef.current) throw new AccountRegistryError('SESSION_CHANGED', 'Дождитесь завершения входа.');
+      const source = sessionRuntime.capture();
+      const isCurrent = () => sessionRuntime.isCurrent(source);
+      installingRef.current = true;
+      try {
+        const saved = await authAccounts.read();
+        const account = saved.accounts.find((item) => item.id === id);
+        if (!account || !isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Аккаунт изменился.');
+        let removalEpoch = source;
+        const next = await withFrozenIntentOwners(account.scopes, async () => {
+          const inspection = await inspectSavedAccountRemoval(AsyncStorage, account);
+          if (!inspection.canRemove)
+            throw new AccountRegistryError(
+              'UNRESOLVED_INTENTS',
+              'В аккаунте остались неотправленные или неподтверждённые операции. Завершите их перед удалением.',
+            );
+          if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+          const removed = await authAccounts.remove(id, saved.generation, isCurrent);
+          if (!isCurrent()) throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+          // Invalidate the old active writers while the freeze is still held.
+          if (saved.activeId === id) {
+            removalEpoch = beginSessionTransition();
+            setDataSession(null);
+            setPersistentCacheSession(null);
+            setAuthToken(null, true);
+          } else activeRegistryRef.current.generation = removed.registry.generation;
+          return removed;
+        });
+        if (!sessionRuntime.isCurrent(removalEpoch))
+          throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+        // No financial, NFC or queue ledger is ever deleted, including a request
+        // that was persisted concurrently with this final inspection.
+        const otherScopes = new Set(
+          next.registry.accounts.flatMap((item) => item.scopes.map((scope) => JSON.stringify(scope))),
+        );
+        const scopes = account.scopes.filter((scope) => !otherScopes.has(JSON.stringify(scope)));
+        if (account.session) void pushLifecycle.logout(account.session.token, saved.activeId === id).catch(() => {});
+        if (saved.activeId === id) await applyRegistrySession(next.registry);
+        const cleanupEpoch = sessionRuntime.capture();
+        await clearAccountCaches(scopes, () => sessionRuntime.isCurrent(cleanupEpoch));
+      } finally {
+        installingRef.current = false;
+      }
+    },
+    [applyRegistrySession, beginSessionTransition, sessionRuntime],
+  );
+
+  /** Server-authorized point reissue retains the original account slot.
+   * Old-point queues/cache stay in their exact namespace and never replay
+   * with the replacement bearer. The reissue window preserves existing 401
+   * handling while the old JWT is being exchanged. */
+  const renderEpoch = sessionRuntime.capture();
+  const sessionClient = useMemo(() => createSessionBoundClient(token), [token, sessionGeneration]);
   const switchSessionPoint = useCallback(
     async (pointId: string) => {
+      if (installingRef.current || !sessionRuntime.isCurrent(renderEpoch))
+        throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+      const saved = authAccounts.snapshot();
+      if (!saved?.activeId) throw new AccountRegistryError('SESSION_CHANGED', 'Нет активного аккаунта.');
       const previousPointId = user?.currentPointId ?? null;
       if (previousPointId) {
         try {
@@ -1263,31 +1463,43 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // щели старый bearer уже мёртв на сервере, и чужие запросы, улетевшие с
       // ним, вернут 401 «Токен отозван». Гасить из-за них живую сессию нельзя —
       // см. beginSessionReissueWindow в api/axios.ts.
+      if (!sessionRuntime.isCurrent(renderEpoch))
+        throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
       const closeReissueWindow = beginSessionReissueWindow();
       try {
-        const res = await authApi.switchSessionPoint(pointId);
-        await commitSession(res.data.token, res.data.user);
+        const res = await serviceFactories.createAuthApi(sessionClient).switchSessionPoint(pointId);
+        await commitSession(res.data.token, res.data.user, {
+          generation: saved.generation,
+          originalAccountId: saved.activeId,
+          isCurrent: () => sessionRuntime.isCurrent(renderEpoch),
+        });
         setOfflineCheckQueuePointId(res.data.currentPointId);
       } finally {
         closeReissueWindow();
       }
     },
-    [commitSession, user],
+    [commitSession, user, sessionClient, renderEpoch, sessionRuntime],
   );
 
   const refreshUser = useCallback(async () => {
-    const refreshEpoch = sessionRuntime.capture();
+    const refreshEpoch = renderEpoch;
+    const refreshRegistryGeneration = activeRegistryRef.current.generation;
     const currentFlight = foregroundProfileRefreshRef.current;
     if (currentFlight?.epoch === refreshEpoch) return currentFlight.promise;
     const flight = { epoch: refreshEpoch, promise: Promise.resolve() };
     const work = (async () => {
       try {
-        const res = await authApi.me();
+        const res = await serviceFactories.createAuthApi(sessionClient).me();
         const fresh = res.data as User;
         await sessionRuntime.commit(refreshEpoch, async (isCurrent) => {
           if (!isCurrent()) return;
           setUser(fresh);
-          await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+          if (token)
+            await persistCurrentSession(
+              { token, user: fresh, impersonating: isImpersonating },
+              refreshEpoch,
+              refreshRegistryGeneration,
+            );
         });
       } catch {
         // A transient failure keeps the cached session; foreground will retry.
@@ -1298,7 +1510,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     flight.promise = work;
     foregroundProfileRefreshRef.current = flight;
     return work;
-  }, [isImpersonating, sessionRuntime, token]);
+  }, [isImpersonating, sessionRuntime, token, renderEpoch, sessionClient, persistCurrentSession]);
 
   foregroundProfileInputsRef.current = { loading, token, user, refreshUser };
 
@@ -1321,27 +1533,12 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   }, [sessionRuntime]);
 
   const logout = useCallback(async () => {
+    if (!sessionRuntime.isCurrent(renderEpoch)) return;
     const logoutEpoch = beginSessionTransition();
-    const previousPushToken = registeredPushToken;
-    registeredPushToken = null;
-
-    // Capture A's bearer + epoch before publishing the local tombstone. The
-    // server cleanup stays best-effort and never blocks local logout, but is
-    // ordered so JWT revocation cannot beat push-token removal. A late result
-    // is rejected at the axios session boundary and cannot affect session B.
-    if (token) {
-      const cleanupAsPreviousSession = createCapturedAuthRequester(token);
-      void (async () => {
-        if (previousPushToken) {
-          await cleanupAsPreviousSession({
-            method: 'delete',
-            url: '/push/token',
-            data: { token: previousPushToken },
-          }).catch(() => {});
-        }
-        await cleanupAsPreviousSession({ method: 'post', url: '/auth/logout' }).catch(() => {});
-      })();
-    }
+    void resetLiveActivitySession();
+    // Queue cleanup before the next owner's registration. A failed cleanup
+    // retains its secure claim and does not revoke the only usable credential.
+    if (token) void pushLifecycle.logout(token, true).catch(() => {});
 
     setAuthToken(null);
     setToken(null);
@@ -1349,7 +1546,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     setRecoveringSession(false);
     setSessionRecoveryPending(false);
     setIsImpersonating(false);
-    const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
+    setDataSession(null);
+    setSessionGeneration((value) => value + 1);
+    const tombstoneWrite = authAccounts
+      .deactivate(activeRegistryRef.current.id, () => sessionRuntime.isCurrent(logoutEpoch))
+      .catch(() => {});
     // Выход НЕ стирает офлайн-очередь: чеки принадлежат человеку, а не сессии,
     // и он почти всегда входит обратно (смена филиала = выход и новый вход).
     // Предупреждение «есть неотправленные чеки» живёт в UI до вызова logout.
@@ -1368,7 +1569,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       ExpoImage.clearDiskCache().catch(() => {});
       ExpoImage.clearMemoryCache().catch(() => {});
     });
-  }, [beginSessionTransition, queryClient, sessionRuntime, token]);
+  }, [beginSessionTransition, queryClient, sessionRuntime, token, renderEpoch]);
 
   /**
    * beginImpersonation — install the short-lived (30-min) director token
@@ -1385,34 +1586,17 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
    */
   const beginImpersonation = useCallback(
     async (t: string, u: User) => {
-      const impersonationEpoch = beginSessionTransition();
-      const applied = await commitAuthenticatedSession(sessionRuntime, impersonationEpoch, {
-        clearPreviousTenant: () => {
-          queryClient?.cancelQueries().catch(() => {});
-          queryClient?.clear();
-          ExpoImage.clearDiskCache().catch(() => {});
-          ExpoImage.clearMemoryCache().catch(() => {});
-          clearWidgetData();
-          // Имперсонация — это ВСЕГДА другой владелец (суперадмин → владелец
-          // тенанта), поэтому очередь здесь гарантированно стирается: иначе
-          // чеки суперадмина уехали бы в кассу чужого автосервиса.
-          return adoptTenantStorage(queueOwnerOf(u));
-        },
-        applyInMemory: () => {
-          setAuthToken(t);
-          setToken(t);
-          setUser(u);
-          setRecoveringSession(false);
-          setSessionRecoveryPending(false);
-          setIsImpersonating(true);
-        },
-        persist: async () => {
-          await authSessionStorage.write({ token: t, user: u, impersonating: true });
-        },
+      const saved = authAccounts.snapshot();
+      if (!saved?.activeId || !sessionRuntime.isCurrent(renderEpoch))
+        throw new AccountRegistryError('SESSION_CHANGED', 'Исходная сессия изменилась.');
+      await commitSession(t, u, {
+        generation: saved.generation,
+        originalAccountId: saved.activeId,
+        impersonating: true,
+        isCurrent: () => sessionRuntime.isCurrent(renderEpoch),
       });
-      if (applied && sessionRuntime.isCurrent(impersonationEpoch) && queryClient) prefetchAfterLogin(queryClient, u);
     },
-    [beginSessionTransition, queryClient, sessionRuntime],
+    [commitSession, renderEpoch, sessionRuntime],
   );
 
   /**
@@ -1450,6 +1634,18 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // long as user/token/loading don't actually change.
   const value = useMemo<AuthContextType>(
     () => ({
+      inspectAccountRemoval,
+      removeAccount,
+      savedAccounts: accountSummaries(registry).map((a) => ({
+        ...a,
+        active: !!token && a.id === activeRegistryRef.current.id,
+      })),
+      activeAccountId: token ? activeRegistryRef.current.id : null,
+      sessionGeneration,
+      addAccount,
+      completeAccountLogin,
+      cancelAccountLogin,
+      switchAccount,
       user,
       token,
       loading,
@@ -1470,6 +1666,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       clearSessionEndedNotice,
     }),
     [
+      registry,
+      sessionGeneration,
+      addAccount,
+      completeAccountLogin,
+      cancelAccountLogin,
+      switchAccount,
+      inspectAccountRemoval,
+      removeAccount,
       user,
       token,
       loading,
@@ -1491,7 +1695,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <React.Fragment key={sessionGeneration}>{children}</React.Fragment>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextType {

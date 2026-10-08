@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Minus, Truck, CreditCard, Package, User, Trash2, Undo2, Wallet } from 'lucide-react';
@@ -47,6 +47,10 @@ import { formatPhone } from '../../../shared/validation/phone';
 import { formatQty, unitLabel } from '../utils/units';
 import { parseNumberInput } from '../components/warehouse/format';
 import { useUrlParams } from '../components/warehouse/useUrlParams';
+import type { PurchaseReceiptContext, SupplierReturn } from '../../../shared/types';
+import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
+import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
+import { parseReturnQuantity, sumReceiptLineCents } from '../../../shared/utils/procurementInput';
 
 type TabType = 'deliveries' | 'payments' | 'returns';
 
@@ -62,6 +66,7 @@ interface DeliveryItemForm {
   quantity: number;
   /** Цена за единицу — строка ввода («12,5» печатается чисто), число — при отправке. */
   price: string;
+  sellPrice: string;
 }
 
 interface DeliveryFormData {
@@ -111,6 +116,7 @@ export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  const recovery = useProcurementRecovery({ contextId: id });
   // ROLE-ONLY: редактирование поставщика + приход/оплата/возврат/б/у-закупка —
   // только с suppliers_manage (байпас superadmin/director — внутри
   // hasPermission; admin — по матрице роли). Просмотр — suppliers_access.
@@ -138,6 +144,9 @@ export default function SupplierDetailPage() {
   const [reverseReason, setReverseReason] = useState('');
   const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
   const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
+  const [deliveryReturnId, setDeliveryReturnId] = useState<string | null>(null);
+  const [deliveryReturnReason, setDeliveryReturnReason] = useState('');
+  const [deliveryReturnQty, setDeliveryReturnQty] = useState<Record<string, string>>({});
   const [showReturnPicker, setShowReturnPicker] = useState(false);
   // Used-purchase ("Покупка б/у товара") modal state. Only meaningful
   // when the current supplier has kind='used_purchase'.
@@ -183,6 +192,19 @@ export default function SupplierDetailPage() {
     enabled: !!id,
   });
   const deliveries: Delivery[] = deliveriesQuery.data || [];
+
+  const deliveryForReturnQuery = useQuery<Delivery>({
+    queryKey: ['supplier-delivery-return-source', deliveryReturnId],
+    queryFn: async () => (await suppliersApi.getDeliveryById(deliveryReturnId as string)).data,
+    enabled: !!deliveryReturnId,
+    staleTime: 0,
+  });
+  const supplierDocumentReturnsQuery = useQuery<SupplierReturn[]>({
+    queryKey: ['supplier-financial-returns', id],
+    queryFn: async () => (await suppliersApi.getReturns({ supplierId: id })).data,
+    enabled: !!id,
+    staleTime: 30_000,
+  });
 
   const paymentsQuery = useQuery({
     queryKey: ['supplier-payments', id],
@@ -303,6 +325,24 @@ export default function SupplierDetailPage() {
   };
   const [deliveryForm, setDeliveryForm] = useState<DeliveryFormData>(emptyDeliveryForm);
 
+  const deliveryProductIdsKey = [...new Set(deliveryForm.items.map((item) => item.productId))].sort().join(',');
+  const deliveryPurchaseContext = useQuery<PurchaseReceiptContext[]>({
+    queryKey: ['supplier-purchase-context', deliveryProductIdsKey, deliveryForm.date],
+    enabled: isDeliveryModalOpen && !!deliveryProductIdsKey && !!deliveryForm.date,
+    queryFn: async () => {
+      const ids = deliveryProductIdsKey.split(',').filter(Boolean);
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+      const all: PurchaseReceiptContext[] = [];
+      for (const chunk of chunks) all.push(...(await suppliersApi.purchaseContext(chunk, deliveryForm.date)).data);
+      return all;
+    },
+    staleTime: 0,
+  });
+  const deliveryContextByProduct = new Map(
+    (deliveryPurchaseContext.data ?? []).map((context) => [context.productId, context]),
+  );
+
   const openDeliveryModal = () => {
     setDeliveryForm(emptyDeliveryForm);
     setIsDeliveryModalOpen(true);
@@ -318,7 +358,15 @@ export default function SupplierDetailPage() {
       }
       return {
         ...prev,
-        items: [...prev.items, { productId: product.id, quantity: 1, price: String(product.costPrice ?? 0) }],
+        items: [
+          ...prev.items,
+          {
+            productId: product.id,
+            quantity: 1,
+            price: String(product.costPrice ?? 0),
+            sellPrice: product.sellPrice == null ? '' : String(product.sellPrice),
+          },
+        ],
       };
     });
   };
@@ -334,34 +382,148 @@ export default function SupplierDetailPage() {
   };
 
   const createDeliveryMutation = useMutation({
-    mutationFn: (data: any) => suppliersApi.createDelivery(data),
-    onSuccess: () => {
+    mutationFn: (data: Parameters<typeof suppliersApi.createDelivery>[0]) =>
+      recovery.execute<{ id: string }>({ operation: 'delivery-create', sourceId: id as string, contextId: id }, data),
+    onSuccess: (res) => {
+      if (!recovery.owns(res)) return;
+
       toast.success('Поставка создана');
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
       queryClient.invalidateQueries({ queryKey: ['supplier', id] });
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
       setIsDeliveryModalOpen(false);
     },
-    onError: () => toast.error('Ошибка при создании поставки'),
+    onError: (err: any) => {
+      if (!recovery.owns(err)) return;
+      if (err?.code) {
+        toast.error(err.message);
+        return;
+      }
+
+      const status = err?.response?.status;
+      toast.error(
+        status === 409
+          ? 'Ключ операции уже использован с другими данными. Проверьте список поставок.'
+          : /остат|склад|количеств/i.test(String(err?.response?.data?.message ?? ''))
+            ? 'Остаток товара изменился. Обновите склад и проверьте поставку.'
+            : 'Не удалось создать поставку. Поля сохранены; повторите отправку без изменений.',
+      );
+    },
   });
 
-  const deliveryTotal = deliveryForm.items.reduce((sum, item) => sum + item.quantity * itemPrice(item), 0);
+  const deliveryReturnMutation = useMutation({
+    mutationFn: (vars: {
+      id: string;
+      requestId?: string;
+      reason: string;
+      items: Array<{ deliveryItemId: string; quantity: number }>;
+    }) =>
+      recovery.execute<Awaited<ReturnType<typeof suppliersApi.returnDelivery>>['data']>(
+        { operation: 'delivery-return', sourceId: vars.id, contextId: id },
+        { reason: vars.reason, items: vars.items },
+      ),
+    onSuccess: (res) => {
+      if (!recovery.owns(res)) return;
+
+      toast.success('Возврат поставщику оформлен. Исходная поставка сохранена в истории.');
+      queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-delivery-return-source', deliveryReturnId] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-financial-returns', id] });
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      setDeliveryReturnId(null);
+    },
+    onError: (err: any) => {
+      if (!recovery.owns(err)) return;
+      if (err?.code) {
+        toast.error(err.message);
+        return;
+      }
+
+      toast.error(
+        err?.response?.status === 409
+          ? 'Ключ операции уже связан с другими данными. Проверьте историю возвратов.'
+          : /остат|склад|количеств/i.test(String(err?.response?.data?.message ?? ''))
+            ? 'Недостаточно остатка для возврата. Проверьте актуальное наличие.'
+            : 'Возврат не подтверждён. Поля сохранены; повторите с теми же значениями.',
+      );
+    },
+  });
+
+  const openDeliveryReturn = useCallback((deliveryId: string) => {
+    setDeliveryReturnQty({});
+    setDeliveryReturnReason('');
+
+    setDeliveryReturnId(deliveryId);
+  }, []);
+
+  useEffect(() => {
+    const sourceId = params.get('returnDeliveryId');
+    if (!sourceId || !canManage || isUsedPurchaseSupplier) return;
+    openDeliveryReturn(sourceId);
+    setParam({ returnDeliveryId: null, tab: 'deliveries' }, { replace: true });
+  }, [params, canManage, isUsedPurchaseSupplier, setParam, openDeliveryReturn]);
+
+  const submitDeliveryReturn = (event: FormEvent) => {
+    event.preventDefault();
+    const source = deliveryForReturnQuery.data;
+    if (!source || !deliveryReturnId || deliveryReturnMutation.isPending) return;
+    const invalidLine = source.items.find((line) => {
+      const raw = deliveryReturnQty[line.id] ?? '';
+      return raw.trim() !== '' && parseReturnQuantity(raw, line.returnableQuantity ?? 0) === null;
+    });
+    if (invalidLine) {
+      toast.error('Укажите количество не больше доступного остатка и не более чем с 3 знаками после запятой');
+      return;
+    }
+    const items = source.items.flatMap((line) => {
+      const quantity = parseReturnQuantity(deliveryReturnQty[line.id] ?? '', line.returnableQuantity ?? 0);
+      return quantity ? [{ deliveryItemId: line.id, quantity }] : [];
+    });
+    if (!items.length || !deliveryReturnReason.trim()) {
+      toast.error('Выберите количество возврата и укажите причину');
+      return;
+    }
+    const payload = { id: deliveryReturnId, reason: deliveryReturnReason.trim(), items };
+    deliveryReturnMutation.mutate({ ...payload });
+  };
+
+  const deliveryTotal =
+    sumReceiptLineCents(deliveryForm.items.map((item) => ({ quantity: item.quantity, unitPrice: itemPrice(item) }))) /
+    100;
 
   const handleDeliverySubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (createDeliveryMutation.isPending) return;
+    const invalidRetail = deliveryForm.items.find((item) => {
+      if (item.sellPrice.trim() === '') return false;
+      const parsed = parseNumberInput(item.sellPrice);
+      return parsed === null || parsed < 0;
+    });
+    if (invalidRetail) {
+      toast.error('Проверьте розничную цену: укажите число или очистите поле, чтобы сохранить текущую цену');
+      return;
+    }
     const validItems = deliveryForm.items
-      .map((item) => ({ productId: item.productId, quantity: item.quantity, price: itemPrice(item) }))
+      .map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: itemPrice(item),
+        ...(item.sellPrice.trim() !== '' ? { sellPrice: parseNumberInput(item.sellPrice) as number } : {}),
+      }))
       .filter((item) => item.productId && item.quantity > 0 && item.price > 0);
     if (validItems.length === 0) {
       toast.error('Добавьте хотя бы один товар с ценой');
       return;
     }
-    createDeliveryMutation.mutate({
-      supplierId: id,
+    const payload = {
+      supplierId: id as string,
       date: deliveryForm.date,
       items: validItems,
       comment: deliveryForm.comment,
-    });
+    };
+    createDeliveryMutation.mutate({ ...payload });
   };
 
   // ── Оплата ─────────────────────────────────────────────────────────────────
@@ -606,6 +768,23 @@ export default function SupplierDetailPage() {
     const is404 = (error as any)?.response?.status === 404;
     return (
       <div className="space-y-5">
+        {canManage && (
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={() => {
+              for (const key of [
+                'supplier',
+                'supplier-deliveries',
+                'suppliers',
+                'supplier-financial-returns',
+                'products',
+                'stock-movements',
+              ])
+                void queryClient.invalidateQueries({ queryKey: [key] });
+              toast.success('Результат операции восстановлен');
+            }}
+          />
+        )}
         <PageHeader title="Поставщик" icon={Truck} backTo="/suppliers" />
         {!isLoading && (is404 || (!isError && !supplier)) ? (
           <Card>
@@ -696,6 +875,22 @@ export default function SupplierDetailPage() {
       ),
       footer: (rows) => <Money value={rows.filter((r) => !r.deletedAt).reduce((s, r) => s + r.totalAmount, 0)} />,
     },
+    ...(canManage && !isUsedPurchaseSupplier
+      ? [
+          {
+            key: 'return',
+            header: 'Возврат',
+            render: (d: Delivery) =>
+              !d.deletedAt && d.items.some((line) => (line.returnableQuantity ?? line.quantity) > 0) ? (
+                <Button size="sm" variant="secondary" icon={Undo2} onClick={() => openDeliveryReturn(d.id)}>
+                  Оформить
+                </Button>
+              ) : (
+                <span className="text-xs text-ink-3">—</span>
+              ),
+          } as DataTableColumn<Delivery>,
+        ]
+      : []),
   ];
 
   const paymentColumns: DataTableColumn<SupplierPayment>[] = [
@@ -825,6 +1020,23 @@ export default function SupplierDetailPage() {
 
   return (
     <div className="space-y-5">
+      {canManage && (
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            for (const key of [
+              'supplier',
+              'supplier-deliveries',
+              'suppliers',
+              'supplier-financial-returns',
+              'products',
+              'stock-movements',
+            ])
+              void queryClient.invalidateQueries({ queryKey: [key] });
+            toast.success('Результат операции восстановлен');
+          }}
+        />
+      )}
       <PageHeader
         title={supplier.name}
         icon={Truck}
@@ -957,6 +1169,47 @@ export default function SupplierDetailPage() {
       </TabPanel>
 
       <TabPanel idPrefix="supplier" tabKey="returns" active={activeTab === 'returns'} className="space-y-4">
+        <section className="space-y-3 rounded-xl border border-line bg-surface p-4">
+          <div>
+            <h2 className="font-semibold text-ink">Возвраты из поставок</h2>
+            <p className="text-sm text-ink-3">
+              Возврат создаёт отдельный документ и кредит поставщика; исходная накладная и платежи остаются неизменными.
+            </p>
+          </div>
+          {supplierDocumentReturnsQuery.isLoading ? <p className="text-sm text-ink-3">Загрузка истории…</p> : null}
+          {supplierDocumentReturnsQuery.isError ? (
+            <Button variant="secondary" onClick={() => supplierDocumentReturnsQuery.refetch()}>
+              Повторить загрузку возвратов
+            </Button>
+          ) : null}
+          {(supplierDocumentReturnsQuery.data ?? []).map((item) => (
+            <div
+              key={item.id}
+              className="flex flex-wrap items-start justify-between gap-2 border-t border-line pt-3 text-sm"
+            >
+              <div>
+                <p className="font-medium text-ink">
+                  {fmtDay(item.date)} · источник {item.deliveryId.slice(0, 8)}
+                </p>
+                <p className="text-ink-3">
+                  {item.reason || 'Причина не указана'} ·{' '}
+                  {item.items.map((line) => `${line.name} × ${formatQty(line.quantity)}`).join(', ')}
+                </p>
+              </div>
+              <div className="text-right">
+                <Money value={item.totalAmount} className="font-semibold text-ink" />
+                <p className="text-xs text-ink-3">
+                  исходная сумма <Money value={item.sourceTotalAmount} />
+                </p>
+              </div>
+            </div>
+          ))}
+          {!supplierDocumentReturnsQuery.isLoading &&
+            !supplierDocumentReturnsQuery.isError &&
+            (supplierDocumentReturnsQuery.data ?? []).length === 0 && (
+              <p className="text-sm text-ink-3">Документированных возвратов пока нет</p>
+            )}
+        </section>
         {/* Возврат брака по системному «Покупка б/у» каналу не имеет смысла. */}
         {canManage && !isUsedPurchaseSupplier && (
           <Toolbar
@@ -992,6 +1245,87 @@ export default function SupplierDetailPage() {
           }}
         />
       </TabPanel>
+
+      <Modal
+        isOpen={!!deliveryReturnId}
+        onClose={() => {
+          if (deliveryReturnMutation.isPending) return;
+          setDeliveryReturnId(null);
+        }}
+        title="Возврат из поставки"
+        description="Будет создан отдельный документ; сумма и оплата исходной накладной не изменятся. Возврат денег наличными оформляется отдельно."
+        size="lg"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDeliveryReturnId(null);
+              }}
+              disabled={deliveryReturnMutation.isPending}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" form="delivery-return-form" loading={deliveryReturnMutation.isPending}>
+              Оформить возврат
+            </Button>
+          </>
+        }
+      >
+        {deliveryForReturnQuery.isLoading ? (
+          <p className="text-sm text-ink-3">Загрузка состава поставки…</p>
+        ) : deliveryForReturnQuery.isError ? (
+          <Button variant="secondary" onClick={() => deliveryForReturnQuery.refetch()}>
+            Повторить загрузку
+          </Button>
+        ) : deliveryForReturnQuery.data ? (
+          <form id="delivery-return-form" onSubmit={submitDeliveryReturn} className="space-y-4">
+            <p className="text-sm text-ink-3">
+              Источник: {fmtDay(deliveryForReturnQuery.data.date)} · исходная сумма{' '}
+              <Money value={deliveryForReturnQuery.data.totalAmount} /> · возвращено{' '}
+              <Money value={deliveryForReturnQuery.data.returnedAmount ?? 0} /> · нетто{' '}
+              <Money value={deliveryForReturnQuery.data.netAmount ?? deliveryForReturnQuery.data.totalAmount} /> ·
+              кредит поставщика <Money value={supplier.creditBalance ?? 0} />
+            </p>
+            <div className="space-y-3">
+              {deliveryForReturnQuery.data.items.map((line) => {
+                const max = line.returnableQuantity ?? 0;
+                const returned = line.returnedQuantity ?? 0;
+                return (
+                  <div key={line.id} className="grid grid-cols-[1fr_7rem] items-center gap-3 border-b border-line pb-3">
+                    <div>
+                      <p className="font-medium text-ink">{line.product?.name || 'Товар'}</p>
+                      <p className="text-xs text-ink-3">
+                        Получено {formatQty(line.quantity)} · возвращено {formatQty(returned)} · доступно{' '}
+                        {formatQty(max)} · {formatQty(line.price)} ₽/шт
+                      </p>
+                    </div>
+                    <Input
+                      aria-label={`Количество возврата — ${line.product?.name || 'товар'}`}
+                      inputMode="decimal"
+                      min={0}
+                      max={max}
+                      value={deliveryReturnQty[line.id] ?? ''}
+                      disabled={deliveryReturnMutation.isPending || max <= 0}
+                      onChange={(e) => setDeliveryReturnQty((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                      placeholder="0"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <Field label="Причина" required>
+              <Textarea
+                value={deliveryReturnReason}
+                onChange={(e) => setDeliveryReturnReason(e.target.value)}
+                rows={2}
+                disabled={deliveryReturnMutation.isPending}
+                placeholder="Например: неподходящая деталь"
+              />
+            </Field>
+          </form>
+        ) : null}
+      </Modal>
 
       {/* ── Редактировать поставщика ─────────────────────────────────────────── */}
       <Modal
@@ -1049,7 +1383,10 @@ export default function SupplierDetailPage() {
       {/* ── Новая поставка ───────────────────────────────────────────────────── */}
       <Modal
         isOpen={isDeliveryModalOpen}
-        onClose={() => setIsDeliveryModalOpen(false)}
+        onClose={() => {
+          if (createDeliveryMutation.isPending) return;
+          setIsDeliveryModalOpen(false);
+        }}
         title="Новая поставка"
         description="Остатки склада вырастут, сумма поставки добавится в долг поставщику"
         size="lg"
@@ -1057,7 +1394,9 @@ export default function SupplierDetailPage() {
           <>
             <Button
               variant="secondary"
-              onClick={() => setIsDeliveryModalOpen(false)}
+              onClick={() => {
+                setIsDeliveryModalOpen(false);
+              }}
               disabled={createDeliveryMutation.isPending}
             >
               Отмена
@@ -1078,6 +1417,11 @@ export default function SupplierDetailPage() {
               className="sm:w-48"
             />
           </Field>
+          {deliveryPurchaseContext.isError && (
+            <Button type="button" variant="secondary" onClick={() => deliveryPurchaseContext.refetch()}>
+              Не удалось загрузить историю закупок · Повторить
+            </Button>
+          )}
 
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -1158,6 +1502,43 @@ export default function SupplierDetailPage() {
                         variant="danger"
                         onClick={() => removeDeliveryItem(index)}
                       />
+                      <div className="grid w-full grid-cols-1 gap-2 border-t border-line pt-2 sm:grid-cols-2">
+                        <Field label="Розничная цена" hint="Пусто — сохранить текущую, 0 — установить ноль">
+                          <Input
+                            size="sm"
+                            inputMode="decimal"
+                            aria-label={`Розничная цена — ${name}`}
+                            value={item.sellPrice}
+                            disabled={createDeliveryMutation.isPending}
+                            onChange={(e) => updateDeliveryItem(index, { sellPrice: e.target.value })}
+                            className="w-36 text-right tabular-nums"
+                          />
+                        </Field>
+                        {(() => {
+                          const prior = deliveryContextByProduct.get(item.productId)?.previousPurchase;
+                          if (deliveryPurchaseContext.isLoading)
+                            return <p className="self-end text-xs text-ink-3">Загрузка истории закупок…</p>;
+                          if (deliveryPurchaseContext.isError)
+                            return (
+                              <p className="self-end text-xs text-ink-3">
+                                История закупок недоступна · используйте «Повторить» выше
+                              </p>
+                            );
+                          if (!prior) return <p className="self-end text-xs text-ink-3">До этой даты закупок нет</p>;
+                          const delta = itemPrice(item) - prior.price;
+                          const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(
+                            Math.abs(delta),
+                          );
+                          const percent = prior.price > 0 ? ` · ${((delta / prior.price) * 100).toFixed(1)}%` : '';
+                          return (
+                            <p className="self-end text-xs text-ink-3">
+                              Ранее: {new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(prior.price)}{' '}
+                              ₽ · {fmtDay(prior.date)} · разница {delta > 0 ? '+' : delta < 0 ? '−' : ''}
+                              {rub} ₽{percent}
+                            </p>
+                          );
+                        })()}
+                      </div>
                     </li>
                   );
                 })}

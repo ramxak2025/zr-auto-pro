@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   InternalServerErrorException,
   Logger,
@@ -14,6 +15,25 @@ import { capLimit } from '../common/cap-limit';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 import { getTenantTimezone } from '../common/timezone';
+import { invalidateReportsForTenant } from '../common/reports-cache';
+import { CreateDeliveryDto } from './dto/create-delivery.dto';
+import { ReturnDeliveryDto } from './dto/return-delivery.dto';
+import { resolveSupplyDate, isBackdated } from './procurement-date';
+import {
+  allocateInvoiceCents,
+  cents,
+  decimal,
+  lineCents,
+  moneyNumber,
+  positiveQuantity,
+  quantityNumber,
+  quantityUnits,
+  stockUnits,
+  replayProcurementRequest,
+  roundRatio,
+  saveProcurementRequest,
+} from './procurement-money';
+import { lockReceiptProducts, PreviousPurchase, purchaseContext, updateReceiptPrices } from './procurement-history';
 
 // Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone), та же конвенция, что в
 // reports.service: период задаётся местным полуинтервалом [from 00:00,
@@ -72,6 +92,8 @@ export class SuppliersService {
       totalPurchases: parseFloat(row.total_purchases) || 0,
       totalPaid: parseFloat(row.total_paid) || 0,
       currentDebt: parseFloat(row.current_debt) || 0,
+      creditBalance: Math.max(-(parseFloat(row.current_debt) || 0), 0),
+      amountDue: Math.max(parseFloat(row.current_debt) || 0, 0),
       // System rows are pinned + uneditable. The FE relies on these two
       // fields to render the special "Покупка б/у товара" row at the top
       // of the suppliers list and to swap actions on the detail screen.
@@ -437,10 +459,12 @@ export class SuppliersService {
     if (deliveries.length > 0) {
       const ids = deliveries.map((d) => d.id);
       const { rows: itemRows } = await this.pool.query(
-        `SELECT di.*, p.name as product_name
+        `SELECT di.*, p.name as product_name, p.sell_price AS current_sell_price,
+           COALESCE((SELECT SUM(ri.quantity) FROM supplier_return_items ri WHERE ri.delivery_item_id=di.id AND ri.tenant_id=$2),0) AS returned_quantity,
+           COALESCE((SELECT SUM(ri.total) FROM supplier_return_items ri WHERE ri.delivery_item_id=di.id AND ri.tenant_id=$2),0) AS returned_amount
          FROM delivery_items di LEFT JOIN products p ON p.id = di.product_id
          WHERE di.delivery_id = ANY($1)`,
-        [ids],
+        [ids, tenantID],
       );
 
       const itemsMap: Record<string, any[]> = {};
@@ -455,6 +479,10 @@ export class SuppliersService {
           price: parseFloat(item.price) || 0,
           total: parseFloat(item.total) || 0,
           purchaseOrderItemId: item.purchase_order_item_id ?? null,
+          sellPrice: Number(item.sell_price ?? item.current_sell_price ?? 0),
+          previousPurchase: (item.previous_purchase as PreviousPurchase | null) ?? null,
+          returnedQuantity: Number(item.returned_quantity ?? 0),
+          returnedAmount: Number(item.returned_amount ?? 0),
         });
       }
       for (const d of deliveries) {
@@ -462,18 +490,46 @@ export class SuppliersService {
       }
     }
 
-    return deliveries;
+    return deliveries.map((delivery) => this.withReturnTotals(delivery));
   }
 
-  async getDeliveryById(id: string, tenantID: string) {
+  private withReturnTotals<
+    T extends {
+      totalAmount: number;
+      items: Array<{
+        id: string;
+        quantity: number;
+        price: number;
+        total: number;
+        returnedQuantity?: number;
+        returnedAmount?: number;
+      }>;
+    },
+  >(delivery: T) {
+    const allocated = allocateInvoiceCents(delivery.totalAmount, delivery.items);
+    const returned = delivery.items.reduce((sum, item) => sum + cents(item.returnedAmount ?? 0), 0n);
+    return {
+      ...delivery,
+      returnedAmount: moneyNumber(returned),
+      netAmount: moneyNumber(cents(delivery.totalAmount) - returned),
+      items: delivery.items.map((item) => ({
+        ...item,
+        returnableQuantity: quantityNumber(quantityUnits(item.quantity) - quantityUnits(item.returnedQuantity ?? 0)),
+        returnableAmount: moneyNumber((allocated.get(item.id) ?? 0n) - cents(item.returnedAmount ?? 0)),
+        refundableTotal: moneyNumber(allocated.get(item.id) ?? 0n),
+      })),
+    };
+  }
+
+  async getDeliveryById(id: string, tenantID: string, pointId: string | null = null) {
     const { rows } = await this.pool.query(
       `SELECT d.*, s.name as supplier_name,
               du.full_name as deleted_by_name, cu.full_name as corrected_by_name
        FROM deliveries d JOIN suppliers s ON s.id = d.supplier_id
        LEFT JOIN users du ON du.id = d.deleted_by
        LEFT JOIN users cu ON cu.id = d.corrected_by
-       WHERE d.id=$1 AND d.tenant_id=$2`,
-      [id, tenantID],
+       WHERE d.id=$1 AND d.tenant_id=$2 AND ($3::uuid IS NULL OR d.point_id=$3)`,
+      [id, tenantID, pointId],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Поставка не найдена' });
 
@@ -497,10 +553,12 @@ export class SuppliersService {
     };
 
     const { rows: itemRows } = await this.pool.query(
-      `SELECT di.*, p.name as product_name
+      `SELECT di.*, p.name as product_name, p.sell_price AS current_sell_price,
+           COALESCE((SELECT SUM(ri.quantity) FROM supplier_return_items ri WHERE ri.delivery_item_id=di.id AND ri.tenant_id=$2),0) AS returned_quantity,
+           COALESCE((SELECT SUM(ri.total) FROM supplier_return_items ri WHERE ri.delivery_item_id=di.id AND ri.tenant_id=$2),0) AS returned_amount
        FROM delivery_items di LEFT JOIN products p ON p.id = di.product_id
        WHERE di.delivery_id=$1`,
-      [id],
+      [id, tenantID],
     );
     delivery.items = itemRows.map((item) => ({
       id: item.id,
@@ -510,93 +568,357 @@ export class SuppliersService {
       price: parseFloat(item.price) || 0,
       total: parseFloat(item.total) || 0,
       purchaseOrderItemId: item.purchase_order_item_id ?? null,
+      sellPrice: Number(item.sell_price ?? item.current_sell_price ?? 0),
+      previousPurchase: (item.previous_purchase as PreviousPurchase | null) ?? null,
+      returnedQuantity: Number(item.returned_quantity ?? 0),
+      returnedAmount: Number(item.returned_amount ?? 0),
     }));
 
-    return delivery;
+    return {
+      ...this.withReturnTotals(delivery),
+      returns: await this.getReturns(tenantID, { deliveryId: id }, pointId),
+    };
   }
 
-  async createDelivery(tenantID: string, dto: any, pointId: string | null = null) {
-    if (!dto.supplierId || !dto.items || dto.items.length === 0) {
+  async getPurchaseContext(tenantID: string, productIds: string[], before?: string, pointId: string | null = null) {
+    if (
+      !productIds.length ||
+      productIds.length > 200 ||
+      productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    ) {
+      throw new BadRequestException({ message: 'Укажите от 1 до 200 товаров' });
+    }
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const cutoff = resolveSupplyDate(before, Date.now(), tz);
+    return purchaseContext(this.pool, tenantID, productIds, cutoff, pointId);
+  }
+
+  async createDelivery(
+    tenantID: string,
+    dto: CreateDeliveryDto,
+    pointId: string | null = null,
+    userID: string | null = null,
+  ) {
+    if (!dto?.supplierId || !Array.isArray(dto.items) || dto.items.length === 0) {
       throw new BadRequestException({ message: 'Поставщик и товары обязательны' });
     }
-
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const occurredAt = resolveSupplyDate(dto.date, Date.now(), tz);
+    const backdated = isBackdated(occurredAt, tz);
+    const totals = dto.items.map((item) => {
+      if (item.sellPrice !== undefined && item.sellPrice !== null) cents(item.sellPrice);
+      return lineCents(item.quantity, item.price);
+    });
+    const invoice = totals.reduce((a, b) => a + b, 0n);
+    cents(decimal(invoice, 2));
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-
-      // Verify the supplier belongs to the caller's tenant BEFORE anything
-      // else. Without this, a director could craft a request with a
-      // supplierId from another tenant and corrupt that supplier's totals
-      // (the post-insert UPDATE suppliers used to omit tenant_id).
-      const { rows: supRows } = await client.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+      const request = await replayProcurementRequest(client, tenantID, dto.requestId, 'delivery-create', {
+        dto,
+        pointId,
+        userID,
+      });
+      if (request.replay !== undefined) {
+        await client.query('COMMIT');
+        return request.replay;
+      }
+      const { rows: suppliers } = await client.query('SELECT id FROM suppliers WHERE id=$1 AND tenant_id=$2', [
         dto.supplierId,
         tenantID,
       ]);
-      if (supRows.length === 0) {
-        throw new BadRequestException({ message: 'Поставщик не найден' });
-      }
-
-      let totalAmount = 0;
-      for (const item of dto.items) {
-        totalAmount += (item.price || 0) * (item.quantity || 0);
-      }
-
-      // 169 — поставка принимается В ФИЛИАЛ сессии.
-      const { rows: delRows } = await client.query(
-        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id, point_id)
-         VALUES ($1, $2, $3, 'unpaid', $4, $5, $6) RETURNING id`,
-        [dto.supplierId, dto.date || new Date().toISOString(), totalAmount, dto.comment, tenantID, pointId],
+      if (!suppliers.length) throw new BadRequestException({ message: 'Поставщик не найден' });
+      const products = await lockReceiptProducts(
+        client,
+        tenantID,
+        dto.items.map((item) => item.productId),
+        pointId,
       );
-      const deliveryId = delRows[0].id;
-
-      for (const item of dto.items) {
-        const itemTotal = (item.price || 0) * (item.quantity || 0);
-        await client.query(
-          `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [deliveryId, item.productId, item.quantity || 0, item.price || 0, itemTotal],
-        );
-
-        // Increase product stock — scoped to tenant (defense-in-depth so a
-        // crafted productId from another tenant cannot mutate stock here).
-        // E-5: ручная поставка растит долг поставщику — обязана и задавать
-        // себестоимость (last-cost — согласовано с purchase-orders.receive в
-        // supply-режиме). Без этого поставка добавляла остаток, но оставляла
-        // cost_price=0 → при продаже COGS=0 → прибыль тихо завышена. Guard
-        // `> 0`: пустая/нулевая цена не затирает известную себестоимость.
-        if (item.productId) {
-          const purchasePrice = Number(item.price) || 0;
-          // 169 — товар обязан лежать на складе филиала сессии.
-          const upd = await client.query(
-            `UPDATE products
-                SET stock = stock + $1,
-                    cost_price = CASE WHEN $4::numeric > 0 THEN $4::numeric ELSE cost_price END
-              WHERE id = $2 AND tenant_id = $3
-                AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
-                       WHERE wpt.id = products.warehouse_id AND wpt.point_id = $5::uuid))`,
-            [item.quantity || 0, item.productId, tenantID, purchasePrice, pointId],
-          );
-          if (upd.rowCount === 0) {
-            throw new BadRequestException({ message: `Товар ${item.productId} не найден` });
-          }
+      const byProduct = new Map(products.map((product) => [product.id, product]));
+      const context = await purchaseContext(
+        client,
+        tenantID,
+        products.map((product) => product.id),
+        occurredAt,
+        pointId,
+      );
+      const byContext = new Map(context.map((row) => [row.productId, row.previousPurchase]));
+      const retailByProduct = new Map<string, number>();
+      for (const item of dto.items)
+        if (item.sellPrice !== undefined && item.sellPrice !== null) {
+          if (retailByProduct.has(item.productId) && retailByProduct.get(item.productId) !== item.sellPrice)
+            throw new BadRequestException({ message: 'Разные розничные цены одного товара' });
+          retailByProduct.set(item.productId, item.sellPrice);
         }
-      }
-
-      // Update supplier totals — tenant_id filter mirrors the upfront check
-      // above. Belt and suspenders so a future refactor can't drop the
-      // assertion without also losing the WHERE clause.
-      await client.query(
-        `UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1
-         WHERE id = $2 AND tenant_id = $3`,
-        [totalAmount, dto.supplierId, tenantID],
+      const { rows } = await client.query(
+        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id, point_id, received_by)
+         VALUES ($1, COALESCE($2::timestamptz, now()), $3, 'unpaid', $4, $5, $6, $7) RETURNING id`,
+        [dto.supplierId, occurredAt, decimal(invoice, 2), dto.comment ?? null, tenantID, pointId, userID],
       );
-
+      const id = rows[0].id as string;
+      for (const [index, item] of dto.items.entries()) {
+        const product = byProduct.get(item.productId)!;
+        const before = stockUnits(product.stock);
+        const after = before + positiveQuantity(item.quantity);
+        stockUnits(decimal(after, 3));
+        await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
+          decimal(after, 3),
+          product.id,
+          tenantID,
+        ]);
+        await client.query(
+          `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id, user_id, warehouse_id, supplier_id, created_at)
+          VALUES ($1,'income',$2,$3,$4,'Поступление от поставщика',$5,$6,$7,$8,COALESCE($9::timestamptz,now()))`,
+          [
+            product.id,
+            item.quantity,
+            decimal(before, 3),
+            decimal(after, 3),
+            tenantID,
+            userID,
+            product.warehouse_id,
+            dto.supplierId,
+            occurredAt,
+          ],
+        );
+        product.stock = decimal(after, 3);
+        await updateReceiptPrices(client, tenantID, userID, product, item.price, item.sellPrice, backdated);
+        await client.query(
+          `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, sell_price, previous_purchase)
+          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+          [
+            id,
+            product.id,
+            item.quantity,
+            item.price,
+            decimal(totals[index], 2),
+            product.sell_price,
+            JSON.stringify(byContext.get(product.id) ?? null),
+          ],
+        );
+      }
+      await client.query(
+        `UPDATE suppliers SET total_purchases=total_purchases+$1, current_debt=current_debt+$1 WHERE id=$2 AND tenant_id=$3`,
+        [decimal(invoice, 2), dto.supplierId, tenantID],
+      );
+      const result = { id };
+      await saveProcurementRequest(client, tenantID, dto.requestId, request.fingerprint, result);
       await client.query('COMMIT');
-      return { id: deliveryId };
+      invalidateReportsForTenant(tenantID);
+      return result;
     } catch (err) {
       await client.query('ROLLBACK');
-      if (err instanceof BadRequestException) throw err;
+      if (err instanceof BadRequestException || err instanceof ConflictException) throw err;
       this.logger.error(`Delivery create error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+  }
+
+  async getReturns(
+    tenantID: string,
+    query: { supplierId?: string; deliveryId?: string; id?: string },
+    pointId: string | null = null,
+  ) {
+    return this.loadReturns(this.pool, tenantID, query, pointId);
+  }
+
+  private async loadReturns(
+    client: Pool | PoolClient,
+    tenantID: string,
+    query: { supplierId?: string; deliveryId?: string; id?: string },
+    pointId: string | null,
+  ) {
+    const { rows } = await client.query(
+      `SELECT r.*, d.date AS source_date, d.total_amount AS source_total, s.name AS supplier_name, u.full_name AS created_by_name
+       FROM supplier_returns r JOIN deliveries d ON d.id=r.delivery_id AND d.tenant_id=r.tenant_id
+       JOIN suppliers s ON s.id=r.supplier_id AND s.tenant_id=r.tenant_id
+       LEFT JOIN users u ON u.id=r.created_by
+       WHERE r.tenant_id=$1 AND ($2::uuid IS NULL OR r.point_id=$2)
+         AND ($3::uuid IS NULL OR r.supplier_id=$3) AND ($4::uuid IS NULL OR r.delivery_id=$4) AND ($5::uuid IS NULL OR r.id=$5)
+       ORDER BY r.date DESC, r.id DESC LIMIT 500`,
+      [tenantID, pointId, query.supplierId ?? null, query.deliveryId ?? null, query.id ?? null],
+    );
+    if (!rows.length) return [];
+    const { rows: items } = await client.query(
+      'SELECT * FROM supplier_return_items WHERE tenant_id=$1 AND return_id=ANY($2::uuid[]) ORDER BY id',
+      [tenantID, rows.map((r) => r.id)],
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      deliveryId: r.delivery_id as string,
+      supplierId: r.supplier_id as string,
+      supplierName: r.supplier_name as string,
+      date: r.date as string,
+      reason: r.reason as string | null,
+      createdByName: r.created_by_name as string | null,
+      totalAmount: Number(r.total_amount),
+      sourceDate: r.source_date as string,
+      sourceTotalAmount: Number(r.source_total),
+      items: items
+        .filter((item) => item.return_id === r.id)
+        .map((item) => ({
+          id: item.id as string,
+          deliveryItemId: item.delivery_item_id as string,
+          productId: item.product_id as string,
+          name: item.product_name as string,
+          quantity: Number(item.quantity),
+          price: Number(item.price),
+          total: Number(item.total),
+        })),
+    }));
+  }
+
+  async returnDelivery(
+    tenantID: string,
+    userID: string | null,
+    id: string,
+    dto: ReturnDeliveryDto,
+    pointId: string | null = null,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const request = await replayProcurementRequest(client, tenantID, dto.requestId, 'delivery-return', {
+        id,
+        dto,
+        userID,
+        pointId,
+      });
+      if (request.replay !== undefined) {
+        await client.query('COMMIT');
+        return request.replay;
+      }
+      // Document lock serializes source edits/deletion and all distinct return
+      // IDs; stock locks are sorted and the supplier balance is locked last.
+      const { rows } = await client.query(
+        'SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3) FOR UPDATE',
+        [id, tenantID, pointId],
+      );
+      if (!rows.length)
+        throw new NotFoundException({
+          message: 'Исходная накладная не найдена. Финансовый возврат без накладной недоступен.',
+        });
+      const delivery = rows[0];
+      if (delivery.deleted_at) throw new BadRequestException({ message: 'Поставка удалена' });
+      const { rows: lines } = await client.query<{
+        id: string;
+        product_id: string;
+        quantity: string;
+        price: string;
+        total: string;
+        returned_quantity: string;
+        returned_amount: string;
+      }>(
+        `SELECT di.*, COALESCE(ret.quantity,0) AS returned_quantity, COALESCE(ret.amount,0) AS returned_amount
+         FROM delivery_items di LEFT JOIN LATERAL (
+           SELECT SUM(ri.quantity) AS quantity, SUM(ri.total) AS amount FROM supplier_return_items ri
+           WHERE ri.delivery_item_id=di.id AND ri.tenant_id=$2
+         ) ret ON true WHERE di.delivery_id=$1 ORDER BY di.id`,
+        [id, tenantID],
+      );
+      const allocations = allocateInvoiceCents(delivery.total_amount, lines);
+      const lineById = new Map(lines.map((line) => [line.id, line]));
+      const deltas = new Map<string, bigint>();
+      if (dto.items !== undefined && dto.items !== null) {
+        if (!Array.isArray(dto.items) || !dto.items.length)
+          throw new BadRequestException({ message: 'Добавьте хотя бы одну позицию' });
+        for (const item of dto.items) {
+          if (!lineById.has(item.deliveryItemId))
+            throw new BadRequestException({ message: 'Позиция не найдена в исходной накладной' });
+          if (deltas.has(item.deliveryItemId)) throw new BadRequestException({ message: 'Позиция указана дважды' });
+          deltas.set(item.deliveryItemId, positiveQuantity(item.quantity));
+        }
+      } else {
+        for (const line of lines) {
+          const available = quantityUnits(line.quantity) - quantityUnits(line.returned_quantity);
+          if (available > 0n) deltas.set(line.id, available);
+        }
+      }
+      if (!deltas.size) throw new BadRequestException({ message: 'Все позиции поставки уже возвращены' });
+      const quantities = new Map<string, bigint>();
+      const amounts = new Map<string, bigint>();
+      for (const [lineId, qty] of deltas) {
+        const line = lineById.get(lineId)!;
+        const cumulative = quantityUnits(line.returned_quantity) + qty;
+        const sourceQty = positiveQuantity(line.quantity);
+        if (cumulative > sourceQty)
+          throw new BadRequestException({ message: 'Нельзя вернуть больше полученного по этой позиции' });
+        if (!line.product_id) throw new BadRequestException({ message: 'Товар исходной накладной недоступен' });
+        quantities.set(line.product_id, (quantities.get(line.product_id) ?? 0n) + qty);
+        amounts.set(lineId, roundRatio(allocations.get(lineId)! * cumulative, sourceQty) - cents(line.returned_amount));
+      }
+      const products = await lockReceiptProducts(client, tenantID, [...quantities.keys()], pointId);
+      const productById = new Map(products.map((p) => [p.id, p]));
+      for (const product of products)
+        if (stockUnits(product.stock) < quantities.get(product.id)!) {
+          throw new BadRequestException({ message: `Недостаточно остатка по «${product.name}»` });
+        }
+      const total = [...amounts.values()].reduce((a, b) => a + b, 0n);
+      const { rows: returns } = await client.query(
+        `INSERT INTO supplier_returns (tenant_id, delivery_id, supplier_id, point_id, created_by, reason, total_amount)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [tenantID, id, delivery.supplier_id, delivery.point_id, userID, dto.reason?.trim() || null, decimal(total, 2)],
+      );
+      const returnId = returns[0].id as string;
+      for (const [lineId, qty] of deltas) {
+        const line = lineById.get(lineId)!;
+        const product = productById.get(line.product_id)!;
+        await client.query(
+          `INSERT INTO supplier_return_items (tenant_id, return_id, delivery_id, delivery_item_id, product_id, product_name, quantity, price, total)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            tenantID,
+            returnId,
+            id,
+            lineId,
+            product.id,
+            product.name,
+            decimal(qty, 3),
+            line.price,
+            decimal(amounts.get(lineId)!, 2),
+          ],
+        );
+      }
+      for (const product of products) {
+        const qty = quantities.get(product.id)!;
+        const after = stockUnits(product.stock) - qty;
+        await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
+          decimal(after, 3),
+          product.id,
+          tenantID,
+        ]);
+        await client.query(
+          `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id, user_id, warehouse_id, supplier_id)
+          VALUES ($1,'expense',$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            product.id,
+            decimal(qty, 3),
+            product.stock,
+            decimal(after, 3),
+            `Возврат поставщику: ${returnId}`,
+            tenantID,
+            userID,
+            product.warehouse_id,
+            delivery.supplier_id,
+          ],
+        );
+      }
+      await client.query(
+        'UPDATE suppliers SET total_purchases=total_purchases-$1, current_debt=current_debt-$1 WHERE id=$2 AND tenant_id=$3',
+        [decimal(total, 2), delivery.supplier_id, tenantID],
+      );
+      const [result] = await this.loadReturns(client, tenantID, { id: returnId }, pointId);
+      await saveProcurementRequest(client, tenantID, dto.requestId, request.fingerprint, result);
+      await client.query('COMMIT');
+      invalidateReportsForTenant(tenantID);
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
+      this.logger.error(`Supplier return error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();
@@ -724,16 +1046,32 @@ export class SuppliersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Same order as PO receipt/date edits: PO -> delivery -> products -> supplier.
+      await client.query(
+        `SELECT po.id FROM purchase_orders po JOIN deliveries d ON d.purchase_order_id=po.id
+        WHERE d.id=$1 AND d.tenant_id=$2 AND po.tenant_id=$2 ORDER BY po.id FOR UPDATE OF po`,
+        [id, tenantID],
+      );
+      await assertRowPointForWrite(client, 'deliveries', id, tenantID, pointId, 'Поставка не найдена');
 
-      const { rows: delRows } = await client.query('SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
-        id,
-        tenantID,
-      ]);
+      const { rows: delRows } = await client.query(
+        'SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3) FOR UPDATE',
+        [id, tenantID, pointId],
+      );
       if (delRows.length === 0) throw new NotFoundException({ message: 'Поставка не найдена' });
       const delivery = delRows[0];
       if (delivery.deleted_at) throw new BadRequestException({ message: 'Поставка удалена' });
 
-      // unpaid/partial правим свободно; paid — только после сторно авто-платежа.
+      const { rows: returned } = await client.query(
+        'SELECT 1 FROM supplier_returns WHERE delivery_id=$1 AND tenant_id=$2 LIMIT 1',
+        [id, tenantID],
+      );
+      if (returned.length && dto.items !== undefined)
+        throw new BadRequestException({
+          message: 'Поставка с возвратами: нельзя менять состав или удалять исходную накладную',
+        });
+      // paid — только после сторно авто-платежа; запрет состава с возвратами
+      // не зависит от оплаты и действует даже для нулевой суммы возврата.
       if (delivery.payment_status === 'paid') {
         await this.assertNoActiveDeliveryPaymentTx(client, tenantID, id);
       }
@@ -797,10 +1135,10 @@ export class SuppliersService {
         await client.query('DELETE FROM delivery_items WHERE delivery_id=$1', [id]);
         newTotal = 0;
         for (const it of dto.items) {
-          const qty = Number(it.quantity) || 0;
-          const price = Number(it.price) || 0;
-          const lineTotal = Math.round(qty * price * 100) / 100;
-          newTotal += lineTotal;
+          const qty = quantityNumber(positiveQuantity(it.quantity));
+          const price = moneyNumber(cents(it.price));
+          const lineTotal = moneyNumber(lineCents(qty, price));
+          newTotal = moneyNumber(cents(newTotal) + cents(lineTotal));
           await client.query(
             `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, purchase_order_item_id)
              VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -846,6 +1184,7 @@ export class SuppliersService {
       }
 
       await client.query('COMMIT');
+      invalidateReportsForTenant(tenantID);
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
@@ -877,15 +1216,30 @@ export class SuppliersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Same order as PO receipt/date edits: PO -> delivery -> products -> supplier.
+      await client.query(
+        `SELECT po.id FROM purchase_orders po JOIN deliveries d ON d.purchase_order_id=po.id
+        WHERE d.id=$1 AND d.tenant_id=$2 AND po.tenant_id=$2 ORDER BY po.id FOR UPDATE OF po`,
+        [id, tenantID],
+      );
+      await assertRowPointForWrite(client, 'deliveries', id, tenantID, pointId, 'Поставка не найдена');
 
-      const { rows: delRows } = await client.query('SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
-        id,
-        tenantID,
-      ]);
+      const { rows: delRows } = await client.query(
+        'SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3) FOR UPDATE',
+        [id, tenantID, pointId],
+      );
       if (delRows.length === 0) throw new NotFoundException({ message: 'Поставка не найдена' });
       const delivery = delRows[0];
       if (delivery.deleted_at) throw new BadRequestException({ message: 'Поставка уже удалена' });
 
+      const { rows: returned } = await client.query(
+        'SELECT 1 FROM supplier_returns WHERE delivery_id=$1 AND tenant_id=$2 LIMIT 1',
+        [id, tenantID],
+      );
+      if (returned.length)
+        throw new BadRequestException({
+          message: 'Поставка с возвратами: нельзя менять состав или удалять исходную накладную',
+        });
       await this.assertNoActiveDeliveryPaymentTx(client, tenantID, id);
 
       const { rows: oldItems } = await client.query(
@@ -925,6 +1279,7 @@ export class SuppliersService {
       );
 
       await client.query('COMMIT');
+      invalidateReportsForTenant(tenantID);
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
@@ -1155,24 +1510,44 @@ export class SuppliersService {
    * снова открыт, владелец погасит его обычным платежом (решение по
    * умолчанию, задокументировано).
    */
-  async reversePayment(tenantID: string, userID: string | null, paymentId: string, reason?: string) {
+  async reversePayment(
+    tenantID: string,
+    userID: string | null,
+    paymentId: string,
+    reason?: string,
+    pointId: string | null = null,
+  ) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Delivery precedes payment/supplier in the shared lock order. Otherwise
+      // return (delivery -> supplier) and reversal (supplier -> delivery) cycle.
+      const { rows: lockedDeliveries } = await client.query(
+        `SELECT d.id FROM deliveries d JOIN supplier_payments sp ON sp.delivery_id=d.id
+        WHERE sp.id=$1 AND sp.tenant_id=$2 AND d.tenant_id=$2
+          AND ($3::uuid IS NULL OR (sp.point_id=$3 AND d.point_id=$3))
+        ORDER BY d.id FOR UPDATE OF d`,
+        [paymentId, tenantID, pointId],
+      );
 
       // Tenant-scoped FOR UPDATE — чужой тенант получает 404, параллельное
       // сторно сериализуется на локе строки.
       const { rows } = await client.query(
         `SELECT id, supplier_id, amount, kind, reversed_at, delivery_id
            FROM supplier_payments
-          WHERE id = $1 AND tenant_id = $2
+          WHERE id = $1 AND tenant_id = $2 AND ($3::uuid IS NULL OR point_id=$3)
           FOR UPDATE`,
-        [paymentId, tenantID],
+        [paymentId, tenantID, pointId],
       );
       if (rows.length === 0) {
         throw new NotFoundException({ message: 'Платёж не найден' });
       }
       const payment = rows[0];
+      if (payment.delivery_id && !lockedDeliveries.some((d) => d.id === payment.delivery_id)) {
+        throw new ConflictException({
+          message: 'Связь платежа с поставкой изменилась или недоступна. Повторите операцию.',
+        });
+      }
       if (payment.reversed_at) {
         throw new BadRequestException({ message: 'Платёж уже сторнирован' });
       }
@@ -1209,10 +1584,12 @@ export class SuppliersService {
       }
 
       await client.query('COMMIT');
+      invalidateReportsForTenant(tenantID);
       return { id: paymentId, supplierId: payment.supplier_id, amount };
     } catch (err) {
       await client.query('ROLLBACK');
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
       this.logger.error(`Payment reverse error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
@@ -1344,19 +1721,30 @@ export class SuppliersService {
       paymentMode: 'debt' | 'paid';
       /** Дата поставки (ISO). Пусто ⇒ now() — поведение до 159. */
       occurredAt?: string | null;
-      lines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }>;
+      lines: Array<{
+        productId: string;
+        purchaseOrderItemId: string;
+        quantity: number;
+        price: number;
+        sellPrice?: number;
+        previousPurchase?: PreviousPurchase | null;
+      }>;
       /** 169 — филиал заказа: поставка и авто-оплата принадлежат ему. */
       pointId?: string | null;
     },
   ): Promise<{ deliveryId: string; paymentId: string | null; invoiceTotal: number }> {
-    // Invoice total (стоимость накладной) = Σ received qty × purchase price.
-    let invoiceTotal = 0;
-    for (const line of params.lines) {
-      invoiceTotal += (Number(line.quantity) || 0) * (Number(line.price) || 0);
-    }
-    invoiceTotal = Math.round(invoiceTotal * 100) / 100;
+    const invoiceTotal = moneyNumber(
+      params.lines.reduce((sum, line) => sum + lineCents(line.quantity, line.price), 0n),
+    );
+    cents(invoiceTotal);
 
     const paid = params.paymentMode === 'paid';
+
+    const { rows: supplierRows } = await client.query('SELECT id FROM suppliers WHERE id=$1 AND tenant_id=$2', [
+      params.supplierId,
+      tenantID,
+    ]);
+    if (!supplierRows.length) throw new BadRequestException({ message: 'Поставщик не найден' });
 
     // 1) The supply header (a deliveries row), linked to its order + receiver.
     // Дата накладной — выбранная дата поставки (159), иначе now().
@@ -1383,11 +1771,20 @@ export class SuppliersService {
     for (const line of params.lines) {
       const qty = Number(line.quantity) || 0;
       const price = Number(line.price) || 0;
-      const lineTotal = Math.round(qty * price * 100) / 100;
+      const lineTotal = moneyNumber(lineCents(qty, price));
       await client.query(
-        `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, purchase_order_item_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [deliveryId, line.productId, qty, price, lineTotal, line.purchaseOrderItemId],
+        `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, purchase_order_item_id, sell_price, previous_purchase)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [
+          deliveryId,
+          line.productId,
+          qty,
+          price,
+          lineTotal,
+          line.purchaseOrderItemId,
+          line.sellPrice ?? null,
+          JSON.stringify(line.previousPurchase ?? null),
+        ],
       );
     }
 

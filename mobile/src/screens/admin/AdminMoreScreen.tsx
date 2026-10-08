@@ -16,7 +16,7 @@ import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-n
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { adminApi, managerApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
@@ -28,16 +28,24 @@ import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { ManagerSummary, RegistrationRequest } from '../../../../shared/types';
 import { balanceCaption, balanceColor, useAdminMode } from './adminShared';
+import AccountPickerSheet from '../AccountPickerSheet';
 
 export default function AdminMoreScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<RouteProp<{ AdminMoreHome: { accountPickerRequest?: number } }, 'AdminMoreHome'>>();
   const palette = useColors();
   const surface = useIosSurface();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
-  const { logout, user } = useAuth();
+  const { logout, user, savedAccounts } = useAuth();
   const { mode, toggle } = useThemeMode();
   const isManager = useAdminMode() === 'manager';
   const [refreshing, setRefreshing] = React.useState(false);
+  const [accountsOpen, setAccountsOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof route.params?.accountPickerRequest !== 'number') return;
+    setAccountsOpen(true);
+    navigation.setParams({ accountPickerRequest: undefined });
+  }, [navigation, route.params?.accountPickerRequest]);
 
   // Pending registration requests — count badge on the «Заявки» row. Same query
   // key the Overview card + review screen use, so all three stay consistent.
@@ -85,6 +93,16 @@ export default function AdminMoreScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
       >
+        <Pressable
+          onPress={() => setAccountsOpen(true)}
+          style={[styles.card, surface.card, styles.accountPickerRow]}
+          accessibilityRole="button"
+        >
+          <Ionicons name="people-outline" size={20} color={palette.accent.primaryText} />
+          <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Аккаунты</Text>
+          <Text style={[styles.settingValue, { color: palette.text.tertiary }]}>{savedAccounts.length}/3</Text>
+          <Ionicons name="chevron-forward" size={17} color={palette.text.tertiary} />
+        </Pressable>
         {/* Settings */}
         <View style={[styles.card, surface.card]}>
           <Pressable
@@ -179,6 +197,7 @@ export default function AdminMoreScreen() {
           <Text style={styles.logoutText}>Выйти</Text>
         </Pressable>
       </ScrollView>
+      <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </View>
   );
 }
@@ -187,6 +206,7 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   scroll: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[3] },
   card: { paddingHorizontal: spacing[4], paddingVertical: spacing[1] },
+  accountPickerRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   settingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3] },
   settingIcon: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   settingLabel: { fontSize: 15, fontWeight: '500', flex: 1 },

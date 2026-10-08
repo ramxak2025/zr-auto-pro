@@ -21,7 +21,6 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
 import EmptyState from './EmptyState';
-import { UserRole } from '../types';
 import type { CheckTemplate, CheckTemplateFolder } from '../types';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -35,14 +34,13 @@ import { focusRing } from '../ui/tokens';
 
 /**
  * Шаблоны чеков на web — parity с mobile (round 8): личные шаблоны + личные
- * вложенные папки + общие шаблоны (userId NULL, правит только owner-class).
+ * вложенные личные и общие папки/шаблоны.
  *
  * Правила зеркалят backend `check-templates.service.ts` (единственный
  * настоящий страж):
  *   • личный шаблон — полный CRUD автору, любая роль;
- *   • общий шаблон — update/delete только owner-class (director/admin/
- *     superadmin); для остальных кнопки правки скрыты;
- *   • shared=true при создании — только owner-class (у остальных чекбокс
+ *   • общий шаблон — update/delete только при templates_shared_manage;
+ *   • shared=true при создании — только при templates_shared_manage;
  *     не показывается, сервер всё равно бы создал личный);
  *   • папки строго личные (дерево через parentId), общие шаблоны вне папок.
  *
@@ -139,16 +137,15 @@ interface TemplatePickerModalProps {
 
 export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePickerModalProps) {
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  // Owner-class зеркалит OWNER_CLASS_ROLES бэкенда.
-  const isOwnerClass = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  const canManageShared = hasPermission('templates_shared_manage');
 
   const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData();
 
   const [mode, setMode] = useState<'pick' | 'manage'>('pick');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Управление: инлайн-создание / переименование
-  const [creatingIn, setCreatingIn] = useState<{ parentId: string | null } | null>(null);
+  const [creatingIn, setCreatingIn] = useState<{ parentId: string | null; isShared: boolean } | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [folderDraft, setFolderDraft] = useState('');
@@ -167,13 +164,17 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     }
   }, [isOpen]);
 
-  const folderTree = useMemo(() => buildFolderTree(folders), [folders]);
+  const personalFolders = useMemo(() => folders.filter((f) => !f.isShared), [folders]);
+  const sharedFolders = useMemo(() => folders.filter((f) => !!f.isShared), [folders]);
+  const folderTree = useMemo(() => buildFolderTree(personalFolders), [personalFolders]);
+  const sharedFolderTree = useMemo(() => buildFolderTree(sharedFolders), [sharedFolders]);
   const flatFolders = useMemo(() => flattenTree(folderTree), [folderTree]);
+  const flatSharedFolders = useMemo(() => flattenTree(sharedFolderTree), [sharedFolderTree]);
 
   const templatesByFolder = useMemo(() => {
     const map = new Map<string, CheckTemplate[]>();
     for (const t of templates) {
-      if (isSharedTemplate(t) || !t.folderId) continue;
+      if (!t.folderId) continue;
       const list = map.get(t.folderId) ?? [];
       list.push(t);
       map.set(t.folderId, list);
@@ -181,7 +182,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     return map;
   }, [templates]);
   const rootPersonal = useMemo(() => templates.filter((t) => !isSharedTemplate(t) && !t.folderId), [templates]);
-  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t)), [templates]);
+  const rootSharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t) && !t.folderId), [templates]);
+  const sharedAllTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t)), [templates]);
 
   // Количество шаблонов в поддереве папки — бейдж в списке выбора.
   const subtreeCount = (node: FolderNode): number =>
@@ -204,7 +206,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const onErr = (fallback: string) => (err: any) => toast.error(err?.response?.data?.message ?? fallback);
 
   const createFolderMutation = useMutation({
-    mutationFn: (data: { name: string; parentId: string | null }) => checkTemplatesApi.folders.create(data),
+    mutationFn: (data: { name: string; parentId: string | null; isShared?: boolean }) =>
+      checkTemplatesApi.folders.create(data),
     onSuccess: () => {
       invalidateAll();
       setCreatingIn(null);
@@ -213,7 +216,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     onError: onErr('Не удалось создать папку'),
   });
   const renameFolderMutation = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) => checkTemplatesApi.folders.update(id, { name }),
+    mutationFn: ({ id, name, isShared }: { id: string; name: string; isShared?: boolean }) =>
+      checkTemplatesApi.folders.update(id, { name, isShared }),
     onSuccess: () => {
       invalidateAll();
       setEditingFolderId(null);
@@ -234,8 +238,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     onError: onErr('Не удалось переименовать шаблон'),
   });
   const moveTemplateMutation = useMutation({
-    mutationFn: ({ id, folderId }: { id: string; folderId: string | null }) =>
-      checkTemplatesApi.update(id, { folderId }),
+    mutationFn: ({ id, folderId, shared }: { id: string; folderId: string | null; shared: boolean }) =>
+      checkTemplatesApi.update(id, { folderId, shared }),
     onSuccess: invalidateAll,
     onError: onErr('Не удалось переместить шаблон'),
   });
@@ -245,15 +249,19 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     onError: onErr('Не удалось удалить шаблон'),
   });
 
-  const startCreateFolder = (parentId: string | null) => {
+  const startCreateFolder = (parentId: string | null, isShared = false) => {
     setNewFolderName('');
-    setCreatingIn({ parentId });
+    setCreatingIn({ parentId, isShared });
     if (parentId) setExpanded((prev) => new Set(prev).add(parentId));
   };
   const submitCreateFolder = () => {
     const name = newFolderName.trim();
     if (!name || createFolderMutation.isPending) return;
-    createFolderMutation.mutate({ name, parentId: creatingIn?.parentId ?? null });
+    createFolderMutation.mutate({
+      name,
+      parentId: creatingIn?.parentId ?? null,
+      isShared: creatingIn?.isShared || undefined,
+    });
   };
   const submitRenameFolder = () => {
     const name = folderDraft.trim();
@@ -416,33 +424,45 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                 <span className="truncate text-sm font-medium text-ink">{node.name}</span>
               </button>
               <div className="flex flex-shrink-0 items-center">
-                <IconButton
-                  label="Создать подпапку"
-                  icon={FolderPlus}
-                  size="sm"
-                  onClick={() => startCreateFolder(node.id)}
-                />
-                <IconButton
-                  label="Переименовать папку"
-                  icon={Pencil}
-                  size="sm"
-                  onClick={() => {
-                    setFolderDraft(node.name);
-                    setEditingFolderId(node.id);
-                  }}
-                />
-                <IconButton
-                  label="Удалить папку"
-                  icon={Trash2}
-                  size="sm"
-                  variant="danger"
-                  onClick={() => setDeleteFolderTarget(node)}
-                />
+                {(!node.isShared || canManageShared) && (
+                  <>
+                    <IconButton
+                      label="Создать подпапку"
+                      icon={FolderPlus}
+                      size="sm"
+                      onClick={() => startCreateFolder(node.id, !!node.isShared)}
+                    />
+                    <IconButton
+                      label="Переименовать папку"
+                      icon={Pencil}
+                      size="sm"
+                      onClick={() => {
+                        setFolderDraft(node.name);
+                        setEditingFolderId(node.id);
+                      }}
+                    />
+                    <IconButton
+                      label="Удалить папку"
+                      icon={Trash2}
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setDeleteFolderTarget(node)}
+                    />
+                    {!node.isShared && canManageShared && (
+                      <IconButton
+                        label="Опубликовать папку и содержимое"
+                        icon={FileText}
+                        size="sm"
+                        onClick={() => renameFolderMutation.mutate({ id: node.id, name: node.name, isShared: true })}
+                      />
+                    )}
+                  </>
+                )}
               </div>
             </>
           )}
         </div>
-        {creatingIn?.parentId === node.id && (
+        {creatingIn?.parentId === node.id && creatingIn.isShared === !!node.isShared && (
           <div className="flex items-center gap-1 py-1" style={{ paddingLeft: 8 + (depth + 1) * 18 }}>
             <FolderPlus className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
             {inlineNameEditor(
@@ -463,7 +483,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   // ── Рендер: управление шаблонами (плоский список) ─────────────────────
   const renderManageTemplateRow = (t: CheckTemplate) => {
     const shared = isSharedTemplate(t);
-    const canEdit = !shared || isOwnerClass; // 403 для мастеров на общих — кнопки прячем
+    const canEdit = !shared || canManageShared;
     return (
       <li key={t.id} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-surface-3">
         <FileText className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
@@ -485,24 +505,44 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               </div>
               <p className="text-xs text-ink-3">{templateSummary(t)}</p>
             </div>
-            {/* Перемещение по папкам — только личные (общие вне папок by design) */}
-            {!shared && (
+            {canEdit && (
               <Select
                 size="sm"
                 aria-label={`Папка шаблона «${t.name}»`}
                 value={t.folderId ?? ''}
-                onChange={(e) => moveTemplateMutation.mutate({ id: t.id, folderId: e.target.value || null })}
+                onChange={(e) => {
+                  const folderId = e.target.value || null;
+                  const target = folders.find((f) => f.id === folderId);
+                  const targetShared = folderId ? !!target?.isShared : shared;
+                  moveTemplateMutation.mutate({ id: t.id, folderId, shared: targetShared });
+                }}
                 disabled={moveTemplateMutation.isPending}
                 className="w-32 flex-shrink-0 sm:w-40"
               >
                 <option value="">Без папки</option>
-                {flatFolders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {'  '.repeat(f.depth)}
-                    {f.name}
-                  </option>
-                ))}
+                {!shared &&
+                  flatFolders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {'  '.repeat(f.depth)}
+                      {f.name} · личная
+                    </option>
+                  ))}
+                {canManageShared &&
+                  flatSharedFolders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {'  '.repeat(f.depth)}
+                      {f.name} · общая
+                    </option>
+                  ))}
               </Select>
+            )}
+            {!shared && canManageShared && (
+              <IconButton
+                label="Опубликовать шаблон для команды"
+                icon={FileText}
+                size="sm"
+                onClick={() => moveTemplateMutation.mutate({ id: t.id, folderId: null, shared: true })}
+              />
             )}
             {canEdit && (
               <div className="flex flex-shrink-0 items-center">
@@ -575,7 +615,8 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
             <ul className="-mx-2">
               {folderTree.map((node) => renderPickFolder(node, 0))}
               {rootPersonal.map((t) => renderPickTemplateRow(t, 0))}
-              {sharedTemplates.map((t) => renderPickTemplateRow(t, 0))}
+              {sharedFolderTree.map((node) => renderPickFolder(node, 0))}
+              {rootSharedTemplates.map((t) => renderPickTemplateRow(t, 0))}
             </ul>
           )
         ) : (
@@ -586,11 +627,11 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                 <h3 id="tpl-folders" className="text-xs font-semibold uppercase tracking-wide text-ink-3">
                   Папки
                 </h3>
-                <Button variant="ghost" size="sm" icon={Plus} onClick={() => startCreateFolder(null)}>
+                <Button variant="ghost" size="sm" icon={Plus} onClick={() => startCreateFolder(null, false)}>
                   Новая папка
                 </Button>
               </div>
-              {creatingIn !== null && creatingIn.parentId === null && (
+              {creatingIn !== null && !creatingIn.isShared && creatingIn.parentId === null && (
                 <div className="flex items-center gap-1 py-1 pl-2">
                   <FolderPlus className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
                   {inlineNameEditor(
@@ -607,6 +648,33 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                 <p className="py-2 pl-2 text-xs text-ink-3">Нет папок — создайте первую</p>
               ) : (
                 <ul>{folderTree.map((node) => renderManageFolder(node, 0))}</ul>
+              )}
+              {canManageShared && (
+                <div className="mt-4 border-t border-line pt-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-3">Общие папки</h4>
+                    <Button variant="ghost" size="sm" icon={Plus} onClick={() => startCreateFolder(null, true)}>
+                      Новая общая папка
+                    </Button>
+                  </div>
+                  {creatingIn?.isShared && creatingIn.parentId === null && (
+                    <div className="flex items-center gap-1 py-1 pl-2">
+                      <FolderPlus className="h-4 w-4 flex-shrink-0 text-warn" aria-hidden="true" />
+                      {inlineNameEditor(
+                        newFolderName,
+                        setNewFolderName,
+                        submitCreateFolder,
+                        () => setCreatingIn(null),
+                        createFolderMutation.isPending,
+                        'Название общей папки',
+                      )}
+                    </div>
+                  )}
+                  <ul>{sharedFolderTree.map((node) => renderManageFolder(node, 0))}</ul>
+                  {sharedAllTemplates.length === 0 && sharedFolderTree.length === 0 && (
+                    <p className="py-2 pl-2 text-xs text-ink-3">Общих шаблонов и папок пока нет</p>
+                  )}
+                </div>
               )}
             </section>
 
@@ -661,11 +729,15 @@ interface SaveTemplateModalProps {
 
 export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveTemplateModalProps) {
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const isOwnerClass = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  const canManageShared = hasPermission('templates_shared_manage');
 
   const { folders } = useTemplatesData();
-  const flatFolders = useMemo(() => flattenTree(buildFolderTree(folders)), [folders]);
+  const flatFolders = useMemo(() => flattenTree(buildFolderTree(folders.filter((f) => !!f.isShared))), [folders]);
+  const flatPersonalFolders = useMemo(
+    () => flattenTree(buildFolderTree(folders.filter((f) => !f.isShared))),
+    [folders],
+  );
 
   const [name, setName] = useState('');
   const [folderId, setFolderId] = useState('');
@@ -685,8 +757,7 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
         name: name.trim(),
         services,
         products,
-        // Общий шаблон нельзя поместить в личную папку — сервер отвергнет.
-        folderId: shared ? undefined : folderId || undefined,
+        folderId: folderId || undefined,
         shared: shared || undefined,
       }),
     onSuccess: () => {
@@ -738,25 +809,26 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
             placeholder="Например: ТО-1 (масло + фильтры)"
           />
         </Field>
-        {!shared && (
-          <Field label="Папка" htmlFor="tpl-folder">
-            <Select id="tpl-folder" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
-              <option value="">Без папки</option>
-              {flatFolders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {'  '.repeat(f.depth)}
-                  {f.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        )}
-        {isOwnerClass && (
+        <Field label="Папка" htmlFor="tpl-folder">
+          <Select id="tpl-folder" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
+            <option value="">Без папки</option>
+            {(shared ? flatFolders : flatPersonalFolders).map((f) => (
+              <option key={f.id} value={f.id}>
+                {'  '.repeat(f.depth)}
+                {f.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {canManageShared && (
           <Checkbox
             label="Общий шаблон"
-            description="Виден всем сотрудникам. Хранится вне личных папок; менять его сможет только руководитель."
+            description="Доступен всем сотрудникам; папка выбирается из общего дерева."
             checked={shared}
-            onChange={(e) => setShared(e.target.checked)}
+            onChange={(e) => {
+              setShared(e.target.checked);
+              setFolderId('');
+            }}
             className="w-full rounded-lg border border-line bg-surface-2 px-3 py-2.5"
           />
         )}

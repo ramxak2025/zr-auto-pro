@@ -33,6 +33,7 @@ export class SuppliersBuilder implements ReportBuilder {
     const ids = idsFilter('s.id', ctx.ids, params);
     const dDate = localDate('d.date');
     const pDate = localDate('sp.date');
+    const rDate = localDate('sr.date');
     const { rows } = await this.pool.query(
       `WITH d AS (
          SELECT d.supplier_id,
@@ -54,15 +55,22 @@ export class SuppliersBuilder implements ReportBuilder {
           WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL AND ${pDate} <= $3::date
           GROUP BY sp.supplier_id
        )
+       , r AS (
+         SELECT sr.supplier_id,
+                COALESCE(SUM(sr.total_amount) FILTER (WHERE ${rDate} < $2::date),0) AS before_sum,
+                COALESCE(SUM(sr.total_amount) FILTER (WHERE ${rDate} BETWEEN $2::date AND $3::date),0) AS in_sum
+         FROM supplier_returns sr WHERE sr.tenant_id=$1 AND ${rDate} <= $3::date GROUP BY sr.supplier_id
+       )
        SELECT s.id, s.name, s.phone, s.is_system, s.current_debt,
-              COALESCE(d.before_sum, 0) - COALESCE(p.before_sum, 0) AS debt_start,
+              COALESCE(d.before_sum, 0) - COALESCE(p.before_sum, 0) - COALESCE(r.before_sum, 0) AS debt_start,
               COALESCE(d.cnt, 0) AS deliveries_count,
               COALESCE(d.in_sum, 0) AS deliveries_sum,
               COALESCE(p.paid_sum, 0) AS payments_sum,
-              COALESCE(p.returns_sum, 0) AS returns_sum
+              COALESCE(p.returns_sum, 0) + COALESCE(r.in_sum, 0) AS returns_sum
          FROM suppliers s
          LEFT JOIN d ON d.supplier_id = s.id
          LEFT JOIN p ON p.supplier_id = s.id
+         LEFT JOIN r ON r.supplier_id = s.id
         WHERE s.tenant_id = $1${ids}
         ORDER BY (COALESCE(d.in_sum, 0)) DESC, lower(s.name)`,
       params,
@@ -80,7 +88,12 @@ export class SuppliersBuilder implements ReportBuilder {
       { key: 'deliveriesCount', title: 'Поставок', type: 'int' },
       { key: 'deliveries', title: 'Поставки', type: 'money' },
       { key: 'payments', title: 'Оплаты', type: 'money', hint: 'За вычетом денег, возвращённых поставщиком' },
-      { key: 'returns', title: 'Возвраты поставщику', type: 'money', hint: 'Возврат брака' },
+      {
+        key: 'returns',
+        title: 'Возвраты поставщику',
+        type: 'money',
+        hint: 'Обычные возвраты и возвраты брака; без движения денег',
+      },
       {
         key: 'debtEnd',
         title: 'Долг на конец',
@@ -128,7 +141,11 @@ export class SuppliersBuilder implements ReportBuilder {
     const truncated = all.length > MAIN_ROW_LIMIT;
     const shown = truncated ? all.slice(0, MAIN_ROW_LIMIT) : all;
 
-    const [deliveriesSection, paymentsSection] = await Promise.all([this.deliveries(ctx), this.payments(ctx)]);
+    const [deliveriesSection, paymentsSection, returnsSection] = await Promise.all([
+      this.deliveries(ctx),
+      this.payments(ctx),
+      this.returns(ctx),
+    ]);
 
     return {
       kpis: [
@@ -147,7 +164,7 @@ export class SuppliersBuilder implements ReportBuilder {
       columns,
       rows: shown,
       totals,
-      sections: [deliveriesSection, paymentsSection],
+      sections: [deliveriesSection, paymentsSection, returnsSection],
       truncated,
       notes: [
         'Поставки — по дате поступления, оплаты — по дате платежа; сторнированные платежи и удалённые поставки не считаются.',
@@ -190,6 +207,35 @@ export class SuppliersBuilder implements ReportBuilder {
         comment: [r.purchase_order_id ? 'По заказу поставщику' : null, r.comment].filter(Boolean).join(' · ') || null,
       })),
       emptyText: 'За период поставок не было',
+    };
+  }
+
+  private async returns(ctx: ReportContext): Promise<ReportSection> {
+    const params = baseParams(ctx);
+    const ids = idsFilter('r.supplier_id', ctx.ids, params);
+    const { rows } = await this.pool.query(
+      `SELECT r.id, ${dayKey('r.date')} AS day, s.name AS supplier, r.total_amount, r.reason
+      FROM supplier_returns r JOIN suppliers s ON s.id=r.supplier_id AND s.tenant_id=r.tenant_id
+      WHERE r.tenant_id=$1 AND ${inPeriod('r.date')}${ids} ORDER BY r.date DESC LIMIT ${SECTION_ROW_LIMIT}`,
+      params,
+    );
+    return {
+      key: 'returns',
+      title: 'Возвраты товара за период',
+      columns: [
+        { key: 'date', title: 'Дата', type: 'date' },
+        { key: 'supplier', title: 'Поставщик', type: 'text' },
+        { key: 'amount', title: 'Сумма', type: 'money' },
+        { key: 'reason', title: 'Причина', type: 'text' },
+      ],
+      rows: rows.map((r) => ({
+        _id: r.id,
+        date: String(r.day),
+        supplier: String(r.supplier),
+        amount: num(r.total_amount),
+        reason: r.reason ?? null,
+      })),
+      emptyText: 'За период возвратов не было',
     };
   }
 

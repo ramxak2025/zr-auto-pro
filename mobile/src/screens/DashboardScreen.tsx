@@ -94,6 +94,7 @@ import { formatDayKey } from '../../../shared/utils/formatters';
 import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
 import { useAttendanceRefresh } from '../hooks/useAttendanceRefresh';
 import { updateWidgetData } from '../utils/widgetBridge';
+import { captureDataSession } from '../contexts/dataSession';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -288,17 +289,21 @@ function OwnerHero({ name }: { name: string }) {
   // intentionally OMITTED — the owner dashboard fetches neither a cash-shift nor
   // a bookings query, and adding one solely to feed the widget is disallowed.
   // The widget renders fine with these fields absent.
+  const widgetLease = useMemo(() => captureDataSession(), []);
   const hasV2 = v2.data !== undefined;
   useEffect(() => {
     if (!hasV2) return;
-    updateWidgetData({
-      role: 'owner',
-      revenue: revenueToday,
-      profitToday,
-      checksCount: checksToday,
-      openOrders,
-    });
-  }, [hasV2, revenueToday, checksToday, profitToday, openOrders]);
+    updateWidgetData(
+      {
+        role: 'owner',
+        revenue: revenueToday,
+        profitToday,
+        checksCount: checksToday,
+        openOrders,
+      },
+      widgetLease,
+    );
+  }, [hasV2, revenueToday, checksToday, profitToday, openOrders, widgetLease]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp
@@ -4275,18 +4280,22 @@ function MasterDashboard() {
   // Source: salaryApi.getMy() — the exact numbers the «Сегодня /
   // За месяц» cards below already render. Primitive deps only —
   // `data` gets a fresh reference on every successful refetch.
+  const widgetLease = useMemo(() => captureDataSession(), []);
   const hasSalary = data !== undefined;
   const earningsToday = data?.today ?? 0;
   const earningsMonth = data?.month ?? 0;
   useEffect(() => {
     if (!hasSalary) return;
-    updateWidgetData({
-      role: 'master',
-      earningsToday,
-      earningsMonth,
-      shiftOpen,
-    });
-  }, [hasSalary, earningsToday, earningsMonth, shiftOpen]);
+    updateWidgetData(
+      {
+        role: 'master',
+        earningsToday,
+        earningsMonth,
+        shiftOpen,
+      },
+      widgetLease,
+    );
+  }, [hasSalary, earningsToday, earningsMonth, shiftOpen, widgetLease]);
 
   // Honest, retryable error state (prod incident 2026-06): the old static
   // «Не удалось загрузить данные» banner was a dead end — no retry button,
@@ -4630,6 +4639,7 @@ function CashierShiftCard() {
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
   useAttendanceRefresh();
+  const navigation = useNavigation<any>();
   const { user, refreshUser } = useAuth();
   const { palette } = useThemeMode();
   const queryClient = useQueryClient();
@@ -4749,6 +4759,27 @@ export default function DashboardScreen() {
         {/* 155 — карточка кассира: видна только при включённом режиме
             кассовой смены и только кассиру (внутри сама рендерит null). */}
         <CashierShiftCard />
+        {shiftsEnabled && (
+          <TouchableOpacity
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('NfcAttendance')}
+            style={[
+              styles.nfcAttendanceEntry,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
+            <View style={styles.nfcAttendanceIcon}>
+              <Ionicons name="radio-outline" size={22} color={colors.primary[700]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.nfcAttendanceTitle, { color: palette.text.primary }]}>Рабочая смена</Text>
+              <Text style={[styles.nfcAttendanceSubtitle, { color: palette.text.secondary }]}>
+                Отметиться по NFC-метке
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
         {/* Owner = new 6-block layout. Master = unchanged previous experience. */}
         {isMaster ? (
           <>
@@ -4775,6 +4806,26 @@ export default function DashboardScreen() {
 // ════════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  nfcAttendanceEntry: {
+    minHeight: 68,
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  nfcAttendanceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nfcAttendanceTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  nfcAttendanceSubtitle: { fontSize: fontSize.sm, marginTop: 2 },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[4] },
   // OwnerFreshnessBadge slot — sits above the hero card, right-aligned.

@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
@@ -16,7 +17,21 @@ import { CreatePurchaseOrderDto, PurchaseOrderItemInputDto } from './dto/create-
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
 import { ChangePurchaseOrderDateDto } from './dto/change-purchase-order-date.dto';
-import { dayStartMsInZone, getTenantTimezone, zonedDateKey } from '../common/timezone';
+import { getTenantTimezone } from '../common/timezone';
+import { resolveSupplyDate, isBackdated } from '../suppliers/procurement-date';
+import {
+  cents,
+  positiveQuantity,
+  quantityUnits,
+  replayProcurementRequest,
+  saveProcurementRequest,
+} from '../suppliers/procurement-money';
+import {
+  lockReceiptProducts,
+  purchaseContext,
+  updateReceiptPrices,
+  PreviousPurchase,
+} from '../suppliers/procurement-history';
 
 // Мусор от битых клиентов (' ', 'undefined', 'null') в query.supplierId раньше
 // уходил в uuid-колонку и падал в pg 22P02 «invalid input syntax for type
@@ -24,74 +39,6 @@ import { dayStartMsInZone, getTenantTimezone, zonedDateKey } from '../common/tim
 // Не-UUID трактуем как «фильтр не задан».
 const isUuid = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
-
-// ── Дата поставки (159 + пояс тенанта 157) ───────────────────────────────────
-// Календарный «день поставки» считается в ПОЯСЕ АВТОСЕРВИСА (tenants.timezone),
-// а не по фиксированному московскому сдвигу, который стоял здесь раньше. Для
-// владивостокского сервиса «вчера» из пикера уезжало на сутки: с 00:00 до 09:00
-// по местному времени МСК-день ещё вчерашний, и «сегодня» отвергалось как
-// будущее. Идиома один-в-один с checks.service.ts (правка даты продажи чека):
-// пояс читается ОДИН раз на операцию (getTenantTimezone кеширует) и передаётся
-// вниз параметром, вся арифметика живёт в common/timezone.ts.
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Не глубже 3 лет — защита от опечатки года (2026 → 1026 и т.п.). */
-const SUPPLY_DATE_MAX_PAST_MS = 3 * 365 * DAY_MS;
-
-/** Календарный день (yyyy-MM-dd) момента `ts` в поясе тенанта. */
-const tenantDayOf = (ts: number, tz: string): string => zonedDateKey(new Date(ts), tz);
-
-/** UTC-timestamp начала местного дня `yyyy-MM-dd`. NaN на кривом дне. */
-const tenantDayStartMs = (day: string, tz: string): number => dayStartMsInZone(tz, day);
-
-/**
- * Нормализовать присланную дату поставки в ISO.
- *   • пусто (undefined / null / '') → null — «датировать текущим моментом»
- *     (поведение до 159, обратная совместимость);
- *   • 'YYYY-MM-DD' (веб `input[type=date]` и мобильный пикер) → этот МЕСТНЫЙ
- *     день со ВРЕМЕНЕМ СУТОК от `anchorTs`: у приёмки это «сейчас»
- *     (сегодняшняя дата ⇒ ровно текущий момент), у смены даты — время
- *     исходной приёмки, чтобы позиция документа внутри дня не прыгала;
- *   • полный ISO — как есть, по миллисекундам.
- *
- * Границы (требование владельца): будущее запрещено — потолок «конец сегодня»
- * по МЕСТНОМУ времени; глубже 3 лет — тоже 400, чтобы опечатка не улетела в
- * 1970.
- */
-function resolveSupplyDate(raw: unknown, anchorTs: number, tz: string): string | null {
-  if (raw === undefined || raw === null || raw === '') return null;
-
-  const rawStr = String(raw).trim();
-  let ts: number;
-  if (DATE_ONLY_RE.test(rawStr)) {
-    const dayStart = tenantDayStartMs(rawStr, tz);
-    if (!Number.isFinite(dayStart)) {
-      throw new BadRequestException({ message: 'Некорректная дата поставки' });
-    }
-    ts = dayStart + (anchorTs - tenantDayStartMs(tenantDayOf(anchorTs, tz), tz));
-  } else {
-    ts = new Date(rawStr).getTime();
-  }
-  if (!Number.isFinite(ts)) {
-    throw new BadRequestException({ message: 'Некорректная дата поставки' });
-  }
-
-  const now = Date.now();
-  // Потолок — конец СЕГОДНЯШНЕГО местного дня: «сегодня» в любое время суток
-  // проходит, завтра и дальше — нет.
-  if (ts >= tenantDayStartMs(tenantDayOf(now, tz), tz) + DAY_MS) {
-    throw new BadRequestException({ message: 'Дата поставки не может быть в будущем' });
-  }
-  if (ts < now - SUPPLY_DATE_MAX_PAST_MS) {
-    throw new BadRequestException({ message: 'Дата поставки не может быть старше 3 лет' });
-  }
-  return new Date(ts).toISOString();
-}
-
-/** Задним ли числом датирована поставка (день раньше сегодняшнего у тенанта). */
-const isBackdated = (iso: string | null, tz: string): boolean =>
-  !!iso && tenantDayOf(new Date(iso).getTime(), tz) < tenantDayOf(Date.now(), tz);
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -215,7 +162,28 @@ export class PurchaseOrdersService {
       [id, tenantID],
     );
 
-    return { ...this.mapOrder(rows[0]), items: itemRows.map((r) => this.mapItem(r)) };
+    const context = await purchaseContext(
+      client,
+      tenantID,
+      itemRows.map((r) => r.product_id),
+      null,
+      rows[0].point_id ?? null,
+    );
+    const byProduct = new Map(context.map((c) => [c.productId, c]));
+    const { rows: sourceRows } = await client.query(
+      'SELECT id FROM deliveries WHERE purchase_order_id=$1 AND tenant_id=$2 AND deleted_at IS NULL ORDER BY date, id',
+      [id, tenantID],
+    );
+    const sourceDeliveryIds = sourceRows.map((r) => r.id as string);
+    return {
+      ...this.mapOrder(rows[0]),
+      items: itemRows.map((r) => ({ ...this.mapItem(r), ...byProduct.get(r.product_id) })),
+      sourceDeliveryIds,
+      financialReturnUnavailableReason:
+        itemRows.some((r) => Number(r.received_quantity) > 0) && !sourceDeliveryIds.length
+          ? 'Нет исходной накладной: приёмка учитывала только склад. Финансовый возврат недоступен.'
+          : null,
+    };
   }
 
   // ── create ──────────────────────────────────────────────────────────────
@@ -305,7 +273,8 @@ export class PurchaseOrdersService {
   }
 
   // ── detail ──────────────────────────────────────────────────────────────
-  async getById(id: string, tenantID: string) {
+  async getById(id: string, tenantID: string, pointId: string | null = null) {
+    await assertRowPointForWrite(this.pool, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
     return this.loadDetail(this.pool, id, tenantID);
   }
 
@@ -578,10 +547,21 @@ export class PurchaseOrdersService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      const request = await replayProcurementRequest(client, tenantID, dto.requestId, 'purchase-order-receive', {
+        id,
+        pointId,
+        userID,
+        dto,
+      });
+      if (request.replay !== undefined) {
+        await client.query('COMMIT');
+        return request.replay;
+      }
+      await assertRowPointForWrite(client, 'purchase_orders', id, tenantID, pointId, 'Заказ не найден');
 
       const { rows: poRows } = await client.query(
-        'SELECT id, status, supplier_id FROM purchase_orders WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
-        [id, tenantID],
+        'SELECT id, status, supplier_id FROM purchase_orders WHERE id=$1 AND tenant_id=$2 AND ($3::uuid IS NULL OR point_id=$3) FOR UPDATE',
+        [id, tenantID, pointId],
       );
       if (poRows.length === 0) throw new NotFoundException({ message: 'Заказ не найден' });
       const po = poRows[0];
@@ -595,7 +575,7 @@ export class PurchaseOrdersService {
       // Lock the lines for this order so concurrent receives serialise.
       const { rows: itemRows } = await client.query(
         `SELECT id, product_id, name, quantity, cost_price, received_quantity
-           FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2 FOR UPDATE`,
+           FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2 ORDER BY id FOR UPDATE`,
         [id, tenantID],
       );
       if (itemRows.length === 0) {
@@ -608,15 +588,23 @@ export class PurchaseOrdersService {
       const paymentMode = dto.paymentMode;
       // Per-line purchase-price overrides (only meaningful in the supply flow).
       const priceOverrideById = new Map<string, number>();
+      const sellOverrideById = new Map<string, number>();
       // Lines fed to the supplier-ledger seam after stock is credited.
-      const supplyLines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }> =
-        [];
+      const supplyLines: Array<{
+        productId: string;
+        purchaseOrderItemId: string;
+        quantity: number;
+        price: number;
+        sellPrice?: number;
+        previousPurchase?: PreviousPurchase | null;
+      }> = [];
 
       // Build a map of itemId → delta to receive.
       const deltaById = new Map<string, number>();
       if (dto.items && dto.items.length > 0) {
         for (const reqItem of dto.items) {
-          const delta = parseFloat(String(reqItem.receivedQuantity));
+          positiveQuantity(reqItem.receivedQuantity);
+          const delta = reqItem.receivedQuantity;
           if (!isFinite(delta) || delta <= 0) {
             throw new BadRequestException({ message: 'Количество должно быть положительным' });
           }
@@ -624,8 +612,13 @@ export class PurchaseOrdersService {
             throw new BadRequestException({ message: 'Позиция указана дважды' });
           }
           deltaById.set(reqItem.itemId, delta);
+          if (reqItem.sellPrice !== undefined && reqItem.sellPrice !== null) {
+            cents(reqItem.sellPrice);
+            sellOverrideById.set(reqItem.itemId, reqItem.sellPrice);
+          }
           if (reqItem.purchasePrice !== undefined && reqItem.purchasePrice !== null) {
-            const price = parseFloat(String(reqItem.purchasePrice));
+            cents(reqItem.purchasePrice);
+            const price = reqItem.purchasePrice;
             if (!isFinite(price) || price < 0) {
               throw new BadRequestException({ message: 'Цена закупки не может быть отрицательной' });
             }
@@ -635,7 +628,7 @@ export class PurchaseOrdersService {
       } else {
         // Full receive — outstanding qty of every line.
         for (const row of itemRows) {
-          const outstanding = (parseFloat(row.quantity) || 0) - (parseFloat(row.received_quantity) || 0);
+          const outstanding = Number(quantityUnits(row.quantity) - quantityUnits(row.received_quantity)) / 1000;
           if (outstanding > 0) deltaById.set(row.id, outstanding);
         }
       }
@@ -645,17 +638,31 @@ export class PurchaseOrdersService {
       }
 
       const byId = new Map(itemRows.map((r) => [r.id, r]));
+      for (const itemId of deltaById.keys())
+        if (!byId.has(itemId)) throw new BadRequestException({ message: 'Позиция не найдена в заказе' });
+      const productIds = [...deltaById.keys()].map((itemId) => byId.get(itemId)!.product_id as string);
+      const products = await lockReceiptProducts(client, tenantID, productIds, pointId);
+      const productById = new Map(products.map((p) => [p.id, p]));
+      const context = await purchaseContext(client, tenantID, productIds, receivedAtIso, pointId);
+      const priorById = new Map(context.map((c) => [c.productId, c.previousPurchase]));
+      // Duplicate product lines may carry different costs, but explicit retail
+      // prices for one product must agree rather than depend on request order.
+      const retailByProduct = new Map<string, number>();
+      for (const [itemId, price] of sellOverrideById) {
+        const productId = byId.get(itemId)!.product_id as string;
+        if (retailByProduct.has(productId) && retailByProduct.get(productId) !== price)
+          throw new BadRequestException({ message: 'Разные розничные цены одного товара' });
+        retailByProduct.set(productId, price);
+      }
 
       // Apply each receipt: credit stock via the shared income path, then bump
       // received_quantity on the line.
-      for (const [itemId, delta] of deltaById) {
+      for (const [itemId, delta] of [...deltaById].sort(([a], [b]) => a.localeCompare(b))) {
         const row = byId.get(itemId);
         if (!row) {
           throw new BadRequestException({ message: 'Позиция не найдена в заказе' });
         }
-        const ordered = parseFloat(row.quantity) || 0;
-        const already = parseFloat(row.received_quantity) || 0;
-        if (already + delta > ordered + 1e-9) {
+        if (quantityUnits(row.received_quantity) + positiveQuantity(delta) > quantityUnits(row.quantity)) {
           throw new BadRequestException({ message: `Нельзя принять больше заказанного: ${row.name}` });
         }
 
@@ -679,30 +686,23 @@ export class PurchaseOrdersService {
           pointId,
         });
 
+        await updateReceiptPrices(
+          client,
+          tenantID,
+          userID,
+          productById.get(row.product_id)!,
+          paymentMode ? effectivePrice : undefined,
+          sellOverrideById.get(itemId),
+          backdated,
+        );
         if (paymentMode) {
-          // Owner spec #3: the received purchase price updates the product COST
-          // BASIS (себестоимость — the field motivation 095 + reports read).
-          // Last-cost: the price just paid becomes the new basis. Guarded by
-          // `> 0` so an unpriced/zero line never clobbers a known cost. The
-          // product row is already locked (applyIncomeTx did FOR UPDATE).
-          if (effectivePrice > 0) {
-            // Приёмка ЗАДНИМ ЧИСЛОМ не двигает известную себестоимость: цена
-            // из прошлого не должна затирать более свежий last-cost (то же
-            // решение, что в updateDelivery, 154). Нулевую/неизвестную
-            // себестоимость back-date всё же заполняет — иначе продажа считала
-            // бы COGS=0 и тихо завышала прибыль.
-            await client.query(
-              backdated
-                ? 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3 AND COALESCE(cost_price,0)=0'
-                : 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3',
-              [effectivePrice, row.product_id, tenantID],
-            );
-          }
           supplyLines.push({
             productId: row.product_id,
             purchaseOrderItemId: itemId,
             quantity: delta,
             price: effectivePrice,
+            sellPrice: Number(productById.get(row.product_id)!.sell_price),
+            previousPurchase: priorById.get(row.product_id) ?? null,
           });
         }
 
@@ -717,9 +717,7 @@ export class PurchaseOrdersService {
         'SELECT quantity, received_quantity FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2',
         [id, tenantID],
       );
-      const fullyReceived = afterRows.every(
-        (r) => (parseFloat(r.received_quantity) || 0) + 1e-9 >= (parseFloat(r.quantity) || 0),
-      );
+      const fullyReceived = afterRows.every((r) => quantityUnits(r.received_quantity) >= quantityUnits(r.quantity));
 
       // Дата приёмки: выбранная владельцем (в т.ч. прошедшая) либо now().
       // ordered_at при back-date КЛАМПИТСЯ к дате поставки (LEAST), иначе на
@@ -763,6 +761,7 @@ export class PurchaseOrdersService {
       }
 
       const detail = await this.loadDetail(client, id, tenantID);
+      await saveProcurementRequest(client, tenantID, dto.requestId, request.fingerprint, detail);
       await client.query('COMMIT');
       // Приёмка двигает деньги (долг/оплата поставщику) и склад — в т.ч. за
       // ПРОШЛЫЙ период при back-date. Сбрасываем серверные кэши отчётов тем же
@@ -771,7 +770,8 @@ export class PurchaseOrdersService {
       return detail;
     } catch (err) {
       await client.query('ROLLBACK');
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
       this.logger.error(`Purchase order receive error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {

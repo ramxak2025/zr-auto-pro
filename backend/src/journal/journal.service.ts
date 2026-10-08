@@ -141,6 +141,36 @@ export class JournalService {
       }
     }
 
+    if (!type || type === 'return_to_supplier') {
+      const returnParams: unknown[] = [tenantID];
+      let returnWhere = 'r.tenant_id=$1';
+      returnWhere += pointFilterSql('r', pointId, returnParams);
+      if (params.from) {
+        returnParams.push(params.from);
+        returnWhere += ` AND r.date >= $${returnParams.length}::timestamptz`;
+      }
+      if (params.to) {
+        returnParams.push(params.to);
+        returnWhere += ` AND r.date <= ($${returnParams.length}::date + 1)::timestamptz`;
+      }
+      const { rows } = await this.pool.query(
+        `SELECT r.id, r.date, r.reason, r.total_amount, s.name AS supplier_name
+        FROM supplier_returns r JOIN suppliers s ON s.id=r.supplier_id AND s.tenant_id=r.tenant_id
+        WHERE ${returnWhere} ORDER BY r.date DESC, r.id DESC LIMIT 500`,
+        returnParams,
+      );
+      for (const r of rows)
+        out.push({
+          id: r.id,
+          kind: 'return_to_supplier',
+          occurredAt: r.date,
+          subtitle: r.reason || r.supplier_name,
+          amount: Number(r.total_amount),
+          ...KIND_META.return_to_supplier,
+          payeeName: r.supplier_name,
+        });
+    }
+
     if (!type || type === 'supplier_payment' || type === 'supplier_refund') {
       // 144: сторнированные строки исключены — денег по ним не было.
       const spConds: string[] = ['sp.tenant_id = $1', 'sp.reversed_at IS NULL'];

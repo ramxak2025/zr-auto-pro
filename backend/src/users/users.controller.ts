@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -9,6 +9,9 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetRateDto } from './dto/set-rate.dto';
 import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
+import { Roles } from '../common/guards/roles.guard';
+import { CreateEmployeeDirectionDto } from './dto/create-employee-direction.dto';
+import { UpdateEmployeeDirectionDto } from './dto/update-employee-direction.dto';
 
 // Управление сотрудниками (create / update / delete / reorder /
 // per-product commissions) — под матричным ключом 'user_management' (волна
@@ -46,6 +49,35 @@ export class UsersController {
   @Get('masters')
   getMasters(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
     return this.usersService.getMasters(user, scope === 'all' ? null : actorPointId(user));
+  }
+
+  // Directions are tenant-scoped; list is readable to support schedule/planning grouping.
+  // Mutations remain owner-class only, with a second service-level gate.
+  @Get('directions')
+  listDirections(@CurrentUser() user: JwtPayload) {
+    return this.usersService.listDirections(user);
+  }
+
+  @Roles('director')
+  @Post('directions')
+  createDirection(@CurrentUser() user: JwtPayload, @Body() dto: CreateEmployeeDirectionDto) {
+    return this.usersService.createDirection(user, dto);
+  }
+
+  @Roles('director')
+  @Patch('directions/:id')
+  updateDirection(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateEmployeeDirectionDto,
+  ) {
+    return this.usersService.updateDirection(user, id, dto);
+  }
+
+  @Roles('director')
+  @Delete('directions/:id')
+  deleteDirection(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.deleteDirection(user, id);
   }
 
   // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────

@@ -86,7 +86,7 @@ export class CreateCheckTemplateDto {
   @IsString()
   folderId?: string | null;
 
-  /** true — опубликовать общий шаблон (только руководитель; остальным сервис игнорирует). */
+  /** true — опубликовать шаблон (нужно templates_shared_manage). */
   @IsOptional()
   @IsBoolean()
   shared?: boolean;
@@ -112,6 +112,48 @@ export class UpdateCheckTemplateDto {
   @IsOptional()
   @IsString()
   folderId?: string | null;
+
+  /** true — опубликовать личный шаблон; false для общего отклоняется. */
+  @IsOptional()
+  @IsBoolean()
+  shared?: boolean;
+}
+
+export class CreateCheckTemplateFolderDto {
+  @MaxLength(200, { message: 'Название папки: максимум 200 символов' })
+  @IsString({ message: 'Укажите название папки' })
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  parentId?: string | null;
+
+  @IsOptional()
+  @IsNumber()
+  sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
+}
+
+export class UpdateCheckTemplateFolderDto {
+  @IsOptional()
+  @MaxLength(200, { message: 'Название папки: максимум 200 символов' })
+  @IsString({ message: 'Укажите название папки' })
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  parentId?: string | null;
+
+  @IsOptional()
+  @IsNumber()
+  sort?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isShared?: boolean;
 }
 
 /** Строка услуги в том виде, в каком она лежит в check_templates.services. */

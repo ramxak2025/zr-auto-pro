@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * PurchaseOrderCreateScreen — создание (и редактирование черновика) заказа
  * поставщику.
@@ -271,8 +272,10 @@ export default function PurchaseOrderCreateScreen() {
       return isEdit ? purchaseOrdersApi.update(editId as string, payload) : purchaseOrdersApi.create(payload);
     },
     onSuccess: async (res) => {
+      const continuation = captureDataSession();
       haptic('success');
       await queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
+      if (!continuation.isCurrent()) return;
       const po = res.data;
       queryClient.setQueryData(['purchase-order', po.id], po);
       if (isEdit) {

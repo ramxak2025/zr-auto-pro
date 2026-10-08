@@ -2,8 +2,9 @@
   "expo": {
     "name": "Autexa",
     "slug": "autexa-mobile",
+    "scheme": "autexa",
     "owner": "ramxak",
-    "version": "3.12.0",
+    "version": "3.13.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,6 +19,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.autexa.mobile",
+      "associatedDomains": ["applinks:autexa-cloud.ru", "applinks:autexa.pw"],
       "buildNumber": "3",
       "entitlements": {
         "com.apple.security.application-groups": ["group.com.autexa.mobile"]
@@ -38,6 +40,25 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [
+            { "scheme": "https", "host": "autexa-cloud.ru", "pathPrefix": "/nfc/attendance" },
+            { "scheme": "https", "host": "autexa.pw", "pathPrefix": "/nfc/attendance" }
+          ]
+        },
+        {
+          "action": "NDEF_DISCOVERED",
+          "category": ["DEFAULT"],
+          "data": [
+            { "scheme": "https", "host": "autexa-cloud.ru", "pathPrefix": "/nfc/attendance" },
+            { "scheme": "https", "host": "autexa.pw", "pathPrefix": "/nfc/attendance" }
+          ]
+        }
+      ],
       "versionCode": 15,
       "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
@@ -138,7 +159,16 @@
           "color": "#2563eb"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Autexa использует NFC для отметки начала и окончания рабочей смены по метке автосервиса.",
+          "includeNdefEntitlement": false
+        }
+      ],
+      "expo-secure-store",
+      "./plugins/withNfcIntentManifest"
     ]
   }
 }

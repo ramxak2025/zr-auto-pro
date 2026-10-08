@@ -257,7 +257,8 @@ async function withDatabase(now, run) {
         is_active boolean DEFAULT true, dismissed_at timestamptz, purged_at timestamptz, hidden_from_schedule boolean DEFAULT false,
         hidden_everywhere boolean DEFAULT false, days_off jsonb DEFAULT '[]', permissions jsonb DEFAULT '{}', salary_percent numeric DEFAULT 0,
         product_salary_percent numeric DEFAULT 0, phone text, username text, sort_order integer DEFAULT 0, team text,
-        can_add_expenses boolean DEFAULT false, daily_expense_limit numeric, role_id uuid, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
+        can_add_expenses boolean DEFAULT false, daily_expense_limit numeric, role_id uuid, direction_id uuid, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
+      CREATE TABLE employee_directions (id uuid PRIMARY KEY, tenant_id uuid, name text);
       CREATE TABLE shifts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, tenant_id uuid, point_id uuid, date date,
         opened_at timestamptz DEFAULT now(), closed_at timestamptz, is_auto_closed boolean DEFAULT false, note text);
       CREATE TABLE schedule_entries (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, tenant_id uuid, point_id uuid, date date,

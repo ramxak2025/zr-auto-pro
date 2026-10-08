@@ -4,6 +4,7 @@ import {
   Text,
   TouchableOpacity,
   TextInput,
+  ScrollView,
   StyleSheet,
   RefreshControl,
   Alert,
@@ -28,7 +29,8 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Service, PaginatedResponse } from '../../../shared/types';
+import type { Service, PaginatedResponse, ServiceVisibilityConfig } from '../../../shared/types';
+import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
 
 function formatMoney(v: number) {
   return (
@@ -49,9 +51,19 @@ interface ServiceRowProps {
   onOpen: (s: Service) => void;
   /** ROLE-ONLY: без services_manage строка не открывает редактор (только просмотр). */
   canManage: boolean;
+  onVisibility?: (target: { kind: 'service'; id: string; label: string }) => void;
+  visibilityEnabled: boolean;
   palette: ReturnType<typeof useColors>;
 }
-const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, canManage, palette }: ServiceRowProps) {
+const ServiceRow = React.memo(function ServiceRow({
+  item,
+  index,
+  onOpen,
+  canManage,
+  onVisibility,
+  visibilityEnabled,
+  palette,
+}: ServiceRowProps) {
   return (
     <AnimatedCard
       style={[styles.serviceCard, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
@@ -77,6 +89,20 @@ const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, canMana
             </Text>
           )}
         </View>
+        {canManage && (
+          <TouchableOpacity
+            disabled={!visibilityEnabled}
+            onPress={(event) => {
+              event.stopPropagation();
+              onVisibility?.({ kind: 'service', id: item.id, label: item.name });
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Видимость: ${item.name}`}
+            style={{ padding: spacing[2], opacity: visibilityEnabled ? 1 : 0.45 }}
+          >
+            <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
+          </TouchableOpacity>
+        )}
         <Text style={[styles.servicePrice, { color: palette.accent.primaryText }]}>
           {formatMoney(item.defaultPrice)}
         </Text>
@@ -89,7 +115,7 @@ export default function ServicesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): управление каталогом (создать/редактировать/
   // удалить, менять %+гарантию) — только с services_manage. «Права как в
   // Битрикс24» (2026-07): admin живёт по матрице из /auth/me; superadmin/
@@ -97,6 +123,9 @@ export default function ServicesScreen() {
   // открыт по services_view) + добавление в чек (в Кассе). Бэкенд шлёт 403 на
   // мутации, поэтому кнопки прячем — никаких мёртвых кнопок.
   const canManageServices = hasPermission('services_manage');
+  const isOwner = user?.role === 'director' || user?.role === 'superadmin';
+  const [showAllServices, setShowAllServices] = useState(false);
+  const preferredOnly = !isOwner && !showAllServices;
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -119,11 +148,17 @@ export default function ServicesScreen() {
   // включения её в чек. Используется для авто-создания WarrantyClaim'ов.
   const [warrantyDays, setWarrantyDays] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [visibilityTarget, setVisibilityTarget] = useState<
+    { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string } | null
+  >(null);
+  const [visibilityRoleIds, setVisibilityRoleIds] = useState<string[]>([]);
+  const [visibilityRuleActive, setVisibilityRuleActive] = useState(false);
+  const [folderListOpen, setFolderListOpen] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Service>>({
-    queryKey: ['services', { search, page, limit }],
+    queryKey: ['services', { search, page, limit, preferredOnly }],
     queryFn: async () => {
-      const res = await servicesApi.getAll({ search, page, limit });
+      const res = await servicesApi.getAll({ search, page, limit, preferredOnly });
       return res.data;
     },
     // Per-screen SWR — keep previous page while search/pagination
@@ -131,6 +166,55 @@ export default function ServicesScreen() {
     // back to a skeleton between transitions.
     placeholderData: (prev) => prev,
   });
+
+  const visibilityConfigQuery = useQuery<ServiceVisibilityConfig>({
+    queryKey: ['service-visibility-config'],
+    queryFn: async () => (await servicesApi.getVisibilityConfig()).data,
+    enabled: canManageServices,
+  });
+  const invalidateCatalog = () => {
+    void queryClient.invalidateQueries({ queryKey: ['services'] });
+    void queryClient.invalidateQueries({ queryKey: ['all-services'] });
+    void queryClient.invalidateQueries({ queryKey: ['service-visibility-config'] });
+  };
+  const saveRule = async (reset = false) => {
+    if (!visibilityTarget) return;
+    try {
+      if (reset) {
+        if (visibilityTarget.kind === 'service') await servicesApi.deleteServiceVisibilityRule(visibilityTarget.id);
+        else await servicesApi.deleteCategoryVisibilityRule(visibilityTarget.path);
+      } else {
+        await servicesApi.putVisibilityRule(
+          visibilityTarget.kind === 'service'
+            ? { serviceId: visibilityTarget.id, visibleRoleIds: visibilityRoleIds }
+            : { categoryPath: visibilityTarget.path, visibleRoleIds: visibilityRoleIds },
+        );
+      }
+      invalidateCatalog();
+      setVisibilityTarget(null);
+      haptic('success');
+    } catch {
+      haptic('error');
+      Alert.alert('Ошибка', reset ? 'Не удалось сбросить правило' : 'Не удалось сохранить правило');
+    }
+  };
+  const openVisibility = (target: NonNullable<typeof visibilityTarget>) => {
+    if (!visibilityConfigQuery.isSuccess) {
+      Alert.alert('Не готово', 'Сначала загрузите настройки ролей и папок.');
+      void visibilityConfigQuery.refetch();
+      return;
+    }
+    const canonicalTarget =
+      target.kind === 'category' ? { ...target, path: normalizeServiceCategoryPath(target.path) } : target;
+    const rule = visibilityConfigQuery.data.rules.find((item) =>
+      canonicalTarget.kind === 'service'
+        ? item.serviceId === canonicalTarget.id
+        : normalizeServiceCategoryPath(item.categoryPath ?? '') === canonicalTarget.path,
+    );
+    setVisibilityRoleIds(rule ? [...rule.visibleRoleIds] : []);
+    setVisibilityRuleActive(!!rule);
+    setVisibilityTarget(canonicalTarget);
+  };
 
   const createMutation = useMutation({
     mutationFn: (d: any) => servicesApi.create(d),
@@ -287,9 +371,17 @@ export default function ServicesScreen() {
 
   const renderService = useCallback(
     ({ item, index }: { item: Service; index: number }) => (
-      <ServiceRow item={item} index={index} onOpen={openEdit} canManage={canManageServices} palette={palette} />
+      <ServiceRow
+        item={item}
+        index={index}
+        onOpen={openEdit}
+        canManage={canManageServices}
+        onVisibility={openVisibility}
+        visibilityEnabled={visibilityConfigQuery.isSuccess}
+        palette={palette}
+      />
     ),
-    [openEdit, canManageServices, palette],
+    [openEdit, canManageServices, openVisibility, visibilityConfigQuery.isSuccess, palette],
   );
 
   return (
@@ -306,6 +398,70 @@ export default function ServicesScreen() {
           ) : undefined
         }
       />
+
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: spacing[4],
+          marginHorizontal: spacing[4],
+          paddingVertical: spacing[2],
+        }}
+      >
+        {!isOwner && (
+          <TouchableOpacity
+            onPress={() => {
+              setShowAllServices((value) => !value);
+              setPage(1);
+            }}
+            accessibilityRole="button"
+            accessibilityState={{ selected: showAllServices }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
+              <Ionicons
+                name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
+                size={18}
+                color={colors.primary[600]}
+              />
+              <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                {showAllServices ? 'Показ по роли' : 'Все услуги'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        )}
+        {canManageServices && (
+          <TouchableOpacity
+            disabled={!visibilityConfigQuery.isSuccess}
+            onPress={() => setFolderListOpen(true)}
+            accessibilityRole="button"
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing[1],
+              opacity: visibilityConfigQuery.isSuccess ? 1 : 0.45,
+            }}
+          >
+            <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Папки</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      {canManageServices && visibilityConfigQuery.isError && (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: spacing[4],
+            paddingVertical: spacing[2],
+          }}
+        >
+          <Text style={{ color: colors.red[500], flex: 1 }}>Не удалось загрузить настройки видимости.</Text>
+          <TouchableOpacity onPress={() => void visibilityConfigQuery.refetch()} accessibilityRole="button">
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Breadcrumbs — appear when navigating folders */}
       {!search && activePath.length > 0 && (
@@ -355,9 +511,21 @@ export default function ServicesScreen() {
         <ListSkeleton count={8} />
       ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
         <EmptyState
-          title="Нет услуг"
-          description={canManageServices ? 'Добавьте первую услугу' : 'Каталог услуг пуст'}
-          action={canManageServices ? { label: 'Добавить', onPress: openCreate } : undefined}
+          title={preferredOnly ? 'Нет услуг по вашей роли' : 'Нет услуг'}
+          description={
+            preferredOnly
+              ? 'Покажите полный каталог или попросите владельца настроить видимость.'
+              : canManageServices
+                ? 'Добавьте первую услугу'
+                : 'Каталог услуг пуст'
+          }
+          action={
+            preferredOnly
+              ? { label: 'Показать все услуги', onPress: () => setShowAllServices(true) }
+              : canManageServices
+                ? { label: 'Добавить', onPress: openCreate }
+                : undefined
+          }
         />
       ) : (
         <FlashList
@@ -400,6 +568,19 @@ export default function ServicesScreen() {
                         {count} {count === 1 ? 'услуга' : count < 5 ? 'услуги' : 'услуг'}
                       </Text>
                     </View>
+                    {canManageServices && (
+                      <TouchableOpacity
+                        disabled={!visibilityConfigQuery.isSuccess}
+                        onPress={() =>
+                          openVisibility({ kind: 'category', path: [...activePath, folderName].join('/') })
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={`Видимость папки ${folderName}`}
+                        style={{ padding: spacing[2] }}
+                      >
+                        <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
+                      </TouchableOpacity>
+                    )}
                     <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </TouchableOpacity>
                 ))}
@@ -408,6 +589,113 @@ export default function ServicesScreen() {
           }
         />
       )}
+
+      <Modal visible={folderListOpen} onClose={() => setFolderListOpen(false)} title="Папки услуг">
+        <ScrollView style={{ maxHeight: 420 }}>
+          {(visibilityConfigQuery.data?.categoryPaths ?? []).map((path: string) => (
+            <TouchableOpacity
+              key={path}
+              onPress={() => {
+                setFolderListOpen(false);
+                openVisibility({ kind: 'category', path });
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: spacing[2],
+                paddingVertical: spacing[3],
+                paddingLeft: spacing[2] + Math.max(0, path.split('/').length - 1) * 12,
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: palette.border.subtle,
+              }}
+              accessibilityRole="button"
+            >
+              <Ionicons name="folder-outline" size={18} color={colors.primary[600]} />
+              <Text style={{ flex: 1, color: palette.text.primary }}>{path.split('/').pop()}</Text>
+              <Text style={{ color: palette.text.tertiary, fontSize: fontSize.xs }}>{path}</Text>
+            </TouchableOpacity>
+          ))}
+          {(visibilityConfigQuery.data?.categoryPaths.length ?? 0) === 0 && (
+            <Text style={{ color: palette.text.tertiary, paddingVertical: spacing[3] }}>Папок пока нет</Text>
+          )}
+        </ScrollView>
+      </Modal>
+
+      <Modal visible={!!visibilityTarget} onClose={() => setVisibilityTarget(null)} title="Предпочтительная видимость">
+        <ScrollView style={{ maxHeight: 420 }}>
+          <Text style={{ color: palette.text.secondary, marginBottom: spacing[3] }}>
+            Это влияет только на список каталога. Любую услугу можно добавить в чек.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setVisibilityRuleActive((value) => !value)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing[2],
+              paddingVertical: spacing[2],
+              borderBottomWidth: StyleSheet.hairlineWidth,
+              borderBottomColor: palette.border.subtle,
+            }}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: visibilityRuleActive }}
+          >
+            <Ionicons
+              name={visibilityRuleActive ? 'checkbox' : 'square-outline'}
+              size={20}
+              color={colors.primary[600]}
+            />
+            <Text style={{ fontSize: fontSize.sm, color: palette.text.primary }}>Задать роли для объекта</Text>
+          </TouchableOpacity>
+          {(visibilityConfigQuery.data?.roles ?? []).map((role) => {
+            const checked = visibilityRoleIds.includes(role.id);
+            return (
+              <TouchableOpacity
+                key={role.id}
+                disabled={!visibilityRuleActive}
+                onPress={() =>
+                  setVisibilityRoleIds((current) =>
+                    checked ? current.filter((id) => id !== role.id) : [...current, role.id],
+                  )
+                }
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing[2],
+                  paddingVertical: spacing[2],
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: palette.border.subtle,
+                  opacity: visibilityRuleActive ? 1 : 0.5,
+                }}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked }}
+              >
+                <Ionicons
+                  name={checked ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={checked ? colors.primary[600] : palette.text.tertiary}
+                />
+                <Text style={{ fontSize: fontSize.sm, color: palette.text.primary }}>{role.name}</Text>
+              </TouchableOpacity>
+            );
+          })}
+          {visibilityRuleActive && visibilityRoleIds.length === 0 && (
+            <Text style={{ color: palette.text.tertiary, padding: spacing[2] }}>
+              Пустой список скроет объект для всех сотрудников.
+            </Text>
+          )}
+        </ScrollView>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing[3] }}>
+          <TouchableOpacity disabled={!visibilityConfigQuery.isSuccess} onPress={() => void saveRule(true)}>
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Наследовать / Все роли</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            disabled={!visibilityConfigQuery.isSuccess || !visibilityRuleActive}
+            onPress={() => void saveRule(false)}
+          >
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.bold }}>Сохранить</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
 
       <Modal visible={modalOpen} onClose={closeModal} title={editingService ? 'Редактировать услугу' : 'Новая услуга'}>
         <View style={styles.formField}>

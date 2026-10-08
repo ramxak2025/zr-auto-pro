@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * NotificationSettingsScreen — per-user «Уведомления».
  *
@@ -476,7 +477,9 @@ export default function NotificationSettingsScreen() {
   >({
     mutationFn: async (newMuted) => (await notificationsApi.updatePreferences(newMuted)).data,
     onMutate: async (newMuted) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: QK_PREFS });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const previous = queryClient.getQueryData<NotificationPreferences>(QK_PREFS);
       queryClient.setQueryData<NotificationPreferences>(QK_PREFS, { muted: newMuted });
       return { previous };
@@ -499,7 +502,9 @@ export default function NotificationSettingsScreen() {
   >({
     mutationFn: async (next) => (await notificationsApi.updateSettings(next)).data,
     onMutate: async (next) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: QK_SETTINGS });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const previous = queryClient.getQueryData<NotificationSettings>(QK_SETTINGS);
       queryClient.setQueryData<NotificationSettings>(QK_SETTINGS, next);
       return { previous };

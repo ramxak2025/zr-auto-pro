@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * WorkBoardSettingsScreen — «Настройка колонок» доски заказ-нарядов (091).
  *
@@ -169,7 +170,9 @@ export default function WorkBoardSettingsScreen() {
       await Promise.all(updates);
     },
     onMutate: async (ordered) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: COLUMNS_KEY });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<WorkBoardColumn[]>(COLUMNS_KEY);
       queryClient.setQueryData<WorkBoardColumn[]>(
         COLUMNS_KEY,

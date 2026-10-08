@@ -38,6 +38,7 @@ import { usePosSettings } from '../hooks/usePosSettings';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { KassaButton } from './KassaButton';
 import { getTabDefinitions, type TabDefinition } from './TabBarShared';
+import { createMoreTabPressHandlers, openAccountPicker } from './accountPickerNavigation';
 
 const BAR_HEIGHT = 60;
 const HORIZONTAL_MARGIN = 14;
@@ -262,7 +263,9 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                 );
               }
 
+              const isMore = tab.routeName === 'MoreTab';
               const onPress = () => navigateToIndex(tabIndex);
+              const onLongPress = isMore ? () => openAccountPicker(navigation) : undefined;
 
               return (
                 <TabItem
@@ -271,6 +274,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                   label={tab.label}
                   focused={focused}
                   onPress={onPress}
+                  onLongPress={onLongPress}
                   palette={palette}
                   badgeCount={tab.routeName === 'Checks' ? queuedCheckCount : 0}
                 />
@@ -288,12 +292,15 @@ interface TabItemProps {
   label: string;
   focused: boolean;
   onPress: () => void;
+  onLongPress?: () => void;
   palette: ReturnType<typeof useColors>;
   /** >0 → маленький амбер-бейдж на иконке (офлайн-очередь чеков у Журнала). */
   badgeCount?: number;
 }
 
-function TabItem({ icon, label, focused, onPress, palette, badgeCount = 0 }: TabItemProps) {
+function TabItem({ icon, label, focused, onPress, onLongPress, palette, badgeCount = 0 }: TabItemProps) {
+  const longPressed = React.useRef(false);
+  const handlers = createMoreTabPressHandlers(longPressed, onPress, onLongPress);
   const focusValue = useSharedValue(focused ? 1 : 0);
   React.useEffect(() => {
     focusValue.value = withSpring(focused ? 1 : 0, SPRING_TIGHT);
@@ -309,7 +316,10 @@ function TabItem({ icon, label, focused, onPress, palette, badgeCount = 0 }: Tab
   return (
     <Pressable
       style={styles.item}
-      onPress={onPress}
+      onPressIn={handlers.onPressIn}
+      onLongPress={onLongPress ? handlers.onLongPress : undefined}
+      delayLongPress={360}
+      onPress={handlers.onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: focused }}

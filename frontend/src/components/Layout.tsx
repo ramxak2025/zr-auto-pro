@@ -96,6 +96,12 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'Главная', path: '/dashboard', icon: LayoutDashboard, end: true },
       { label: 'Касса', path: '/checks/new', icon: Receipt, permission: 'checks_create', end: true },
+      {
+        label: 'Записи',
+        path: '/bookings',
+        icon: CalendarDays,
+        anyPermission: ['bookings_access', 'company_manage'],
+      },
       { label: 'Доска работ', path: '/work-board', icon: LayoutGrid, permission: 'checks_view' },
       { label: 'Журнал', path: '/checks', icon: BookOpen, permission: 'checks_view' },
     ],

@@ -14,10 +14,11 @@
  *
  * Только сериализуемый JSON. Android-safe (AsyncStorage кроссплатформенный).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { ownedStorage } from '../contexts/ownedStorage';
 
-const STORAGE_PREFIX = 'pref:';
+import { captureDataSession } from '../contexts/dataSession';
+const STORAGE_PREFIX = 'pref:v2:';
 
 /**
  * Строит per-user ключ настройки. `userId` может быть undefined (гость /
@@ -47,13 +48,16 @@ export function usePreference<T>(key: string, defaultValue: T): UsePreferenceRes
   const defaultRef = useRef(defaultValue);
   defaultRef.current = defaultValue;
 
-  const storageKey = STORAGE_PREFIX + key;
+  const lease = useMemo(() => captureDataSession(), []);
+  const storageKey = lease.key ? STORAGE_PREFIX + key : null;
 
   useEffect(() => {
     let cancelled = false;
-    AsyncStorage.getItem(storageKey)
+    if (!storageKey) return;
+    ownedStorage
+      .get(storageKey, lease)
       .then((raw) => {
-        if (cancelled) return;
+        if (cancelled || !lease.isCurrent()) return;
         if (raw != null) {
           try {
             setValueState(JSON.parse(raw) as T);
@@ -66,30 +70,32 @@ export function usePreference<T>(key: string, defaultValue: T): UsePreferenceRes
         /* read error — остаёмся на дефолте */
       })
       .finally(() => {
-        if (!cancelled) setHydrated(true);
+        if (!cancelled && lease.isCurrent()) setHydrated(true);
       });
     return () => {
       cancelled = true;
     };
     // storageKey — единственная зависимость: смена userId/имени = новый бакет.
-  }, [storageKey]);
+  }, [storageKey, lease]);
 
   const setValue = useCallback(
     (next: T) => {
+      if (!storageKey || !lease.isCurrent()) return;
       setValueState(next);
-      AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {
+      ownedStorage.set(storageKey, JSON.stringify(next), lease).catch(() => {
         /* write error — некритично */
       });
     },
-    [storageKey],
+    [storageKey, lease],
   );
 
   const reset = useCallback(() => {
+    if (!storageKey || !lease.isCurrent()) return;
     setValueState(defaultRef.current);
-    AsyncStorage.removeItem(storageKey).catch(() => {
+    ownedStorage.remove(storageKey, lease).catch(() => {
       /* remove error — некритично */
     });
-  }, [storageKey]);
+  }, [storageKey, lease]);
 
   return { value, setValue, reset, hydrated };
 }

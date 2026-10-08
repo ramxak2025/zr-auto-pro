@@ -1,3 +1,6 @@
+import { captureCheckSaveSession } from './checkCreate/saveSession';
+import { updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
+import { captureDataSession } from '../contexts/dataSession';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
@@ -107,6 +110,7 @@ import type {
 // для этого пикера, редактора и раздела «Ещё → Шаблоны».
 import { FolderPickerList, isSharedTemplate, templateSummary, pluralRu } from './TemplatesScreen';
 import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../shared/validation/phone';
+import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
@@ -409,6 +413,8 @@ const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
 const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
 export default function CheckCreateScreen() {
+  const { user: catalogActor } = useAuth();
+  const catalogOwner = catalogActor?.role === 'director' || catalogActor?.role === 'superadmin';
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -616,6 +622,7 @@ export default function CheckCreateScreen() {
   }, []);
   const [showPlatePicker, setShowPlatePicker] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
+  const [showAllCatalogServices, setShowAllCatalogServices] = useState(false);
   // Пикер товаров — теперь ПОЛНОЭКРАННЫЙ роут `ProductPicker` на корневом
   // стеке (Round 8 #2, Склад-паттерн с папками), а не модалка: локального
   // show-state больше нет, открытие — openProductPicker() ниже.
@@ -868,26 +875,37 @@ export default function CheckCreateScreen() {
     [pointMasterIds],
   );
 
-  const {
-    data: allServices,
-    isError: isErrorServices,
-    fetchStatus: fetchStatusServices,
-    refetch: refetchServices,
-  } = useQuery<Service[]>({
-    queryKey: ['all-services'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 500 });
-      return res.data.data || res.data;
-    },
-    enabled: showServicePicker,
+  const allServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: false }],
+    queryFn: () => loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit })).data, 500),
+    enabled: showServicePicker && (catalogOwner || showAllCatalogServices),
+    staleTime: 60_000,
   });
+  const allServices = allServicesQuery.data;
+  const preferredServicesQuery = useQuery<Service[]>({
+    queryKey: ['all-services', { preferredOnly: true }],
+    queryFn: () =>
+      loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly: true })).data, 500),
+    enabled: showServicePicker && !catalogOwner && !showAllCatalogServices,
+    staleTime: 60_000,
+  });
+  const preferredServices = preferredServicesQuery.data;
+  const activeServicesLoading =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isLoading : allServicesQuery.isLoading;
+  const activeServicesError =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.isError : allServicesQuery.isError;
+  const refetchActiveServices =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
+  const activeServiceFetchStatus =
+    !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.fetchStatus : allServicesQuery.fetchStatus;
+  const selectableServices = !catalogOwner && !showAllCatalogServices ? (preferredServices ?? []) : (allServices ?? []);
 
   // Тот же сетевой сбой, что и в поиске клиента: список услуг не загрузился
   // из-за сети (упал / приостановлен офлайном) → показываем «Нет связи» +
   // «Повторить», а не пустоту / ложное «Ничего не найдено».
   const servicePickerNetworkError =
-    (isErrorServices || fetchStatusServices === 'paused' || !onlineManager.isOnline()) &&
-    (allServices?.length ?? 0) === 0;
+    (activeServicesError || activeServiceFetchStatus === 'paused' || !onlineManager.isOnline()) &&
+    selectableServices.length === 0;
 
   // Products cache for bundle expansion + the oversell guard — CRITICAL
   // screen. Stock numbers must NEVER be stale here: picking a product is
@@ -1080,11 +1098,11 @@ export default function CheckCreateScreen() {
 
   // Filtered services
   const filteredServices = useMemo(() => {
-    const services = allServices || [];
+    const services = selectableServices;
     if (!serviceSearch) return services;
     const q = serviceSearch.toLowerCase();
     return services.filter((s) => s.name.toLowerCase().includes(q));
-  }, [allServices, serviceSearch]);
+  }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────
   const { data: templates = [] } = useQuery<CheckTemplate[]>({
@@ -1103,37 +1121,53 @@ export default function CheckCreateScreen() {
   // Группировка пикера: мои шаблоны по папкам текущего уровня + «Общие»
   // отдельной плоской секцией на корне.
   const myTemplates = useMemo(() => templates.filter((t) => !isSharedTemplate(t)), [templates]);
-  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t)), [templates]);
-  const pickerFolders = useMemo(
-    () =>
-      templateFolders
-        .filter((f) => (f.parentId ?? null) === templatesPickerFolderId)
-        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
-    [templateFolders, templatesPickerFolderId],
-  );
-  const pickerTemplates = useMemo(
-    () => myTemplates.filter((t) => (t.folderId ?? null) === templatesPickerFolderId),
-    [myTemplates, templatesPickerFolderId],
-  );
+  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t) && !t.folderId), [templates]);
   const pickerCurrentFolder = useMemo(
     () => (templatesPickerFolderId ? templateFolders.find((f) => f.id === templatesPickerFolderId) : undefined),
     [templateFolders, templatesPickerFolderId],
   );
+  const pickerFolders = useMemo(
+    () =>
+      templateFolders
+        .filter(
+          (f) =>
+            (f.parentId ?? null) === templatesPickerFolderId &&
+            !!f.isShared === !!(templatesPickerFolderId ? pickerCurrentFolder?.isShared : false),
+        )
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [templateFolders, templatesPickerFolderId, pickerCurrentFolder?.isShared],
+  );
+  const pickerTemplates = useMemo(
+    () =>
+      templates.filter(
+        (t) =>
+          (t.folderId ?? null) === templatesPickerFolderId &&
+          isSharedTemplate(t) === !!(templatesPickerFolderId ? pickerCurrentFolder?.isShared : false),
+      ),
+    [templates, templatesPickerFolderId, pickerCurrentFolder?.isShared],
+  );
   // Счётчик прямых шаблонов в папке — подпись строки папки в пикере.
   const pickerFolderTplCount = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of myTemplates) {
+    for (const t of templates) {
       if (t.folderId) counts.set(t.folderId, (counts.get(t.folderId) ?? 0) + 1);
     }
     return counts;
-  }, [myTemplates]);
+  }, [templates]);
+  const sharedRootFolders = useMemo(
+    () =>
+      templateFolders
+        .filter((f) => f.isShared && !f.parentId)
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [templateFolders],
+  );
 
   // Owner-class (director/admin/superadmin) — зеркало backend
   // OWNER_CLASS_ROLES: правка/удаление ОБЩИХ шаблонов и публикация общих.
   // Отдельный вызов useAuth(): основной деструктур (`authUser`) объявлен ниже
   // по файлу, ссылаться на него отсюда — temporal dead zone.
-  const { user: templatesActor } = useAuth();
-  const isOwnerClassRole = !!templatesActor?.role && ['superadmin', 'director', 'admin'].includes(templatesActor.role);
+  const { hasPermission: hasTemplatePermission } = useAuth();
+  const canManageSharedTemplates = hasTemplatePermission('templates_shared_manage');
 
   const openTemplatesPicker = () => {
     setTemplatesPickerFolderId(null);
@@ -1217,8 +1251,7 @@ export default function CheckCreateScreen() {
             costPrice: l.costPrice,
             quantity: l.quantity,
           })),
-        // Общий шаблон живёт вне личных папок (сервер вернул бы 400).
-        folderId: saveTplShared ? null : saveTplFolderId,
+        folderId: saveTplFolderId,
         shared: saveTplShared || undefined,
       });
       queryClient.invalidateQueries({ queryKey: ['check-templates'] });
@@ -1659,6 +1692,7 @@ export default function CheckCreateScreen() {
    *  tile) the new photo is appended. */
   type ReplaceTarget = { kind: 'pending'; uri: string } | { kind: 'existing'; photo: CheckPhoto };
   const pickAndAddPhoto = async (replace?: ReplaceTarget) => {
+    const operation = captureCheckSaveSession();
     if (!replace) {
       const totalCount = pendingPhotos.length + existingPhotos.length;
       if (totalCount >= MAX_PHOTOS) {
@@ -1668,6 +1702,7 @@ export default function CheckCreateScreen() {
     }
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!operation.isCurrent()) return;
       if (!perm.granted) {
         Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках iPhone.');
         return;
@@ -1677,9 +1712,11 @@ export default function CheckCreateScreen() {
         quality: 1, // we re-compress below — picker quality just controls source decode
         allowsEditing: false,
       });
+      if (!operation.isCurrent()) return;
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       const compressedUri = await compressPhoto(asset.uri);
+      if (!operation.isCurrent()) return;
 
       // ── Replace flows ──
       if (replace?.kind === 'pending') {
@@ -1696,17 +1733,21 @@ export default function CheckCreateScreen() {
           return next;
         });
         try {
-          await checkPhotosApi.upload(replace.photo.checkId, buildPhotoFormData(compressedUri));
-          await checkPhotosApi.remove(replace.photo.id);
+          await operation.photos.upload(replace.photo.checkId, buildPhotoFormData(compressedUri));
+          if (!operation.isCurrent()) return;
+          await operation.photos.remove(replace.photo.id);
+          if (!operation.isCurrent()) return;
           await refetchEditPhotos();
         } catch {
+          if (!operation.isCurrent()) return;
           Alert.alert('Ошибка', 'Не удалось заменить фото');
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(compressedUri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(compressedUri);
+              return next;
+            });
         }
         return;
       }
@@ -1720,22 +1761,26 @@ export default function CheckCreateScreen() {
           return next;
         });
         try {
-          await checkPhotosApi.upload(editId, buildPhotoFormData(compressedUri));
+          await operation.photos.upload(editId, buildPhotoFormData(compressedUri));
+          if (!operation.isCurrent()) return;
           await refetchEditPhotos();
         } catch {
+          if (!operation.isCurrent()) return;
           Alert.alert('Ошибка', 'Не удалось загрузить фото');
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(compressedUri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(compressedUri);
+              return next;
+            });
         }
       } else {
         // Create mode: defer the upload until the check is saved.
         setPendingPhotos((prev) => [...prev, compressedUri]);
       }
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.warn('[CheckCreate] pickAndAddPhoto error', err);
       Alert.alert('Ошибка', 'Не удалось выбрать фото');
     }
@@ -1753,17 +1798,21 @@ export default function CheckCreateScreen() {
   };
 
   const removeExistingPhoto = (photoId: string) => {
+    const operation = captureCheckSaveSession();
     Alert.alert('Удалить фото?', 'Это действие необратимо', [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Удалить',
         style: 'destructive',
         onPress: async () => {
+          if (!operation.isCurrent()) return;
           try {
-            await checkPhotosApi.remove(photoId);
+            await operation.photos.remove(photoId);
+            if (!operation.isCurrent()) return;
             setExistingPhotos((prev) => prev.filter((p) => p.id !== photoId));
             if (editId) refetchEditPhotos();
           } catch {
+            if (!operation.isCurrent()) return;
             Alert.alert('Ошибка', 'Не удалось удалить фото');
           }
         },
@@ -1773,32 +1822,55 @@ export default function CheckCreateScreen() {
 
   /** Upload every pending local URI to a freshly-created check. Returns
    *  the URIs that failed so the caller can offer a retry. */
-  const uploadPendingForCheck = async (checkId: string, uris: string[]): Promise<string[]> => {
-    if (uris.length === 0) return [];
+  const uploadPendingForCheck = async (
+    checkId: string,
+    uris: string[],
+    operation: ReturnType<typeof captureCheckSaveSession>,
+  ): Promise<string[]> => {
+    if (!operation.isCurrent() || uris.length === 0) return uris;
+    // Save references to the already created check before the first upload.
+    // On cancellation the exact owner can inspect/retry them from CheckDetail.
+    await updatePendingCheckPhotos(checkId, operation.data, (previous) => [
+      ...previous,
+      ...uris.filter((uri) => !previous.some((p) => p.uri === uri)).map((uri) => ({ uri, state: 'pending' as const })),
+    ]);
+    if (!operation.isCurrent()) return uris;
     const failed: string[] = [];
     setUploadingUris(new Set(uris));
     try {
-      for (const uri of uris) {
+      for (let index = 0; index < uris.length; index += 1) {
+        const uri = uris[index];
+        if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
+        await updatePendingCheckPhotos(checkId, operation.data, (photos) =>
+          photos.map((p) => (p.uri === uri ? { ...p, state: 'uncertain' } : p)),
+        );
+        if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
         try {
-          await checkPhotosApi.upload(checkId, buildPhotoFormData(uri));
+          await operation.photos.upload(checkId, buildPhotoFormData(uri));
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
+          await updatePendingCheckPhotos(checkId, operation.data, (photos) => photos.filter((p) => p.uri !== uri));
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index + 1)];
         } catch (err) {
+          if (!operation.isCurrent()) return [...failed, ...uris.slice(index)];
           console.warn('[CheckCreate] photo upload failed', err);
           failed.push(uri);
         } finally {
-          setUploadingUris((prev) => {
-            const next = new Set(prev);
-            next.delete(uri);
-            return next;
-          });
+          if (operation.isCurrent())
+            setUploadingUris((prev) => {
+              const next = new Set(prev);
+              next.delete(uri);
+              return next;
+            });
         }
       }
     } finally {
-      setUploadingUris(new Set());
+      if (operation.isCurrent()) setUploadingUris(new Set());
     }
     return failed;
   };
 
   const resetForm = () => {
+    confirmedSavedCheckRef.current = null;
     setClientId('');
     setCarId('');
     setMileage('');
@@ -1824,6 +1896,7 @@ export default function CheckCreateScreen() {
   // isPending alone is not enough because there's a micro-gap between the
   // press and the mutation entering its pending state. The ref closes it.
   const submittingRef = useRef(false);
+  const confirmedSavedCheckRef = useRef<string | null>(null);
 
   // If the previous submit attempt was interrupted (component unmount,
   // navigation pop with mutation still in flight, dev fast-refresh), the
@@ -1954,6 +2027,8 @@ export default function CheckCreateScreen() {
       submittingRef.current = false;
     },
     onSuccess: async (res: any) => {
+      const operation = captureCheckSaveSession();
+      if (!operation.isCurrent()) return;
       submittingRef.current = false;
       // Чек записан — гвард «несохранённое» больше не нужен, иначе навигация
       // после сохранения упёрлась бы в вопрос «выйти без сохранения?».
@@ -2029,6 +2104,7 @@ export default function CheckCreateScreen() {
       // BEFORE resetting the form / navigating away.
       const uris = pendingPhotos;
       const savedCheckId: string | undefined = editId || res?.data?.id;
+      if (!editId && savedCheckId) confirmedSavedCheckRef.current = savedCheckId;
 
       // ── Order-mode: припарковать новый заказ-наряд на доску ───────────────
       // С Round 14 ПАРКОВКУ ГАРАНТИРУЕТ СЕРВЕР: create() при включённом режиме
@@ -2039,9 +2115,10 @@ export default function CheckCreateScreen() {
       // же инвалидирует кеш доски, на которую мастер вернётся по goBack().
       // Best-effort / fire-and-forget: заказ уже сохранён и уже на доске.
       if (orderMode && !editId && savedCheckId && firstBoardColumnKey) {
-        checksApi
+        operation.checks
           .setWorkStatus(savedCheckId, firstBoardColumnKey)
           .then(() => {
+            if (!operation.isCurrent()) return;
             queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });
           })
           .catch(() => {
@@ -2059,9 +2136,10 @@ export default function CheckCreateScreen() {
       if (!editId && savedCheckId && clientId && !selectedClient?.isRetail) {
         const accrueClientId = clientId;
         const accrueCheckId = savedCheckId;
-        loyaltyApi
+        operation.loyalty
           .accrue({ clientId: accrueClientId, checkId: accrueCheckId })
           .then(() => {
+            if (!operation.isCurrent()) return;
             // Обновляем баланс бонусов клиента, если карточка уже открыта.
             queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', accrueClientId] });
           })
@@ -2072,19 +2150,29 @@ export default function CheckCreateScreen() {
 
       if (!editId && savedCheckId && uris.length > 0) {
         try {
-          const failed = await uploadPendingForCheck(savedCheckId, uris);
+          const failed = await uploadPendingForCheck(savedCheckId, uris, operation);
+          if (!operation.isCurrent()) return;
           if (failed.length > 0) {
             Alert.alert(
               'Чек создан, но не все фото загружены',
-              `Не удалось загрузить ${failed.length} из ${uris.length} фото. Повторить попытку?`,
+              `Не удалось подтвердить ${failed.length} из ${uris.length} фото. Перед повтором проверьте галерею чека: фото могло уже загрузиться. Повторить?`,
               [
                 { text: 'Отмена', style: 'cancel' },
                 {
                   text: 'Повторить',
                   onPress: async () => {
-                    const stillFailed = await uploadPendingForCheck(savedCheckId, failed);
-                    if (stillFailed.length > 0) {
-                      Alert.alert('Ошибка', 'Не удалось загрузить часть фото. Откройте чек и добавьте их вручную.');
+                    if (!operation.isCurrent()) return;
+                    try {
+                      const stillFailed = await uploadPendingForCheck(savedCheckId, failed, operation);
+                      if (!operation.isCurrent()) return;
+                      if (stillFailed.length > 0)
+                        Alert.alert('Ошибка', 'Не удалось загрузить часть фото. Повтор сохранён в карточке чека.');
+                    } catch {
+                      if (operation.isCurrent())
+                        Alert.alert(
+                          'Чек уже создан',
+                          'Не удалось сохранить фото для повтора. Добавьте их вручную к существующему чеку.',
+                        );
                     }
                   },
                 },
@@ -2092,7 +2180,13 @@ export default function CheckCreateScreen() {
             );
           }
         } catch (err) {
+          if (!operation.isCurrent()) return;
           console.warn('[CheckCreate] pending photo upload sequence failed', err);
+          Alert.alert(
+            'Чек создан',
+            'Не удалось сохранить фото для повтора. Чек уже существует: повторное нажатие «Сохранить» откроет его карточку. Фото потребуется добавить вручную.',
+          );
+          return;
         }
       }
 
@@ -2105,15 +2199,18 @@ export default function CheckCreateScreen() {
       // блокировки навигации.
       if (isFromBooking && bookingId && !editId && savedCheckId) {
         try {
-          await bookingsApi.convert(bookingId, { checkId: savedCheckId });
+          await operation.bookings.convert(bookingId, { checkId: savedCheckId });
+          if (!operation.isCurrent()) return;
           queryClient.invalidateQueries({ queryKey: ['bookings'] });
           queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
         } catch (err) {
+          if (!operation.isCurrent()) return;
           // eslint-disable-next-line no-console
           console.warn('[CheckCreate] booking convert failed (check saved anyway)', err);
         }
       }
 
+      if (!operation.isCurrent()) return;
       if (isFromBooking) {
         // Приход проведён → возвращаем пользователя на список Записей (запись
         // теперь в «Прошедших» со ссылкой на чек). Явная навигация надёжнее
@@ -2128,7 +2225,12 @@ export default function CheckCreateScreen() {
           // деталку (она перезапросит свежие итоги на mount). Отложенный/
           // обычный edit — тихий goBack, как прежде (draft-поток не трогаем).
           Alert.alert('Чек обновлён', 'Изменения сохранены, всё пересчитано.', [
-            { text: 'OK', onPress: () => navigation.goBack() },
+            {
+              text: 'OK',
+              onPress: () => {
+                if (operation.isCurrent()) navigation.goBack();
+              },
+            },
           ]);
         } else {
           navigation.goBack();
@@ -2185,6 +2287,7 @@ export default function CheckCreateScreen() {
    * (притворяться, что чек сохранён, нельзя).
    */
   const stashCheckOffline = async (payload: any, err: any) => {
+    const lease = captureDataSession();
     // Время чека = момент ПРОБИТИЯ. Живой сабмит поля `date` не несёт и сервер
     // штампует now() при приёме запроса — но офлайн-очередь может пролежать до
     // возврата сети, и тогда now() был бы временем ДОСТАВКИ. Поэтому именно
@@ -2202,9 +2305,10 @@ export default function CheckCreateScreen() {
           : undefined,
       });
     } catch {
-      showSubmitError(err);
+      if (lease.isCurrent()) showSubmitError(err);
       return;
     }
+    if (!lease.isCurrent()) return;
     // Чек лежит на телефоне и уйдёт сам — это сохранение, а не потеря:
     // гвард «несохранённое» снимаем, чтобы уход с экрана не спрашивал.
     markFormSaved();
@@ -2438,6 +2542,12 @@ export default function CheckCreateScreen() {
     // Double-fire guard: bail out immediately if a submission is already
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
+    // A photo/storage failure after confirmed creation must never create a
+    // second financial document when the user presses Save again.
+    if (!editId && confirmedSavedCheckRef.current) {
+      navigation.navigate('CheckDetail', { id: confirmedSavedCheckRef.current });
+      return;
+    }
 
     // СБП-успех проводит чек как электронную (карточную) оплату через
     // `paymentOverride='card'`. Без override поведение байт-в-байт прежнее —
@@ -4751,6 +4861,28 @@ export default function CheckCreateScreen() {
 
       {/* Service Picker */}
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
+        {!catalogOwner && (
+          <TouchableOpacity
+            onPress={() => setShowAllCatalogServices((value) => !value)}
+            style={{
+              paddingVertical: spacing[2],
+              alignSelf: 'flex-start',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing[1],
+            }}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name={showAllCatalogServices ? 'eye-off-outline' : 'eye-outline'}
+              size={18}
+              color={colors.primary[600]}
+            />
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+              {showAllCatalogServices ? 'Показывать по роли' : 'Показать все услуги'}
+            </Text>
+          </TouchableOpacity>
+        )}
         <TextInput
           value={serviceSearch}
           onChangeText={setServiceSearch}
@@ -4780,7 +4912,11 @@ export default function CheckCreateScreen() {
               <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
             </TouchableOpacity>
           ))}
-          {servicePickerNetworkError ? (
+          {activeServicesLoading && filteredServices.length === 0 ? (
+            <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] }}>
+              <ActivityIndicator color={colors.primary[500]} size="small" />
+            </View>
+          ) : servicePickerNetworkError ? (
             <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] }}>
               <Ionicons name="cloud-offline-outline" size={22} color={palette.text.tertiary} />
               <Text style={{ textAlign: 'center', color: palette.text.tertiary }}>
@@ -4789,17 +4925,26 @@ export default function CheckCreateScreen() {
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
-                  void refetchServices();
+                  void refetchActiveServices();
                 }}
                 activeOpacity={0.8}
               >
                 <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
               </TouchableOpacity>
             </View>
-          ) : serviceSearch && filteredServices.length === 0 ? (
-            <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[4] }}>
-              Ничего не найдено
-            </Text>
+          ) : !activeServicesError && !activeServicesLoading && filteredServices.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[4], gap: spacing[2] }}>
+              <Text style={{ textAlign: 'center', color: palette.text.tertiary }}>
+                {serviceSearch ? 'Ничего не найдено' : 'Нет услуг по вашей роли'}
+              </Text>
+              {!serviceSearch && !showAllCatalogServices && !catalogOwner && (
+                <TouchableOpacity onPress={() => setShowAllCatalogServices(true)} accessibilityRole="button">
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                    Показать все услуги
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ) : null}
         </ScrollView>
       </Modal>
@@ -4884,6 +5029,34 @@ export default function CheckCreateScreen() {
               </TouchableOpacity>
             );
           })}
+          {templatesPickerFolderId === null &&
+            sharedRootFolders.map((folder) => {
+              const count = pickerFolderTplCount.get(folder.id) ?? 0;
+              return (
+                <TouchableOpacity
+                  key={folder.id}
+                  style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+                  onPress={() => {
+                    haptic('tap');
+                    setTemplatesPickerFolderId(folder.id);
+                  }}
+                  activeOpacity={0.6}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 }}>
+                    <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.pickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {folder.name}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
+                        {count > 0 ? `${count} ${pluralRu(count, 'шаблон', 'шаблона', 'шаблонов')}` : 'Общая папка'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              );
+            })}
 
           {/* Мои шаблоны текущего уровня */}
           {pickerTemplates.map((tpl) => (
@@ -4917,17 +5090,19 @@ export default function CheckCreateScreen() {
                     Применить
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() =>
-                    Alert.alert('Удалить шаблон?', tpl.name, [
-                      { text: 'Отмена', style: 'cancel' },
-                      { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
-                    ])
-                  }
-                  hitSlop={8}
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-                </TouchableOpacity>
+                {(!isSharedTemplate(tpl) || canManageSharedTemplates) && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert('Удалить шаблон?', tpl.name, [
+                        { text: 'Отмена', style: 'cancel' },
+                        { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
+                      ])
+                    }
+                    hitSlop={8}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           ))}
@@ -5013,7 +5188,7 @@ export default function CheckCreateScreen() {
                       </Text>
                     </TouchableOpacity>
                     {/* Удаление общего — только owner-class (сервер всё равно 403). */}
-                    {isOwnerClassRole && (
+                    {canManageSharedTemplates && (
                       <TouchableOpacity
                         onPress={() =>
                           Alert.alert('Удалить шаблон?', tpl.name, [
@@ -5051,7 +5226,7 @@ export default function CheckCreateScreen() {
             onSubmitEditing={submitSaveTemplate}
           />
 
-          {isOwnerClassRole && (
+          {canManageSharedTemplates && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text.primary }}>Общий шаблон</Text>
@@ -5064,48 +5239,47 @@ export default function CheckCreateScreen() {
                 onValueChange={(v) => {
                   haptic('select');
                   setSaveTplShared(v);
+                  setSaveTplFolderId(null);
                 }}
                 trackColor={{ true: colors.primary[500] }}
               />
             </View>
           )}
 
-          {!saveTplShared && (
-            <View>
-              <TouchableOpacity
-                style={[styles.tplFolderRow, { borderColor: palette.border.subtle }]}
-                onPress={() => {
-                  haptic('tap');
-                  setSaveTplFolderOpen((o) => !o);
-                }}
-                activeOpacity={0.6}
-              >
-                <Ionicons name="folder-open-outline" size={16} color={colors.primary[500]} />
-                <Text style={{ flex: 1, fontSize: 14, color: palette.text.primary }} numberOfLines={1}>
-                  {saveTplFolderId
-                    ? (templateFolders.find((f) => f.id === saveTplFolderId)?.name ?? 'Папка')
-                    : 'Без папки'}
-                </Text>
-                <Ionicons
-                  name={saveTplFolderOpen ? 'chevron-up' : 'chevron-down'}
-                  size={15}
-                  color={palette.text.tertiary}
-                />
-              </TouchableOpacity>
-              {/* Инлайн-список вместо второй модалки: вложенные RN Modal на
+          <View>
+            <TouchableOpacity
+              style={[styles.tplFolderRow, { borderColor: palette.border.subtle }]}
+              onPress={() => {
+                haptic('tap');
+                setSaveTplFolderOpen((o) => !o);
+              }}
+              activeOpacity={0.6}
+            >
+              <Ionicons name="folder-open-outline" size={16} color={colors.primary[500]} />
+              <Text style={{ flex: 1, fontSize: 14, color: palette.text.primary }} numberOfLines={1}>
+                {saveTplFolderId
+                  ? (templateFolders.find((f) => f.id === saveTplFolderId)?.name ?? 'Папка')
+                  : 'Без папки'}
+              </Text>
+              <Ionicons
+                name={saveTplFolderOpen ? 'chevron-up' : 'chevron-down'}
+                size={15}
+                color={palette.text.tertiary}
+              />
+            </TouchableOpacity>
+            {/* Инлайн-список вместо второй модалки: вложенные RN Modal на
                   iOS ведут себя непредсказуемо. */}
-              {saveTplFolderOpen && (
-                <FolderPickerList
-                  folders={templateFolders}
-                  selectedId={saveTplFolderId}
-                  onSelect={(id) => {
-                    setSaveTplFolderId(id);
-                    setSaveTplFolderOpen(false);
-                  }}
-                />
-              )}
-            </View>
-          )}
+            {saveTplFolderOpen && (
+              <FolderPickerList
+                folders={templateFolders.filter((f) => !!f.isShared === saveTplShared)}
+                selectedId={saveTplFolderId}
+                onSelect={(id) => {
+                  setSaveTplFolderId(id);
+                  setSaveTplFolderOpen(false);
+                }}
+              />
+            )}
+          </View>
 
           <TouchableOpacity
             style={[styles.tplSaveBtn, { opacity: saveTplName.trim() && !savingTemplate ? 1 : 0.5 }]}

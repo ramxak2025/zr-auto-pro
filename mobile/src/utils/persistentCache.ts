@@ -22,9 +22,10 @@
 import { InteractionManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import { AUTH_SESSION_ENVELOPE_KEY, LEGACY_TOKEN_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
+import { authAccounts } from '../contexts/authAccountStorage';
+import { activeAccount } from '../contexts/accountRegistry';
+import { dataOwnerKey, userDataOwner, type DataOwner } from '../contexts/dataSession';
 import {
-  STORAGE_PREFIX,
   PERSISTED_KEYS,
   VARIANT_CAPS,
   capInfinitePages,
@@ -33,7 +34,6 @@ import {
   isEmptyCollection,
   isPersisted,
   isSearchVolatile,
-  storageKey,
   type PersistedKey,
   type StoredEntry,
   type StoredPairResult,
@@ -109,7 +109,19 @@ const PRIORITY_HYDRATE_BUDGET_MS = 80;
  * behind the clear).
  */
 let persistenceGeneration = 0;
-let persistenceBoundaryReady = true;
+let persistenceBoundaryReady = false;
+let activePrefix: string | null = null;
+let sessionBoundaryInitialized = false;
+export const SCOPED_CACHE_PREFIX = 'rqcache:v2:';
+export const cachePrefixFor = (owner: DataOwner) => SCOPED_CACHE_PREFIX + dataOwnerKey(owner) + ':';
+
+/** Synchronous invalidation; existing per-owner durable data stays intact. */
+export function setPersistentCacheSession(owner: DataOwner | null): void {
+  sessionBoundaryInitialized = true;
+  persistenceGeneration += 1;
+  activePrefix = owner ? cachePrefixFor(owner) : null;
+  persistenceBoundaryReady = owner !== null;
+}
 let storageMutationTail: Promise<void> = Promise.resolve();
 
 function enqueueStorageMutation(mutation: () => Promise<void>): Promise<void> {
@@ -131,103 +143,49 @@ function isWritableGeneration(generation: number): boolean {
 interface HydrationAuthSession {
   token: string | null;
   identity: string;
-  /** Which durable source decided the session (envelope wins over legacy). */
-  source: 'v1' | 'legacy';
-  /**
-   * true — durable-сессию не удалось ПРОЧИТАТЬ (reject нативного getItem).
-   * Это НЕ сигнал «разлогинен»: гидрацию пропускаем, но rqcache-слоты на
-   * диске не трогаем — иначе транзиентный сбой моста/storage стирал бы весь
-   * instant-boot кэш живого пользователя.
-   */
+  prefix: string | null;
   unreadable?: boolean;
 }
 
-/**
- * Resolve the authoritative cold-start auth owner. A valid v1 envelope wins
- * over every legacy mirror, including a logged-out tombstone over a stale A
- * token. Legacy is used only as the migration fallback for a missing/corrupt
- * envelope.
- *
- * The identity deliberately EXCLUDES `envelope.generation`: authSessionStorage
- * bumps it on every write, including the bootstrap `/auth/me` revalidation
- * that re-commits the SAME token+user. Folding it in made a successful `/me`
- * mid-hydration look like a session change and silently aborted the rest of
- * background hydration (+ its GC pass) for the very same user. A user switch
- * always changes the token, and every in-process transition (login / logout /
- * 401 / impersonation) synchronously bumps `persistenceGeneration` via
- * `clearPersistentCache` — so the token alone is the durable identity.
- */
-function resolveHydrationAuthSession(rawEnvelope: string | null, legacyToken: string | null): HydrationAuthSession {
-  const envelope = parseAuthSessionEnvelope(rawEnvelope);
-  if (envelope) {
-    return {
-      token: envelope.token,
-      identity: JSON.stringify(['v1', envelope.token]),
-      source: 'v1',
-    };
-  }
-  return { token: legacyToken, identity: JSON.stringify(['legacy', legacyToken]), source: 'legacy' };
-}
-
 async function readHydrationAuthSession(): Promise<HydrationAuthSession> {
-  let readFailed = false;
-  const guardedGet = (key: string) =>
-    AsyncStorage.getItem(key).catch(() => {
-      readFailed = true;
-      return null;
-    });
-  const [rawEnvelope, legacyToken] = await Promise.all([
-    guardedGet(AUTH_SESSION_ENVELOPE_KEY),
-    guardedGet(LEGACY_TOKEN_KEY),
-  ]);
-  const session = resolveHydrationAuthSession(rawEnvelope, legacyToken);
-  // Валидный конверт авторитетен — сбой чтения одного лишь legacy-зеркала не
-  // важен. Во всех остальных случаях reject любого из чтений означает
-  // «состояние сессии неизвестно», а НЕ «разлогинен»: вызывающие обязаны
-  // пропустить гидрацию и не трогать диск.
-  if (session.source !== 'v1' && readFailed) {
-    return { ...session, identity: JSON.stringify(['unreadable']), unreadable: true };
+  try {
+    const registry = await authAccounts.read();
+    const account = activeAccount(registry);
+    const session = account?.session;
+    const owner = session?.user ? userDataOwner(session.user) : null;
+    const prefix = owner ? cachePrefixFor(owner) : null;
+    return {
+      token: session?.token ?? null,
+      identity: JSON.stringify([registry.generation, account?.id ?? null, prefix]),
+      prefix,
+    };
+  } catch {
+    return { token: null, identity: 'unreadable', prefix: null, unreadable: true };
   }
-  return session;
 }
 
 /** Re-check the authoritative durable session after a hydration await/yield. */
 async function isCurrentHydrationSession(generation: number, session: HydrationAuthSession): Promise<boolean> {
   if (!isCurrentGeneration(generation)) return false;
   const currentSession = await readHydrationAuthSession();
-  return isCurrentGeneration(generation) && currentSession.identity === session.identity;
+  return (
+    isCurrentGeneration(generation) &&
+    currentSession.identity === session.identity &&
+    (!sessionBoundaryInitialized || currentSession.prefix === activePrefix)
+  );
 }
 
 /**
  * Tenant-isolation gate shared by both hydration passes. Returns the durable
  * auth identity, or `null` if the previous session is over — in which case it
- * also flushes orphaned `rqcache:v1:*` entries so a half-completed logout
- * (process killed mid-clear) can't leak A's data into B's next login.
+ * retains inactive/legacy entries without hydrating them as the new owner.
  */
 async function readTokenOrFlush(generation: number): Promise<HydrationAuthSession | null> {
   const session = await readHydrationAuthSession();
-  if (!isCurrentGeneration(generation)) return null;
-
-  // Сбой ЧТЕНИЯ auth-ключей ≠ «разлогинен»: без достоверного знания о сессии
-  // гидрацию пропускаем, но НИЧЕГО не удаляем — стирать rqcache-слоты можно
-  // только по успешно прочитанному logged-out состоянию.
-  if (session.unreadable) return null;
-
-  if (!session.token) {
-    const allKeys = await AsyncStorage.getAllKeys();
-    if (!isCurrentGeneration(generation)) return null;
-
-    const orphanKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
-    if (orphanKeys.length > 0) {
-      // Serialize this GC with normal writes/clear too. If a session boundary
-      // wins before the queued removal starts, the stale cleanup is a no-op.
-      await enqueueStorageMutation(async () => {
-        if (!isWritableGeneration(generation)) return;
-        await AsyncStorage.multiRemove(orphanKeys);
-      }).catch(() => {});
-    }
-    return null;
-  }
+  if (!isCurrentGeneration(generation) || session.unreadable || !session.token || !session.prefix) return null;
+  if (sessionBoundaryInitialized && session.prefix !== activePrefix) return null;
+  // Inactive accounts keep their cache. Unscoped v1 cache is never hydrated
+  // under a new registry because its owner/point cannot be established.
   return session;
 }
 
@@ -257,7 +215,7 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     const allKeys = await AsyncStorage.getAllKeys();
     if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
 
-    const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
+    const ourKeys = allKeys.filter((k) => k.startsWith(authSession.prefix!));
     if (ourKeys.length === 0) return;
     const pairs = await AsyncStorage.multiGet(ourKeys);
     if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
@@ -361,9 +319,9 @@ export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
       // serialises as e.g. `rqcache:v1:["dashboard-v2",...]` — a cheap string
       // prefix test per priority key avoids parsing every slot.
       const priorityStorageKeys = allKeys.filter((k) => {
-        if (!k.startsWith(STORAGE_PREFIX)) return false;
+        if (!k.startsWith(authSession.prefix!)) return false;
         for (const pk of PRIORITY_KEY_SET) {
-          if (k.startsWith(`${STORAGE_PREFIX}["${pk}"`)) return true;
+          if (k.startsWith(`${authSession.prefix}["${pk}"`)) return true;
         }
         return false;
       });
@@ -483,7 +441,8 @@ export function attachPersistence(qc: QueryClient): () => void {
     // persist as before.
     if (isEmptyCollection(query.state.data)) return;
 
-    const skey = storageKey(query.queryKey);
+    if (!activePrefix || !persistenceBoundaryReady) return;
+    const skey = activePrefix + JSON.stringify(query.queryKey);
     const existing = pendingWrites.get(skey);
     if (existing) clearTimeout(existing.timer);
     pendingWrites.set(skey, {
@@ -503,34 +462,33 @@ export function attachPersistence(qc: QueryClient): () => void {
   };
 }
 
-/**
- * ПОЛНАЯ ОЧИСТКА ДИСКА — вызывается на логауте, на 401 и при входе (перед тем
- * как записать новую сессию).
- *
- * ЭТО ЖЕ И БАРЬЕР МЕЖДУ ФИЛИАЛАМИ (163). Слоты на диске пишутся БЕЗ сегмента
- * филиала: ключ слота — это query-key, а филиал живёт в токене. Смена филиала
- * теперь = выход и новый вход, то есть проходит РОВНО через эту функцию, и
- * второго механизма (прежний clearPersistentCacheForPointSwitch) не нужно.
- * Сегментировать сотню ключей филиалом мы сознательно не стали: пропустить
- * один ключ = показать владельцу чужую выручку на холодном старте, а цена
- * полной очистки — одна медленная загрузка после редкого входа.
- */
+/** Explicit clear of the currently captured scope; other saved accounts
+ * remain on disk. Logical switches use setPersistentCacheSession instead. */
 export function clearPersistentCache(): Promise<void> {
-  // This executes before the function returns, invalidating every old-session
-  // debounce / InteractionManager callback immediately. The queued clear then
-  // waits for any AsyncStorage.setItem that had already started.
+  const prefix = activePrefix;
   persistenceGeneration += 1;
   const clearGeneration = persistenceGeneration;
   persistenceBoundaryReady = false;
-
   return enqueueStorageMutation(async () => {
-    const allKeys = await AsyncStorage.getAllKeys();
-    const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
-    if (ourKeys.length > 0) await AsyncStorage.multiRemove(ourKeys);
+    if (prefix) {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const ourKeys = allKeys.filter((k) => k.startsWith(prefix));
+      if (ourKeys.length) await AsyncStorage.multiRemove(ourKeys);
+    }
+    if (isCurrentGeneration(clearGeneration)) persistenceBoundaryReady = !!activePrefix;
+  });
+}
 
-    // Two clears may overlap. Only the newest successful boundary can admit
-    // current-generation cache writes again.
-    if (isCurrentGeneration(clearGeneration)) persistenceBoundaryReady = true;
+/** Explicit account removal only. Serialized with native writes; namespaces
+ * shared by another saved identity are excluded by the caller. */
+export function clearAccountCaches(owners: readonly DataOwner[], isCurrent: () => boolean): Promise<void> {
+  const prefixes = owners.map(cachePrefixFor);
+  return enqueueStorageMutation(async () => {
+    if (!isCurrent()) return;
+    const keys = await AsyncStorage.getAllKeys();
+    if (!isCurrent()) return;
+    const owned = keys.filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
+    if (owned.length) await AsyncStorage.multiRemove(owned);
   });
 }
 

@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 /**
  * ExpensesScreen — расходы предприятия с разрезами по периодам,
  * категориям и сотрудникам.
@@ -861,7 +862,9 @@ export default function ExpensesScreen() {
     mutationFn: ({ id, ...patch }: { id: string; approvalRequired?: boolean; isRecurring?: boolean }) =>
       expensesApi.updateCategory(id, patch),
     onMutate: async ({ id, ...patch }) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: ['expense-categories'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<ExpenseCategoryRow[]>(['expense-categories']);
       queryClient.setQueryData<ExpenseCategoryRow[]>(['expense-categories'], (old) =>
         old ? old.map((c) => (c.id === id ? { ...c, ...patch } : c)) : old,

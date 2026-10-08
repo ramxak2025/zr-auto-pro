@@ -75,6 +75,10 @@ const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн–Вс
 const CELL_W = 44;
 
+function directionGroupId(user: User): string | null {
+  return user.directionId ?? null;
+}
+
 interface MyStats {
   totalScheduled: number;
   totalWorked: number;
@@ -599,6 +603,15 @@ export default function SchedulePage() {
 
     // Sort by backend sortOrder field
     activeUsers.sort((a, b) => {
+      const aUnassigned = directionGroupId(a) === null;
+      const bUnassigned = directionGroupId(b) === null;
+      if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
+      const ad = a.directionName?.trim() || '\uffff';
+      const bd = b.directionName?.trim() || '\uffff';
+      const groupOrder = ad.localeCompare(bd, 'ru');
+      if (groupOrder !== 0) return groupOrder;
+      const groupIdOrder = (directionGroupId(a) ?? '').localeCompare(directionGroupId(b) ?? '');
+      if (groupIdOrder !== 0) return groupIdOrder;
       const ao = (a as any).sortOrder ?? 0;
       const bo = (b as any).sortOrder ?? 0;
       if (ao !== bo) return ao - bo;
@@ -608,12 +621,44 @@ export default function SchedulePage() {
     return activeUsers;
   }, [entries, users]);
 
+  const scheduleDisplayRows = useMemo(() => {
+    const displayRows: Array<
+      { kind: 'direction'; key: string; label: string } | { kind: 'employee'; key: string; user: User; index: number }
+    > = [];
+    let previousGroupId: string | null = null;
+    let hasPreviousGroup = false;
+    scheduleUsers.forEach((user, index) => {
+      const groupId = directionGroupId(user);
+      if (!hasPreviousGroup || groupId !== previousGroupId) {
+        displayRows.push({
+          kind: 'direction',
+          key: `direction:${JSON.stringify([groupId === null, groupId])}`,
+          label: groupId === null ? 'Без направления' : user.directionName || 'Без названия',
+        });
+        previousGroupId = groupId;
+        hasPreviousGroup = true;
+      }
+      displayRows.push({ kind: 'employee', key: `employee:${user.id}`, user, index });
+    });
+    return displayRows;
+  }, [scheduleUsers]);
+
   const moveMasterToPosition = (userId: string, newPos: number) => {
-    const current = scheduleUsers.map((u) => u.id);
-    const idx = current.indexOf(userId);
-    if (idx < 0 || idx === newPos) return;
-    const reordered = current.filter((id) => id !== userId);
-    reordered.splice(newPos, 0, userId);
+    const moved = scheduleUsers.find((u) => u.id === userId);
+    if (!moved) return;
+    const groupUsers = scheduleUsers.filter((u) => directionGroupId(u) === directionGroupId(moved));
+    const currentGroupPos = groupUsers.findIndex((u) => u.id === userId);
+    if (newPos < 0 || newPos >= groupUsers.length || currentGroupPos === newPos) return;
+    const reorderedGroup = groupUsers.map((u) => u.id);
+    reorderedGroup.splice(currentGroupPos, 1);
+    reorderedGroup.splice(newPos, 0, userId);
+    const groupPositions = scheduleUsers.flatMap((u, index) =>
+      directionGroupId(u) === directionGroupId(moved) ? [index] : [],
+    );
+    const reordered = scheduleUsers.map((u) => u.id);
+    groupPositions.forEach((position, index) => {
+      reordered[position] = reorderedGroup[index];
+    });
     updateOrderMutation.mutate(reordered);
     setReorderDialog(null);
   };
@@ -1046,7 +1091,17 @@ export default function SchedulePage() {
                 <div className="flex h-10 items-center border-b border-line bg-surface-2 px-3 text-xs font-semibold text-ink-3">
                   Сотрудник
                 </div>
-                {scheduleUsers.map((u, idx) => {
+                {scheduleDisplayRows.map((row) => {
+                  if (row.kind === 'direction')
+                    return (
+                      <div
+                        key={row.key}
+                        className="flex h-8 items-center border-b border-line bg-surface-2 px-3 text-2xs font-semibold uppercase tracking-wide text-ink-3"
+                      >
+                        {row.label}
+                      </div>
+                    );
+                  const { user: u, index: idx } = row;
                   const rowInner = (
                     <>
                       <span className="w-4 flex-shrink-0 text-2xs font-semibold tabular-nums text-ink-4">
@@ -1058,17 +1113,25 @@ export default function SchedulePage() {
                   );
                   return canEdit ? (
                     <button
-                      key={u.id}
+                      key={row.key}
                       type="button"
-                      onClick={() => setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
-                      title="Изменить позицию в списке"
-                      aria-label={`${u.fullName} — изменить позицию в списке`}
+                      onClick={() =>
+                        setReorderDialog({
+                          userId: u.id,
+                          name: u.fullName,
+                          currentIndex: scheduleUsers
+                            .filter((item) => directionGroupId(item) === directionGroupId(u))
+                            .findIndex((item) => item.id === u.id),
+                        })
+                      }
+                      title="Изменить позицию внутри направления"
+                      aria-label={`${u.fullName} — изменить позицию в направлении ${u.directionName || 'Без направления'}`}
                       className="flex h-12 w-full items-center gap-2 border-b border-line px-3 text-left transition-colors hover:bg-surface-2 focus-ring"
                     >
                       {rowInner}
                     </button>
                   ) : (
-                    <div key={u.id} className="flex h-12 items-center gap-2 border-b border-line px-3">
+                    <div key={row.key} className="flex h-12 items-center gap-2 border-b border-line px-3">
                       {rowInner}
                     </div>
                   );
@@ -1108,62 +1171,74 @@ export default function SchedulePage() {
                     })}
                   </div>
 
-                  {scheduleUsers.map((u) => (
-                    <div key={u.id} className="flex h-12 border-b border-line">
-                      {monthDays.map((day) => {
-                        const dateStr = format(day, 'yyyy-MM-dd');
-                        const entry = entryMap[u.id]?.[dateStr];
-                        const cell = scheduleCellOf(entry, dateStr, todayKey);
-                        const dayOfWeek = getDay(day);
-                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                        const isTodayDate = dateStr === todayKey;
-                        const def = cell ? SCHEDULE_STATUS[cell.kind] : null;
-                        const CellIcon = def?.icon;
-                        const statusLabel = def
-                          ? cell?.time
-                            ? `${def.label}, с ${cell.time}`
-                            : def.label
-                          : isWeekend
-                            ? 'выходной день, записи нет'
-                            : 'записи нет';
-                        const content = def ? (
-                          <span
-                            className={cn('flex h-8 w-8 items-center justify-center rounded-lg border', def.cell)}
-                            aria-hidden="true"
-                          >
-                            {cell?.time ? (
-                              <span className="text-2xs font-semibold tabular-nums">{cell.time}</span>
-                            ) : (
-                              CellIcon && <CellIcon className="h-4 w-4" />
-                            )}
-                          </span>
-                        ) : null;
-                        const cellCls = cn(
-                          'flex h-12 w-11 flex-shrink-0 items-center justify-center border-r border-line last:border-r-0',
-                          isTodayDate ? 'bg-accent-soft/40' : isWeekend ? 'bg-surface-2/70' : '',
-                        );
-                        return canEdit ? (
-                          <button
-                            key={dateStr}
-                            type="button"
-                            onClick={() => setQuickPopup({ userId: u.id, date: dateStr, entry })}
-                            aria-label={`${u.fullName}, ${format(day, 'd MMMM', { locale: ru })}: ${statusLabel}`}
-                            title={statusLabel}
-                            className={cn(
-                              cellCls,
-                              'transition-colors hover:bg-accent-soft/60 focus-ring focus-visible:z-10',
-                            )}
-                          >
-                            {content}
-                          </button>
-                        ) : (
-                          <div key={dateStr} className={cellCls} title={statusLabel}>
-                            {content}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
+                  {scheduleDisplayRows.map((row) => {
+                    if (row.kind === 'direction')
+                      return (
+                        <div
+                          key={row.key}
+                          className="h-8 border-b border-line bg-surface-2"
+                          style={{ minWidth: `${monthDays.length * CELL_W}px` }}
+                          aria-hidden="true"
+                        />
+                      );
+                    const u = row.user;
+                    return (
+                      <div key={row.key} className="flex h-12 border-b border-line">
+                        {monthDays.map((day) => {
+                          const dateStr = format(day, 'yyyy-MM-dd');
+                          const entry = entryMap[u.id]?.[dateStr];
+                          const cell = scheduleCellOf(entry, dateStr, todayKey);
+                          const dayOfWeek = getDay(day);
+                          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                          const isTodayDate = dateStr === todayKey;
+                          const def = cell ? SCHEDULE_STATUS[cell.kind] : null;
+                          const CellIcon = def?.icon;
+                          const statusLabel = def
+                            ? cell?.time
+                              ? `${def.label}, с ${cell.time}`
+                              : def.label
+                            : isWeekend
+                              ? 'выходной день, записи нет'
+                              : 'записи нет';
+                          const content = def ? (
+                            <span
+                              className={cn('flex h-8 w-8 items-center justify-center rounded-lg border', def.cell)}
+                              aria-hidden="true"
+                            >
+                              {cell?.time ? (
+                                <span className="text-2xs font-semibold tabular-nums">{cell.time}</span>
+                              ) : (
+                                CellIcon && <CellIcon className="h-4 w-4" />
+                              )}
+                            </span>
+                          ) : null;
+                          const cellCls = cn(
+                            'flex h-12 w-11 flex-shrink-0 items-center justify-center border-r border-line last:border-r-0',
+                            isTodayDate ? 'bg-accent-soft/40' : isWeekend ? 'bg-surface-2/70' : '',
+                          );
+                          return canEdit ? (
+                            <button
+                              key={dateStr}
+                              type="button"
+                              onClick={() => setQuickPopup({ userId: u.id, date: dateStr, entry })}
+                              aria-label={`${u.fullName}, ${format(day, 'd MMMM', { locale: ru })}: ${statusLabel}`}
+                              title={statusLabel}
+                              className={cn(
+                                cellCls,
+                                'transition-colors hover:bg-accent-soft/60 focus-ring focus-visible:z-10',
+                              )}
+                            >
+                              {content}
+                            </button>
+                          ) : (
+                            <div key={dateStr} className={cellCls} title={statusLabel}>
+                              {content}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1339,26 +1414,31 @@ export default function SchedulePage() {
       >
         {reorderDialog && (
           <ul className="-mx-2 max-h-[50vh] overflow-y-auto">
-            {scheduleUsers.map((_, idx) => {
-              const current = idx === reorderDialog.currentIndex;
-              return (
-                <li key={idx}>
-                  <button
-                    type="button"
-                    onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
-                    disabled={current || updateOrderMutation.isPending}
-                    aria-current={current ? 'true' : undefined}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-ring',
-                      current ? 'bg-accent-soft font-medium text-accent-text' : 'text-ink hover:bg-surface-3',
-                    )}
-                  >
-                    <span className="w-6 text-xs font-semibold tabular-nums text-ink-3">{idx + 1}</span>
-                    <span className="flex-1">{current ? 'Текущая позиция' : `Переместить на ${idx + 1}`}</span>
-                  </button>
-                </li>
-              );
-            })}
+            {scheduleUsers
+              .filter((item) => {
+                const target = scheduleUsers.find((u) => u.id === reorderDialog.userId);
+                return !!target && directionGroupId(item) === directionGroupId(target);
+              })
+              .map((_, idx) => {
+                const current = idx === reorderDialog.currentIndex;
+                return (
+                  <li key={idx}>
+                    <button
+                      type="button"
+                      onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
+                      disabled={current || updateOrderMutation.isPending}
+                      aria-current={current ? 'true' : undefined}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-ring',
+                        current ? 'bg-accent-soft font-medium text-accent-text' : 'text-ink hover:bg-surface-3',
+                      )}
+                    >
+                      <span className="w-6 text-xs font-semibold tabular-nums text-ink-3">{idx + 1}</span>
+                      <span className="flex-1">{current ? 'Текущая позиция' : `Переместить на ${idx + 1}`}</span>
+                    </button>
+                  </li>
+                );
+              })}
           </ul>
         )}
       </Modal>

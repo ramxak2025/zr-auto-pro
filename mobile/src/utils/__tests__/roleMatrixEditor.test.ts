@@ -30,10 +30,10 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
     expect([...groupKeys].sort()).toEqual([...EDITOR_PERMISSION_KEYS].sort()); // полное покрытие
   });
 
-  it('54 канонических ключа − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 50 строк редактора', () => {
+  it('55 канонических ключей − 4 свёрнутых охвата = 51 строка редактора', () => {
     // 145: +suppliers_payments_correct («Корректирует платежи поставщикам»).
     // 148: +checks_edit_assigned_order («Изменяет назначенный заказ»).
-    expect(ALL_MATRIX_ROWS).toHaveLength(50);
+    expect(ALL_MATRIX_ROWS).toHaveLength(51);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_view_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_edit_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'cashflow_view_all')).toBe(false);
@@ -57,6 +57,7 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
       'Управление',
       'Настройки',
       'База знаний',
+      'Шаблоны',
     ]);
   });
 });
@@ -102,6 +103,7 @@ describe('draftFromMatrix — fail-closed чтение', () => {
     expect(draft.scopes.cashflow_view).toBe('own');
     expect(draft.bools.checks_create).toBe(true);
     expect(draft.bools.user_management).toBe(true);
+    draft.bools.templates_shared_manage = true;
     expect(draft.bools.checks_delete).toBe(false);
   });
 });
@@ -150,6 +152,7 @@ describe('matrixFromDraft — полная материализация и round
         'schedule',
         'settings',
         'suppliers',
+        'templates',
         'warehouse',
       ].sort(),
     );
@@ -163,6 +166,7 @@ describe('matrixFromDraft — полная материализация и round
     expect(matrix.settings?.manage).toBe(false);
     expect(matrix.settings?.company).toBe(false);
     expect(matrix.knowledge?.manage).toBe(false);
+    expect(matrix.templates?.manageShared).toBe(false);
   });
 });
 

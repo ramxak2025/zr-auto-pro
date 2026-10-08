@@ -43,7 +43,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { purchaseOrdersApi } from '../api/services';
+import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
@@ -61,6 +61,10 @@ import {
 } from './purchaseOrders/purchaseOrderHelpers';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { roundQty } from '../utils/units';
+import type { PurchaseReceiptContext } from '../../../shared/types';
+import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
+import { sumReceiptLineCents } from '../../../shared/utils/procurementInput';
+import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 
 type PayMode = 'debt' | 'paid';
 
@@ -78,6 +82,8 @@ interface LineState {
   qty: number;
   /** Закупочная цена за единицу (free-text, чтобы 12.5 печаталось чисто). */
   priceText: string;
+  /** Current retail price; blank preserves it, while "0" is an explicit zero. */
+  sellPriceText: string;
   /** Включена ли строка в накладную (можно «вычеркнуть» лишнюю). */
   included: boolean;
 }
@@ -85,6 +91,14 @@ interface LineState {
 function parsePrice(t: string): number {
   const n = parseFloat((t || '').replace(',', '.'));
   return Number.isNaN(n) || n < 0 ? 0 : n;
+}
+
+function parseOptionalPrice(t: string): number | null {
+  const value = t.trim();
+  if (!value) return null;
+  if (!/^(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(value)) return null;
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 export default function SupplyReceiveScreen() {
@@ -96,6 +110,7 @@ export default function SupplyReceiveScreen() {
   // Заказы поставщикам / приёмка — ключ suppliers_manage (сервер: мутации
   // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
   const { hasPermission } = useAuth();
+  const recovery = useProcurementRecovery({ operation: 'po-receive', sourceId: route.params.orderId });
   const canWrite = hasPermission('suppliers_manage');
   // Пояс автосервиса: им меряются «сегодня» и «задним числом» для даты поставки
   // (сервер считает границы суток в нём же — миграция 157).
@@ -154,6 +169,7 @@ export default function SupplyReceiveScreen() {
       init[it.id] = {
         qty: out,
         priceText: it.costPrice ? String(it.costPrice) : '',
+        sellPriceText: it.sellPrice == null ? '' : String(it.sellPrice),
         included: out > 0,
       };
     }
@@ -161,11 +177,37 @@ export default function SupplyReceiveScreen() {
     setSeeded(true);
   }, [items, seeded]);
 
+  const supplyDateKey = toSupplyDateStr(supplyDate);
+  const receiptContextsQuery = useQuery<PurchaseReceiptContext[]>({
+    queryKey: [
+      'supplier-purchase-context',
+      items
+        .map((item) => item.productId)
+        .sort()
+        .join(','),
+      supplyDateKey,
+    ],
+    enabled: items.length > 0 && !!supplyDateKey,
+    queryFn: async () => {
+      const ids = [...new Set(items.map((item) => item.productId))];
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += 200) chunks.push(ids.slice(i, i + 200));
+      const result: PurchaseReceiptContext[] = [];
+      for (const chunk of chunks) result.push(...(await suppliersApi.purchaseContext(chunk, supplyDateKey)).data);
+      return result;
+    },
+    staleTime: 0,
+  });
+  const receiptContextByProduct = useMemo(
+    () => new Map((receiptContextsQuery.data ?? []).map((context) => [context.productId, context])),
+    [receiptContextsQuery.data],
+  );
+
   // Ручной ввод количества. QtyInput уже клампит к [0; max] и округляет до
   // 3 знаков (дробная приёмка «0.5 м»), здесь фиксируем валидное значение.
   const setQty = useCallback((id: string, n: number) => {
     setLineState((s) => {
-      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
+      const cur = s[id] ?? { qty: 0, priceText: '', sellPriceText: '', included: true };
       return { ...s, [id]: { ...cur, qty: n } };
     });
   }, []);
@@ -173,7 +215,7 @@ export default function SupplyReceiveScreen() {
   const stepQty = useCallback((id: string, delta: number, max: number) => {
     haptic('tap');
     setLineState((s) => {
-      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
+      const cur = s[id] ?? { qty: 0, priceText: '', sellPriceText: '', included: true };
       const n = Math.max(0, Math.min(max, roundQty(cur.qty + delta)));
       return { ...s, [id]: { ...cur, qty: n } };
     });
@@ -182,15 +224,22 @@ export default function SupplyReceiveScreen() {
   const setPrice = useCallback((id: string, value: string) => {
     const cleaned = value.replace(/[^0-9.,]/g, '');
     setLineState((s) => {
-      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
+      const cur = s[id] ?? { qty: 0, priceText: '', sellPriceText: '', included: true };
       return { ...s, [id]: { ...cur, priceText: cleaned } };
+    });
+  }, []);
+
+  const setSellPrice = useCallback((id: string, value: string) => {
+    setLineState((s) => {
+      const cur = s[id] ?? { qty: 0, priceText: '', sellPriceText: '', included: true };
+      return { ...s, [id]: { ...cur, sellPriceText: value } };
     });
   }, []);
 
   const toggleIncluded = useCallback((id: string) => {
     haptic('select');
     setLineState((s) => {
-      const cur = s[id] ?? { qty: 0, priceText: '', included: false };
+      const cur = s[id] ?? { qty: 0, priceText: '', sellPriceText: '', included: false };
       return { ...s, [id]: { ...cur, included: !cur.included } };
     });
   }, []);
@@ -201,7 +250,7 @@ export default function SupplyReceiveScreen() {
       items.reduce((sum, it) => {
         const ls = lineState[it.id];
         if (!ls || !ls.included) return sum;
-        return sum + ls.qty * parsePrice(ls.priceText);
+        return sum + sumReceiptLineCents([{ quantity: ls.qty, unitPrice: parsePrice(ls.priceText) }]) / 100;
       }, 0),
     [items, lineState],
   );
@@ -216,29 +265,35 @@ export default function SupplyReceiveScreen() {
           const max = outstandingQty(it.quantity, it.receivedQuantity);
           const qty = Math.min(max, ls.qty);
           if (qty <= 0) return null;
-          return { itemId: it.id, receivedQuantity: qty, purchasePrice: parsePrice(ls.priceText) };
+          const sellPrice = ls.sellPriceText.trim() === '' ? undefined : parsePrice(ls.sellPriceText);
+          return {
+            itemId: it.id,
+            receivedQuantity: qty,
+            purchasePrice: parsePrice(ls.priceText),
+            ...(sellPrice !== undefined ? { sellPrice } : {}),
+          };
         })
-        .filter((x): x is { itemId: string; receivedQuantity: number; purchasePrice: number } => x != null),
+        .filter(
+          (x): x is { itemId: string; receivedQuantity: number; purchasePrice: number; sellPrice?: number } =>
+            x != null,
+        ),
     [items, lineState],
   );
 
   const receiveMutation = useMutation({
     mutationFn: (vars: {
       mode: PayMode;
-      items: Array<{ itemId: string; receivedQuantity: number; purchasePrice: number }>;
+      items: Array<{ itemId: string; receivedQuantity: number; purchasePrice: number; sellPrice?: number }>;
       receivedAt?: string;
+      requestId?: string;
     }) =>
-      purchaseOrdersApi.receive(orderId, {
-        items: vars.items,
-        paymentMode: vars.mode,
-        // 'YYYY-MM-DD' — сервер трактует его как календарный день по МСК.
-        // Шлём ТОЛЬКО осознанно выбранную дату: «сегодня» на устройстве в
-        // дальневосточном поясе может быть «завтра» по МСК, и сервер честно
-        // отклонил бы такую приёмку как будущую. Без поля сервер ставит свой
-        // текущий момент — ровно прежнее поведение.
-        ...(vars.receivedAt ? { receivedAt: vars.receivedAt } : {}),
-      }),
+      recovery.execute<PurchaseOrder>(
+        { operation: 'po-receive', sourceId: orderId },
+        { items: vars.items, paymentMode: vars.mode, ...(vars.receivedAt ? { receivedAt: vars.receivedAt } : {}) },
+      ),
     onSuccess: (res, vars) => {
+      if (!recovery.owns(res)) return;
+
       haptic('success');
       const updated = res.data;
       // Мгновенно обновляем карточку заказа (новые «получено» + статус).
@@ -260,7 +315,10 @@ export default function SupplyReceiveScreen() {
         queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
       }
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
-      const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
+      const total =
+        sumReceiptLineCents(
+          vars.items.map((line) => ({ quantity: line.receivedQuantity, unitPrice: line.purchasePrice })),
+        ) / 100;
       const dateSuffix = backdated ? ` Дата поставки — ${formatSupplyDate(supplyDate)}.` : '';
       navigation.goBack();
       // Сообщение после возврата — глобальный Alert поверх предыдущего экрана.
@@ -274,10 +332,23 @@ export default function SupplyReceiveScreen() {
       }, 350);
     },
     onError: (err: any) => {
+      if (!recovery.owns(err)) return;
+      if (err?.code) {
+        Alert.alert('Операция не подтверждена', err.message);
+        return;
+      }
+
       haptic('error');
       const raw = err?.response?.data?.message;
       const msg = Array.isArray(raw) ? raw.join('\n') : raw || 'Не удалось принять поставку. Попробуйте ещё раз.';
-      Alert.alert('Ошибка приёмки', String(msg));
+      const status = err?.response?.status;
+      const detail =
+        status === 409
+          ? `${msg}\nПроверьте историю поставок: сервер уже обработал другой вариант этой операции.`
+          : /остат|склад|количеств/i.test(String(msg))
+            ? `${msg}\nОстаток мог измениться. Обновите данные перед новой приёмкой.`
+            : `${msg}\nПоля сохранены; повторите отправку с теми же значениями.`;
+      Alert.alert('Ошибка приёмки', detail);
     },
   });
 
@@ -294,11 +365,25 @@ export default function SupplyReceiveScreen() {
   };
 
   const confirmReceive = () => {
-    if (!pendingMode) return;
+    if (!pendingMode || receiveMutation.isPending) return;
+    const invalidRetailItem = items.find((it) => {
+      const ls = lineState[it.id];
+      return (
+        !!ls?.included && ls.qty > 0 && ls.sellPriceText.trim() !== '' && parseOptionalPrice(ls.sellPriceText) === null
+      );
+    });
+    if (invalidRetailItem) {
+      Alert.alert(
+        'Проверьте розничную цену',
+        `Укажите корректное число для «${invalidRetailItem.name}» или очистите поле, чтобы сохранить текущую цену.`,
+      );
+      return;
+    }
+    const receivedAt = backdated ? toSupplyDateStr(supplyDate) : undefined;
     receiveMutation.mutate({
       mode: pendingMode,
       items: payloadItems,
-      receivedAt: backdated ? toSupplyDateStr(supplyDate) : undefined,
+      receivedAt,
     });
   };
 
@@ -319,6 +404,22 @@ export default function SupplyReceiveScreen() {
   if (!po) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            for (const key of [
+              'purchase-order',
+              'purchase-orders',
+              'supplier',
+              'supplier-deliveries',
+              'suppliers',
+              'products',
+              'stock-movements',
+            ])
+              void queryClient.invalidateQueries({ queryKey: [key] });
+            Alert.alert('Готово', 'Результат приёмки восстановлен');
+          }}
+        />
         <IosScreenHeader title="Приёмка поставки" onBack={() => navigation.goBack()} />
         {isError ? (
           <QueryErrorState
@@ -337,6 +438,22 @@ export default function SupplyReceiveScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ProcurementRecoveryPanel
+        recovery={recovery}
+        onRecovered={() => {
+          for (const key of [
+            'purchase-order',
+            'purchase-orders',
+            'supplier',
+            'supplier-deliveries',
+            'suppliers',
+            'products',
+            'stock-movements',
+          ])
+            void queryClient.invalidateQueries({ queryKey: [key] });
+          Alert.alert('Готово', 'Результат приёмки восстановлен');
+        }}
+      />
       <IosScreenHeader
         title={po.supplierName || 'Приёмка'}
         subtitle="Приёмка поставки по заказу"
@@ -398,6 +515,17 @@ export default function SupplyReceiveScreen() {
             <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
           </View>
         </TouchableOpacity>
+        {receiptContextsQuery.isError ? (
+          <TouchableOpacity
+            onPress={() => void receiptContextsQuery.refetch()}
+            style={[styles.hintCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
+            <Ionicons name="refresh-outline" size={16} color={colors.primary[600]} />
+            <Text style={[styles.hintText, { color: palette.text.secondary }]}>
+              Не удалось загрузить историю закупок · Повторить
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* ── Позиции ── */}
         <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>
@@ -411,7 +539,7 @@ export default function SupplyReceiveScreen() {
             const included = !done && (ls?.included ?? false);
             const qty = ls?.qty ?? 0;
             const price = parsePrice(ls?.priceText ?? '');
-            const lineTotal = included ? qty * price : 0;
+            const lineTotal = included ? sumReceiptLineCents([{ quantity: qty, unitPrice: price }]) / 100 : 0;
             const notLast = idx < items.length - 1;
             return (
               <View
@@ -495,35 +623,82 @@ export default function SupplyReceiveScreen() {
 
                 {/* Контролы приёмки — только для включённых незакрытых строк. */}
                 {included ? (
-                  <View style={styles.controls}>
-                    <View style={[styles.stepper, { borderColor: palette.border.subtle }]}>
-                      <TouchableOpacity onPress={() => stepQty(it.id, -1, max)} style={styles.stepBtn} hitSlop={6}>
-                        <Ionicons name="remove" size={18} color={palette.text.secondary} />
-                      </TouchableOpacity>
-                      <QtyInput
-                        value={qty}
-                        min={0}
-                        max={max}
-                        onCommit={(n) => setQty(it.id, n)}
-                        style={[styles.stepInput, { color: palette.text.primary }]}
-                        placeholder="0"
-                        placeholderTextColor={palette.text.tertiary}
-                      />
-                      <TouchableOpacity onPress={() => stepQty(it.id, 1, max)} style={styles.stepBtn} hitSlop={6}>
-                        <Ionicons name="add" size={18} color={palette.text.secondary} />
-                      </TouchableOpacity>
+                  <View style={{ gap: spacing[2] }}>
+                    <View style={styles.controls}>
+                      <View style={[styles.stepper, { borderColor: palette.border.subtle }]}>
+                        <TouchableOpacity onPress={() => stepQty(it.id, -1, max)} style={styles.stepBtn} hitSlop={6}>
+                          <Ionicons name="remove" size={18} color={palette.text.secondary} />
+                        </TouchableOpacity>
+                        <QtyInput
+                          value={qty}
+                          min={0}
+                          max={max}
+                          onCommit={(n) => setQty(it.id, n)}
+                          style={[styles.stepInput, { color: palette.text.primary }]}
+                          placeholder="0"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                        <TouchableOpacity onPress={() => stepQty(it.id, 1, max)} style={styles.stepBtn} hitSlop={6}>
+                          <Ionicons name="add" size={18} color={palette.text.secondary} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={[styles.priceWrap, { borderColor: palette.border.subtle }]}>
+                        <TextInput
+                          value={ls?.priceText ?? ''}
+                          onChangeText={(t) => setPrice(it.id, t)}
+                          style={[styles.priceInput, { color: palette.text.primary }]}
+                          keyboardType="decimal-pad"
+                          placeholder="Цена"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                        <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>₽/шт</Text>
+                      </View>
                     </View>
-                    <View style={[styles.priceWrap, { borderColor: palette.border.subtle }]}>
+                    <View style={[styles.priceWrap, { borderColor: palette.border.subtle, marginTop: spacing[2] }]}>
+                      <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>Розница</Text>
                       <TextInput
-                        value={ls?.priceText ?? ''}
-                        onChangeText={(t) => setPrice(it.id, t)}
+                        value={ls?.sellPriceText ?? ''}
+                        onChangeText={(t) => setSellPrice(it.id, t)}
                         style={[styles.priceInput, { color: palette.text.primary }]}
                         keyboardType="decimal-pad"
-                        placeholder="Цена"
+                        placeholder="Без изменений"
                         placeholderTextColor={palette.text.tertiary}
                       />
                       <Text style={[styles.priceCurrency, { color: palette.text.tertiary }]}>₽/шт</Text>
                     </View>
+                    {(() => {
+                      const prior = receiptContextByProduct.get(it.productId)?.previousPurchase;
+                      if (receiptContextsQuery.isLoading)
+                        return (
+                          <Text style={[styles.excludedHint, { color: palette.text.tertiary }]}>
+                            Загрузка истории закупок…
+                          </Text>
+                        );
+                      if (receiptContextsQuery.isError)
+                        return (
+                          <TouchableOpacity onPress={() => void receiptContextsQuery.refetch()}>
+                            <Text style={[styles.excludedHint, { color: colors.primary[600] }]}>
+                              История закупок недоступна · повторить
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      if (!prior)
+                        return (
+                          <Text style={[styles.excludedHint, { color: palette.text.tertiary }]}>
+                            История закупок до этой даты отсутствует
+                          </Text>
+                        );
+                      const delta = parsePrice(ls?.priceText ?? '') - prior.price;
+                      const pct = prior.price > 0 ? ` · ${((delta / prior.price) * 100).toFixed(1)}%` : '';
+                      const sign = delta > 0 ? '+' : '';
+                      return (
+                        <Text style={[styles.excludedHint, { color: palette.text.tertiary }]}>
+                          Последняя закупка: {formatMoney(prior.price)} · {formatPoDate(prior.date)} · разница {sign}
+                          {formatMoney(delta)}
+                          {pct}
+                        </Text>
+                      );
+                    })()}
                   </View>
                 ) : !done ? (
                   <Text style={[styles.excludedHint, { color: palette.text.tertiary }]}>

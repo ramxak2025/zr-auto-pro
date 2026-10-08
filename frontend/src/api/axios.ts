@@ -10,6 +10,7 @@ import {
   sessionTakeoverError,
 } from '../utils/sessionToken';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
+import { isPublicSessionLandingPath } from './publicAuthPath';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -49,6 +50,9 @@ export function createSessionBoundClient(token: string | null) {
       request<T>({ ...config, method: 'post', url, data }),
     patch: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
       request<T>({ ...config, method: 'patch', url, data }),
+    put: <T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig) =>
+      request<T>({ ...config, method: 'put', url, data }),
+    delete: <T = unknown>(url: string, config?: AxiosRequestConfig) => request<T>({ ...config, method: 'delete', url }),
   };
 }
 
@@ -90,8 +94,20 @@ function hardLogoutRedirect(): void {
   // обесточить человека посреди работы там. См. utils/sessionToken.ts.
   clearOwnSessionToken();
   localStorage.removeItem('user');
-
   const now = Date.now();
+
+  // The page is public and does not depend on this staff token. Clear the
+  // expired session as usual, but do not interrupt the visitor's public flow.
+  if (isPublicSessionLandingPath(window.location.pathname)) {
+    if (now - lastRedirectTime > 2000) {
+      lastRedirectTime = now;
+      void clearPersistentCache();
+      void purgeApiCache();
+      void purgeOfflineQueues();
+    }
+    return;
+  }
+
   if (window.location.pathname !== '/login' && now - lastRedirectTime > 2000) {
     lastRedirectTime = now;
     void clearPersistentCache();

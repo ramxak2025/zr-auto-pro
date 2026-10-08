@@ -1,0 +1,12 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["98SHYK65HQ.com.autexa.mobile"],
+        "components": [
+          { "/": "/nfc/attendance", "comment": "Autexa attendance NFC fallback" }
+        ]
+      }
+    ]
+  }
+}

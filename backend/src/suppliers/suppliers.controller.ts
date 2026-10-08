@@ -9,9 +9,12 @@ import {
   Query,
   UseGuards,
   ForbiddenException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { SuppliersService } from './suppliers.service';
 import { UpdateDeliveryDto } from './dto/update-delivery.dto';
+import { CreateDeliveryDto } from './dto/create-delivery.dto';
+import { ReturnDeliveryDto, SupplierReturnsQueryDto } from './dto/return-delivery.dto';
 import { DeleteDeliveryDto } from './dto/delete-delivery.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -63,7 +66,7 @@ export class SuppliersController {
   @RequirePermission('suppliers_access')
   @Get('deliveries/:id')
   getDeliveryById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.suppliersService.getDeliveryById(id, user.tenantID);
+    return this.suppliersService.getDeliveryById(id, user.tenantID, actorPointId(user));
   }
 
   // ── Корректировка / soft-delete поставки (154) ─────────────────────────────
@@ -88,6 +91,39 @@ export class SuppliersController {
   }
 
   @RequirePermission('suppliers_access')
+  @Get('purchase-context')
+  purchaseContext(@CurrentUser() user: JwtPayload, @Query() query: { productIds?: string; before?: string }) {
+    return this.suppliersService.getPurchaseContext(
+      user.tenantID,
+      (query.productIds ?? '').split(',').filter(Boolean),
+      query.before,
+      actorPointId(user),
+    );
+  }
+
+  @RequirePermission('suppliers_access')
+  @Get('returns')
+  getReturns(@CurrentUser() user: JwtPayload, @Query() query: SupplierReturnsQueryDto) {
+    return this.suppliersService.getReturns(user.tenantID, query, actorPointId(user));
+  }
+
+  @RequirePermission('suppliers_access')
+  @Get('deliveries/:id/returns')
+  deliveryReturns(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() user: JwtPayload) {
+    return this.suppliersService.getReturns(user.tenantID, { deliveryId: id }, actorPointId(user));
+  }
+
+  @RequirePermission('suppliers_manage')
+  @Post('deliveries/:id/returns')
+  returnDelivery(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ReturnDeliveryDto,
+  ) {
+    return this.suppliersService.returnDelivery(user.tenantID, user.userID, id, dto, actorPointId(user));
+  }
+
+  @RequirePermission('suppliers_access')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.suppliersService.getById(id, user.tenantID);
@@ -101,8 +137,8 @@ export class SuppliersController {
 
   @RequirePermission('suppliers_manage')
   @Post('deliveries')
-  createDelivery(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.suppliersService.createDelivery(user.tenantID, dto, actorPointId(user));
+  createDelivery(@CurrentUser() user: JwtPayload, @Body() dto: CreateDeliveryDto) {
+    return this.suppliersService.createDelivery(user.tenantID, dto, actorPointId(user), user.userID);
   }
 
   @RequirePermission('suppliers_manage')
@@ -134,7 +170,7 @@ export class SuppliersController {
   @RequirePermission('suppliers_payments_correct')
   @Post('payments/:id/reverse')
   reversePayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { reason?: string }) {
-    return this.suppliersService.reversePayment(user.tenantID, user.userID, id, dto?.reason);
+    return this.suppliersService.reversePayment(user.tenantID, user.userID, id, dto?.reason, actorPointId(user));
   }
 
   // Defect return-to-supplier. Decrements defect-warehouse stock, lowers the

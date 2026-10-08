@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { captureDataSession } from '../contexts/dataSession';
 import { setWidgetData } from '../../modules/autexa-liquid-glass/src/index';
 
 /**
@@ -59,7 +60,8 @@ export type WidgetData = MasterWidgetData | OwnerWidgetData;
  *
  * On Android this is a no-op.
  */
-export function updateWidgetData(data: WidgetData): void {
+export function updateWidgetData(data: WidgetData, lease: ReturnType<typeof captureDataSession>): void {
+  if (!lease.owner || !lease.isCurrent()) return;
   if (Platform.OS !== 'ios') return;
   try {
     setWidgetData(

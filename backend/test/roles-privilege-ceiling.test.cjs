@@ -4,6 +4,7 @@ const test = require('node:test');
 // Компилируется nest build перед `node --test` (см. package.json "test").
 const { assertPrivilegeCeiling } = require('../dist/roles/privilege-ceiling.js');
 const { flattenRoleMatrix } = require('../dist/common/role-matrix.js');
+const { userHasPermission } = require('../dist/common/guards/permissions.guard.js');
 
 // Актор с ограниченными правами: держит user_management (может редактировать
 // роли), но НЕ имеет доступа к прибыли, к cashflow «по всем», к складской
@@ -98,6 +99,28 @@ test('суперадмин (owner-class) — потолка нет', () => {
   assert.doesNotThrow(() =>
     assertPrivilegeCeiling({}, { salary: { payouts: true }, equipment: { permanentDelete: true } }, superadmin),
   );
+});
+
+test('управление общими шаблонами явно выдаётся роли; custom role без ключа и admin fallback закрыты', () => {
+  const granted = { role: 'admin', permissions: flattenRoleMatrix({ templates: { manageShared: true } }) };
+  const revoked = { role: 'admin', permissions: flattenRoleMatrix({ templates: { manageShared: false } }) };
+  const missingCustom = { role: 'mechanic', permissions: {} };
+  assert.equal(userHasPermission(granted, 'templates_shared_manage'), true);
+  assert.equal(userHasPermission(revoked, 'templates_shared_manage'), false);
+  assert.equal(userHasPermission(missingCustom, 'templates_shared_manage'), false);
+  assert.equal(userHasPermission({ role: 'admin', permissions: {} }, 'templates_shared_manage'), false);
+  assert.equal(userHasPermission({ role: 'director', permissions: {} }, 'templates_shared_manage'), true);
+  assert.equal(userHasPermission({ role: 'superadmin', permissions: {} }, 'templates_shared_manage'), true);
+});
+
+test('потолок запрещает администратору самовыдать shared-template permission без исходного grant', () => {
+  const noGrant = { role: 'admin', permissions: flattenRoleMatrix({}) };
+  const withGrant = { role: 'admin', permissions: flattenRoleMatrix({ templates: { manageShared: true } }) };
+  assert.throws(
+    () => assertPrivilegeCeiling({}, { templates: { manageShared: true } }, noGrant),
+    is403('Общие шаблоны и папки'),
+  );
+  assert.doesNotThrow(() => assertPrivilegeCeiling({}, { templates: { manageShared: true } }, withGrant));
 });
 
 test('внутренний вызов без актора — проверка пропускается (fail-open)', () => {

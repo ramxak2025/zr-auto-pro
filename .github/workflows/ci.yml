@@ -12,8 +12,22 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (typecheck + lint + build)
+    name: Backend (typecheck + lint + build + PostgreSQL 16 suites)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: oct8_fixture
+          POSTGRES_PASSWORD: oct8_fixture_only
+          POSTGRES_DB: autexa_oct8_test
+        ports:
+          - 127.0.0.1:55438:5432
+        options: >-
+          --health-cmd "pg_isready -U oct8_fixture -d autexa_oct8_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     defaults:
       run:
         working-directory: backend
@@ -28,6 +42,29 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
+      - name: Apply migrations to the disposable PostgreSQL 16 fixture
+        env:
+          DATABASE_URL: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          DB_APP_PASSWORD: oct8_app_fixture_only
+        run: node ../scripts/ci-oct8-live-db.cjs
+      - name: Run maintained PostgreSQL 16 integration suites
+        env:
+          SUPPLIER_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          SUPPLIER_LIVE_APP_PASSWORD: oct8_app_fixture_only
+          NFC_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          NFC_LIVE_APP_PASSWORD: oct8_app_fixture_only
+          PUBLIC_BOOKING_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          PUBLIC_BOOKING_LIVE_APP_PASSWORD: oct8_app_fixture_only
+          OCT8_ORDINARY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT8_ORDINARY_APP_PASSWORD: oct8_app_fixture_only
+          RUN_BACKGROUND_JOBS: "false"
+          SENTRY_DSN: ""
+        run: >-
+          node --test
+          test/supplier-receipts-returns.test.cjs
+          test/attendance-nfc.test.cjs
+          test/public-booking.test.cjs
+          test/oct8-ordinary-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)

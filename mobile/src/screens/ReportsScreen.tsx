@@ -43,9 +43,10 @@ import { captureRef } from 'react-native-view-shot';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ownedStorage } from '../contexts/ownedStorage';
 import { reportsApi, expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { captureDataSession } from '../contexts/dataSession';
 import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
@@ -321,7 +322,8 @@ function useKpiTargets(userId?: string) {
   // logout, и директор другого тенанта на том же устройстве видел и
   // наследовал план выручки предыдущего владельца. Паттерн per-uid — как
   // seenKey(uid) в BroadcastNotificationContext.
-  const storageKey = userId ? `${KPI_TARGETS_KEY}:${userId}` : null;
+  const lease = useMemo(() => captureDataSession(), []);
+  const storageKey = userId && lease.key ? KPI_TARGETS_KEY : null;
 
   // Загрузка происходит асинхронно. До первой записи показываем
   // дефолты — это лучше, чем держать кольца пустыми.
@@ -331,9 +333,10 @@ function useKpiTargets(userId?: string) {
     // предыдущего пользователя не мигали, пока грузится его ключ.
     setTargets(DEFAULT_TARGETS);
     if (!storageKey) return;
-    AsyncStorage.getItem(storageKey)
+    ownedStorage
+      .get(storageKey, lease)
       .then((raw) => {
-        if (cancelled || !raw) return;
+        if (cancelled || !raw || !lease.isCurrent()) return;
         try {
           const parsed = JSON.parse(raw) as Partial<KpiTargets>;
           setTargets({
@@ -349,20 +352,21 @@ function useKpiTargets(userId?: string) {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [storageKey, lease]);
 
   const save = useCallback(
     async (next: KpiTargets) => {
+      if (!lease.isCurrent()) return;
       setTargets(next);
       if (!storageKey) return;
       try {
-        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+        await ownedStorage.set(storageKey, JSON.stringify(next), lease);
       } catch {
         /* AsyncStorage в принципе не должен падать здесь, но если — UI уже
          обновлён через setTargets, потеряется только персистентность. */
       }
     },
-    [storageKey],
+    [storageKey, lease],
   );
 
   return { targets, save };

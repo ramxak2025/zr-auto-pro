@@ -313,10 +313,9 @@ function makeTemplatePool(stored = {}) {
     updated_at: '2026-09-30T09:00:00Z',
     ...over,
   });
-  return {
-    calls,
-    query: async (sql, params) => {
+  const query = async (sql, params) => {
       calls.push({ sql, params });
+      if (/^\s*(?:BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
       if (/^\s*INSERT INTO check_templates/.test(sql)) {
         return {
           rows: [
@@ -331,11 +330,15 @@ function makeTemplatePool(stored = {}) {
         };
       }
       if (/^\s*UPDATE check_templates/.test(sql)) return { rows: [row()] };
-      // Папка автора найдена (assertOwnFolder) — тело старого клиента шлёт folderId.
+      // Папка нужного scope найдена.
       if (/FROM check_template_folders/.test(sql)) return { rows: [{ id: params[0] }] };
       if (/FROM check_templates/.test(sql)) return { rows: [row(stored)] };
       throw new Error(`unexpected SQL: ${sql.slice(0, 120)}`);
-    },
+  };
+  return {
+    calls,
+    query,
+    connect: async () => ({ query, release() {} }),
   };
 }
 
@@ -344,7 +347,7 @@ const MASTER = { userID: 'user-1', role: 'master' };
 test('create: услуга quantity 3 сохраняется как 1, количество товара сохраняется', async () => {
   const pool = makeTemplatePool();
   const service = new CheckTemplatesService(pool);
-  const dto = await makePipe().transform(structuredClone(OLD_CLIENT_BODY), bodyOf(CreateCheckTemplateDto));
+  const dto = await makePipe().transform({ ...structuredClone(OLD_CLIENT_BODY), shared: false }, bodyOf(CreateCheckTemplateDto));
 
   const created = await service.create('tenant-1', MASTER, dto);
 
@@ -357,7 +360,23 @@ test('create: услуга quantity 3 сохраняется как 1, коли�
   assert.equal(savedProducts[1].quantity, 0.5, 'дробное количество товара не тронуто');
   assert.equal(created.services[0].quantity, 1, 'клиент получает услугу с quantity 1');
   assert.equal(created.products[0].quantity, 5);
-  assert.equal(insert.params[4], 'user-1', 'не руководитель — шаблон личный, shared игнорируется');
+  assert.equal(insert.params[4], 'user-1', 'личный шаблон остаётся за автором');
+});
+
+test('create shared template requires the explicit role permission; director remains implicit', async () => {
+  const deniedPool = makeTemplatePool();
+  await assert.rejects(
+    new CheckTemplatesService(deniedPool).create('tenant-1', MASTER, { name: 'Общий', shared: true }),
+    (err) => err && err.getStatus?.() === 403,
+  );
+
+  const sharedPool = makeTemplatePool({ user_id: null });
+  const actor = { userID: 'user-1', role: 'admin', permissions: { templates_shared_manage: true } };
+  const result = await new CheckTemplatesService(sharedPool).create('tenant-1', actor, { name: 'Общий', shared: true });
+  const insert = sharedPool.calls.find((c) => /INSERT INTO check_templates/.test(c.sql));
+  assert.equal(insert.params[4], null, 'permission holder publishes into shared scope');
+  assert.equal(result.isShared, true);
+  assert.ok(sharedPool.calls.some((call) => /pg_advisory_xact_lock/.test(call.sql)), 'mutation takes tenant tree lock');
 });
 
 test('create через контроллер: тело → ValidationPipe → сервис → INSERT с quantity 1', async () => {

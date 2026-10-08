@@ -87,8 +87,12 @@ import BookingsScreen from '../screens/BookingsScreen';
 import BookingDetailScreen from '../screens/BookingDetailScreen';
 import BookingCreateScreen from '../screens/BookingCreateScreen';
 import BookingSettingsScreen from '../screens/BookingSettingsScreen';
+import PublicBookingRequestsScreen from '../screens/PublicBookingRequestsScreen';
+import PublicBookingSettingsScreen from '../screens/PublicBookingSettingsScreen';
 import TemplatesScreen from '../screens/TemplatesScreen';
 import TemplateEditorScreen from '../screens/TemplateEditorScreen';
+import NfcTagsScreen from '../screens/NfcTagsScreen';
+import NfcAttendanceScreen from '../screens/NfcAttendanceScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import SessionRecoveryScreen from '../components/SessionRecoveryScreen';
 import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
@@ -258,7 +262,7 @@ export type RootStackParamList = {
    * are loaded. Detail screen consumes the flag once via useEffect and
    * resets navigation state so a re-mount doesn't re-trigger it.
    */
-  SupplierDetail: { id: string; openDefectReturn?: boolean };
+  SupplierDetail: { id: string; openDefectReturn?: boolean; openDeliveryReturnId?: string };
   /**
    * Приёмка поставки ПО ЗАКАЗУ. `orderId` — заказ, который принимаем; `po` —
    * строка заказа для мгновенной отрисовки шапки (позиции дотянет getById).
@@ -289,6 +293,8 @@ export type RootStackParamList = {
    * (slide-up, перекрывает таб-бар — как CheckCreate).
    */
   AcceptPayment: { id: string };
+  NfcAttendance: undefined;
+  NfcTags: undefined;
 };
 
 export type TabParamList = {
@@ -435,6 +441,8 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
       <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
       <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
+      <MoreStack.Screen name="PublicBookingRequests" component={PublicBookingRequestsScreen} />
+      <MoreStack.Screen name="PublicBookingSettings" component={PublicBookingSettingsScreen} />
       {/*
         Шаблоны чеков (round 8 #3) — list + editor live in MoreStack so the
         floating tab bar stays visible and back-nav steps in-section
@@ -562,6 +570,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Roles" component={GatedRoles} />
       <MoreStack.Screen name="RoleEditor" component={GatedRoleEditor} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
+      <MoreStack.Screen name="NfcTags" component={NfcTagsScreen} />
       {/* Филиалы (156/163, мульти-точки) — тенант-сторона: сводка по сети и
           вход в другой филиал (через выход и новый вход). Заводит/архивирует
           филиалы только суперадмин (AdminTenantDetailScreen); строка в меню
@@ -1012,6 +1021,11 @@ export default function AppNavigator() {
               «Ещё» идёт через копии в MoreStack выше (таб-бар виден). */}
           <Stack.Screen name="Templates" component={TemplatesScreen} />
           <Stack.Screen name="TemplateEditor" component={TemplateEditorScreen} />
+          <Stack.Screen
+            name="NfcAttendance"
+            component={NfcAttendanceScreen}
+            options={{ animation: 'slide_from_bottom' }}
+          />
           {/* «Филиалы» КОРНЕВОЙ копии больше нет (163): индикатор автосервиса
               на Кассе стал неинтерактивной подписью, и уводить с корневого
               стека оттуда некому. Раздел живёт единственной копией в MoreStack

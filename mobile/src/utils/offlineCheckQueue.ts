@@ -59,7 +59,8 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
+import { withIntentWrite } from '../contexts/intentWriteBarrier';
+import { captureDataSession, dataOwnerKey } from '../contexts/dataSession';
 import { extractApiErrorMessage } from './apiError';
 
 // ── Типы ────────────────────────────────────────────────────────────────────
@@ -121,6 +122,8 @@ export interface QueueOwner {
   userId: string;
   /** tenants.id — очередь никогда не переезжает в другой автосервис. null = профиль без тенанта. */
   tenantId: string | null;
+  /** Exact effective point for v2 queues; absent only in legacy envelopes. */
+  pointId?: string | null;
 }
 
 /** Один ли это владелец. undefined/null с обеих сторон НЕ равны: неизвестный владелец не совпадает ни с кем. */
@@ -131,11 +134,12 @@ export function sameQueueOwner(a: QueueOwner | null | undefined, b: QueueOwner |
 
 function sanitizeOwner(raw: unknown): QueueOwner | null {
   if (!raw || typeof raw !== 'object') return null;
-  const candidate = raw as { userId?: unknown; tenantId?: unknown };
+  const candidate = raw as { userId?: unknown; tenantId?: unknown; pointId?: unknown };
   if (typeof candidate.userId !== 'string' || !candidate.userId) return null;
   return {
     userId: candidate.userId,
     tenantId: typeof candidate.tenantId === 'string' && candidate.tenantId ? candidate.tenantId : null,
+    ...(candidate.pointId === null || typeof candidate.pointId === 'string' ? { pointId: candidate.pointId } : {}),
   };
 }
 
@@ -145,6 +149,9 @@ export type SendQueuedCheck = (payload: QueuedCheckPayload) => Promise<unknown>;
 export interface OfflineCheckQueueCoreDeps {
   storage: QueueStorage;
   now?: () => number;
+  /** Production uses a separate physical ledger per tenant/user/point. */
+  scopedStorage?: boolean;
+  captureSender?: (owner: QueueOwner) => SendQueuedCheck | null;
   /**
    * Текущий филиал пользователя (мульти-точки, 156/160) на момент постановки
    * чека в очередь. Синглтон читает его из сохранённой сессии авторизации;
@@ -166,6 +173,9 @@ export interface OfflineCheckQueueCoreDeps {
 
 /** Версионированный ключ AsyncStorage — смена схемы = новый суффикс. */
 export const OFFLINE_CHECK_QUEUE_STORAGE_KEY = 'offline_check_queue_v1';
+export const OFFLINE_CHECK_QUEUE_PREFIX = 'offline_check_queue_v2:';
+export const scopedQueueKey = (owner: QueueOwner) =>
+  OFFLINE_CHECK_QUEUE_PREFIX + dataOwnerKey({ ...owner, pointId: owner.pointId ?? null });
 
 /** Дебаунс flush-триггера «любой успешный ответ axios». */
 export const NETWORK_SUCCESS_KICK_DEBOUNCE_MS = 15_000;
@@ -412,6 +422,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   // Владелец ТЕКУЩЕЙ очереди. Пишется на конверт при каждом сохранении, чтобы
   // следующий вход мог отличить «мои отложенные чеки» от чужих.
   let owner: QueueOwner | null = null;
+  let activeStorageKey: string | null = deps.scopedStorage ? null : OFFLINE_CHECK_QUEUE_STORAGE_KEY;
   let entries: readonly QueuedCheck[] = [];
   let loaded = false;
   let loadPromise: Promise<void> | null = null;
@@ -430,7 +441,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   // Until a later clear succeeds, never persist or send new-session entries:
   // durable auth intentionally stays on the old session too, so reboot state
   // remains consistent instead of pairing token A with queue B.
-  let storageBoundaryReady = true;
+  let storageBoundaryReady = !deps.scopedStorage;
 
   let send: SendQueuedCheck | null = null;
   let onSent: ((entry: QueuedCheck, result: unknown) => void) | undefined;
@@ -450,9 +461,12 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
 
   function persistSnapshot(snapshot: readonly QueuedCheck[]): Promise<void> {
     const serialized = serializeQueue(snapshot, owner);
-    const write = storageWriteTail
-      .catch(() => {})
-      .then(() => deps.storage.setItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY, serialized));
+    const key = activeStorageKey;
+    if (!key) return Promise.reject(new Error('Нет активного владельца очереди'));
+    const preceding = storageWriteTail;
+    const write = withIntentWrite(key, () =>
+      preceding.catch(() => {}).then(() => deps.storage.setItem(key, serialized)),
+    );
     storageWriteTail = write.catch(() => {});
     return write;
   }
@@ -464,7 +478,8 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     notify();
     try {
       await persistSnapshot(next);
-    } catch {
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'UNRESOLVED_INTENTS') return false;
       // Диск отказал ПОСЛЕ обновления памяти: очередь этой сессии живёт, при
       // рестарте вернётся последняя удачная запись. Благодаря идемпотентному
       // clientRequestId возможный повтор отправки безопасен (дубля не будет).
@@ -473,11 +488,12 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   }
 
   function ensureLoaded(): Promise<void> {
+    if (deps.scopedStorage && !activeStorageKey) return Promise.resolve();
     if (loaded) return Promise.resolve();
     if (!loadPromise) {
       const ownerGeneration = sessionGeneration;
       const pendingLoad = deps.storage
-        .getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY)
+        .getItem(activeStorageKey ?? OFFLINE_CHECK_QUEUE_STORAGE_KEY)
         .then((raw) => {
           // A getItem started for a previous tenant may resolve after clear.
           if (ownerGeneration !== sessionGeneration) return;
@@ -540,7 +556,13 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     // сам, а потерянный заказ-наряд не восстановит никто. Поэтому ошибка
     // резолвера = «точки нет»: чек встаёт в очередь без поля pointId.
     let stamped = payload;
-    if (payload.pointId === undefined) {
+    if (deps.scopedStorage) {
+      if (!owner || owner.pointId === undefined || !activeStorageKey)
+        throw new Error('Нет активного владельца очереди');
+      if (payload.pointId !== undefined && payload.pointId !== owner.pointId)
+        throw new Error('Филиал чека не совпадает с текущей сессией');
+      stamped = { ...payload, pointId: owner.pointId };
+    } else if (payload.pointId === undefined) {
       const pointId = await resolvePointId().catch(() => null);
       if (pointId) stamped = { ...payload, pointId };
     }
@@ -554,6 +576,8 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       if (resolved && ownerGeneration === sessionGeneration) owner = resolved;
     }
 
+    if (ownerGeneration !== sessionGeneration || !storageBoundaryReady)
+      throw new Error('Сессия сменилась до сохранения чека');
     const entry: QueuedCheck = {
       clientRequestId: stamped.clientRequestId,
       payload: stamped,
@@ -640,7 +664,8 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) {
       return { sent, rejected, remaining: entries.length };
     }
-    if (!send) {
+    const capturedSend = deps.captureSender ? (owner ? deps.captureSender(owner) : null) : send;
+    if (!capturedSend) {
       // Wiring ещё не подключён (attachOfflineCheckQueue не вызван) —
       // отправлять нечем; данные никуда не деваются.
       return { sent, rejected, remaining: entries.length };
@@ -663,7 +688,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       if (!committed || ownerGeneration !== sessionGeneration) break;
 
       try {
-        const result = await send(attempted.payload);
+        const result = await capturedSend(attempted.payload);
         if (ownerGeneration !== sessionGeneration) break;
         const removed = await commit(
           entries.filter((e) => e.clientRequestId !== attempted.clientRequestId),
@@ -749,7 +774,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       sessionGeneration += 1;
       const ownerGeneration = sessionGeneration;
       storageBoundaryReady = false;
-      owner = null;
+      if (!deps.scopedStorage) owner = null;
       entries = [];
       loaded = true;
       loadPromise = null;
@@ -767,10 +792,13 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     // три заказ-наряда без связи, терял их молча, стоило токену истечь или
     // владельцу поправить ему доступ к филиалу.
     adoptSession: async (next: QueueOwner) => {
+      if (deps.scopedStorage && next.pointId === undefined) throw new Error('Филиал исходной сессии не подтверждён');
       sessionGeneration += 1;
       const ownerGeneration = sessionGeneration;
       storageBoundaryReady = false;
       owner = null;
+      activeStorageKey = deps.scopedStorage ? scopedQueueKey(next) : OFFLINE_CHECK_QUEUE_STORAGE_KEY;
+      const nextStorageKey = activeStorageKey;
       entries = [];
       loaded = false;
       loadPromise = null;
@@ -784,14 +812,39 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       await storageWriteTail.catch(() => {});
       let restored: QueuedCheck[] = [];
       try {
-        const raw = await deps.storage.getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY);
+        const raw = await deps.storage.getItem(nextStorageKey);
+        if (deps.scopedStorage && raw !== null) {
+          const savedOwner = parseStoredQueueOwner(raw);
+          const parsed = JSON.parse(raw) as { entries?: unknown[] };
+          const valid = parseStoredQueue(raw);
+          if (
+            !sameQueueOwner(savedOwner, next) ||
+            savedOwner?.pointId !== next.pointId ||
+            !Array.isArray(parsed.entries) ||
+            parsed.entries.length !== valid.length ||
+            valid.some((entry) => entry.payload.pointId !== next.pointId)
+          )
+            throw new Error('Сохранённая очередь требует проверки исходного владельца и филиала');
+        }
+        if (deps.scopedStorage && raw === null) {
+          // Do not delete the old ledger. Only proved entries are copied once;
+          // ownerless/unstamped entries remain quarantined, never auto-posted.
+          const legacy = await deps.storage.getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY);
+          const legacyOwner = parseStoredQueueOwner(legacy);
+          if (sameQueueOwner(legacyOwner, next))
+            restored = parseStoredQueue(legacy).filter(
+              (entry) =>
+                entry.payload.pointId !== undefined &&
+                entry.payload.pointId === next.pointId &&
+                (next.pointId !== null || legacyOwner?.pointId === null),
+            );
+        }
         // Конверт без владельца (старая версия схемы) доказать «это тот же
         // человек» не может — такие записи не усыновляем: тихо отправить чужой
         // чек в чужую кассу хуже, чем потерять его на обновлении приложения.
         if (sameQueueOwner(parseStoredQueueOwner(raw), next)) restored = parseStoredQueue(raw);
-      } catch {
-        // Диск не прочитался — считаем владельца неизвестным и начинаем с
-        // пустой очереди: изоляция тенантов важнее сохранности хвоста.
+      } catch (error) {
+        if (deps.scopedStorage) throw error;
         restored = [];
       }
       if (ownerGeneration !== sessionGeneration) return;
@@ -812,6 +865,10 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     endSession: async () => {
       sessionGeneration += 1;
       owner = null;
+      if (deps.scopedStorage) {
+        activeStorageKey = null;
+        storageBoundaryReady = false;
+      }
       entries = [];
       loaded = false;
       loadPromise = null;
@@ -845,23 +902,10 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
 
 let singleton: OfflineCheckQueueCore | null = null;
 
-/**
- * Филиал ТЕКУЩЕЙ СЕССИИ, как его сообщил первый экран, прочитавший GET /points.
- * Приоритетнее сохранённой сессии: она обновляется только после /auth/me, а
- * очередь обязана знать филиал уже в момент первого «Пробить». null = у
- * тенанта нет живых филиалов (163) ЯВНО, undefined = «никто не сообщал» (тогда
- * читаем сессию). Сбрасывается на logout вместе с очередью — филиал прошлой
- * сессии не должен пережить вход в другой филиал.
- */
-let liveCurrentPointId: string | null | undefined;
-
-/**
- * Сообщить очереди филиал текущей сессии (зовётся из usePointsQuery, как
- * только приехал GET /points). Необязательно: без вызова очередь читает филиал
- * из сохранённой сессии авторизации.
- */
-export function setOfflineCheckQueuePointId(pointId: string | null): void {
-  liveCurrentPointId = pointId;
+/** Compatibility adapter. AuthProvider now owns the exact point boundary;
+ * a late /points response is not permitted to reassign another session. */
+export function setOfflineCheckQueuePointId(_pointId: string | null): void {
+  // Intentionally no mutation: the authenticated DataSession is authoritative.
 }
 
 function getQueue(): OfflineCheckQueueCore {
@@ -874,41 +918,21 @@ function getQueue(): OfflineCheckQueueCore {
         getItem: (key) => AsyncStorage.getItem(key),
         setItem: (key, value) => AsyncStorage.setItem(key, value),
       },
-      // Филиал берём из СОХРАНЁННОЙ сессии авторизации, а не из React-стейта:
-      // очередь — модуль без провайдеров, и любой её вызов (в том числе из
-      // фонового flush-триггера) обязан работать без смонтированного дерева.
-      // Это тот же конверт, который читает холодный старт axios, поэтому
-      // значение всегда согласовано с текущим пользователем — включая
-      // мгновенную смену филиала (167): AuthContext перезаписывает конверт
-      // новым профилем в том же коммите сессии и тут же сообщает очереди новый
-      // филиал явно (setOfflineCheckQueuePointId), не дожидаясь GET /points.
-      // Любая ошибка чтения/разбора = null: чек важнее штампа точки, сервер
-      // тогда просто возьмёт текущую точку автора, как делал раньше.
-      resolvePointId: async () => {
-        if (liveCurrentPointId !== undefined) return liveCurrentPointId;
-        try {
-          const parsed = parseAuthSessionEnvelope(await AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY));
-          const pointId = (parsed?.user as { currentPointId?: unknown } | null | undefined)?.currentPointId;
-          return typeof pointId === 'string' && pointId.length > 0 ? pointId : null;
-        } catch {
-          return null;
-        }
-      },
-      // Владелец очереди из того же сохранённого конверта сессии. Нужен только
-      // на конверте очереди СТАРОЙ версии (обновление приложения посреди
-      // офлайн-смены): в остальных случаях владельца объявляет вход.
-      resolveOwner: async () => {
-        try {
-          const parsed = parseAuthSessionEnvelope(await AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY));
-          const sessionUser = parsed?.user as { id?: unknown; tenantId?: unknown } | null | undefined;
-          if (!sessionUser || typeof sessionUser.id !== 'string' || !sessionUser.id) return null;
-          return {
-            userId: sessionUser.id,
-            tenantId: typeof sessionUser.tenantId === 'string' && sessionUser.tenantId ? sessionUser.tenantId : null,
-          };
-        } catch {
-          return null;
-        }
+      scopedStorage: true,
+      resolvePointId: async () => captureDataSession().owner?.pointId ?? null,
+      resolveOwner: async () => captureDataSession().owner,
+      captureSender: (owner) => {
+        const lease = captureDataSession();
+        if (!lease.owner || scopedQueueKey(lease.owner) !== scopedQueueKey(owner)) return null;
+        // Capture axios epoch before its async request interceptors can run.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const transport = require('../api/axios') as typeof import('../api/axios');
+        const auth = transport.captureAuthSession();
+        const client = transport.createSessionBoundClient(auth.token);
+        return async (payload) => {
+          if (!lease.isCurrent() || !auth.isCurrent()) throw new Error('Сессия очереди изменилась');
+          return (await client.post('/checks', payload)).data;
+        };
       },
     });
   }
@@ -947,7 +971,6 @@ export function flushOfflineCheckQueue(): Promise<FlushResult> {
 export function adoptOfflineCheckQueue(owner: QueueOwner): Promise<void> {
   // Филиал прошлой сессии не должен пережить вход: резолвер точки перечитает
   // сохранённую сессию, а её уже перезаписал вход.
-  liveCurrentPointId = undefined;
   return getQueue().adoptSession(owner);
 }
 
@@ -957,7 +980,6 @@ export function adoptOfflineCheckQueue(owner: QueueOwner): Promise<void> {
  * исчезали, стоило истечь токену или владельцу снять доступ к филиалу.
  */
 export function endOfflineCheckQueueSession(): Promise<void> {
-  liveCurrentPointId = undefined;
   return getQueue().endSession();
 }
 
@@ -991,7 +1013,7 @@ export function pendingChecksLogoutNotice(count: number): string {
   return (
     `На телефоне ${count} ${adj} ${noun} — они ещё не ушли на сервер. ` +
     'Записи сохранятся и отправятся сами, когда вы снова войдёте под этим же аккаунтом. ' +
-    'Вход под другим аккаунтом их удалит.'
+    'При смене аккаунта или филиала очередь сохранится за исходным владельцем.'
   );
 }
 

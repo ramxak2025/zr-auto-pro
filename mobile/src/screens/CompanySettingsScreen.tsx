@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -407,6 +408,20 @@ export default function CompanySettingsScreen() {
                     ios_backgroundColor={palette.border.subtle}
                   />
                 </View>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => navigation.navigate('NfcTags')}
+                  style={[styles.nfcTagsLink, { borderColor: palette.border.subtle }]}
+                >
+                  <Ionicons name="radio-outline" size={18} color={palette.accent.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>NFC-метки</Text>
+                    <Text style={[styles.hint, { color: palette.text.secondary }]}>
+                      Создать, записать и отозвать метку присутствия
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
               </View>
             </AnimatedCard>
           )}
@@ -559,7 +574,9 @@ function PosShiftModeSection({ index }: { index: number }) {
     // Optimistic: the switch flips instantly; the tab bar / CheckCreate that
     // read the same key pick up the new mode without waiting on the round-trip.
     onMutate: async (next) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: POS_SETTINGS_KEY });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<PosSettings>(POS_SETTINGS_KEY);
       if (prev) queryClient.setQueryData<PosSettings>(POS_SETTINGS_KEY, { ...prev, shiftModeEnabled: next });
       return { prev };
@@ -1072,10 +1089,13 @@ function VinSettingsSection({ index }: { index: number }) {
     mutationFn: (data: UpdateVinSettingsRequest) => vinApi.updateSettings(data),
     // Optimistic только для тумблера: он должен щёлкать мгновенно.
     onMutate: async (next) => {
+      const continuation = captureDataSession();
       const empty = { prev: undefined as VinSettings | undefined, prevCompany: undefined as Tenant | undefined };
       if (typeof next.enabled !== 'boolean') return empty;
       await queryClient.cancelQueries({ queryKey: VIN_SETTINGS_KEY });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       await queryClient.cancelQueries({ queryKey: ['my-company'] });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<VinSettings>(VIN_SETTINGS_KEY);
       if (prev) queryClient.setQueryData<VinSettings>(VIN_SETTINGS_KEY, { ...prev, enabled: next.enabled });
       // useVinEnabled читает ['my-company'] → профиль (снимок этого экрана он
@@ -1659,4 +1679,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[4],
   },
   saveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
+  nfcTagsLink: {
+    marginTop: spacing[3],
+    minHeight: 56,
+    borderWidth: 1,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
 });

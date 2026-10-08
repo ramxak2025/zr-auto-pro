@@ -984,6 +984,10 @@ export interface User {
   isActive: boolean;
   /** Free-text team grouping. Null/empty → "Без группы" on the FE. */
   team?: string | null;
+  /** Tenant-owned employee direction; null means "Без направления". */
+  directionId?: string | null;
+  /** Human-readable name of directionId when the response includes it. */
+  directionName?: string | null;
   /** Per-employee permission to submit /expenses entries. Off by default. */
   canAddExpenses?: boolean;
   /** When set, non-privileged users' daily expense submissions auto-flip to 'pending' once the total crosses this number. */
@@ -1015,6 +1019,14 @@ export interface User {
   tenantId?: string;
   tenant?: Tenant;
   createdAt: string;
+}
+
+/** Tenant-owned grouping used by employee, schedule and planning screens. */
+export interface EmployeeDirection {
+  id: string;
+  tenantId: string;
+  name: string;
+  sortOrder: number;
 }
 
 export enum UserRole {
@@ -1220,6 +1232,8 @@ export interface UserPermissions {
   company_manage?: boolean;
   /** Мутации базы знаний (knowledge.manage). */
   knowledge_manage?: boolean;
+  /** Управляет общими шаблонами и папками своего автосервиса. */
+  templates_shared_manage?: boolean;
   // ── Уровень «смотрит vs редактирует» для маркетинга и базы знаний (миграция 137) ──
   /**
    * Маркетинг: УПРАВЛЕНИЕ (marketing.manage) — все мутации раздела «Маркетинг»
@@ -1306,7 +1320,8 @@ export type PermissionKey =
   | 'company_manage'
   // ── Уровень «смотрит vs редактирует» (миграция 137) ──
   | 'knowledge_view'
-  | 'knowledge_manage';
+  | 'knowledge_manage'
+  | 'templates_shared_manage';
 
 /**
  * Permission keys grouped for UI rendering (Касса / Услуги / Финансы / Склад /
@@ -1363,6 +1378,7 @@ export const PERMISSION_GROUPS = {
   Управление: ['user_management', 'employees_approve_profile'],
   Настройки: ['settings_manage', 'company_manage'],
   'База знаний': ['knowledge_view', 'knowledge_manage'],
+  Шаблоны: ['templates_shared_manage'],
 } as const satisfies Record<string, readonly PermissionKey[]>;
 
 /** Flat set of every canonical permission key (deduped, stable order). */
@@ -1378,7 +1394,7 @@ export const PERMISSION_KEYS: readonly PermissionKey[] = Array.from(
  * silently granted financials/reports/profit, product mutations, calls,
  * marketing, or user management.
  *
- * Owner-class roles (superadmin / director / admin) are handled by the guard
+ * Owner-class roles (superadmin / director) are handled by the guard
  * as ALWAYS-allowed and do not consult this map; they are listed here only for
  * completeness / client-side mirroring.
  */
@@ -1458,6 +1474,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     // редактирует. Миграция 137: view=true (1:1 с сегодняшним поведением), manage=false.
     knowledge_view: true,
     knowledge_manage: false,
+    templates_shared_manage: false,
   },
 };
 
@@ -1603,6 +1620,7 @@ export interface RoleMatrix {
    * manage — все мутации + менеджерские чтения (→ knowledge_manage). manage ⇒ view.
    */
   knowledge?: { view?: boolean; manage?: boolean };
+  templates?: { manageShared?: boolean };
 }
 
 /** Стабильный ключ системной роли (миграция 121). Null у кастомных ролей. */
@@ -1844,6 +1862,24 @@ export interface Service {
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
   warrantyDays: number | null;
   createdAt: string;
+}
+
+/** Role-preferred display rule for a service or one folder path. */
+export type ServiceVisibilityRule =
+  | { serviceId: string; categoryPath: null; visibleRoleIds: string[] }
+  | { serviceId: null; categoryPath: string; visibleRoleIds: string[] };
+
+export interface ServiceVisibilityRole {
+  id: string;
+  name: string;
+  systemKey: string | null;
+  isSystem: boolean;
+}
+
+export interface ServiceVisibilityConfig {
+  rules: ServiceVisibilityRule[];
+  categoryPaths: string[];
+  roles: ServiceVisibilityRole[];
 }
 
 export interface Warehouse {
@@ -2380,8 +2416,12 @@ export type BookingStatus = 'scheduled' | 'arrived' | 'converted' | 'cancelled' 
 export interface Booking {
   id: string;
   tenantId: string;
-  clientId: string;
-  /** Denormalised from the client join (list/detail responses). */
+  /** Nullable only for public requests whose phone card is inaccessible in this point. */
+  clientId: string | null;
+  publicRequestId?: string | null;
+  needsClientLink?: boolean;
+  durationMinutes?: number | null;
+  /** Public requests use their own contact snapshot, never an inaccessible card. */
   clientName?: string | null;
   clientPhone?: string | null;
   carId?: string | null;
@@ -2424,6 +2464,104 @@ export interface BookingSettings {
   /** 'auto' = use the provider configured in Маркетинг. */
   channel: 'auto' | 'sms' | 'whatsapp';
 }
+
+export type PublicBookingMode = 'instant' | 'approval';
+export type PublicBookingRequestStatus = 'pending' | 'confirmed' | 'rejected' | 'cancelled';
+export type PublicBookingHours = Record<string, { start: string; end: string } | null>;
+export interface PublicBookingOperator {
+  name: string;
+  requisites: string;
+  contact: string;
+}
+export interface PublicBookingPageSettings {
+  id: string;
+  pointId: string | null;
+  slug: string;
+  published: boolean;
+  revision: number;
+  displayName: string;
+  address: string;
+  contacts: string;
+  showPrices: boolean;
+  mode: PublicBookingMode;
+  slotStepMinutes: number;
+  openingHours: PublicBookingHours;
+  operator: PublicBookingOperator;
+  policyText: string;
+  consentText: string;
+  consentVersion: string;
+  services: Array<{ serviceId: string; durationMinutes: number }>;
+  resourceIds: string[];
+}
+export interface PublicBookingResource {
+  id: string;
+  name: string;
+  role: string;
+}
+export interface PublicBookingLanding {
+  slug: string;
+  /** Derive the first calendar day from this server clock in the tenant IANA zone. */
+  timezone: string;
+  serverAt: string;
+  displayName: string;
+  address: string;
+  contacts: string;
+  mode: PublicBookingMode;
+  showPrices: boolean;
+  operator: PublicBookingOperator;
+  policyText: string;
+  consentText: string;
+  consentVersion: string;
+  /** price is ABSENT, not null/zero, whenever showPrices=false. */
+  services: Array<{ id: string; name: string; durationMinutes: number; price?: number }>;
+}
+export interface PublicBookingSlotPage {
+  timezone: string;
+  serverAt: string;
+  slots: Array<{ startsAt: string; endsAt: string }>;
+  nextAfter: string | null;
+}
+/** No contact/card information, resource IDs or prices in public acknowledgements. */
+export interface PublicBookingReceipt {
+  requestId: string;
+  status: PublicBookingRequestStatus;
+  startsAt: string;
+  endsAt: string;
+  services: Array<{ serviceId: string; name: string; durationMinutes: number }>;
+}
+/** Unknown is NOT proof of rollback; keep the same UUID/capability/exact body. */
+export type PublicBookingRecovery = { status: 'unknown' } | { status: 'completed'; result: PublicBookingReceipt };
+export interface StaffPublicBookingRequest {
+  id: string;
+  requestId: string;
+  pointId: string | null;
+  status: PublicBookingRequestStatus;
+  name: string;
+  phone: string;
+  comment: string;
+  services: PublicBookingReceipt['services'];
+  startsAt: string;
+  durationMinutes: number;
+  resourceId: string | null;
+  bookingId: string | null;
+  clientId: string | null;
+  needsClientLink: boolean;
+  createdAt: string;
+}
+export type PublicBookingErrorCode =
+  | 'BOOKING_DISABLED'
+  | 'SLOT_UNAVAILABLE'
+  | 'CONSENT_CHANGED'
+  | 'SERVICES_CHANGED'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'INVALID_REQUEST'
+  | 'SETTINGS_CHANGED'
+  | 'SLUG_TAKEN'
+  | 'PUBLICATION_INCOMPLETE'
+  | 'RESOURCE_UNAVAILABLE'
+  | 'REQUEST_DECIDED'
+  | 'BOOKING_CLIENT_LINK_REQUIRED'
+  | 'BOOKING_CLIENT_LINK_UNAVAILABLE';
 
 // ───────────────────────────────────────────────────────────────────────
 //  Кассовая смена / Z-отчёт / Инкассация (cash shift / Z-report / collection).
@@ -2912,11 +3050,56 @@ export interface Supplier {
   totalPurchases: number;
   totalPaid: number;
   currentDebt: number;
+  /** Negative currentDebt means supplier credit; amounts are shown separately. */
+  creditBalance?: number;
+  amountDue?: number;
   /** System-managed row — uneditable and undeletable. Currently used for the pinned "Покупка б/у товара" supplier. */
   isSystem?: boolean;
   /** Well-known marker. `'used_purchase'` is the inbound second-hand purchase channel; null for normal suppliers. */
   kind?: 'used_purchase' | null;
   createdAt: string;
+}
+
+/** Last actual, non-deleted invoice line at/before the selected receipt date.
+ * A zero price is a valid baseline: show RUB difference, no percentage. */
+export interface PreviousPurchase {
+  price: number;
+  date: string;
+  deliveryId: string;
+  deliveryItemId: string;
+  supplierId: string;
+}
+export interface PurchaseReceiptContext {
+  productId: string;
+  sellPrice: number;
+  previousPurchase: PreviousPurchase | null;
+}
+export interface SupplierReturn {
+  id: string;
+  deliveryId: string;
+  supplierId: string;
+  supplierName: string;
+  date: string;
+  reason: string | null;
+  createdByName: string | null;
+  totalAmount: number;
+  sourceDate: string;
+  sourceTotalAmount: number;
+  items: Array<{
+    id: string;
+    deliveryItemId: string;
+    productId: string;
+    name: string;
+    quantity: number;
+    price: number;
+    total: number;
+  }>;
+}
+export interface ReturnDeliveryRequest {
+  requestId?: string;
+  reason?: string;
+  /** Omit to return every outstanding quantity. Empty arrays are rejected. */
+  items?: Array<{ deliveryItemId: string; quantity: number }>;
 }
 
 export interface Delivery {
@@ -2925,7 +3108,12 @@ export interface Delivery {
   supplier?: Supplier;
   date: string;
   items: DeliveryItem[];
+  /** Original invoice amount, never reduced by returns. */
   totalAmount: number;
+  returnedAmount?: number;
+  netAmount?: number;
+  /** Present on detail responses. */
+  returns?: SupplierReturn[];
   paymentStatus: 'unpaid' | 'partial' | 'paid';
   comment?: string;
   /**
@@ -2958,6 +3146,14 @@ export interface DeliveryItem {
   total: number;
   /** The purchase-order line this supply line received against (098); null otherwise. */
   purchaseOrderItemId?: string | null;
+  sellPrice?: number;
+  previousPurchase?: PreviousPurchase | null;
+  returnedQuantity?: number;
+  returnedAmount?: number;
+  returnableQuantity?: number;
+  returnableAmount?: number;
+  /** Original cents allocated to this line; includes historical rounding residue. */
+  refundableTotal?: number;
 }
 
 /**
@@ -3030,6 +3226,8 @@ export interface PurchaseOrderItem {
   costPrice: number;
   /** How much has been received so far (partial receipts accumulate here). */
   receivedQuantity: number;
+  sellPrice?: number;
+  previousPurchase?: PreviousPurchase | null;
   /** quantity * costPrice (server-computed convenience). */
   total: number;
 }
@@ -3065,6 +3263,9 @@ export interface PurchaseOrder {
   createdAt: string;
   /** Present on detail / mutation responses; omitted on list. */
   items?: PurchaseOrderItem[];
+  /** Actual invoices available for financial returns; legacy stock-only receipts have none. */
+  sourceDeliveryIds?: string[];
+  financialReturnUnavailableReason?: string | null;
 }
 
 /** One row in the reorder-suggestions response, scoped to a preferred supplier. */
@@ -3430,6 +3631,48 @@ export interface Shift {
   pointId?: string | null;
 }
 
+/** NFC attendance is separate from cash shifts. Static tags are cloneable. */
+export interface AttendanceNfcTag {
+  id: string;
+  pointId: string | null;
+  name: string;
+  status: 'pending' | 'active' | 'revoked';
+  createdAt: string;
+  activatedAt: string | null;
+  revokedAt: string | null;
+}
+export interface CreatedAttendanceNfcTag extends AttendanceNfcTag {
+  /** Returned ONCE; write the URI, read it back, then activate. Never log. */
+  token: string;
+  ndefUri: string;
+}
+export interface AttendanceNfcStatus {
+  shiftsEnabled: boolean;
+  canManageTags: boolean;
+  hasActiveTag: boolean;
+  canScan: boolean;
+  hasOpenShift: boolean;
+  needsFirstScanConfirmation: boolean;
+  openShiftInOtherPoint: boolean;
+  pointId: string | null;
+  firstNfcAt: string | null;
+}
+export type AttendanceNfcShift = Omit<Shift, 'note'> & {
+  note: string | null;
+  firstNfcAt: string | null;
+};
+export interface AttendanceNfcScanResult {
+  action: 'opened' | 'confirmed' | 'closed' | 'unchanged';
+  reason: 'within_window' | 'closing_duplicate' | null;
+  shift: AttendanceNfcShift;
+  serverAt: string;
+  firstNfcAt: string | null;
+  /** A scan at this instant is still a no-op; closing requires strictly later. */
+  closeAfter: string | null;
+  /** The <=10-second close debounce never extends on repeat scans. */
+  reopenAfter: string | null;
+}
+
 export type LateStatus = 'on_time' | 'late_minor' | 'late_major';
 
 export interface ScheduleEntry {
@@ -3688,15 +3931,14 @@ export interface CheckTemplate {
    * author. `isShared` mirrors `userId == null` for convenience.
    */
   userId?: string | null;
-  /** Personal folder the template lives in; общие templates are folder-less. */
+  /** Folder may be personal or tenant-shared. */
   folderId?: string | null;
   isShared?: boolean;
 }
 
 /**
- * Personal folder for check templates (`check_template_folders`). Folders
- * are strictly per-employee: the API returns only the actor's own tree as a
- * flat list — build hierarchy client-side via `parentId`.
+ * Personal or tenant-shared folder for check templates. The API returns the
+ * actor's private tree plus all shared folders as one flat list.
  */
 export interface CheckTemplateFolder {
   id: string;
@@ -3704,6 +3946,7 @@ export interface CheckTemplateFolder {
   parentId: string | null;
   sort: number;
   createdAt?: string;
+  isShared?: boolean;
 }
 
 export interface PushToken {
@@ -5674,3 +5917,8 @@ export interface ReportCatalogResponse {
     reason?: string | null;
   }>;
 }
+
+/** Historical request snapshot; unknown never permits replacing a pending UUID. */
+export type AttendanceNfcRequestResult =
+  | { status: 'completed'; result: AttendanceNfcScanResult }
+  | { status: 'unknown' };

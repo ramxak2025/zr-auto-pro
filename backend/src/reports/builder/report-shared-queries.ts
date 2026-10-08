@@ -205,7 +205,9 @@ export async function suppliersOwedTotal(pool: Pool, tenantId: string): Promise<
               COALESCE((SELECT SUM(d.total_amount) FROM deliveries d
                          WHERE d.supplier_id = s.id AND d.tenant_id = $1 AND d.deleted_at IS NULL), 0)
             - COALESCE((SELECT SUM(sp.amount) FROM supplier_payments sp
-                         WHERE sp.supplier_id = s.id AND sp.tenant_id = $1 AND sp.reversed_at IS NULL), 0) AS balance
+                         WHERE sp.supplier_id = s.id AND sp.tenant_id = $1 AND sp.reversed_at IS NULL), 0)
+            - COALESCE((SELECT SUM(sr.total_amount) FROM supplier_returns sr
+                         WHERE sr.supplier_id = s.id AND sr.tenant_id = $1), 0) AS balance
          FROM suppliers s WHERE s.tenant_id = $1) x`,
     [tenantId],
   );

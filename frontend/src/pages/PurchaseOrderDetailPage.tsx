@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Pencil, PackageCheck, XCircle, Send, Clock, Wallet, CalendarClock, ShoppingCart } from 'lucide-react';
+import { Pencil, PackageCheck, XCircle, Send, Clock, Wallet, CalendarClock, ShoppingCart, Undo2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { purchaseOrdersApi } from '../api/services';
+import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Button,
@@ -26,11 +26,14 @@ import {
 import type { DataTableColumn } from '../ui';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
 
-import type { PurchaseOrder, PurchaseOrderItem } from '../types';
+import type { PurchaseOrder, PurchaseOrderItem, PurchaseReceiptContext } from '../types';
 import { formatMoney, formatDateTime, formatDateShort, formatDayKey } from '../../../shared/utils/formatters';
 import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { formatQty } from '../utils/units';
 import { parseNumberInput } from '../components/warehouse/format';
+import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
+import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
+import { sumReceiptLineCents } from '../../../shared/utils/procurementInput';
 
 const outstanding = (it: PurchaseOrderItem) => Math.max(0, it.quantity - it.receivedQuantity);
 
@@ -47,7 +50,7 @@ const parseQty = (t: string): number => {
 };
 
 type PayMode = 'debt' | 'paid';
-type ReceiveLine = { itemId: string; receivedQuantity: number; purchasePrice: number };
+type ReceiveLine = { itemId: string; receivedQuantity: number; purchasePrice: number; sellPrice?: number };
 
 export default function PurchaseOrderDetailPage() {
   const navigate = useNavigate();
@@ -56,6 +59,7 @@ export default function PurchaseOrderDetailPage() {
   const { hasPermission } = useAuth();
   // Мутации заказа (приёмка/отмена/правка) — suppliers_manage (волна Битрикс24).
   const canWrite = hasPermission('suppliers_manage');
+  const recovery = useProcurementRecovery({ operation: 'po-receive', sourceId: id });
   // «Сегодня» календарём АВТОСЕРВИСА, а не браузера (157). Потолок даты
   // поставки сервер считает в поясе тенанта: бухгалтер, открывший админку из
   // другого региона, иначе либо не мог выбрать сегодняшний день, либо получал
@@ -69,6 +73,7 @@ export default function PurchaseOrderDetailPage() {
   // товара (миграция 098).
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   const [prices, setPrices] = useState<Record<string, string>>({});
+  const [sellPrices, setSellPrices] = useState<Record<string, string>>({});
   // Выбранный способ приёмки для подтверждения: 'debt' (в долг) / 'paid'
   // (оплатить сразу). null — диалог закрыт.
   const [pendingMode, setPendingMode] = useState<PayMode | null>(null);
@@ -146,16 +151,22 @@ export default function PurchaseOrderDetailPage() {
     // «сегодня» в браузере дальневосточного пояса может быть «завтра» по МСК,
     // и сервер честно отклонил бы такую приёмку как будущую. Без поля сервер
     // ставит свой текущий момент — прежнее поведение.
-    mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode; receivedAt?: string }) =>
-      purchaseOrdersApi.receive(id as string, vars),
+    mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode; receivedAt?: string; requestId?: string }) =>
+      recovery.execute<PurchaseOrder>({ operation: 'po-receive', sourceId: id as string }, vars),
     onSuccess: (res, vars) => {
+      if (!recovery.owns(res)) return;
       invalidateAfterMutation(res.data);
       invalidateStock();
       invalidateSupplier(res.data.supplierId);
       setReceiveMode(false);
       setDeltas({});
       setPrices({});
-      const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
+      setSellPrices({});
+
+      const total =
+        sumReceiptLineCents(
+          vars.items.map((line) => ({ quantity: line.receivedQuantity, unitPrice: line.purchasePrice })),
+        ) / 100;
       const dateSuffix = vars.receivedAt ? ` (дата поставки ${vars.receivedAt.split('-').reverse().join('.')})` : '';
       setReceiveDate(today);
       toast.success(
@@ -164,7 +175,21 @@ export default function PurchaseOrderDetailPage() {
           : `Поставка на ${formatMoney(total)} принята в долг поставщику`) + dateSuffix,
       );
     },
-    onError: (err: any) => toast.error(err?.response?.data?.message || 'Не удалось провести приёмку'),
+    onError: (err: any) => {
+      if (!recovery.owns(err)) return;
+      if (err?.code) {
+        toast.error(err.message);
+        return;
+      }
+
+      toast.error(
+        err?.response?.status === 409
+          ? 'Ключ приёмки связан с другими данными. Проверьте историю поставок перед повтором.'
+          : /остат|склад|количеств/i.test(String(err?.response?.data?.message ?? ''))
+            ? 'Остаток изменился. Обновите склад и проверьте данные заказа.'
+            : 'Не удалось подтвердить приёмку. Поля сохранены; повторите с теми же значениями.',
+      );
+    },
   });
 
   // Смена даты УЖЕ ПРОВЕДЁННОЙ поставки (159). Сервер одной транзакцией
@@ -186,16 +211,39 @@ export default function PurchaseOrderDetailPage() {
 
   const items = useMemo(() => po?.items || [], [po]);
 
+  const receiptProductIdsKey = [...new Set(items.map((item) => item.productId))].sort().join(',');
+  const receiptContextQuery = useQuery<PurchaseReceiptContext[]>({
+    queryKey: ['supplier-purchase-context', receiptProductIdsKey, receiveDate],
+    enabled: receiveMode && !!receiptProductIdsKey && !!receiveDate,
+    queryFn: async () => {
+      const ids = receiptProductIdsKey.split(',').filter(Boolean);
+      const chunks: string[][] = [];
+      for (let index = 0; index < ids.length; index += 200) chunks.push(ids.slice(index, index + 200));
+      const all: PurchaseReceiptContext[] = [];
+      for (const chunk of chunks) all.push(...(await suppliersApi.purchaseContext(chunk, receiveDate)).data);
+      return all;
+    },
+    staleTime: 0,
+  });
+  const receiptContextByProduct = useMemo(
+    () => new Map((receiptContextQuery.data ?? []).map((context) => [context.productId, context])),
+    [receiptContextQuery.data],
+  );
+
   const enterReceiveMode = () => {
     const initDeltas: Record<string, string> = {};
     const initPrices: Record<string, string> = {};
+    const initSellPrices: Record<string, string> = {};
     for (const it of items) {
       initDeltas[it.id] = String(outstanding(it));
       // По умолчанию — цена из заказа (снимок costPrice); владелец правит по факту.
       initPrices[it.id] = it.costPrice ? String(it.costPrice) : '';
+      initSellPrices[it.id] = it.sellPrice == null ? '' : String(it.sellPrice);
     }
     setDeltas(initDeltas);
     setPrices(initPrices);
+    setSellPrices(initSellPrices);
+
     setReceiveDate(today);
     setReceiveMode(true);
   };
@@ -204,6 +252,7 @@ export default function PurchaseOrderDetailPage() {
     setReceiveMode(false);
     setDeltas({});
     setPrices({});
+    setSellPrices({});
   };
 
   // Строки к приёмке — только с положительным «принять сейчас» (кламп к остатку).
@@ -212,7 +261,14 @@ export default function PurchaseOrderDetailPage() {
       .map((it) => {
         const qty = Math.min(parseQty(deltas[it.id] ?? ''), outstanding(it));
         if (qty <= 0) return null;
-        return { itemId: it.id, receivedQuantity: qty, purchasePrice: parsePrice(prices[it.id] ?? '') };
+        const sellPriceText = sellPrices[it.id] ?? '';
+        const sellPrice = sellPriceText.trim() === '' ? undefined : parsePrice(sellPriceText);
+        return {
+          itemId: it.id,
+          receivedQuantity: qty,
+          purchasePrice: parsePrice(prices[it.id] ?? ''),
+          ...(sellPrice !== undefined ? { sellPrice } : {}),
+        };
       })
       .filter((x): x is ReceiveLine => x != null);
 
@@ -222,7 +278,7 @@ export default function PurchaseOrderDetailPage() {
       items.reduce((sum, it) => {
         const qty = Math.min(parseQty(deltas[it.id] ?? ''), outstanding(it));
         if (qty <= 0) return sum;
-        return sum + qty * parsePrice(prices[it.id] ?? '');
+        return sum + sumReceiptLineCents([{ quantity: qty, unitPrice: parsePrice(prices[it.id] ?? '') }]) / 100;
       }, 0),
     [items, deltas, prices],
   );
@@ -236,7 +292,7 @@ export default function PurchaseOrderDetailPage() {
   };
 
   const confirmReceive = () => {
-    if (!pendingMode) return;
+    if (!pendingMode || receiveMutation.isPending) return;
     const payloadItems = buildReceiveItems();
     if (payloadItems.length === 0) {
       toast.error('Укажите количество для приёмки');
@@ -246,10 +302,21 @@ export default function PurchaseOrderDetailPage() {
       toast.error('Дата поставки не может быть в будущем');
       return;
     }
+    const receivingIds = new Set(payloadItems.map((item) => item.itemId));
+    const invalidSellPrice = items.find((item) => {
+      if (!receivingIds.has(item.id) || (sellPrices[item.id] ?? '').trim() === '') return false;
+      const parsed = parseNumberInput(sellPrices[item.id]);
+      return parsed === null || parsed < 0;
+    });
+    if (invalidSellPrice) {
+      toast.error(`Проверьте розничную цену для «${invalidSellPrice.name}»`);
+      return;
+    }
+    const receivedAt = receiveDate !== today ? receiveDate : undefined;
     receiveMutation.mutate({
       items: payloadItems,
       paymentMode: pendingMode,
-      receivedAt: receiveDate !== today ? receiveDate : undefined,
+      receivedAt,
     });
   };
 
@@ -276,6 +343,17 @@ export default function PurchaseOrderDetailPage() {
   if (isLoading || isError) {
     return (
       <div className="mx-auto w-full max-w-3xl space-y-5">
+        {canWrite && (
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={() => {
+              invalidateStock();
+              void queryClient.invalidateQueries({ queryKey: ['purchase-order', id] });
+              void queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+              toast.success('Результат приёмки восстановлен');
+            }}
+          />
+        )}
         <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
         <QueryState
           isLoading={isLoading}
@@ -299,6 +377,17 @@ export default function PurchaseOrderDetailPage() {
   if (!po) {
     return (
       <div className="mx-auto w-full max-w-3xl space-y-5">
+        {canWrite && (
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={() => {
+              invalidateStock();
+              void queryClient.invalidateQueries({ queryKey: ['purchase-order', id] });
+              void queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+              toast.success('Результат приёмки восстановлен');
+            }}
+          />
+        )}
         <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
         <Card>
           <EmptyState
@@ -395,6 +484,52 @@ export default function PurchaseOrderDetailPage() {
       render: (it) => <Money value={it.total} className="font-medium text-ink" />,
       footer: () => <Money value={po.total} />,
     },
+    ...(receiveMode
+      ? ([
+          {
+            key: 'sellPrice',
+            header: 'Розница',
+            numeric: true,
+            interactive: true,
+            render: (it) => (
+              <Input
+                size="sm"
+                inputMode="decimal"
+                aria-label={`Розничная цена — ${it.name}`}
+                value={sellPrices[it.id] ?? ''}
+                disabled={outstanding(it) === 0}
+                placeholder="Сохранить"
+                onChange={(e) => setSellPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                className="w-28 text-right tabular-nums"
+              />
+            ),
+          },
+          {
+            key: 'previousPurchase',
+            header: 'История закупки',
+            hideBelow: 'md',
+            render: (it) => {
+              const previous = receiptContextByProduct.get(it.productId)?.previousPurchase;
+              if (receiptContextQuery.isLoading) return <span className="text-xs text-ink-3">Загрузка истории…</span>;
+              if (receiptContextQuery.isError)
+                return <span className="text-xs text-ink-3">История недоступна · повторите загрузку выше</span>;
+              if (!previous) return <span className="text-xs text-ink-3">Нет истории до этой даты</span>;
+              const delta = parsePrice(prices[it.id] ?? '') - previous.price;
+              const pct = previous.price > 0 ? ` · ${((delta / previous.price) * 100).toFixed(1)}%` : '';
+              const sign = delta > 0 ? '+' : '';
+              return (
+                <span className="text-xs text-ink-3">
+                  {formatMoney(previous.price)} · {formatDateShort(previous.date)}
+                  <br />
+                  Разница {sign}
+                  {formatMoney(delta)}
+                  {pct}
+                </span>
+              );
+            },
+          },
+        ] as DataTableColumn<PurchaseOrderItem>[])
+      : []),
   ];
 
   const actions = canWrite
@@ -478,6 +613,17 @@ export default function PurchaseOrderDetailPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
+      {canWrite && (
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={() => {
+            invalidateStock();
+            void queryClient.invalidateQueries({ queryKey: ['purchase-order', id] });
+            void queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+            toast.success('Результат приёмки восстановлен');
+          }}
+        />
+      )}
       <PageHeader
         title={po.supplierName || 'Без поставщика'}
         icon={ShoppingCart}
@@ -532,29 +678,55 @@ export default function PurchaseOrderDetailPage() {
               <p className="text-ink-3 sm:col-span-2">Черновик: заказ ещё не оформлен</p>
             )}
           </dl>
+          {po.financialReturnUnavailableReason && (
+            <p className="mt-3 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2">
+              {po.financialReturnUnavailableReason}
+            </p>
+          )}
+          {po.sourceDeliveryIds?.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {po.sourceDeliveryIds.map((deliveryId, index) => (
+                <Button
+                  key={deliveryId}
+                  variant="secondary"
+                  icon={Undo2}
+                  onClick={() => navigate(`/suppliers/${po.supplierId}?tab=deliveries&returnDeliveryId=${deliveryId}`)}
+                >
+                  Возврат по поставке {index + 1} · {deliveryId.slice(0, 8)}
+                </Button>
+              ))}
+            </div>
+          ) : null}
         </CardBody>
       </Card>
 
       {/* Дата поставки (159) — в режиме приёмки. По умолчанию сегодня; можно
           выбрать прошедшую: ею сервер датирует склад, накладную и деньги. */}
       {receiveMode && (
-        <Card padding="sm">
-          <Field
-            label="Дата поставки"
-            htmlFor="po-receive-date"
-            inline
-            hint="Можно указать прошедшую — этой датой запишутся приход на склад, накладная и деньги"
-          >
-            <Input
-              id="po-receive-date"
-              type="date"
-              max={today}
-              value={receiveDate}
-              onChange={(e) => setReceiveDate(e.target.value)}
-              className="sm:w-48"
-            />
-          </Field>
-        </Card>
+        <>
+          <Card padding="sm">
+            <Field
+              label="Дата поставки"
+              htmlFor="po-receive-date"
+              inline
+              hint="Можно указать прошедшую — этой датой запишутся приход на склад, накладная и деньги"
+            >
+              <Input
+                id="po-receive-date"
+                type="date"
+                max={today}
+                value={receiveDate}
+                onChange={(e) => setReceiveDate(e.target.value)}
+                className="sm:w-48"
+              />
+            </Field>
+          </Card>
+          {receiptContextQuery.isError && (
+            <Button variant="secondary" onClick={() => receiptContextQuery.refetch()}>
+              Не удалось загрузить историю закупок · Повторить
+            </Button>
+          )}
+        </>
       )}
 
       <Card>

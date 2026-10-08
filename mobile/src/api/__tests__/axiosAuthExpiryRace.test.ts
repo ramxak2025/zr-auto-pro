@@ -40,7 +40,7 @@ describe('axios auth-expiry epoch', () => {
 
   it('recipient acknowledgement cannot inherit login B before async interceptors start', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const bound = mod.createSessionBoundClient('token-A');
     const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => ok(config));
@@ -56,7 +56,7 @@ describe('axios auth-expiry epoch', () => {
 
   it('recipient acknowledgement uses its own bearer while the session is current', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const bound = mod.createSessionBoundClient('token-A');
     const adapter = jest.fn(async (config: InternalAxiosRequestConfig) => ok(config));
@@ -69,7 +69,7 @@ describe('axios auth-expiry epoch', () => {
 
   it('current 401 notifies synchronously and never owns persistent token cleanup', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn(() => {
       // Model a new login committed synchronously by the auth listener.
@@ -109,7 +109,7 @@ describe('axios — 401 в окне перевыпуска сессии', () => 
 
   it('чужой 401 внутри окна НЕ гасит сессию, но остаётся ошибкой запроса', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn();
     const unsubscribe = mod.onAuthExpired(expired);
@@ -130,7 +130,7 @@ describe('axios — 401 в окне перевыпуска сессии', () => 
 
   it('401 самого перевыпуска гасит сессию даже внутри окна — это «войдите заново»', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn();
     const unsubscribe = mod.onAuthExpired(expired);
@@ -149,7 +149,7 @@ describe('axios — 401 в окне перевыпуска сессии', () => 
 
   it('повторное закрытие окна идемпотентно — счётчик не уходит в минус', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn();
     const unsubscribe = mod.onAuthExpired(expired);
@@ -199,7 +199,7 @@ describe('axios — 401, который не означает конец сес�
 
   it('401 с HTML в теле НЕ гасит сессию — это подмена от узла оператора, а не наш сервер', async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn();
     const unsubscribe = mod.onAuthExpired(expired);
@@ -219,7 +219,7 @@ describe('axios — 401, который не означает конец сес�
     // обмене — штатная гонка. Раньше он шёл в общий убийца сессии, и одна
     // потерянная ротация выкидывала человека окончательно.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const expired = jest.fn();
     const unsubscribe = mod.onAuthExpired(expired);
@@ -240,7 +240,7 @@ describe('axios — 401, который не означает конец сес�
   it('разлогин несёт диагностику: причина, хост, статус и путь без id', async () => {
     // Без этого три с половиной месяца событий не могли назвать причину.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('../axios') as typeof import('../axios');
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
     mod.setAuthToken('token-A');
     const seen: { reason?: string; details?: Record<string, unknown> }[] = [];
     const unsubscribe = mod.onAuthExpired((reason, details) => {
@@ -270,5 +270,63 @@ describe('axios — 401, который не означает конец сес�
     expect(seen[0].details?.path).toBe('/schedule/:id');
     expect(typeof seen[0].details?.host).toBe('string');
     unsubscribe();
+  });
+});
+
+describe('saved account epochs and anonymous second-stage Add', () => {
+  beforeEach(() => jest.resetModules());
+  it('same JWT A→B→A never revives a deferred dispatch or response lease', async () => {
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
+    mod.setAuthToken('same-A', true);
+    const lease = mod.captureAuthSession();
+    const bound = mod.createSessionBoundClient('same-A');
+    const adapter = jest.fn(async (cfg: InternalAxiosRequestConfig) => ok(cfg));
+    mod.default.defaults.adapter = adapter;
+    const pending = bound.post('/supplier-test');
+    mod.setAuthToken('B', true);
+    mod.setAuthToken('same-A', true);
+    await expect(pending).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    expect(adapter).not.toHaveBeenCalled();
+    expect(lease.isCurrent()).toBe(false);
+  });
+  it('failed anonymous select-point Add 401 cannot expire A or carry A bearer', async () => {
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
+    mod.setAuthToken('A', true);
+    const expired = jest.fn();
+    const off = mod.onAuthExpired(expired);
+    const lease = mod.captureAuthSession();
+    const adapter = jest.fn(async (cfg: InternalAxiosRequestConfig) => {
+      throw http401(cfg);
+    });
+    mod.default.defaults.adapter = adapter;
+    await expect(
+      mod.default.post('/auth/select-point', { selectToken: 'one-use-B', pointId: 'B-point' }),
+    ).rejects.toMatchObject({ response: { status: 401 } });
+    expect(adapter.mock.calls[0][0].headers.Authorization).toBeUndefined();
+    expect(expired).not.toHaveBeenCalled();
+    expect(lease.isCurrent()).toBe(true);
+    expect(mod.captureAuthSession().token).toBe('A');
+    off();
+  });
+  it('captured A cleanup finishes after B without expiry or network-success side effects', async () => {
+    const mod = jest.requireActual('../axios') as typeof import('../axios');
+    mod.setAuthToken('A', true);
+    const cleanup = mod.createCapturedAuthRequester('A');
+    mod.setAuthToken('B', true);
+    const success = jest.fn();
+    const expired = jest.fn();
+    const off = mod.onRequestSucceeded(success);
+    const offExpired = mod.onAuthExpired(expired);
+    const adapter = jest.fn(async (cfg: InternalAxiosRequestConfig) => ok(cfg));
+    mod.default.defaults.adapter = adapter;
+    await expect(cleanup({ method: 'delete', url: '/push/token', data: { token: 'device' } })).resolves.toMatchObject({
+      status: 200,
+    });
+    expect(adapter.mock.calls[0][0].headers.Authorization).toBe('Bearer A');
+    expect(success).not.toHaveBeenCalled();
+    expect(expired).not.toHaveBeenCalled();
+    expect(mod.captureAuthSession().token).toBe('B');
+    off();
+    offExpired();
   });
 });

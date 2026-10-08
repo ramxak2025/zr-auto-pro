@@ -35,6 +35,7 @@ import {
   ADMIN_BAR_TOP_LIFT,
   ADMIN_BAR_BOTTOM_LIFT,
 } from '../hooks/useAdminTabBarHeight';
+import { createMoreTabPressHandlers, openAccountPicker } from './accountPickerNavigation';
 
 /** Tab metadata for the admin shell — route name → label + icons. */
 export interface AdminTabDef {
@@ -204,6 +205,11 @@ export default function AdminTabBar({
                 palette={palette}
                 reduceMotion={reduceMotion}
                 onPress={() => navigateToTab(index)}
+                onLongPress={
+                  tab.routeName === 'AdminMore'
+                    ? () => openAccountPicker(navigation, 'AdminMore', 'AdminMoreHome')
+                    : undefined
+                }
               />
             );
           })}
@@ -219,9 +225,12 @@ interface AdminTabItemProps {
   palette: ReturnType<typeof useColors>;
   reduceMotion: boolean;
   onPress: () => void;
+  onLongPress?: () => void;
 }
 
-function AdminTabItem({ tab, focused, palette, reduceMotion, onPress }: AdminTabItemProps) {
+function AdminTabItem({ tab, focused, palette, reduceMotion, onPress, onLongPress }: AdminTabItemProps) {
+  const longPressed = React.useRef(false);
+  const handlers = createMoreTabPressHandlers(longPressed, onPress, onLongPress);
   // Active tab pops a touch more (1.08) so the focused icon reads as clearly
   // emphasised — the focused glyph (e.g. the filled `pricetags` price-tag) sits
   // on the soft pill in `primaryText`, never a flat low-contrast blob.
@@ -240,7 +249,10 @@ function AdminTabItem({ tab, focused, palette, reduceMotion, onPress }: AdminTab
   return (
     <Pressable
       style={styles.item}
-      onPress={onPress}
+      onPressIn={handlers.onPressIn}
+      onLongPress={onLongPress ? handlers.onLongPress : undefined}
+      delayLongPress={360}
+      onPress={handlers.onPress}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
       accessibilityLabel={tab.label}

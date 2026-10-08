@@ -46,7 +46,7 @@ export class PurchaseOrdersController {
   @RequirePermission('suppliers_access')
   @Get(':id')
   getById(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.purchaseOrders.getById(id, user.tenantID);
+    return this.purchaseOrders.getById(id, user.tenantID, actorPointId(user));
   }
 
   // ─── Create (draft) ────────────────────────────────────────────────────

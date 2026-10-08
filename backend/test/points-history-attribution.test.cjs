@@ -313,9 +313,11 @@ test('состав разбираемых таблиц у кода и мигра
   ];
   assert.deepEqual(
     tables.slice().sort(),
-    ['checks', 'clients', ...MONEY_TABLES, ...POINT_TABLES_167].sort(),
+    // 180 adds an empty return ledger: later first-point attachment follows its source.
+    ['checks', 'clients', ...MONEY_TABLES, ...POINT_TABLES_167, 'supplier_returns', 'attendance_nfc_tags', 'attendance_nfc_requests', 'public_booking_pages', 'public_booking_requests', 'booking_operation_keys'].sort(),
     'список таблиц разъехался: по забытой таблице тенант увидит пустоту',
   );
+  assert.ok(tables.indexOf('supplier_returns') > tables.indexOf('deliveries'), 'returns inherit the source point after deliveries');
   assert.ok(
     tables.indexOf('expenses') > tables.indexOf('salary_payouts'),
     'порядок важен и в коде: расход зарплаты наследует филиал выплаты',

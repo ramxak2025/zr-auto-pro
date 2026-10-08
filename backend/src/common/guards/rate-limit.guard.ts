@@ -125,7 +125,22 @@ export class RateLimitGuard implements CanActivate {
     // fine per-(ip,account) bucket + a coarse per-ip backstop) — see below.
     const checks: Array<{ key: string; max: number }> = [];
 
-    if (/\/auth\/(login|register)\b/.test(path)) {
+    // Express matches static route segments case-insensitively. Preserve the
+    // captured slug's case for validation and the shared anonymous budget.
+    const publicBooking = path.match(/^(?:\/api)?\/public\/bookings\/([^/]+)\/requests\/?$/i);
+    if (method === 'POST' && publicBooking) {
+      // Anonymous requests cannot multiply their budget by rotating JWTs or
+      // arbitrary client headers. request.ip is the existing trusted-proxy IP.
+      let slug = 'invalid';
+      try {
+        const decoded = decodeURIComponent(publicBooking[1]);
+        if (/^[a-z0-9][a-z0-9-]{2,63}$/.test(decoded)) slug = decoded;
+      } catch {
+        // Malformed path encoding still consumes the anonymous IP budget.
+      }
+      checks.push({ key: `public-booking:${ip}:${slug}`, max: 5 });
+      checks.push({ key: `public-booking-ip:${ip}`, max: 20 });
+    } else if (/\/auth\/(login|register)\b/.test(path)) {
       // Brute-force protection on login/register, hardened against many users
       // arriving from ONE upstream IP. When the mobile app fails over to the
       // Yandex reserve API-gateway, all traffic reaches us from the gateway's

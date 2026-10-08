@@ -136,6 +136,9 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // до появления ключа. Без явного дефолта легаси-мастер без матрицы (role_id
   // NULL) потерял бы просмотр = регресс.
   knowledge_view: true,
+  // Shared templates are granted only by the migrated system Admin role
+  // matrix; the role_id-null safety fallback must not become a bypass.
+  templates_shared_manage: false,
 };
 
 /**

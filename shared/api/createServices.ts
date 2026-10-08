@@ -1,3 +1,11 @@
+import type {
+  AttendanceNfcTag,
+  CreatedAttendanceNfcTag,
+  AttendanceNfcStatus,
+  AttendanceNfcScanResult,
+  AttendanceNfcRequestResult,
+} from '../types';
+import type { AttendanceNfcScanRequest } from './types';
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared API Service Factories
 //  Each factory accepts an HTTP client (axios-shaped) and returns the API module.
@@ -18,6 +26,9 @@ interface HttpClient {
 }
 import type {
   User,
+  EmployeeDirection,
+  ServiceVisibilityConfig,
+  ServiceVisibilityRule,
   Role,
   RoleMatrix,
   EffectivePermissionsResult,
@@ -38,6 +49,9 @@ import type {
   TenantLocation,
   Supplier,
   Delivery,
+  SupplierReturn,
+  ReturnDeliveryRequest,
+  PurchaseReceiptContext,
   UpdateDeliveryRequest,
   SupplierPayment,
   MasterSalary,
@@ -155,6 +169,14 @@ import type {
   Booking,
   BookingMutationResult,
   BookingSettings,
+  PublicBookingPageSettings,
+  PublicBookingResource,
+  PublicBookingLanding,
+  PublicBookingSlotPage,
+  PublicBookingReceipt,
+  PublicBookingRecovery,
+  StaffPublicBookingRequest,
+  PublicBookingRequestStatus,
   CashShift,
   CashShiftReport,
   ClientDebtSummary,
@@ -263,6 +285,12 @@ import type {
   UpdateBookingRequest,
   ConvertBookingRequest,
   UpdateBookingSettingsRequest,
+  BookingOperationRequest,
+  LinkBookingClientRequest,
+  ApprovePublicBookingRequest,
+  PutPublicBookingSettingsRequest,
+  PublicBookingSlotsParams,
+  SubmitPublicBookingRequest,
   UpdateProfileRequest,
   UpdateProfileResponse,
   ChangePasswordRequest,
@@ -314,6 +342,7 @@ import type {
   CreateExpenseRequest,
   UpdateExpenseRequest,
   CheckTemplateServiceInput,
+  PutServiceVisibilityRuleRequest,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -429,8 +458,7 @@ export function createProfileApi(api: HttpClient) {
     changePassword: (data: ChangePasswordRequest) => api.post<{ message: string }>('/profile/password', data),
     getMyChangeRequest: () => api.get<ProfileChangeRequest | null>('/profile/change-requests/mine'),
     listChangeRequests: () => api.get<ProfileChangeRequest[]>('/profile/change-requests'),
-    approveChangeRequest: (id: string) =>
-      api.post<ProfileChangeRequest>(`/profile/change-requests/${id}/approve`),
+    approveChangeRequest: (id: string) => api.post<ProfileChangeRequest>(`/profile/change-requests/${id}/approve`),
     rejectChangeRequest: (id: string) => api.post<ProfileChangeRequest>(`/profile/change-requests/${id}/reject`),
   };
 }
@@ -445,6 +473,11 @@ export function createUsersApi(api: HttpClient) {
      * чужой сотрудник ведёт к неверным деньгам — в пикере мастера в Кассе).
      */
     getAll: (params?: UsersQuery) => api.get<User[]>('/users', { params }),
+    getDirections: () => api.get<EmployeeDirection[]>('/users/directions'),
+    createDirection: (data: { name: string }) => api.post<EmployeeDirection>('/users/directions', data),
+    updateDirection: (id: string, data: { name: string }) =>
+      api.patch<EmployeeDirection>(`/users/directions/${id}`, data),
+    deleteDirection: (id: string) => api.delete(`/users/directions/${id}`),
     getMasters: (params?: UsersQuery) => api.get<User[]>('/users/masters', { params }),
     getById: (id: string) => api.get<User>(`/users/${id}`),
     create: (data: CreateUserRequest) => api.post<User>('/users', data),
@@ -530,8 +563,11 @@ export function createTenantsApi(api: HttpClient) {
       create: (tenantId: string, data: { name: string; address?: string }) =>
         api.post<TenantPoint>(`/tenants/${tenantId}/points`, data),
       /** isMain менять нельзя: основной сервис можно только переименовать. */
-      update: (tenantId: string, pointId: string, data: Partial<Pick<TenantPoint, 'name' | 'address' | 'isActive' | 'sortOrder'>>) =>
-        api.patch<TenantPoint>(`/tenants/${tenantId}/points/${pointId}`, data),
+      update: (
+        tenantId: string,
+        pointId: string,
+        data: Partial<Pick<TenantPoint, 'name' | 'address' | 'isActive' | 'sortOrder'>>,
+      ) => api.patch<TenantPoint>(`/tenants/${tenantId}/points/${pointId}`, data),
       /**
        * «Удалить» = архив (isActive=false): старые чеки точку сохраняют.
        * Основной сервис архивировать нельзя — сервер ответит 400 (это сам
@@ -589,8 +625,7 @@ export function createPointsApi(api: HttpClient) {
      * (authApi.switchSessionPoint, 167), сотрудник — выходом и входом в нужный
      * филиал (authApi.loginWithPointSelect → authApi.selectPoint).
      */
-    switch: (pointId: string | null) =>
-      api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),
+    switch: (pointId: string | null) => api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),
     /**
      * Состав филиала (user_management). Сторона раздела «Филиалы»; НОВЫЙ UI
      * настраивает доступ в карточке сотрудника — setUserPoints ниже, а раздел
@@ -876,12 +911,17 @@ export function createProductsApi(api: HttpClient) {
 
 export function createServicesApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams & { category?: string }) =>
+    getAll: (params?: PaginationParams & { category?: string; preferredOnly?: boolean }) =>
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
     create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
     update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
     remove: (id: string) => api.delete(`/services/${id}`),
+    getVisibilityConfig: () => api.get<ServiceVisibilityConfig>('/services/visibility/config'),
+    putVisibilityRule: (data: PutServiceVisibilityRuleRequest) =>
+      api.put<ServiceVisibilityRule>('/services/visibility/rule', data),
+    deleteServiceVisibilityRule: (id: string) => api.delete(`/services/visibility/service/${id}`),
+    deleteCategoryVisibilityRule: (path: string) => api.delete('/services/visibility/category', { params: { path } }),
   };
 }
 
@@ -1023,8 +1063,7 @@ export function createChecksApi(api: HttpClient) {
      * validates; 400 otherwise). Orthogonal to payment — sets only the
      * work_status flag; returns the full updated check.
      */
-    setWorkStatus: (id: string, workStatus: string) =>
-      api.patch<Check>(`/checks/${id}/work-status`, { workStatus }),
+    setWorkStatus: (id: string, workStatus: string) => api.patch<Check>(`/checks/${id}/work-status`, { workStatus }),
     /**
      * Owner-configurable board columns (091). Read is open to board-viewing
      * roles; create/update/remove are owner-class only (server-enforced).
@@ -1068,8 +1107,7 @@ export function createChecksApi(api: HttpClient) {
      */
     locations: {
       list: () => api.get<TenantLocation[]>('/checks/locations'),
-      create: (data: { name: string; sortOrder?: number }) =>
-        api.post<TenantLocation>('/checks/locations', data),
+      create: (data: { name: string; sortOrder?: number }) => api.post<TenantLocation>('/checks/locations', data),
       update: (id: string, data: { name?: string; sortOrder?: number; isActive?: boolean }) =>
         api.patch<TenantLocation>(`/checks/locations/${id}`, data),
       remove: (id: string) => api.delete(`/checks/locations/${id}`),
@@ -1086,6 +1124,16 @@ export function createSuppliersApi(api: HttpClient) {
     remove: (id: string) => api.delete(`/suppliers/${id}`),
     getDeliveries: (params?: { supplierId?: string }) => api.get<Delivery[]>('/suppliers/deliveries', { params }),
     createDelivery: (data: CreateDeliveryRequest) => api.post<{ id: string }>('/suppliers/deliveries', data),
+    /** Refresh on receipt date changes; products are checked against the active branch. */
+    purchaseContext: (productIds: string[], before?: string) =>
+      api.get<PurchaseReceiptContext[]>('/suppliers/purchase-context', {
+        params: { productIds: productIds.join(','), before },
+      }),
+    returnDelivery: (id: string, data: ReturnDeliveryRequest) =>
+      api.post<SupplierReturn>(`/suppliers/deliveries/${id}/returns`, data),
+    getReturns: (params?: { supplierId?: string; deliveryId?: string }) =>
+      api.get<SupplierReturn[]>('/suppliers/returns', { params }),
+    getDeliveryReturns: (id: string) => api.get<SupplierReturn[]>(`/suppliers/deliveries/${id}/returns`),
     getDeliveryById: (id: string) => api.get<Delivery>(`/suppliers/deliveries/${id}`),
     /**
      * 154 — корректировка поставки: полный новый набор строк / цена / дата /
@@ -1397,10 +1445,16 @@ export function createReportsApi(api: HttpClient) {
      * клиенты в этом случае блок не рендерят. Гейт — financial_reports.
      */
     getTagAnalytics: (params: DateRangeParams) =>
-      api.get<Array<{ tagId: string; name: string; color: string | null; checksCount: number; revenue: number; profit: number }>>(
-        '/reports/tags',
-        { params },
-      ),
+      api.get<
+        Array<{
+          tagId: string;
+          name: string;
+          color: string | null;
+          checksCount: number;
+          revenue: number;
+          profit: number;
+        }>
+      >('/reports/tags', { params }),
     getCashFlow: (params: CashFlowParams) =>
       api.get<{
         // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота: total = cash + card +
@@ -1626,6 +1680,15 @@ export function createShiftsApi(api: HttpClient) {
   return {
     getAll: (params?: ShiftsQuery) => api.get<Shift[]>('/shifts', { params }),
     getMy: () => api.get<Shift[]>('/shifts/my'),
+    nfcRequestResult: (requestId: string) => api.get<AttendanceNfcRequestResult>(`/shifts/nfc/requests/${requestId}`),
+    nfcStatus: () => api.get<AttendanceNfcStatus>('/shifts/nfc/status'),
+    scanNfc: (data: AttendanceNfcScanRequest) => api.post<AttendanceNfcScanResult>('/shifts/nfc/scan', data),
+    nfcTags: () => api.get<AttendanceNfcTag[]>('/shifts/nfc/tags'),
+    createNfcTag: (data: { name: string }) => api.post<CreatedAttendanceNfcTag>('/shifts/nfc/tags', data),
+    activateNfcTag: (id: string, token: string) =>
+      api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/activate`, { token }),
+    renameNfcTag: (id: string, name: string) => api.patch<AttendanceNfcTag>(`/shifts/nfc/tags/${id}`, { name }),
+    revokeNfcTag: (id: string) => api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/revoke`),
     open: (data?: Record<string, unknown>) => api.post<Shift>('/shifts/open', data),
     close: (id: string) => api.post<Shift>(`/shifts/${id}/close`),
   };
@@ -1914,9 +1977,9 @@ export function createCheckTemplatesApi(api: HttpClient) {
   return {
     list: () => api.get<CheckTemplate[]>('/check-templates'),
     /**
-     * `folderId` — put the new template into one of the actor's personal
-     * folders. `shared: true` — publish as общий template (owner-class only;
-     * for everyone else the backend creates a personal template).
+     * `folderId` — put the new template into a folder in the matching scope.
+     * `shared: true` — publish as a tenant-wide template; requires the explicit
+     * `templates_shared_manage` permission (director/superadmin are implicit).
      */
     create: (data: {
       name: string;
@@ -1932,15 +1995,16 @@ export function createCheckTemplatesApi(api: HttpClient) {
       data: Partial<Pick<CheckTemplate, 'name' | 'products'>> & {
         services?: CheckTemplateServiceInput[];
         folderId?: string | null;
+        shared?: boolean;
       },
     ) => api.put<CheckTemplate>(`/check-templates/${id}`, data),
     remove: (id: string) => api.delete(`/check-templates/${id}`),
-    /** Personal folders of the current employee (flat list, hierarchy via parentId). */
+    /** The current employee's private folders and all tenant-shared folders. */
     folders: {
       list: () => api.get<CheckTemplateFolder[]>('/check-templates/folders'),
-      create: (data: { name: string; parentId?: string | null; sort?: number }) =>
+      create: (data: { name: string; parentId?: string | null; sort?: number; isShared?: boolean }) =>
         api.post<CheckTemplateFolder>('/check-templates/folders', data),
-      update: (id: string, data: { name?: string; parentId?: string | null; sort?: number }) =>
+      update: (id: string, data: { name?: string; parentId?: string | null; sort?: number; isShared?: boolean }) =>
         api.patch<CheckTemplateFolder>(`/check-templates/folders/${id}`, data),
       remove: (id: string) => api.delete(`/check-templates/folders/${id}`),
     },
@@ -2240,13 +2304,52 @@ export function createNotificationsApi(api: HttpClient) {
 //  booking with an optional non-blocking `conflictWarning`.
 // ───────────────────────────────────────────────────────────────────────
 
+/** Dedicated public client: no staff bearer, session interceptors, account cache,
+ * service-worker mutation queue or form telemetry. Preserve raw HTTP status:
+ * a synthetic 202/queued or malformed body must never confirm an appointment. */
+export interface PublicBookingHttpClient {
+  get<T>(url: string, config?: unknown): Promise<{ data: T; status: number }>;
+  post<T>(url: string, data?: unknown, config?: unknown): Promise<{ data: T; status: number }>;
+}
+export function createPublicBookingsApi(publicClient: PublicBookingHttpClient) {
+  const root = (slug: string) => `/public/bookings/${encodeURIComponent(slug)}`;
+  return {
+    landing: (slug: string) => publicClient.get<PublicBookingLanding>(root(slug)),
+    slots: (slug: string, params: PublicBookingSlotsParams) =>
+      publicClient.get<PublicBookingSlotPage>(`${root(slug)}/slots`, {
+        params: { ...params, serviceIds: params.serviceIds.join(',') },
+      }),
+    submit: (slug: string, data: SubmitPublicBookingRequest) =>
+      publicClient.post<PublicBookingReceipt>(`${root(slug)}/requests`, data),
+    recover: (slug: string, requestId: string, recoveryToken: string) =>
+      publicClient.get<PublicBookingRecovery>(`${root(slug)}/requests/${encodeURIComponent(requestId)}`, {
+        headers: { 'x-booking-recovery': recoveryToken },
+      }),
+  };
+}
+
 export function createBookingsApi(api: HttpClient) {
   return {
     list: (params?: ListBookingsParams) => api.get<Booking[]>('/bookings', { params }),
     create: (data: CreateBookingRequest) => api.post<BookingMutationResult>('/bookings', data),
     update: (id: string, data: UpdateBookingRequest) => api.patch<BookingMutationResult>(`/bookings/${id}`, data),
-    cancel: (id: string) => api.post<Booking>(`/bookings/${id}/cancel`),
+    cancel: (id: string, data?: BookingOperationRequest) => api.post<Booking>(`/bookings/${id}/cancel`, data),
     convert: (id: string, data: ConvertBookingRequest) => api.post<Booking>(`/bookings/${id}/convert`, data),
+    linkClient: (id: string, data: LinkBookingClientRequest) => api.post<Booking>(`/bookings/${id}/link-client`, data),
+    getPublicSettings: () => api.get<PublicBookingPageSettings | null>('/bookings/public-settings'),
+    putPublicSettings: (data: PutPublicBookingSettingsRequest) =>
+      api.put<PublicBookingPageSettings>('/bookings/public-settings', data),
+    publicResources: () => api.get<PublicBookingResource[]>('/bookings/public-resources'),
+    publish: (data: BookingOperationRequest) =>
+      api.post<PublicBookingPageSettings>('/bookings/public-settings/publish', data),
+    unpublish: (data: BookingOperationRequest) =>
+      api.post<PublicBookingPageSettings>('/bookings/public-settings/unpublish', data),
+    requests: (status?: PublicBookingRequestStatus) =>
+      api.get<StaffPublicBookingRequest[]>('/bookings/requests', { params: { status } }),
+    approve: (id: string, data: ApprovePublicBookingRequest) =>
+      api.post<StaffPublicBookingRequest>(`/bookings/requests/${id}/approve`, data),
+    reject: (id: string, data: BookingOperationRequest) =>
+      api.post<StaffPublicBookingRequest>(`/bookings/requests/${id}/reject`, data),
     getSettings: () => api.get<BookingSettings>('/bookings/settings'),
     updateSettings: (data: UpdateBookingSettingsRequest) => api.patch<BookingSettings>('/bookings/settings', data),
   };
@@ -2271,8 +2374,13 @@ export function createRolesApi(api: HttpClient) {
     /** Системные + свои роли (is_system DESC, sort). */
     list: () => api.get<Role[]>('/roles'),
     /** Создать роль; copyFromRoleId — база-копия, matrix сливается поверх. */
-    create: (data: { name: string; description?: string; matrix?: RoleMatrix; copyFromRoleId?: string; sort?: number }) =>
-      api.post<Role>('/roles', data),
+    create: (data: {
+      name: string;
+      description?: string;
+      matrix?: RoleMatrix;
+      copyFromRoleId?: string;
+      sort?: number;
+    }) => api.post<Role>('/roles', data),
     /** Обновить СВОЮ роль (matrix заменяется целиком). Системная → 403. */
     update: (id: string, data: { name?: string; description?: string; matrix?: RoleMatrix; sort?: number }) =>
       api.patch<Role>(`/roles/${id}`, data),
@@ -2331,8 +2439,7 @@ export function createCashShiftsApi(api: HttpClient) {
      * подтверждения кассира; кассиру уходит пуш «инкассация N, остаток M»).
      * Гейт cash_shifts_manage. amount > 0, не больше баланса сейфа.
      */
-    safeCollect: (data: { amount: number; note?: string }) =>
-      api.post<SafeState>('/cash-shifts/safe/collect', data),
+    safeCollect: (data: { amount: number; note?: string }) => api.post<SafeState>('/cash-shifts/safe/collect', data),
   };
 }
 
@@ -2387,8 +2494,10 @@ export function createInstallmentsApi(api: HttpClient) {
      * Record a partial payment; reduces remaining, optionally moves the next date. Returns the updated plan.
      * method (119) — способ оплаты погашения; опционален, бэкенд по умолчанию пишет 'cash'.
      */
-    pay: (planId: string, data: { amount: number; comment?: string; nextPaymentDate?: string; method?: 'cash' | 'card' }) =>
-      api.post<InstallmentPlan>(`/installments/${planId}/pay`, data),
+    pay: (
+      planId: string,
+      data: { amount: number; comment?: string; nextPaymentDate?: string; method?: 'cash' | 'card' },
+    ) => api.post<InstallmentPlan>(`/installments/${planId}/pay`, data),
     /** Pay off the whole remaining at once (close the plan). Returns the updated plan. Body опционален — {method?} (119). */
     payoff: (planId: string, data?: { method?: 'cash' | 'card' }) =>
       api.post<InstallmentPlan>(`/installments/${planId}/payoff`, data),
@@ -2509,7 +2618,9 @@ export function createPurchaseOrdersApi(api: HttpClient) {
     receive: (
       id: string,
       data?: {
-        items?: Array<{ itemId: string; receivedQuantity: number; purchasePrice?: number }>;
+        items?: Array<{ itemId: string; receivedQuantity: number; purchasePrice?: number; sellPrice?: number }>;
+        /** Keep the same UUID and payload on a network retry. */
+        requestId?: string;
         paymentMode?: 'debt' | 'paid';
         receivedAt?: string;
       },
@@ -2802,8 +2913,7 @@ export function createReportBuilderApi(api: HttpClient) {
     /** Какие отчёты доступны текущему пользователю (права, филиалы). */
     catalog: () => api.get<ReportCatalogResponse>('/reports/builder/catalog'),
     /** Варианты сущностного фильтра: мастера / сотрудники / поставщики / филиалы. */
-    filterOptions: (kind: ReportFilterKind) =>
-      api.get<ReportFilterOptions>(`/reports/builder/filters/${kind}`),
+    filterOptions: (kind: ReportFilterKind) => api.get<ReportFilterOptions>(`/reports/builder/filters/${kind}`),
     /**
      * Сформировать отчёт за период. ids — выбранные сущности (пусто = все),
      * на проводе CSV. Период ≤ 366 дней. Тяжёлые отчёты могут считаться

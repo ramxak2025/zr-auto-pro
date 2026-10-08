@@ -76,6 +76,7 @@ const itemRow = () => ({
 /** Пул для receive(): ordered-заказ с одной позицией, полностью принимаемой. */
 function receivePool(timezone) {
   return makePool((sql) => {
+    if (sql.startsWith('SELECT p.id, p.name, p.stock, p.warehouse_id, p.cost_price, p.sell_price')) return [{ id: 'product-1', name: 'Масло', stock: '0.000', cost_price: '0.00', sell_price: '200.00', warehouse_id: null }];
     if (sql.startsWith('SELECT id, status, supplier_id FROM purchase_orders')) {
       return [{ id: ORDER, status: 'ordered', supplier_id: 'supplier-1' }];
     }

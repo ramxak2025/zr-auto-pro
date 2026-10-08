@@ -1,3 +1,4 @@
+import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
   Animated as RNAnimated,
@@ -180,6 +181,10 @@ function getInitials(fullName?: string): string {
   const parts = fullName.trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return parts[0][0]?.toUpperCase() || '?';
+}
+
+function directionGroupId(user: User): string | null {
+  return user.directionId ?? null;
 }
 
 const AVATAR_COLORS = [
@@ -708,6 +713,13 @@ function GridTab() {
     const raw = toArray<User>(usersData).filter(isSchedulable);
     if (raw.length > 0) {
       return raw.sort((a: any, b: any) => {
+        const aUnassigned = a.directionId == null;
+        const bUnassigned = b.directionId == null;
+        if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
+        const group = (a.directionName?.trim() || '\uffff').localeCompare(b.directionName?.trim() || '\uffff', 'ru');
+        if (group !== 0) return group;
+        const groupId = (a.directionId ?? '').localeCompare(b.directionId ?? '');
+        if (groupId !== 0) return groupId;
         const ao = a.sortOrder ?? 0;
         const bo = b.sortOrder ?? 0;
         if (ao !== bo) return ao - bo;
@@ -720,12 +732,36 @@ function GridTab() {
     return [];
   }, [usersData, user]);
 
+  const scheduleDisplayRows = useMemo(() => {
+    const displayRows: Array<
+      { kind: 'direction'; key: string; label: string } | { kind: 'employee'; key: string; user: User; index: number }
+    > = [];
+    let previousGroupId: string | null = null;
+    let hasPreviousGroup = false;
+    activeUsers.forEach((employee, index) => {
+      const groupId = employee.directionId ?? null;
+      if (!hasPreviousGroup || groupId !== previousGroupId) {
+        displayRows.push({
+          kind: 'direction',
+          key: `direction:${JSON.stringify([groupId === null, groupId])}`,
+          label: groupId === null ? 'Без направления' : employee.directionName || 'Без названия',
+        });
+        previousGroupId = groupId;
+        hasPreviousGroup = true;
+      }
+      displayRows.push({ kind: 'employee', key: `employee:${employee.id}`, user: employee, index });
+    });
+    return displayRows;
+  }, [activeUsers]);
+
   const updateOrderMut = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
     onMutate: async (orderedIds: string[]) => {
+      const continuation = captureDataSession();
       // Оптимистично правим слот команды филиала — им и рисуется сетка;
       // onSettled ниже инвалидирует префикс ['users'], то есть оба слота.
       await queryClient.cancelQueries({ queryKey: USERS_POINT_QUERY_KEY });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const prev = queryClient.getQueryData<any>(USERS_POINT_QUERY_KEY);
       queryClient.setQueryData<any>(USERS_POINT_QUERY_KEY, (old: unknown) => {
         // toArray: never .map a poisoned non-array users cache value.
@@ -749,13 +785,24 @@ function GridTab() {
   });
 
   const moveMaster = (userId: string, dir: 'up' | 'down') => {
-    const ids = activeUsers.map((u) => u.id);
-    const idx = ids.indexOf(userId);
-    if (idx < 0) return;
-    const newIdx = dir === 'up' ? Math.max(0, idx - 1) : Math.min(ids.length - 1, idx + 1);
-    if (idx === newIdx) return;
-    const next = [...ids];
-    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+    const moved = activeUsers.find((employee) => employee.id === userId);
+    if (!moved) return;
+    const groupUsers = activeUsers.filter((employee) => directionGroupId(employee) === directionGroupId(moved));
+    const groupIndex = groupUsers.findIndex((employee) => employee.id === userId);
+    const newGroupIndex = dir === 'up' ? Math.max(0, groupIndex - 1) : Math.min(groupUsers.length - 1, groupIndex + 1);
+    if (groupIndex < 0 || groupIndex === newGroupIndex) return;
+    const reorderedGroup = groupUsers.map((employee) => employee.id);
+    [reorderedGroup[groupIndex], reorderedGroup[newGroupIndex]] = [
+      reorderedGroup[newGroupIndex],
+      reorderedGroup[groupIndex],
+    ];
+    const groupPositions = activeUsers.flatMap((employee, index) =>
+      directionGroupId(employee) === directionGroupId(moved) ? [index] : [],
+    );
+    const next = activeUsers.map((employee) => employee.id);
+    groupPositions.forEach((position, index) => {
+      next[position] = reorderedGroup[index];
+    });
     updateOrderMut.mutate(next);
   };
 
@@ -825,7 +872,9 @@ function GridTab() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scheduleApi.remove(id),
     onMutate: async (id: string) => {
+      const continuation = captureDataSession();
       await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
       const previous = queryClient.getQueryData(scheduleQueryKey);
       queryClient.setQueryData(scheduleQueryKey, (old: unknown) =>
         toArray<ScheduleEntry>(old).filter((e) => e.id !== id),
@@ -1238,18 +1287,48 @@ function GridTab() {
               overScrollMode="never"
               contentContainerStyle={{ paddingBottom: tabBarHeight }}
             >
-              {activeUsers.map((u, rowIdx) => {
+              {scheduleDisplayRows.map((row) => {
+                if (row.kind === 'direction')
+                  return (
+                    <View
+                      key={row.key}
+                      style={{
+                        width: NAME_W,
+                        height: 30,
+                        justifyContent: 'center',
+                        paddingHorizontal: spacing[3],
+                        backgroundColor: palette.bg.muted,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: palette.border.subtle,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: palette.text.tertiary,
+                          fontSize: 10,
+                          fontWeight: '700',
+                          letterSpacing: 0.6,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {row.label}
+                      </Text>
+                    </View>
+                  );
+                const u = row.user;
+                const rowIdx = row.index;
+                const groupMembers = activeUsers.filter(
+                  (employee) => directionGroupId(employee) === directionGroupId(u),
+                );
+                const groupIndex = groupMembers.findIndex((employee) => employee.id === u.id);
                 const stats = userStats.get(u.id);
                 const avatarColors = getAvatarColors(u.fullName);
                 return (
                   <TouchableOpacity
-                    key={u.id}
-                    // Tap → открыть карточку сотрудника. Reorder теперь
-                    // спрятан под long-press, чтобы не конфликтовать с
-                    // привычным iOS-навигационным жестом.
+                    key={row.key}
                     onPress={() => openEmployee(navigation, u.id)}
                     onLongPress={() => {
-                      if (canEdit) setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx });
+                      if (canEdit) setReorderUser({ userId: u.id, name: u.fullName, index: groupIndex });
                     }}
                     delayLongPress={350}
                     activeOpacity={0.7}
@@ -1346,27 +1425,41 @@ function GridTab() {
                 overScrollMode="never"
                 contentContainerStyle={{ paddingBottom: tabBarHeight }}
               >
-                {activeUsers.map((u, rowIdx) => (
-                  <GridDayRow
-                    key={u.id}
-                    userId={u.id}
-                    userName={u.fullName}
-                    days={days}
-                    entryMap={entryMap}
-                    rowIdx={rowIdx}
-                    today={today}
-                    canEdit={canEdit}
-                    CELL_W={CELL_W}
-                    ROW_H={ROW_H}
-                    onCellPress={handleCellPress}
-                    isDark={palette.mode === 'dark'}
-                    dividerColor={palette.border.subtle}
-                    rowStripBg={palette.mode === 'dark' ? 'rgba(255,255,255,0.025)' : colors.gray[50] + '60'}
-                    todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : colors.primary[50]}
-                    weekendColumnBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.05)' : colors.red[50] + '30'}
-                    emptyDotColor={palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : colors.gray[200]}
-                  />
-                ))}
+                {scheduleDisplayRows.map((row) =>
+                  row.kind === 'direction' ? (
+                    <View
+                      key={row.key}
+                      style={{
+                        width: days.length * CELL_W,
+                        height: 30,
+                        backgroundColor: palette.bg.muted,
+                        borderBottomWidth: StyleSheet.hairlineWidth,
+                        borderBottomColor: palette.border.subtle,
+                      }}
+                      accessibilityElementsHidden
+                    />
+                  ) : (
+                    <GridDayRow
+                      key={row.key}
+                      userId={row.user.id}
+                      userName={row.user.fullName}
+                      days={days}
+                      entryMap={entryMap}
+                      rowIdx={row.index}
+                      today={today}
+                      canEdit={canEdit}
+                      CELL_W={CELL_W}
+                      ROW_H={ROW_H}
+                      onCellPress={handleCellPress}
+                      isDark={palette.mode === 'dark'}
+                      dividerColor={palette.border.subtle}
+                      rowStripBg={palette.mode === 'dark' ? 'rgba(255,255,255,0.025)' : colors.gray[50] + '60'}
+                      todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : colors.primary[50]}
+                      weekendColumnBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.05)' : colors.red[50] + '30'}
+                      emptyDotColor={palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : colors.gray[200]}
+                    />
+                  ),
+                )}
               </Reanimated.ScrollView>
             </View>
           </ScrollView>
@@ -1380,70 +1473,87 @@ function GridTab() {
       >
         {reorderUser && (
           <ScrollView style={{ maxHeight: 400 }}>
-            {activeUsers.map((_, idx) => {
-              const isCurrent = idx === reorderUser.index;
-              return (
-                <TouchableOpacity
-                  key={idx}
-                  onPress={() => {
-                    if (!isCurrent) {
-                      // `idx` is the FINAL 0-based position the master should
-                      // occupy. We remove the master first, then splice it
-                      // back in at `idx`: because the moved id is already
-                      // gone from `filtered`, inserting at `idx` lands it at
-                      // visual position `idx + 1` exactly — for upward AND
-                      // downward moves alike (no off-by-one). Do not add a
-                      // removal-shift correction here; that would re-introduce
-                      // the classic off-by-one on downward moves.
-                      const ids = activeUsers.map((u) => u.id);
-                      const filtered = ids.filter((id) => id !== reorderUser.userId);
-                      filtered.splice(idx, 0, reorderUser.userId);
-                      updateOrderMut.mutate(filtered);
-                    }
-                    setReorderUser(null);
-                  }}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 12,
-                    paddingVertical: 14,
-                    paddingHorizontal: 16,
-                    backgroundColor: isCurrent
-                      ? dark
-                        ? palette.accent.primarySoft
-                        : colors.primary[50]
-                      : 'transparent',
-                    borderBottomWidth: 0.5,
-                    borderBottomColor: palette.border.subtle,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontSize: 11,
-                      fontWeight: '700',
-                      color: isCurrent ? colors.primary[600] : palette.text.tertiary,
-                      width: 24,
+            {activeUsers
+              .filter((employee) => {
+                const target = activeUsers.find((u) => u.id === reorderUser.userId);
+                return !!target && directionGroupId(employee) === directionGroupId(target);
+              })
+              .map((_, idx) => {
+                const isCurrent = idx === reorderUser.index;
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    onPress={() => {
+                      if (!isCurrent) {
+                        // `idx` is the FINAL 0-based position the master should
+                        // occupy. We remove the master first, then splice it
+                        // back in at `idx`: because the moved id is already
+                        // gone from `filtered`, inserting at `idx` lands it at
+                        // visual position `idx + 1` exactly — for upward AND
+                        // downward moves alike (no off-by-one). Do not add a
+                        // removal-shift correction here; that would re-introduce
+                        // the classic off-by-one on downward moves.
+                        const moved = activeUsers.find((employee) => employee.id === reorderUser.userId);
+                        if (!moved) return;
+                        const groupUsers = activeUsers.filter(
+                          (employee) => directionGroupId(employee) === directionGroupId(moved),
+                        );
+                        const reorderedGroup = groupUsers.map((employee) => employee.id);
+                        reorderedGroup.splice(reorderUser.index, 1);
+                        reorderedGroup.splice(idx, 0, reorderUser.userId);
+                        const groupPositions = activeUsers.flatMap((employee, position) =>
+                          directionGroupId(employee) === directionGroupId(moved) ? [position] : [],
+                        );
+                        const ids = activeUsers.map((employee) => employee.id);
+                        groupPositions.forEach((position, groupPos) => {
+                          ids[position] = reorderedGroup[groupPos];
+                        });
+                        updateOrderMut.mutate(ids);
+                      }
+                      setReorderUser(null);
                     }}
-                  >
-                    {idx + 1}
-                  </Text>
-                  <Text
                     style={{
-                      fontSize: 14,
-                      color: isCurrent
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      paddingVertical: 14,
+                      paddingHorizontal: 16,
+                      backgroundColor: isCurrent
                         ? dark
-                          ? palette.accent.primaryText
-                          : colors.primary[700]
-                        : palette.text.secondary,
-                      flex: 1,
-                      fontWeight: isCurrent ? '600' : '500',
+                          ? palette.accent.primarySoft
+                          : colors.primary[50]
+                        : 'transparent',
+                      borderBottomWidth: 0.5,
+                      borderBottomColor: palette.border.subtle,
                     }}
                   >
-                    {isCurrent ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: '700',
+                        color: isCurrent ? colors.primary[600] : palette.text.tertiary,
+                        width: 24,
+                      }}
+                    >
+                      {idx + 1}
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 14,
+                        color: isCurrent
+                          ? dark
+                            ? palette.accent.primaryText
+                            : colors.primary[700]
+                          : palette.text.secondary,
+                        flex: 1,
+                        fontWeight: isCurrent ? '600' : '500',
+                      }}
+                    >
+                      {isCurrent ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
           </ScrollView>
         )}
       </Modal>

@@ -318,6 +318,18 @@ export class ShiftsService {
    * назначений нет вовсе (безопасный дефолт 156 — владелец обычно именно
    * такой и обязан видеть всё).
    */
+  /** NFC calls this only after its transaction commits; replay/no-op never calls it. */
+  notifyNfcAttendance(
+    tenantID: string,
+    userID: string,
+    fullName: string,
+    kind: 'arrived' | 'left',
+    late: { minutes: number; status: string } | null,
+    pointId: string | null,
+  ): Promise<void> {
+    return this.fireAttendancePush(tenantID, userID, fullName, kind, late, pointId);
+  }
+
   private async fireAttendancePush(
     tenantID: string,
     shiftUserID: string,

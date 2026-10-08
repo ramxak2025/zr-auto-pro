@@ -16,6 +16,9 @@ import type {
   SubscriptionStatus,
   LateStatus,
   WorkModeDayTimes,
+  PublicBookingHours,
+  PublicBookingMode,
+  PublicBookingOperator,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -316,6 +319,8 @@ export interface CreateUserRequest {
    * caller's own tenant (a director cannot create users in other tenants).
    */
   tenantId?: string;
+  /** Tenant-owned staff grouping. Only owner-class actors may assign it. */
+  directionId?: string | null;
 }
 
 export interface UpdateUserRequest {
@@ -343,6 +348,8 @@ export interface UpdateUserRequest {
    * снять с себя user_management).
    */
   roleId?: string | null;
+  /** Tenant-owned staff grouping. null clears it; only owner-class may change it. */
+  directionId?: string | null;
 }
 
 export interface CreateClientRequest {
@@ -656,6 +663,10 @@ export interface UpdateServiceRequest {
   warrantyDays?: number | null;
 }
 
+export type PutServiceVisibilityRuleRequest =
+  | { serviceId: string; visibleRoleIds: string[] }
+  | { categoryPath: string; visibleRoleIds: string[] };
+
 export interface CreateCheckRequest {
   /**
    * Идемпотентность (офлайн-очередь): UUID, сгенерированный клиентом один раз
@@ -809,12 +820,15 @@ export interface UpdateSupplierRequest {
 
 export interface CreateDeliveryRequest {
   supplierId: string;
+  requestId?: string;
   date?: string;
   comment?: string;
   items: Array<{
     productId: string;
     quantity: number;
     price: number;
+    /** Omitted preserves current retail; zero is valid. */
+    sellPrice?: number;
   }>;
 }
 
@@ -1464,6 +1478,8 @@ export interface ListBookingsParams {
 
 /** POST /bookings body. */
 export interface CreateBookingRequest {
+  requestId?: string;
+  durationMinutes?: number;
   clientId: string;
   carId?: string | null;
   /** Omit when a master books for self; admin/owner may set any master or null. */
@@ -1476,6 +1492,8 @@ export interface CreateBookingRequest {
 
 /** PATCH /bookings/:id body (reschedule / comment / reassign). */
 export interface UpdateBookingRequest {
+  requestId?: string;
+  durationMinutes?: number;
   scheduledAt?: string;
   comment?: string;
   masterId?: string | null;
@@ -1484,7 +1502,53 @@ export interface UpdateBookingRequest {
 
 /** POST /bookings/:id/convert body. */
 export interface ConvertBookingRequest {
+  requestId?: string;
   checkId: string;
+}
+
+export interface BookingOperationRequest {
+  requestId: string;
+}
+export interface LinkBookingClientRequest extends BookingOperationRequest {
+  clientId: string;
+}
+export interface ApprovePublicBookingRequest extends BookingOperationRequest {
+  resourceId?: string;
+}
+export interface PutPublicBookingSettingsRequest extends BookingOperationRequest {
+  /** 0 for the first draft; otherwise the last read server revision. Slug is immutable after creation. */
+  revision: number;
+  slug: string;
+  displayName: string;
+  address: string;
+  contacts: string;
+  showPrices: boolean;
+  mode: PublicBookingMode;
+  slotStepMinutes?: number;
+  openingHours?: PublicBookingHours;
+  operator: PublicBookingOperator;
+  policyText: string;
+  consentText: string;
+  services: Array<{ serviceId: string; durationMinutes?: number }>;
+  resourceIds: string[];
+}
+export interface PublicBookingSlotsParams {
+  /** Tenant-local dates, inclusive; at most 31 days. */
+  from: string;
+  to: string;
+  serviceIds: string[];
+  after?: string;
+}
+export interface SubmitPublicBookingRequest extends BookingOperationRequest {
+  /** Secure random 32-byte base64url capability, generated and retained BEFORE POST. Never put it in a URL/log. */
+  recoveryToken: string;
+  serviceIds: string[];
+  startsAt: string;
+  name: string;
+  phone: string;
+  comment?: string;
+  consentVersion: string;
+  consentAccepted: true;
 }
 
 /** PATCH /bookings/settings body — all fields optional. */
@@ -1533,4 +1597,11 @@ export interface UpdateProfileResponse {
 export interface ChangePasswordRequest {
   currentPassword: string;
   newPassword: string;
+}
+
+/** Authenticated self-scan. User, point and time are exclusively server-owned. */
+export interface AttendanceNfcScanRequest {
+  token: string;
+  /** Reuse this UUID and the exact token on retry. */
+  requestId: string;
 }
