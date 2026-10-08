@@ -340,7 +340,6 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
                   disabled={!!busy}
                   style={[styles.primary, { backgroundColor: palette.accent.primary }]}
                 >
-                  {' '}
                   {busy === 'login' ? (
                     <ActivityIndicator color={colors.white} />
                   ) : (
