@@ -111,6 +111,8 @@ const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
 const NfcAttendanceLandingPage = lazyWithRetry(() => import('./pages/NfcAttendanceLandingPage'));
+const PublicBookingPage = lazyWithRetry(() => import('./pages/PublicBookingPage'));
+const BookingsPage = lazyWithRetry(() => import('./pages/BookingsPage'));
 const PrivacyPage = lazyWithRetry(() => import('./pages/PrivacyPage'));
 const TermsPage = lazyWithRetry(() => import('./pages/TermsPage'));
 const NotificationSettingsPage = lazyWithRetry(() => import('./pages/NotificationSettingsPage'));
@@ -241,6 +243,7 @@ export default function App() {
           {/* Static NFC tag fallback: public while signed in or out; it only
               forwards a validated bearer after an explicit app-open action. */}
           <Route path="/nfc/attendance" element={<NfcAttendanceLandingPage />} />
+          <Route path="/book/:slug" element={<PublicBookingPage />} />
 
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />
@@ -304,6 +307,7 @@ export default function App() {
                       <Route path="/checks" element={<ChecksPage />} />
                       <Route path="/work-board" element={<WorkBoardPage />} />
                       <Route path="/checks/new" element={<CheckCreatePage />} />
+                      <Route path="/bookings" element={<BookingsPage />} />
                       <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
                       <Route path="/checks/:id" element={<CheckDetailPage />} />
                       <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />

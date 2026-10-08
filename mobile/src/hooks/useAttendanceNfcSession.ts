@@ -5,6 +5,7 @@ import type { NfcSession } from '../../../shared/utils/pendingNfc';
 import { createSessionBoundClient } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import { captureNfcSessionGeneration } from '../utils/nfcSessionGeneration';
+import { createNfcSessionRefresh } from '../utils/nfcSessionRefresh';
 
 export const NFC_STATUS_QUERY_KEY = ['shifts', 'nfc-status'] as const;
 export const MY_SHIFTS_QUERY_KEY = ['shifts', 'my'] as const;
@@ -59,12 +60,7 @@ export function useAttendanceNfcSession() {
       owner: { tenantId, userId, pointId },
       lease,
       isCurrent,
-      refreshCurrent: async () => {
-        const [shifts, status] = await Promise.all([api.getMy(), api.nfcStatus()]);
-        if (!isCurrent()) throw new Error('Session changed');
-        queryClient.setQueryData(MY_SHIFTS_QUERY_KEY, shifts.data);
-        queryClient.setQueryData(nfcStatusQueryKeyForLease(lease), status.data);
-      },
+      refreshCurrent: createNfcSessionRefresh(api, queryClient, isCurrent, nfcStatusQueryKeyForLease(lease)),
     };
   }, [api, identity, pointId, queryClient, sessionScope.id, tenantId, token, userId]);
 

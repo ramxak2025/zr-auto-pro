@@ -29,6 +29,7 @@ import {
   createAttendanceNfcOperation,
 } from '../utils/attendanceNfcDevice';
 import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
+import { runNfcCreateTagOperation } from '../utils/nfcCreateTagOperation';
 
 export default function NfcTagsScreen() {
   const palette = useColors();
@@ -40,9 +41,12 @@ export default function NfcTagsScreen() {
   const [pendingTag, setPendingTag] = useState<CreatedAttendanceNfcTag | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const creatingRef = React.useRef(false);
   const [createFailed, setCreateFailed] = useState(false);
   const [hardware, setHardware] = useState<'loading' | 'ready' | 'disabled' | 'unsupported'>('loading');
   const focusedRef = React.useRef(false);
+  const focusGenerationRef = React.useRef(0);
+  const createGenerationRef = React.useRef(0);
   const operationController = React.useRef(createNfcOperationLeaseController()).current;
   const nativeOperationRef = React.useRef<ReturnType<typeof createAttendanceNfcOperation> | null>(null);
   const statusQuery = useQuery({
@@ -73,6 +77,7 @@ export default function NfcTagsScreen() {
     useCallback(() => {
       let active = true;
       focusedRef.current = true;
+      focusGenerationRef.current += 1;
       setHardware('loading');
       void checkAttendanceNfcHardware()
         .then((state) => {
@@ -84,11 +89,14 @@ export default function NfcTagsScreen() {
       return () => {
         active = false;
         focusedRef.current = false;
+        focusGenerationRef.current += 1;
+        createGenerationRef.current += 1;
         operationController.invalidate();
         const operation = nativeOperationRef.current;
         nativeOperationRef.current = null;
         if (operation) void cancelAttendanceNfcOperation(operation);
         setPendingTag(null);
+        creatingRef.current = false;
         setCreating(false);
         setBusyId(null);
       };
@@ -101,26 +109,36 @@ export default function NfcTagsScreen() {
   }, [sessionIdentity]);
 
   const createTag = async () => {
-    if (!api || !session?.isCurrent() || !focusedRef.current || creating || !name.trim()) return;
+    if (!api || !session?.isCurrent() || !focusedRef.current || creatingRef.current || !name.trim()) return;
     const ownedSession = session;
     const ownedApi = api;
-    const lease = ownedSession.lease;
+    const focusGeneration = focusGenerationRef.current;
+    const createGeneration = ++createGenerationRef.current;
+    const isCurrent = () =>
+      focusedRef.current &&
+      focusGenerationRef.current === focusGeneration &&
+      createGenerationRef.current === createGeneration &&
+      ownedSession.isCurrent();
+    creatingRef.current = true;
     setCreating(true);
     setCreateFailed(false);
-    try {
-      const created = (await ownedApi.createNfcTag({ name: name.trim() })).data;
-      if (!focusedRef.current || !ownedSession.isCurrent() || ownedSession.lease !== lease) return;
-      setName('');
-      setPendingTag(created);
-      const { token: _token, ndefUri: _ndefUri, ...metadata } = created;
-      queryClient.setQueryData<AttendanceNfcTag[]>(nfcTagsQueryKey(ownedSession), (current) =>
-        current ? [metadata, ...current] : [metadata],
-      );
-    } catch {
-      if (focusedRef.current && ownedSession.isCurrent() && ownedSession.lease === lease) setCreateFailed(true);
-    } finally {
-      if (focusedRef.current && ownedSession.isCurrent() && ownedSession.lease === lease) setCreating(false);
-    }
+    await runNfcCreateTagOperation({
+      request: async () => (await ownedApi.createNfcTag({ name: name.trim() })).data,
+      isCurrent,
+      onSuccess: (created) => {
+        setName('');
+        setPendingTag(created);
+        const { token: _token, ndefUri: _ndefUri, ...metadata } = created;
+        queryClient.setQueryData<AttendanceNfcTag[]>(nfcTagsQueryKey(ownedSession), (current) =>
+          current ? [metadata, ...current] : [metadata],
+        );
+      },
+      onError: () => setCreateFailed(true),
+      onFinally: () => {
+        creatingRef.current = false;
+        setCreating(false);
+      },
+    });
   };
 
   const renameMutation = useMutation({

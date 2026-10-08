@@ -97,6 +97,12 @@ self.addEventListener('fetch', (event) => {
     // Auth: always bypass — must never get stale auth data
     if (url.pathname.startsWith('/api/auth')) return;
 
+    // Public booking requests have their own exact recovery capability and
+    // idempotency key. Never serve a stale public page/receipt or turn a POST
+    // into a synthetic queued 202. Match static route segments case-insensitively
+    // because the Nest router accepts those URL variants too.
+    if (/^\/api\/public\/bookings(?:\/|$)/i.test(url.pathname)) return;
+
     // Attendance NFC has a durable, session-bound request-id protocol in the
     // app. Never cache its status/recovery reads or put tag scans in the generic
     // offline mutation queue (a replay could mark a later shift).

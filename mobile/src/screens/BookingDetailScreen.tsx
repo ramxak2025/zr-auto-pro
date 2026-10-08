@@ -380,7 +380,22 @@ export default function BookingDetailScreen() {
         ) : null}
 
         {/* ── Actions ── */}
-        {active ? (
+        {active && (!booking.clientId || booking.needsClientLink) ? (
+          <View style={styles.actions}>
+            <Text style={[styles.primaryActionHint, { color: palette.text.secondary }]}>
+              Для отметки прихода сначала свяжите заявку с существующей карточкой клиента этой точки.
+            </Text>
+            <TouchableOpacity
+              style={[styles.secondaryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => navigation.navigate('PublicBookingRequests')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.secondaryBtnText, { color: palette.text.primary }]}>
+                Открыть заявки и связать клиента
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : active && booking.clientId ? (
           <View style={styles.actions}>
             {/* Главное действие — приход → касса. */}
             <TouchableOpacity

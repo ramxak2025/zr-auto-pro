@@ -87,6 +87,8 @@ import BookingsScreen from '../screens/BookingsScreen';
 import BookingDetailScreen from '../screens/BookingDetailScreen';
 import BookingCreateScreen from '../screens/BookingCreateScreen';
 import BookingSettingsScreen from '../screens/BookingSettingsScreen';
+import PublicBookingRequestsScreen from '../screens/PublicBookingRequestsScreen';
+import PublicBookingSettingsScreen from '../screens/PublicBookingSettingsScreen';
 import TemplatesScreen from '../screens/TemplatesScreen';
 import TemplateEditorScreen from '../screens/TemplateEditorScreen';
 import NfcTagsScreen from '../screens/NfcTagsScreen';
@@ -439,6 +441,8 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
       <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
       <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
+      <MoreStack.Screen name="PublicBookingRequests" component={PublicBookingRequestsScreen} />
+      <MoreStack.Screen name="PublicBookingSettings" component={PublicBookingSettingsScreen} />
       {/*
         Шаблоны чеков (round 8 #3) — list + editor live in MoreStack so the
         floating tab bar stays visible and back-nav steps in-section

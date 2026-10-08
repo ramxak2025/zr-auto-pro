@@ -17,6 +17,7 @@ import { takePendingAttendanceLink, subscribePendingAttendanceLink } from '../ut
 import { parseAttendanceNfcUri } from '../../../shared/utils/attendanceNfcUri';
 import { ownsNfcOutcome } from '../../../shared/utils/pendingNfc';
 import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
+import { refreshNfcStatusForCurrentSession } from '../utils/nfcStatusRefresh';
 import type { AttendanceNfcScanResult } from '../../../shared/types';
 
 type ScreenState = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error';
@@ -283,7 +284,24 @@ export default function NfcAttendanceScreen() {
   };
 
   const refreshStatus = async () => {
-    await Promise.all([statusQuery.refetch(), queryClient.invalidateQueries({ queryKey: ['shifts', 'my'] })]);
+    if (!session || working) return;
+    const ownerSession = session;
+    const operationLease = operationController.begin(() => focusedRef.current && ownerSession.isCurrent());
+    const isCurrent = operationLease.isCurrent;
+    setWorking(true);
+    await refreshNfcStatusForCurrentSession(
+      ownerSession,
+      isCurrent,
+      () => {
+        setCurrentRefreshFailed(false);
+        setMessage('Статус смены обновлён.');
+      },
+      () => {
+        setCurrentRefreshFailed(true);
+        setMessage('Не удалось обновить статус. Проверьте связь и повторите попытку.');
+      },
+    );
+    if (isCurrent()) setWorking(false);
   };
 
   const canScan = statusQuery.data?.shiftsEnabled === true && statusQuery.data?.canScan === true;
