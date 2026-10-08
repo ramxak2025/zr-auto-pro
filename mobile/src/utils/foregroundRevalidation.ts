@@ -35,7 +35,7 @@
  *     useQuery render does a background refetch.
  */
 import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { captureAuthSession } from '../api/axios';
 import type { QueryClient } from '@tanstack/react-query';
 
 /**
@@ -101,17 +101,12 @@ export function attachForegroundRevalidation(qc: QueryClient): () => void {
     // Don't refetch when there's no session — the user is on the login
     // screen and any 401 we'd trigger would just feed the auth-expired
     // listener for no reason.
-    AsyncStorage.getItem('token')
-      .then((token) => {
-        if (!token) return;
-        // Fire-and-forget. Each invalidate triggers a refetch of
-        // currently-mounted queries with the matching prefix; unmounted
-        // queries stay cold until the screen opens.
-        for (const key of FOREGROUND_REVALIDATE_KEYS) {
-          qc.invalidateQueries({ queryKey: key as unknown as readonly unknown[] }).catch(() => {});
-        }
-      })
-      .catch(() => {});
+    const lease = captureAuthSession();
+    if (!lease.token || !lease.isCurrent()) return;
+    for (const key of FOREGROUND_REVALIDATE_KEYS) {
+      if (!lease.isCurrent()) return;
+      qc.invalidateQueries({ queryKey: key as unknown as readonly unknown[] }).catch(() => {});
+    }
   };
 
   const sub: NativeEventSubscription = AppState.addEventListener('change', onChange);

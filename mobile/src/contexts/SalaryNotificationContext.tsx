@@ -7,7 +7,8 @@ import { AppState } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useQueryClient } from '@tanstack/react-query';
 import { createSalaryApi } from '../../../shared/api/createServices';
-import { createSessionBoundClient, isCurrentAuthToken } from '../api/axios';
+import { captureAuthSession, createSessionBoundClient } from '../api/axios';
+import { captureDataSession } from './dataSession';
 import { useAuth } from './AuthContext';
 import SalaryReceivedModal from '../components/SalaryReceivedModal';
 import { getSalaryAckQueue, type SalaryAckKind } from '../utils/salaryAckQueue';
@@ -24,12 +25,15 @@ function sendAck(salaryApi: ReturnType<typeof createSalaryApi>, kind: SalaryAckK
 }
 
 export function SalaryNotificationProvider({ children }: { children: React.ReactNode }) {
-  const { user, token } = useAuth();
+  const { user, token, sessionGeneration } = useAuth();
   const queryClient = useQueryClient();
   const recipient = !!user && (user.role === 'master' || user.role === 'admin');
   const ownerKey = user?.tenantId && recipient ? JSON.stringify([user.tenantId, user.id]) : null;
   // Token belongs in the in-memory generation only, never in an AsyncStorage key.
-  const session = React.useMemo(() => ({ ownerKey, token }), [ownerKey, token]);
+  const session = React.useMemo(
+    () => ({ ownerKey, token, data: captureDataSession(), auth: captureAuthSession() }),
+    [ownerKey, token, sessionGeneration],
+  );
   const salaryApi = React.useMemo(() => createSalaryApi(createSessionBoundClient(token)), [session]);
   const send = React.useCallback((kind: SalaryAckKind, id: string) => sendAck(salaryApi, kind, id), [salaryApi]);
   const sessionRef = React.useRef(session);
@@ -44,7 +48,10 @@ export function SalaryNotificationProvider({ children }: { children: React.React
   const busy = React.useRef(false);
   const closingUntil = React.useRef(0);
   const nextTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const active = React.useCallback(() => sessionRef.current === session && isCurrentAuthToken(token), [session, token]);
+  const active = React.useCallback(
+    () => sessionRef.current === session && session.data.isCurrent() && session.auth.isCurrent(),
+    [session, token],
+  );
 
   const checkOnce = React.useCallback(async () => {
     if (!queue || !user || !active() || busy.current || Date.now() < closingUntil.current) return;

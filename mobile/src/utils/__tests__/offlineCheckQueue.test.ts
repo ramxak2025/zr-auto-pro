@@ -884,9 +884,9 @@ describe('pendingChecksLogoutNotice — что человек читает пе�
     expect(pendingChecksLogoutNotice(22)).toContain('22 неотправленных заказ-наряда ');
   });
 
-  it('говорит и что сохранится, и что удалит их', () => {
+  it('говорит, что очередь сохранится за исходным владельцем', () => {
     const text = pendingChecksLogoutNotice(2);
     expect(text).toContain('под этим же аккаунтом');
-    expect(text).toContain('другим аккаунтом их удалит');
+    expect(text).toContain('очередь сохранится за исходным владельцем');
   });
 });

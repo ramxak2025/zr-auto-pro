@@ -24,7 +24,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ownedStorage } from '../contexts/ownedStorage';
+import { captureDataSession } from '../contexts/dataSession';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -96,6 +97,7 @@ export default function KnowledgeArticleScreen() {
   // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
   // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
   const { hasPermission } = useAuth();
+  const lease = React.useMemo(() => captureDataSession(), []);
   const isManager = hasPermission('knowledge_manage');
 
   const id = route.params?.id;
@@ -133,17 +135,18 @@ export default function KnowledgeArticleScreen() {
   // Read the locally-remembered acked version once we know the id.
   React.useEffect(() => {
     let alive = true;
-    AsyncStorage.getItem(ackedVersionKey(id))
+    ownedStorage
+      .get(ackedVersionKey(id), lease)
       .then((raw) => {
-        if (!alive) return;
+        if (!alive || !lease.isCurrent()) return;
         const parsed = raw != null ? Number(raw) : NaN;
         setAckedVersion(Number.isFinite(parsed) ? parsed : null);
       })
-      .catch(() => alive && setAckedVersion(null));
+      .catch(() => alive && lease.isCurrent() && setAckedVersion(null));
     return () => {
       alive = false;
     };
-  }, [id]);
+  }, [id, lease]);
 
   const ackMutation = useMutation({
     mutationFn: async () => (await knowledgeApi.acknowledge(id)).data,
@@ -152,7 +155,7 @@ export default function KnowledgeArticleScreen() {
       // Remember which version we just acked, so a later version bump is detected.
       const acked = res?.version ?? article?.version ?? 1;
       setAckedVersion(acked);
-      AsyncStorage.setItem(ackedVersionKey(id), String(acked)).catch(() => {});
+      ownedStorage.set(ackedVersionKey(id), String(acked), lease).catch(() => {});
       // Optimistically flip the local cache to acknowledged.
       queryClient.setQueryData<KnowledgeArticle>(['knowledge-article', id], (prev) =>
         prev ? { ...prev, acknowledged: true } : prev,

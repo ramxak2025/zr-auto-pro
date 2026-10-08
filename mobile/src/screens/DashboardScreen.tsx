@@ -94,6 +94,7 @@ import { formatDayKey } from '../../../shared/utils/formatters';
 import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
 import { useAttendanceRefresh } from '../hooks/useAttendanceRefresh';
 import { updateWidgetData } from '../utils/widgetBridge';
+import { captureDataSession } from '../contexts/dataSession';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -288,17 +289,21 @@ function OwnerHero({ name }: { name: string }) {
   // intentionally OMITTED — the owner dashboard fetches neither a cash-shift nor
   // a bookings query, and adding one solely to feed the widget is disallowed.
   // The widget renders fine with these fields absent.
+  const widgetLease = useMemo(() => captureDataSession(), []);
   const hasV2 = v2.data !== undefined;
   useEffect(() => {
     if (!hasV2) return;
-    updateWidgetData({
-      role: 'owner',
-      revenue: revenueToday,
-      profitToday,
-      checksCount: checksToday,
-      openOrders,
-    });
-  }, [hasV2, revenueToday, checksToday, profitToday, openOrders]);
+    updateWidgetData(
+      {
+        role: 'owner',
+        revenue: revenueToday,
+        profitToday,
+        checksCount: checksToday,
+        openOrders,
+      },
+      widgetLease,
+    );
+  }, [hasV2, revenueToday, checksToday, profitToday, openOrders, widgetLease]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp
@@ -4275,18 +4280,22 @@ function MasterDashboard() {
   // Source: salaryApi.getMy() — the exact numbers the «Сегодня /
   // За месяц» cards below already render. Primitive deps only —
   // `data` gets a fresh reference on every successful refetch.
+  const widgetLease = useMemo(() => captureDataSession(), []);
   const hasSalary = data !== undefined;
   const earningsToday = data?.today ?? 0;
   const earningsMonth = data?.month ?? 0;
   useEffect(() => {
     if (!hasSalary) return;
-    updateWidgetData({
-      role: 'master',
-      earningsToday,
-      earningsMonth,
-      shiftOpen,
-    });
-  }, [hasSalary, earningsToday, earningsMonth, shiftOpen]);
+    updateWidgetData(
+      {
+        role: 'master',
+        earningsToday,
+        earningsMonth,
+        shiftOpen,
+      },
+      widgetLease,
+    );
+  }, [hasSalary, earningsToday, earningsMonth, shiftOpen, widgetLease]);
 
   // Honest, retryable error state (prod incident 2026-06): the old static
   // «Не удалось загрузить данные» banner was a dead end — no retry button,

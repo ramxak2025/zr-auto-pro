@@ -8,7 +8,7 @@ import {
   nextUntriedApiHost,
   orderApiHosts,
 } from './apiHosts';
-import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
+import { readStoredAccountSession } from '../contexts/authAccountStorage';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 import { resolveImageUrl } from './imageUrl';
 
@@ -798,22 +798,10 @@ function readAuthTokenWithDeadline(): Promise<string | null> {
       resolve(token);
     };
     const timer = setTimeout(() => finish(null), AUTH_TOKEN_READ_TIMEOUT_MS);
-    // The versioned envelope is authoritative. Its logged-out tombstone must
-    // beat a stale legacy mirror, and its token B must beat legacy token A
-    // while a native repair is still pending. Legacy remains a migration
-    // fallback for installations that have not written the envelope yet.
-    void Promise.all([
-      AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY).catch(() => null),
-      AsyncStorage.getItem('token').catch(() => null),
-    ]).then(
-      ([rawEnvelope, legacyToken]) => {
-        const envelope = parseAuthSessionEnvelope(rawEnvelope);
-        if (envelope) {
-          finish(envelope.token);
-          return;
-        }
-        finish(legacyToken ?? null);
-      },
+    // SecureStore is authoritative after its recoverable legacy migration.
+    // A storage failure never falls back to an old plaintext credential.
+    void readStoredAccountSession().then(
+      (session) => finish(session.token),
       () => finish(null),
     );
   });
@@ -871,8 +859,14 @@ export function createSessionBoundClient(token: string | null) {
   };
 }
 
-export function setAuthToken(token: string | null): void {
-  if (cachedAuthToken !== token) {
+export function captureAuthSession() {
+  const epoch = authTokenEpoch;
+  const token = cachedAuthToken ?? null;
+  return { token, epoch, isCurrent: () => epoch === authTokenEpoch && token === cachedAuthToken };
+}
+
+export function setAuthToken(token: string | null, forceNewSession = false): void {
+  if (cachedAuthToken !== token || forceNewSession) {
     authTokenEpoch += 1;
     explicitAuthTransitionEpoch += 1;
   }
@@ -891,6 +885,15 @@ export function requestWithCapturedAuth<T = unknown>(
   config: AxiosRequestConfig,
   capturedEpoch = authTokenEpoch,
 ): Promise<AxiosResponse<T>> {
+  const method = (config.method ?? 'get').toLowerCase();
+  if (
+    !(
+      (config.url === '/push/token' && (method === 'post' || method === 'delete')) ||
+      (config.url === '/auth/logout' && method === 'post')
+    )
+  ) {
+    return Promise.reject(new Error('Captured credentials are restricted to push/session cleanup.'));
+  }
   const captured: AxiosRequestConfig & {
     _authEpoch: number;
     _authToken: string;
@@ -993,7 +996,12 @@ api.interceptors.request.use(async (config) => {
       authTokenLoadPromise = null;
     }
     cfg._authEpoch = authTokenEpoch;
-    cfg._authToken = cachedAuthToken ?? null;
+    // Adding an account must not send A's bearer or expire A when the
+    // one-use point-selection credential is rejected. Keep epoch cancellation.
+    const credentialExchange =
+      isLoginRequest(cfg) ||
+      ((cfg.method || '').toLowerCase() === 'post' && /(^|\/)auth\/select-point\/?$/.test(cfg.url || ''));
+    cfg._authToken = credentialExchange ? null : (cachedAuthToken ?? null);
   }
 
   // No request can race a late persisted-host restore or a meaningful native
@@ -1306,7 +1314,7 @@ function finalizeRingFailure(ringError: unknown, cfg: FailoverAwareConfig): Prom
 // основании ответа посредника.
 api.interceptors.response.use((res) => {
   const cfg = res.config as FailoverAwareConfig;
-  if (cfg._authEpoch !== undefined && cfg._authEpoch !== authTokenEpoch) {
+  if (cfg._authEpoch !== undefined && cfg._authEpoch !== authTokenEpoch && !cfg._allowCapturedAuthDispatch) {
     return Promise.reject(staleAuthCancellation(res.config));
   }
   if (isHtmlApiPayload(res.data, res.headers?.['content-type'])) {
@@ -1334,6 +1342,8 @@ api.interceptors.response.use(
     // очередь чеков, баннер) остаётся безусловным: успех ЛЮБОГО поколения —
     // честное доказательство работающей сети.
     const cfg = res.config as FailoverAwareConfig | undefined;
+    // Captured logout/push cleanup reports only to its serialized owner.
+    if (cfg?._allowCapturedAuthDispatch) return res;
     if (cfg?._routeGeneration === selectionGeneration) markHostHealthy(cfg.baseURL);
     fireNetworkListeners(requestSuccessListeners);
     return res;
@@ -1473,7 +1483,8 @@ api.interceptors.response.use(
       !isLoginRequest(cfg) &&
       !isSessionRefreshRequest(cfg) &&
       !htmlErrorResponse &&
-      authSnapshotIsCurrent
+      authSnapshotIsCurrent &&
+      !cfg._allowCapturedAuthDispatch
     ) {
       // Идёт перевыпуск сессии (167): старый токен уже мёртв, новый ещё в пути.
       // 401 чужого запроса в этой щели — ожидаемое следствие переключения, а не

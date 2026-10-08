@@ -33,6 +33,13 @@ let mockStorageGetItem: (key: string) => Promise<string | null> = async (key) =>
 const mockStorageSetItem = jest.fn(async (_key: string, _value: string) => undefined);
 const mockStorageRemoveItem = jest.fn(async (_key: string) => undefined);
 
+let mockReadStoredSession: () => Promise<{ token: string | null; user: null; impersonating: boolean }> = async () => ({
+  token: null,
+  user: null,
+  impersonating: false,
+});
+jest.mock('../../contexts/authAccountStorage', () => ({ readStoredAccountSession: () => mockReadStoredSession() }));
+
 jest.mock('expo-constants', () => ({
   __esModule: true,
   default: {
@@ -138,6 +145,7 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     // фейковые таймеры не дают ему повиснуть открытым хендлом. Микротаски живые.
     jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
     mockStoredBase = null;
+    mockReadStoredSession = async () => ({ token: null, user: null, impersonating: false });
     mockStorageGetItem = async (key) => (key === 'active_api_base_v1' ? mockStoredBase : null);
     mockStorageSetItem.mockClear();
     mockStorageRemoveItem.mockClear();
@@ -170,7 +178,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 'net-no-code', [RESERVE]: 'ok' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
 
     expect(calls.map((c) => c.baseURL)).toEqual([PRIMARY, RESERVE]);
     expect(mod.getActiveApiBaseUrl()).toBe(RESERVE);
@@ -189,7 +199,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE, THIRD]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 'ok', [RESERVE]: 'net', [THIRD]: 'ok' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
 
     expect(calls.map((c) => c.baseURL)).toEqual([RESERVE, THIRD]);
     expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
@@ -208,7 +220,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE, THIRD]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 'ok', [RESERVE]: 'net', [THIRD]: 'net' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
 
     expect(calls.map((c) => c.baseURL)).toEqual([THIRD, PRIMARY]);
     expect(mod.getActiveApiBaseUrl()).toBe(PRIMARY);
@@ -239,7 +253,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE, THIRD]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 403, [RESERVE]: 'ok', [THIRD]: 'ok' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
     expect(calls.map((c) => c.baseURL)).toEqual([PRIMARY, RESERVE]);
   });
 
@@ -377,7 +393,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE, THIRD]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 'net', [RESERVE]: 'html403', [THIRD]: 'ok' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
     expect(calls.map((c) => c.baseURL)).toEqual([PRIMARY, RESERVE, THIRD]);
     expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
   });
@@ -386,7 +404,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const mod = loadApiModule([RESERVE, THIRD]);
     const calls = keyedAdapter(mod.default, { [PRIMARY]: 502, [RESERVE]: 504, [THIRD]: 'ok' });
 
-    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({ status: 200 });
+    await expect(mod.loginAcrossHosts({ phone: '+79990000000', password: 'x' })).resolves.toMatchObject({
+      status: 200,
+    });
     expect(calls.map((c) => c.baseURL)).toEqual([PRIMARY, RESERVE, THIRD]);
     expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
   });
@@ -503,8 +523,7 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
   });
 
   it('зависшее чтение token из native storage не может навсегда повесить login', async () => {
-    mockStorageGetItem = (key) =>
-      key === 'token' ? new Promise<string | null>(() => {}) : Promise.resolve(null);
+    mockReadStoredSession = () => new Promise(() => {});
     const mod = loadApiModule([]);
     const calls = scriptAdapter(mod.default, ['ok']);
 
@@ -520,12 +539,13 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
 
   it('mutation, созданная до смены сессии и зависшая на token read, не получает bearer B', async () => {
     let releaseToken!: (value: string | null) => void;
-    mockStorageGetItem = (key) =>
-      key === 'token'
-        ? new Promise((resolve) => {
-            releaseToken = resolve;
-          })
-        : Promise.resolve(null);
+    mockReadStoredSession = async () => ({
+      token: await new Promise<string | null>((resolve) => {
+        releaseToken = resolve;
+      }),
+      user: null,
+      impersonating: false,
+    });
     const mod = loadApiModule([]);
     const calls = scriptAdapter(mod.default, ['ok']);
 
@@ -542,23 +562,27 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
 
   it.each([
     ['logout tombstone', null, 'stale-token-A', undefined],
-    ['new envelope token', 'token-B', 'stale-token-A', 'Bearer token-B'],
-  ])('authoritative auth envelope (%s) wins over a stale legacy token', async (_label, envelopeToken, legacy, expected) => {
-    mockStorageGetItem = async (key) => {
-      if (key === 'auth_session_v1') {
-        return JSON.stringify({ v: 1, generation: 7, token: envelopeToken, user: null, impersonating: false });
-      }
-      if (key === 'token') return legacy;
-      return null;
-    };
-    const mod = loadApiModule([]);
-    const calls = scriptAdapter(mod.default, ['ok']);
+    ['new secure registry token', 'token-B', 'stale-token-A', 'Bearer token-B'],
+  ])(
+    'authoritative secure registry (%s) wins over a stale legacy token',
+    async (_label, envelopeToken, legacy, expected) => {
+      mockReadStoredSession = async () => ({ token: envelopeToken, user: null, impersonating: false });
+      mockStorageGetItem = async (key) => {
+        if (key === 'auth_session_v1') {
+          return JSON.stringify({ v: 1, generation: 7, token: envelopeToken, user: null, impersonating: false });
+        }
+        if (key === 'token') return legacy;
+        return null;
+      };
+      const mod = loadApiModule([]);
+      const calls = scriptAdapter(mod.default, ['ok']);
 
-    await mod.default.get('/products');
+      await mod.default.get('/products');
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].headers.Authorization).toBe(expected);
-  });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].headers.Authorization).toBe(expected);
+    },
+  );
 
   it('logout cleanup dispatches only captured token A after local token changed to B', async () => {
     const mod = loadApiModule([]);
@@ -568,9 +592,9 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     const cleanup = mod.requestWithCapturedAuth('token-A', { method: 'delete', url: '/push/token' });
     mod.setAuthToken('token-B');
 
-    // The old cleanup is allowed onto the wire with A, but its stale success
-    // is canceled before it can publish into the new session.
-    await expect(cleanup).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    // Cleanup reports its acknowledgement only to the captured cleanup owner;
+    // it never publishes a current-session success/expiry event.
+    await expect(cleanup).resolves.toMatchObject({ status: 200 });
     expect(calls).toHaveLength(1);
     expect(calls[0].headers.Authorization).toBe('Bearer token-A');
   });
@@ -585,7 +609,7 @@ describe('loginAcrossHosts — rate-limit-safe route failover', () => {
     mod.setAuthToken('token-B');
     const lateSecondCleanup = cleanupAsA({ method: 'post', url: '/auth/logout' });
 
-    await expect(lateSecondCleanup).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    await expect(lateSecondCleanup).resolves.toMatchObject({ status: 200 });
     expect(calls).toHaveLength(1);
     expect(calls[0].headers.Authorization).toBe('Bearer token-A');
   });
@@ -635,6 +659,7 @@ describe('raceInitialActiveHost — стартовая гонка /health', () =
   beforeEach(() => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
     mockStoredBase = null;
+    mockReadStoredSession = async () => ({ token: null, user: null, impersonating: false });
     mockStorageGetItem = async (key) => (key === 'active_api_base_v1' ? mockStoredBase : null);
     mockStorageSetItem.mockClear();
     mockStorageRemoveItem.mockClear();
@@ -686,8 +711,10 @@ describe('raceInitialActiveHost — стартовая гонка /health', () =
     } as unknown as Response;
     fetchMock = jest.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('primary.test')) return new Promise<Response>((resolve) => setTimeout(() => resolve(response), 5_200));
-      if (url.includes('third.test')) return new Promise<Response>((resolve) => setTimeout(() => resolve(response), 4_000));
+      if (url.includes('primary.test'))
+        return new Promise<Response>((resolve) => setTimeout(() => resolve(response), 5_200));
+      if (url.includes('third.test'))
+        return new Promise<Response>((resolve) => setTimeout(() => resolve(response), 4_000));
       return new Promise<Response>((_resolve, reject) => setTimeout(() => reject(new Error('H2 blocked')), 8_000));
     });
     global.fetch = fetchMock as unknown as typeof fetch;

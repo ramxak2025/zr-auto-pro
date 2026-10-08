@@ -1,14 +1,15 @@
 import { ownsProcurementOutcome, runOwnedProcurement } from '../../../shared/utils/procurementSession';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { createSessionBoundClient, isCurrentAuthToken } from '../api/axios';
+import { captureAuthSession, createSessionBoundClient } from '../api/axios';
+import { captureDataSession } from '../contexts/dataSession';
 
 import { durableProcurement } from '../utils/procurementStorage';
 import type { PendingProcurement, ProcurementOwner, ProcurementTarget } from '../../../shared/utils/durableProcurement';
 
 /** Recovery is independent of the form, its refetch, and the current date. */
 export function useProcurementRecovery(filter: Partial<ProcurementTarget> = {}) {
-  const { user, token } = useAuth();
+  const { user, token, sessionGeneration } = useAuth();
   const owner = useMemo<ProcurementOwner | null>(
     () =>
       user?.tenantId && token
@@ -16,8 +17,11 @@ export function useProcurementRecovery(filter: Partial<ProcurementTarget> = {}) 
         : null,
     [user?.tenantId, user?.id, user?.currentPointId, token],
   );
-  const lease = useMemo(() => ({ owner }), [owner]);
-  const client = useMemo(() => createSessionBoundClient(token), [token]);
+  const lease = useMemo(
+    () => ({ owner, auth: captureAuthSession(), data: captureDataSession() }),
+    [owner, sessionGeneration],
+  );
+  const client = useMemo(() => createSessionBoundClient(token), [token, sessionGeneration]);
   const active = useRef(token);
   const activeLease = useRef(lease);
   activeLease.current = lease;
@@ -30,7 +34,12 @@ export function useProcurementRecovery(filter: Partial<ProcurementTarget> = {}) 
     };
   }, []);
   const isCurrent = useCallback(
-    () => mounted.current && active.current === token && activeLease.current === lease && isCurrentAuthToken(token),
+    () =>
+      mounted.current &&
+      active.current === token &&
+      activeLease.current === lease &&
+      lease.auth.isCurrent() &&
+      lease.data.isCurrent(),
     [token, lease],
   );
   const [records, setRecords] = useState<PendingProcurement[]>([]);

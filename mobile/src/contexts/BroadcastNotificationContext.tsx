@@ -40,9 +40,11 @@
  */
 import React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ownedStorage } from './ownedStorage';
+import { captureDataSession } from './dataSession';
+import { createSessionBoundClient } from '../api/axios';
+import { createNotificationsApi } from '../../../shared/api/createServices';
 import * as Notifications from 'expo-notifications';
-import { notificationsApi } from '../api/services';
 import { useAuth } from './AuthContext';
 import BroadcastModal from '../components/BroadcastModal';
 import type { Broadcast } from '../../../shared/types';
@@ -83,7 +85,12 @@ function parseIds(raw: string | null): string[] {
 }
 
 export function BroadcastNotificationProvider({ children }: ProviderProps) {
-  const { user } = useAuth();
+  const { user, token, sessionGeneration } = useAuth();
+  const lease = React.useMemo(() => captureDataSession(), [sessionGeneration]);
+  const notificationsApi = React.useMemo(
+    () => createNotificationsApi(createSessionBoundClient(token)),
+    [token, sessionGeneration],
+  );
 
   // `current` is the broadcast on screen; `queue` holds the rest (newest is
   // surfaced first because the endpoint returns newest-first).
@@ -113,37 +120,45 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
       flushTimer.current = null;
     }
     flushDelay.current = BACKOFF_START;
-  }, []);
+  }, [lease]);
 
-  const persistSeen = React.useCallback(async (uid: string) => {
-    try {
-      // Keep only the newest SEEN_CAP ids (insertion order = oldest→newest).
-      const capped = [...seenIds.current].slice(-SEEN_CAP);
-      seenIds.current = new Set(capped);
-      await AsyncStorage.setItem(seenKey(uid), JSON.stringify(capped));
-    } catch {
-      // best-effort — re-pop guard degrades to session-only on storage failure
-    }
-  }, []);
+  const persistSeen = React.useCallback(
+    async (uid: string) => {
+      try {
+        // Keep only the newest SEEN_CAP ids (insertion order = oldest→newest).
+        const capped = [...seenIds.current].slice(-SEEN_CAP);
+        seenIds.current = new Set(capped);
+        await ownedStorage.set(seenKey(uid), JSON.stringify(capped), lease);
+      } catch {
+        // best-effort — re-pop guard degrades to session-only on storage failure
+      }
+    },
+    [lease],
+  );
 
-  const persistPending = React.useCallback(async (uid: string) => {
-    try {
-      await AsyncStorage.setItem(pendingKey(uid), JSON.stringify([...pendingSeen.current]));
-    } catch {
-      // best-effort
-    }
-  }, []);
+  const persistPending = React.useCallback(
+    async (uid: string) => {
+      try {
+        await ownedStorage.set(pendingKey(uid), JSON.stringify([...pendingSeen.current]), lease);
+      } catch {
+        // best-effort
+      }
+    },
+    [lease],
+  );
 
   // Retry markBroadcastSeen for every queued-but-unconfirmed dismissal.
   const flushPendingSeen = React.useCallback(
     async (uid: string) => {
-      if (flushing.current || pendingSeen.current.size === 0) return;
+      if (!lease.isCurrent() || flushing.current || pendingSeen.current.size === 0) return;
       flushing.current = true;
       try {
         let changed = false;
         for (const id of [...pendingSeen.current]) {
+          if (!lease.isCurrent()) return;
           try {
             await notificationsApi.markBroadcastSeen(id);
+            if (!lease.isCurrent()) return;
             pendingSeen.current.delete(id);
             changed = true;
           } catch {
@@ -155,17 +170,18 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
         flushing.current = false;
       }
     },
-    [persistPending],
+    [persistPending, lease, notificationsApi],
   );
 
   // Self-rescheduling backoff: runs a flush; if anything is still pending,
   // re-arms with a growing delay (capped). Cleared once the queue empties.
   const scheduleFlush = React.useCallback(
     (uid: string) => {
-      if (flushTimer.current) return; // a chain is already running
+      if (!lease.isCurrent() || flushTimer.current) return; // a chain is already running
       const run = async () => {
         flushTimer.current = null;
         await flushPendingSeen(uid);
+        if (!lease.isCurrent()) return;
         if (pendingSeen.current.size > 0) {
           flushDelay.current = Math.min(flushDelay.current * 3, BACKOFF_MAX);
           flushTimer.current = setTimeout(run, flushDelay.current);
@@ -175,38 +191,42 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
       };
       flushTimer.current = setTimeout(run, flushDelay.current);
     },
-    [flushPendingSeen],
+    [flushPendingSeen, lease],
   );
 
-  const enqueue = React.useCallback((items: Broadcast[]) => {
-    setCurrent((cur) => {
-      // Drop anything already on screen, queued, or handled (incl. persisted).
-      const fresh = items.filter((b) => !handledIds.current.has(b.id) && (!cur || cur.id !== b.id));
-      if (fresh.length === 0) return cur;
-      fresh.forEach((b) => handledIds.current.add(b.id));
-      if (cur) {
-        // Something's already showing — append the rest to the queue.
-        setQueue((q) => [...q, ...fresh]);
-        return cur;
-      }
-      // Nothing showing — surface the first, queue the remainder.
-      const [first, ...rest] = fresh;
-      if (rest.length > 0) setQueue((q) => [...q, ...rest]);
-      return first;
-    });
-  }, []);
+  const enqueue = React.useCallback(
+    (items: Broadcast[]) => {
+      setCurrent((cur) => {
+        // Drop anything already on screen, queued, or handled (incl. persisted).
+        const fresh = items.filter((b) => !handledIds.current.has(b.id) && (!cur || cur.id !== b.id));
+        if (fresh.length === 0) return cur;
+        fresh.forEach((b) => handledIds.current.add(b.id));
+        if (cur) {
+          // Something's already showing — append the rest to the queue.
+          setQueue((q) => [...q, ...fresh]);
+          return cur;
+        }
+        // Nothing showing — surface the first, queue the remainder.
+        const [first, ...rest] = fresh;
+        if (rest.length > 0) setQueue((q) => [...q, ...rest]);
+        return first;
+      });
+    },
+    [lease],
+  );
 
   const checkOnce = React.useCallback(async () => {
-    if (!user || !hydrated.current) return;
+    if (!user || !hydrated.current || !lease.isCurrent()) return;
     try {
       const res = await notificationsApi.listUnseenBroadcasts();
+      if (!lease.isCurrent()) return;
       if (Array.isArray(res.data) && res.data.length > 0) {
         enqueue(res.data);
       }
     } catch {
       // Silent — push or the next foreground change re-triggers us.
     }
-  }, [user, enqueue]);
+  }, [user, enqueue, notificationsApi, lease]);
 
   // Per-user lifecycle: hydrate persisted state → reconcile pending → check.
   // Reset everything on logout so a stale broadcast never shows on the login
@@ -228,10 +248,10 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
     (async () => {
       try {
         const [seenRaw, pendingRaw] = await Promise.all([
-          AsyncStorage.getItem(seenKey(uid)),
-          AsyncStorage.getItem(pendingKey(uid)),
+          ownedStorage.get(seenKey(uid), lease),
+          ownedStorage.get(pendingKey(uid), lease),
         ]);
-        if (cancelled) return;
+        if (cancelled || !lease.isCurrent()) return;
         const seen = parseIds(seenRaw);
         const pending = parseIds(pendingRaw);
         seenIds.current = new Set(seen);
@@ -243,7 +263,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
       } catch {
         // best-effort — fall back to session-only behaviour
       }
-      if (cancelled) return;
+      if (cancelled || !lease.isCurrent()) return;
       hydrated.current = true;
       // Reconcile any unconfirmed dismissals, then look for new broadcasts.
       flushPendingSeen(uid);
@@ -252,7 +272,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
     return () => {
       cancelled = true;
     };
-  }, [user, checkOnce, flushPendingSeen, clearFlushTimer]);
+  }, [user, checkOnce, flushPendingSeen, clearFlushTimer, lease]);
 
   // Foreground events — a superadmin often sends the broadcast while the
   // user's app is backgrounded. On return to 'active' we re-check AND retry any
@@ -283,6 +303,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
   React.useEffect(() => () => clearFlushTimer(), [clearFlushTimer]);
 
   const onDismiss = React.useCallback(async () => {
+    if (!lease.isCurrent()) return;
     const dismissed = current;
     // Advance to the next queued broadcast (or clear) immediately for snappy
     // feedback, then persist the "seen" state in the background.
@@ -302,6 +323,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
     persistPending(uid);
     try {
       await notificationsApi.markBroadcastSeen(dismissed.id);
+      if (!lease.isCurrent()) return;
       pendingSeen.current.delete(dismissed.id);
       persistPending(uid);
     } catch {
@@ -309,7 +331,7 @@ export function BroadcastNotificationProvider({ children }: ProviderProps) {
       // in `seenIds`, so it won't re-pop in the meantime.
       scheduleFlush(uid);
     }
-  }, [current, user, persistSeen, persistPending, scheduleFlush]);
+  }, [current, user, persistSeen, persistPending, scheduleFlush, lease, notificationsApi]);
 
   const ctx = React.useMemo<BroadcastNotificationContextValue>(() => ({ refresh: checkOnce }), [checkOnce]);
 

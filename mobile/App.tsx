@@ -33,7 +33,10 @@ import {
 } from './src/utils/offlineCheckQueue';
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
 import { ensureApiHostReady, onNetworkClassFailure, onRequestSucceeded, reselectApiHost } from './src/api/axios';
-import { checksApi, clientsApi, loyaltyApi } from './src/api/services';
+import { checksApi } from './src/api/services';
+import { captureAuthSession, createSessionBoundClient } from './src/api/axios';
+import { captureDataSession } from './src/contexts/dataSession';
+import { createClientsApi, createLoyaltyApi } from '../shared/api/createServices';
 import { useAuth } from './src/contexts/AuthContext';
 import { parseAttendanceNfcUri } from '../shared/utils/attendanceNfcUri';
 import { clearPendingAttendanceLink, setPendingAttendanceLink } from './src/utils/nfcLinkInbox';
@@ -260,14 +263,21 @@ function invalidateAfterQueuedCheckSent(): void {
  * сеть) глушим — чек уже отправлен, блокировать нечего.
  */
 async function accrueLoyaltyForQueuedCheck(entry: QueuedCheck, result: unknown): Promise<void> {
+  const lease = captureAuthSession();
+  const dataLease = captureDataSession();
+  if (!lease.token || !dataLease.owner) return;
+  const bound = createSessionBoundClient(lease.token);
+  const clientsApi = createClientsApi(bound);
+  const loyaltyApi = createLoyaltyApi(bound);
   const clientId = typeof entry.payload.clientId === 'string' ? entry.payload.clientId : '';
   const checkId = (result as { id?: string } | null | undefined)?.id;
   if (!clientId || !checkId) return;
   try {
     const client = await clientsApi.getById(clientId);
-    if (client.data?.isRetail) return;
+    if (client.data?.isRetail || !lease.isCurrent() || !dataLease.isCurrent()) return;
     await loyaltyApi.accrue({ clientId, checkId });
-    queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', clientId] });
+    if (lease.isCurrent() && dataLease.isCurrent())
+      queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', clientId] });
   } catch {
     /* лояльность выключена/не настроена/сеть — тихо, чек уже в журнале */
   }
@@ -282,12 +292,15 @@ async function accrueLoyaltyForQueuedCheck(entry: QueuedCheck, result: unknown):
  * гадает, ушёл ли чек.
  */
 function notifyQueuedCheckSent(entry: QueuedCheck, result: unknown): void {
+  const lease = captureDataSession();
+  if (!lease.owner) return;
   const number = (result as { number?: number } | null | undefined)?.number;
   const client = entry.meta?.clientName;
   void (async () => {
     let delivered = false;
     try {
       const perms = await Notifications.getPermissionsAsync();
+      if (!lease.isCurrent()) return;
       const canNotify = perms.granted || perms.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
       if (canNotify) {
         await Notifications.scheduleNotificationAsync({
@@ -303,7 +316,7 @@ function notifyQueuedCheckSent(entry: QueuedCheck, result: unknown): void {
     } catch {
       // Права/шедулер недоступны — ниже покажем тост.
     }
-    if (!delivered) {
+    if (!delivered && lease.isCurrent()) {
       showToast(number ? `Чек №${number} отправлен — записан в журнал` : 'Отложенный чек отправлен', 'success');
     }
   })();
