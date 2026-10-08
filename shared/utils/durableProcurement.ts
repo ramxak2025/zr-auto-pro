@@ -197,6 +197,9 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
         const record = await storage.exclusive(key, async () => {
           guard(isCurrent);
           const raw = await storage.getItem(key);
+          // Account removal may have completed while the initial read waited.
+          // Reject the stale owner before reserving or persisting a new intent.
+          guard(isCurrent);
           if (raw !== null) {
             const saved = readRecord(raw, key, owner);
             if (

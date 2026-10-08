@@ -494,3 +494,68 @@ it('actual AuthProvider restores only selected saved-account disk cache while sw
     f.query.onlineManager.setOnline(true);
   }
 });
+
+it.each(['procurement', 'nfc'])(
+  'late %s preparation read after completed removal cannot create an orphan intent',
+  async (kind) => {
+    const f = await setup(false, intentUser);
+    const data = jest.requireActual('../dataSession') as typeof import('../dataSession');
+    const owner = { tenantId: f.a.tenantId!, userId: f.a.id, pointId: f.a.currentPointId! };
+    const lease = data.captureDataSession();
+    const prefix = kind === 'procurement' ? 'autexa:procurement:v1:' : 'autexa:nfc:v1:';
+    const gate = deferred<void>();
+    const originalRead = mockLegacy.getItem.getMockImplementation()!;
+    let entered = false;
+    mockLegacy.getItem.mockImplementation(async (key) => {
+      const originalValue = await originalRead(key);
+      if (!entered && key.startsWith(prefix)) {
+        entered = true;
+        await gate.promise;
+      }
+      return originalValue;
+    });
+    const send = jest.fn(async () => {
+      throw new Error('Network must not run');
+    });
+    const work =
+      kind === 'procurement'
+        ? (
+            jest.requireActual('../../utils/procurementStorage') as typeof import('../../utils/procurementStorage')
+          ).durableProcurement.execute({
+            owner,
+            target: { operation: 'delivery-return', sourceId: '44444444-4444-4444-8444-444444444444' },
+            payload: {},
+            isCurrent: lease.isCurrent,
+            send,
+          })
+        : (
+            jest.requireActual('../../utils/nativePendingNfc') as typeof import('../../utils/nativePendingNfc')
+          ).nativePendingNfc.scan({
+            owner,
+            lease,
+            token: 'a'.repeat(43),
+            isCurrent: lease.isCurrent,
+            refreshCurrent: async () => {},
+            send,
+          });
+    const outcome = work.catch((error: { code: string }) => error);
+    try {
+      for (let i = 0; i < 1000 && !entered; i++) await Promise.resolve();
+      expect(entered).toBe(true);
+      expect([...mockLegacyMap.keys()].some((key) => key.startsWith(prefix))).toBe(false);
+      await f.api.removeAccount(f.api.activeAccountId!);
+      expect((await mockRegistry.read()).accounts).toHaveLength(0);
+      expect(lease.isCurrent()).toBe(false);
+      // The freeze has finished and released. The delayed native read still
+      // carries the original empty result and may not start its first write.
+      gate.resolve();
+      expect(await outcome).toMatchObject({ code: 'SESSION_CHANGED' });
+      expect([...mockLegacyMap.keys()].some((key) => key.startsWith(prefix))).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await outcome;
+      mockLegacy.getItem.mockImplementation(originalRead);
+    }
+  },
+);
