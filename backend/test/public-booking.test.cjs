@@ -1150,6 +1150,169 @@ test(
           assert.equal((await neighbor.recover(nb)).status, 'completed');
         },
       );
+      await scenario(
+        'review repair: public transfer to an unconfigured resource keeps strict overlap and end boundary',
+        async () => {
+          const f = await seed();
+          await f.submit(f.body());
+          const source = await f.booking();
+          await f.internal({ masterId: f.worker });
+          await assert.rejects(
+            run(f, () => bookings.update(f.boss, source.id, { requestId: uuid(), masterId: f.worker })),
+            failure(409, 'SLOT_UNAVAILABLE'),
+          );
+          assert.equal((await one('SELECT master_id FROM bookings WHERE id=$1', [source.id])).master_id, f.owner);
+          const moved = await run(f, () =>
+            bookings.update(f.boss, source.id, { requestId: uuid(), masterId: f.worker, scheduledAt: at('11:30') }),
+          );
+          assert.equal(moved.masterId, f.worker);
+          assert.equal(moved.conflictWarning, null);
+          // Ordinary, never configured resources retain the original warning contract.
+          await f.internal({ masterId: f.otherWorker });
+          const legacy = await f.internal({ masterId: f.otherWorker });
+          assert.ok(legacy.conflictWarning);
+        },
+      );
+      await scenario(
+        'review repair: public transfer checks current point membership and employee eligibility',
+        async () => {
+          const f = await seed();
+          await f.submit(f.body());
+          const source = await f.booking();
+          await q('UPDATE user_points SET point_id=$1 WHERE user_id=$2', [f.otherPoint, f.worker]);
+          await assert.rejects(
+            run(f, () => bookings.update(f.boss, source.id, { requestId: uuid(), masterId: f.worker })),
+            failure(400, 'RESOURCE_UNAVAILABLE'),
+          );
+          await q('UPDATE user_points SET point_id=$1 WHERE user_id=$2', [f.point, f.worker]);
+          for (const field of ['is_active', 'dismissed_at', 'purged_at']) {
+            await q(`UPDATE users SET ${field}=${field === 'is_active' ? 'false' : 'now()'} WHERE id=$1`, [f.worker]);
+            await assert.rejects(
+              run(f, () => bookings.update(f.boss, source.id, { requestId: uuid(), masterId: f.worker })),
+              failure(400, 'RESOURCE_UNAVAILABLE'),
+            );
+            await q(`UPDATE users SET ${field}=${field === 'is_active' ? 'true' : 'NULL'} WHERE id=$1`, [f.worker]);
+          }
+          assert.equal((await one('SELECT master_id FROM bookings WHERE id=$1', [source.id])).master_id, f.owner);
+        },
+      );
+      await scenario(
+        'review repair: public transfer and internal create on unconfigured resource serialize in both orders',
+        async () => {
+          for (const transferFirst of [false, true]) {
+            const f = await seed();
+            await f.submit(f.body());
+            const source = await f.booking(),
+              entered = defer(),
+              release = defer();
+            const transfer = () =>
+              run(f, () => bookings.update(f.boss, source.id, { requestId: uuid(), masterId: f.worker }));
+            const create = () => f.internal({ masterId: f.worker });
+            let paused = false;
+            const first = gates.run(
+              async (sql) => {
+                if (
+                  !paused &&
+                  (transferFirst
+                    ? sql.startsWith('UPDATE bookings SET scheduled_at=')
+                    : sql.includes('INSERT INTO bookings'))
+                ) {
+                  paused = true;
+                  entered.resolve();
+                  await release.promise;
+                }
+              },
+              transferFirst ? transfer : create,
+            );
+            await entered.promise;
+            const second = (transferFirst ? create : transfer)();
+            try {
+              await waiting('%pg_advisory_xact_lock%');
+            } finally {
+              release.resolve();
+            }
+            const outcomes = await Promise.allSettled([first, second]);
+            assert.equal(outcomes[0].status, 'fulfilled');
+            assert.equal(outcomes[1].status, 'rejected');
+            assert.ok(failure(409, 'SLOT_UNAVAILABLE')(outcomes[1].reason));
+            assert.equal(
+              (
+                await one(
+                  "SELECT count(*)::int n FROM bookings WHERE tenant_id=$1 AND master_id=$2 AND status='scheduled'",
+                  [f.tenant, f.worker],
+                )
+              ).n,
+              1,
+            );
+          }
+        },
+      );
+      await scenario(
+        'review repair: muted public reminder uses own snapshot and fresh point/permission/own recipients',
+        async () => {
+          const f = await seed(),
+            allowed = uuid(),
+            otherPointAdmin = uuid(),
+            otherPointDirector = uuid(),
+            revoked = uuid(),
+            revokedRole = uuid();
+          await q('UPDATE clients SET point_id=$1 WHERE id=$2', [f.otherPoint, f.client]);
+          await q(
+            `INSERT INTO roles(id,tenant_id,name,matrix) VALUES($1,$2,'Revoked bookings','{"bookings":{"view":false}}')`,
+            [revokedRole, f.tenant],
+          );
+          for (const [id, role, roleId, point] of [
+            [allowed, 'admin', f.role, f.point],
+            [otherPointAdmin, 'admin', f.role, f.otherPoint],
+            [otherPointDirector, 'director', null, f.otherPoint],
+            [revoked, 'admin', f.role, f.point],
+          ]) {
+            await q(
+              "INSERT INTO users(id,tenant_id,phone,password,full_name,role,role_id) VALUES($1,$2,$5,'fixture-only','Reminder recipient',$3,$4)",
+              [id, f.tenant, role, roleId, id],
+            );
+            await q('INSERT INTO user_points(user_id,tenant_id,point_id) VALUES($1,$2,$3)', [id, f.tenant, point]);
+          }
+          await f.submit(f.body({ name: 'Own request contact' }));
+          await drain();
+          assert.equal((await f.booking()).client_id, null);
+          // Revoke after submission, so no cached authorisation from creation can leak the reminder.
+          await q('UPDATE users SET role_id=$1 WHERE id=$2', [revokedRole, revoked]);
+          await q("UPDATE bookings SET scheduled_at=now()+interval '1 hour' WHERE tenant_id=$1", [f.tenant]);
+          await q('UPDATE booking_settings SET reminder_enabled=true,reminder_hours=2 WHERE tenant_id=$1', [f.tenant]);
+          await q(
+            "INSERT INTO messaging_integrations(tenant_id,provider_type,api_key,is_active) VALUES($1,'smsru','fixture-not-used',true)",
+            [f.tenant],
+          );
+          const sent = [],
+            smsAttempts = [];
+          const reminders = new BookingReminderService(
+            native,
+            {
+              sendClientMessage: async (...args) => {
+                smsAttempts.push(args);
+                return { sent: false, reason: 'no_provider' };
+              },
+            },
+            {
+              sendToUserCategory: async (id, _category, _title, body) => {
+                sent.push({ id, body });
+              },
+              sendToUserInTenant: async (id, tenant, _category, _title, body) => {
+                assert.equal(tenant, f.tenant);
+                sent.push({ id, body });
+              },
+            },
+          );
+          await reminders.run();
+          await reminders.run();
+          assert.equal(smsAttempts.length, 1);
+          assert.equal(smsAttempts[0][1], f.phone);
+          assert.equal(smsAttempts[0][3].clientId, null);
+          assert.deepEqual(sent.map((s) => s.id).sort(), [f.owner, allowed].sort());
+          assert.ok(sent.every((s) => s.body.includes('Own request contact') && !s.body.includes('Saved card name')));
+        },
+      );
     } finally {
       await Promise.allSettled(effects);
       const cleanup = new TenantsService(native, {}, {});

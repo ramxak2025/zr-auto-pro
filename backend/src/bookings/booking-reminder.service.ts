@@ -5,6 +5,10 @@ import { MarketingService } from '../marketing/marketing.service';
 import { PushService } from '../push/push.service';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { getTenantTimezone } from '../common/timezone';
+import { userHasPermission } from '../common/guards/permissions.guard';
+import { mergeEffectivePermissions } from '../common/role-matrix';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { bookingOwner } from './booking-reservations';
 
 /**
  * BookingReminderService
@@ -94,7 +98,7 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
              LIMIT 200
              FOR UPDATE SKIP LOCKED
           )
-          RETURNING b.id, b.tenant_id, b.scheduled_at, b.client_id, b.master_id, b.public_request_id`,
+          RETURNING b.id, b.tenant_id, b.point_id, b.scheduled_at, b.client_id, b.master_id, b.public_request_id`,
       );
 
       if (rows.length === 0) return;
@@ -154,27 +158,57 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
    * не роняет цикл напоминаний.
    */
   private async notifyStaffSmsMuted(
-    row: { id: string; tenant_id: string; scheduled_at: Date | string; master_id?: string | null },
+    row: {
+      id: string;
+      tenant_id: string;
+      point_id?: string | null;
+      scheduled_at: Date | string;
+      master_id?: string | null;
+      public_request_id?: string | null;
+    },
     clientName: string,
   ): Promise<void> {
     try {
-      const { rows: staff } = await this.pool.query(
-        `SELECT id FROM users
+      // Public contact snapshots follow the same fresh visibility boundary as
+      // the request list/creation notification, including restricted admins.
+      const { rows: staff } = await this.pool.query<{ id: string; role?: string; matrix?: unknown }>(
+        row.public_request_id
+          ? `SELECT u.id,u.role,r.matrix FROM users u LEFT JOIN roles r ON r.id=u.role_id AND r.tenant_id=u.tenant_id
+             WHERE u.tenant_id=$1 AND u.is_active AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+             AND ($2::uuid IS NULL OR autexa_point_is_allowed(u.tenant_id,u.id,$2::uuid))`
+          : `SELECT id FROM users
           WHERE tenant_id = $1
             AND (role IN ('director', 'admin') OR id = $2)
             AND is_active = true
             AND dismissed_at IS NULL`,
-        [row.tenant_id, row.master_id ?? null],
+        [row.tenant_id, (row.public_request_id ? row.point_id : row.master_id) ?? null],
       );
       const tz = await getTenantTimezone(this.pool, row.tenant_id);
       const body = `SMS-напоминание не отправлено (SMS отключены): ${clientName}, запись на ${this.formatWhen(row.scheduled_at, tz)}`;
       await Promise.all(
-        staff.map((s: { id: string }) =>
-          this.pushService.sendToUserCategory(s.id, 'booking_reminder', 'Напоминание о записи', body, {
-            type: 'booking_reminder_sms_muted',
-            bookingId: row.id,
+        staff
+          .filter(
+            (s) =>
+              !row.public_request_id ||
+              (userHasPermission(
+                { role: s.role, permissions: mergeEffectivePermissions(s.matrix) },
+                'bookings_access',
+              ) &&
+                (bookingOwner({ role: s.role } as JwtPayload) || s.id === row.master_id)),
+          )
+          .map((s) => {
+            const data = { type: 'booking_reminder_sms_muted', bookingId: row.id };
+            return row.public_request_id
+              ? this.pushService.sendToUserInTenant(
+                  s.id,
+                  row.tenant_id,
+                  'booking_reminder',
+                  'Напоминание о записи',
+                  body,
+                  data,
+                )
+              : this.pushService.sendToUserCategory(s.id, 'booking_reminder', 'Напоминание о записи', body, data);
           }),
-        ),
       );
     } catch (err) {
       this.logger.warn(`Booking reminder staff-push fallback failed for ${row.id}: ${err}`);

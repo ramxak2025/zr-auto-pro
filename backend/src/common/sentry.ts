@@ -14,7 +14,8 @@ export function redactNfcTelemetry<T extends { request?: { url?: string; data?: 
   return event;
 }
 
-export const isPublicBookingUrl = (url: string) => /\/(?:api\/)?public\/bookings(?:[/?#]|$)/.test(url);
+// Match Express' static route semantics without changing dynamic values.
+export const isPublicBookingUrl = (url: string) => /\/(?:api\/)?public\/bookings(?:[/?#]|$)/i.test(url);
 
 interface BookingTelemetry {
   request?: {

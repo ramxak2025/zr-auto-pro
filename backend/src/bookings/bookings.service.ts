@@ -289,7 +289,7 @@ export class BookingsService {
       if (row.public_request_id && !masterId)
         throw new BadRequestException({ message: 'Публичная бронь должна иметь исполнителя' });
       await lockBookingResources(client, tenantId, [row.master_id, masterId]);
-      const managed = await managedBookingResource(client, tenantId, masterId),
+      const managed = !!row.public_request_id || (await managedBookingResource(client, tenantId, masterId)),
         scheduledAt = dto.scheduledAt ?? row.scheduled_at;
       const duration = dto.durationMinutes ?? row.duration_minutes ?? 90;
       if (

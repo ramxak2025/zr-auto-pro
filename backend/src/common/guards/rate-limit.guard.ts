@@ -125,7 +125,9 @@ export class RateLimitGuard implements CanActivate {
     // fine per-(ip,account) bucket + a coarse per-ip backstop) — see below.
     const checks: Array<{ key: string; max: number }> = [];
 
-    const publicBooking = path.match(/^(?:\/api)?\/public\/bookings\/([^/]+)\/requests\/?$/);
+    // Express matches static route segments case-insensitively. Preserve the
+    // captured slug's case for validation and the shared anonymous budget.
+    const publicBooking = path.match(/^(?:\/api)?\/public\/bookings\/([^/]+)\/requests\/?$/i);
     if (method === 'POST' && publicBooking) {
       // Anonymous requests cannot multiply their budget by rotating JWTs or
       // arbitrary client headers. request.ip is the existing trusted-proxy IP.
