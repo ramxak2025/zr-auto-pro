@@ -17,6 +17,7 @@ import { Button } from '../components/Button';
 import { KeyboardAwareView } from '../components/KeyboardAware';
 import RegistrationRequestSheet from './RegistrationRequestSheet';
 import LoginPointSelect from './LoginPointSelect';
+import AccountPickerSheet from './AccountPickerSheet';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -38,7 +39,7 @@ type PendingPointSelection = Extract<LoginStepResult, { status: 'point-required'
 const LOGIN_DIAGNOSIS_TIMEOUT_MS = 3_000;
 
 export default function LoginScreen() {
-  const { login, loginWithPoint, sessionEndedNotice, clearSessionEndedNotice } = useAuth();
+  const { login, loginWithPoint, sessionEndedNotice, clearSessionEndedNotice, savedAccounts } = useAuth();
   // Login screen is intentionally LOCKED to the light palette regardless
   // of the user's preferred theme mode. The owner wants the brand entry
   // screen — logo on near-white — to always read as "Autexa", not flip
@@ -51,6 +52,7 @@ export default function LoginScreen() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
   // ── Второй шаг входа: выбор филиала (163) ────────────────────────────────
   // Пока здесь не null, экран показывает НЕ форму, а выбор филиала. Сессии в
   // этот момент ещё нет: на руках только промежуточный токен на пять минут.
@@ -317,6 +319,19 @@ export default function LoginScreen() {
               <Button title="Войти" onPress={handleSubmit} loading={submitting} size="lg" />
             </Animated.View>
 
+            {savedAccounts.length > 0 ? (
+              <TouchableOpacity
+                style={styles.savedAccountsButton}
+                onPress={() => setAccountsOpen(true)}
+                disabled={submitting}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.savedAccountsText, { color: palette.accent.primaryText }]}>
+                  Сохранённые аккаунты · {savedAccounts.length}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
             {/* Self-service registration — secondary action under the login form.
                 HIDDEN on iOS (App Store Guideline 3.1.1): in-app account creation
                 that unlocks a subscription paid outside Apple is not allowed. On
@@ -346,6 +361,7 @@ export default function LoginScreen() {
       {Platform.OS !== 'ios' && (
         <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
       )}
+      <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -454,6 +470,8 @@ const styles = StyleSheet.create({
   registerWrap: {
     marginTop: spacing[3],
   },
+  savedAccountsButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginTop: spacing[2] },
+  savedAccountsText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   footer: {
     textAlign: 'center',
     fontSize: fontSize.xs,

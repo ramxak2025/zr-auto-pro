@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, 
 import EmployeeAvatar from '../components/EmployeeAvatar';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -16,6 +16,7 @@ import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { usePointAccess } from '../hooks/usePoints';
 import { pendingChecksLogoutNotice, pendingOfflineCheckCount } from '../utils/offlineCheckQueue';
+import AccountPickerSheet from './AccountPickerSheet';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
@@ -518,11 +519,19 @@ const MenuRow = React.memo(function MenuRow({
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission } = useAuth();
+  const route = useRoute<RouteProp<{ MoreHome: { accountPickerRequest?: number } }, 'MoreHome'>>();
+  const { user, logout, hasPermission, savedAccounts } = useAuth();
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
+  const [accountsOpen, setAccountsOpen] = React.useState(false);
+  const accountPickerRequest = route.params?.accountPickerRequest;
+  useEffect(() => {
+    if (typeof accountPickerRequest !== 'number') return;
+    setAccountsOpen(true);
+    navigation.setParams({ accountPickerRequest: undefined });
+  }, [accountPickerRequest, navigation]);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   // Role badge — byte-identical pale chip in light, translucent accent glow in
@@ -721,6 +730,19 @@ export default function MoreScreen() {
           </View>
         </Animated.View>
 
+        <TouchableOpacity
+          style={[styles.accountPickerButton, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          onPress={() => setAccountsOpen(true)}
+          activeOpacity={0.65}
+          accessibilityRole="button"
+          accessibilityLabel="Управление аккаунтами"
+        >
+          <Ionicons name="people-outline" size={19} color={palette.accent.primaryText} />
+          <Text style={[styles.accountPickerText, { color: palette.text.primary }]}>Аккаунты</Text>
+          <Text style={[styles.accountPickerCount, { color: palette.text.tertiary }]}>{savedAccounts.length}/3</Text>
+          <Ionicons name="chevron-forward" size={17} color={palette.text.tertiary} />
+        </TouchableOpacity>
+
         {/* Grouped sections — iOS Settings pattern */}
         {menuSections.map((section) => {
           // Round 12: видимость строк решает ТОЛЬКО матрица роли (hasPermission
@@ -818,6 +840,7 @@ export default function MoreScreen() {
         {/* «Удалить аккаунт» moved to «Мой профиль» (the destructive action lives
             at the bottom of the profile screen, reached via the header above). */}
       </ScrollView>
+      <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </View>
   );
 }
@@ -825,6 +848,18 @@ export default function MoreScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scrollContent: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[4] },
+  accountPickerButton: {
+    minHeight: 52,
+    marginTop: -spacing[2],
+    paddingHorizontal: spacing[3],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  accountPickerText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  accountPickerCount: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
   // Identity card
   userCard: {

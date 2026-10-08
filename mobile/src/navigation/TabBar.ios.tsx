@@ -28,7 +28,7 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AutexaLiquidGlassTabBar, AutexaKassaButton } from 'autexa-liquid-glass';
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { Icon } from '../platform/Icon';
@@ -40,6 +40,7 @@ import { usePosSettings } from '../hooks/usePosSettings';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { colors } from '../theme';
 import { getTabDefinitions, type TabDefinition } from './TabBarShared';
+import { createMoreTabPressHandlers, openAccountPicker } from './accountPickerNavigation';
 
 // Floating island geometry — owner explicitly wants the bar to read as
 // a small island floating ABOVE the screen content with content
@@ -140,6 +141,15 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     },
     [tabs, state, navigation],
   );
+  const moreTabIndex = tabs.findIndex((tab) => tab.routeName === 'MoreTab');
+  const moreLongPressed = React.useRef(false);
+  const morePressHandlers = {
+    ...createMoreTabPressHandlers(
+      moreLongPressed,
+      () => navigateToTab(moreTabIndex),
+      () => openAccountPicker(navigation),
+    ),
+  };
 
   // Floating island: glass pill with TOP_LIFT above and (BOTTOM_LIFT +
   // safeBottom) below it.
@@ -210,6 +220,26 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               );
             })}
           </View>
+          {moreTabIndex >= 0 && (
+            <View pointerEvents="box-none" style={styles.touchTargets}>
+              {tabs.map((tab, index) =>
+                index === moreTabIndex ? (
+                  <Pressable
+                    key={tab.routeName}
+                    accessibilityRole="button"
+                    accessibilityLabel="Ещё. Удерживайте, чтобы открыть список аккаунтов"
+                    delayLongPress={360}
+                    onPressIn={morePressHandlers.onPressIn}
+                    onLongPress={morePressHandlers.onLongPress}
+                    onPress={morePressHandlers.onPress}
+                    style={styles.moreTouchTarget}
+                  />
+                ) : (
+                  <View key={tab.routeName} pointerEvents="none" style={styles.moreTouchTarget} />
+                ),
+              )}
+            </View>
+          )}
         </View>
 
         {/* Native premium Касса button — Swift-side AutexaKassaButtonView.
@@ -323,6 +353,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 4,
   },
+  touchTargets: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: HORIZONTAL_MARGIN + 4,
+    right: HORIZONTAL_MARGIN + 4,
+    flexDirection: 'row',
+  },
+  moreTouchTarget: { flex: 1 },
   item: {
     flex: 1,
     alignItems: 'center',
