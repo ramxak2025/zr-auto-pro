@@ -277,7 +277,7 @@ export default function BookingsPage() {
                   </Field>
                   <Field label="Исполнитель">
                     <Input
-                      value={draft?.operator.name ?? settings?.operator.name ?? ''}
+                      value={draft?.operator?.name ?? settings?.operator.name ?? ''}
                       onChange={(event) =>
                         putDraft({
                           operator: {
@@ -291,7 +291,7 @@ export default function BookingsPage() {
                   </Field>
                   <Field label="Реквизиты">
                     <Input
-                      value={draft?.operator.requisites ?? settings?.operator.requisites ?? ''}
+                      value={draft?.operator?.requisites ?? settings?.operator.requisites ?? ''}
                       onChange={(event) =>
                         putDraft({
                           operator: {
@@ -305,7 +305,7 @@ export default function BookingsPage() {
                   </Field>
                   <Field label="Контакт исполнителя">
                     <Input
-                      value={draft?.operator.contact ?? settings?.operator.contact ?? ''}
+                      value={draft?.operator?.contact ?? settings?.operator.contact ?? ''}
                       onChange={(event) =>
                         putDraft({
                           operator: {

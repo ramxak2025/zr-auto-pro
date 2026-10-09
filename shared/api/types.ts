@@ -1527,17 +1527,18 @@ export interface ApprovePublicBookingRequest extends BookingOperationRequest {
 export interface PutPublicBookingSettingsRequest extends BookingOperationRequest {
   /** 0 for the first draft; otherwise the last read server revision. Slug is immutable after creation. */
   revision: number;
-  slug: string;
+  slug?: string;
   displayName: string;
   address: string;
   contacts: string;
+  links?: { phone?: string; instagram?: string; whatsapp?: string; vk?: string; telegram?: string };
   showPrices: boolean;
   mode: PublicBookingMode;
   slotStepMinutes?: number;
   openingHours?: PublicBookingHours;
-  operator: PublicBookingOperator;
-  policyText: string;
-  consentText: string;
+  operator?: PublicBookingOperator;
+  policyText?: string;
+  consentText?: string;
   services: Array<{ serviceId: string; durationMinutes?: number }>;
   resourceIds: string[];
 }
@@ -1547,12 +1548,15 @@ export interface PublicBookingSlotsParams {
   to: string;
   serviceIds: string[];
   after?: string;
+  resourceKey?: string;
 }
 export interface SubmitPublicBookingRequest extends BookingOperationRequest {
   /** Secure random 32-byte base64url capability, generated and retained BEFORE POST. Never put it in a URL/log. */
   recoveryToken: string;
   serviceIds: string[];
   startsAt: string;
+  /** Page-scoped opaque identifier of a master explicitly offered on this public page. */
+  resourceKey?: string;
   name: string;
   phone: string;
   comment?: string;

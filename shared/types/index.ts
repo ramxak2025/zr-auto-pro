@@ -2513,15 +2513,26 @@ export interface PublicBookingOperator {
   requisites: string;
   contact: string;
 }
+export interface PublicBookingContactLinks {
+  phone?: string;
+  instagram?: string;
+  whatsapp?: string;
+  vk?: string;
+  telegram?: string;
+}
 export interface PublicBookingPageSettings {
   id: string;
   pointId: string | null;
   slug: string;
+  /** Server-generated immutable alias. Legacy slug remains the recovery identity. */
+  publicCode?: string;
+  publicUrl?: string;
   published: boolean;
   revision: number;
   displayName: string;
   address: string;
   contacts: string;
+  links?: PublicBookingContactLinks;
   showPrices: boolean;
   mode: PublicBookingMode;
   slotStepMinutes: number;
@@ -2546,6 +2557,8 @@ export interface PublicBookingLanding {
   displayName: string;
   address: string;
   contacts: string;
+  links?: PublicBookingContactLinks;
+  resources?: Array<{ resourceKey: string; name: string }>;
   mode: PublicBookingMode;
   showPrices: boolean;
   operator: PublicBookingOperator;
@@ -2553,7 +2566,16 @@ export interface PublicBookingLanding {
   consentText: string;
   consentVersion: string;
   /** price is ABSENT, not null/zero, whenever showPrices=false. */
-  services: Array<{ id: string; name: string; durationMinutes: number; price?: number }>;
+  services: Array<{
+    id: string;
+    name: string;
+    category?: string;
+    durationMinutes: number;
+    price?: number;
+    priceType?: 'fixed' | 'range';
+    minPrice?: number;
+    maxPrice?: number;
+  }>;
 }
 export interface PublicBookingSlotPage {
   timezone: string;

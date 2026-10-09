@@ -244,6 +244,7 @@ export default function App() {
               forwards a validated bearer after an explicit app-open action. */}
           <Route path="/nfc/attendance" element={<NfcAttendanceLandingPage />} />
           <Route path="/book/:slug" element={<PublicBookingPage />} />
+          <Route path="/:publicCode" element={<PublicBookingPage />} />
 
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />

@@ -2318,6 +2318,8 @@ export function createPublicBookingsApi(publicClient: PublicBookingHttpClient) {
   const root = (slug: string) => `/public/bookings/${encodeURIComponent(slug)}`;
   return {
     landing: (slug: string) => publicClient.get<PublicBookingLanding>(root(slug)),
+    landingByCode: (code: string) =>
+      publicClient.get<PublicBookingLanding>(`/public/bookings/by-code/${encodeURIComponent(code)}`),
     slots: (slug: string, params: PublicBookingSlotsParams) =>
       publicClient.get<PublicBookingSlotPage>(`${root(slug)}/slots`, {
         params: { ...params, serviceIds: params.serviceIds.join(',') },
