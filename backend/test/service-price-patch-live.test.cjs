@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const { Pool } = require('pg');
 const { Logger } = require('@nestjs/common');
 const { TenantAwarePool } = require('../dist/common/tenant-pool');
@@ -121,6 +123,33 @@ test(
         assert.equal(check.services.length, 0, 'explicit [] clears services');
         assert.equal(check.products.length, 1, 'omitted products survive explicit service removal');
         await q('UPDATE users SET product_salary_percent=10,salary_percent=10 WHERE id=$1', [owner]);
+      }
+      // Reapply the exact revised migration only in a rolled-back private schema:
+      // PostgreSQL CHECK treats NULL as success unless the type is explicit.
+      const tx = await admin.connect();
+      try {
+        await tx.query('BEGIN');
+        const schema = 'price_constraint_' + randomUUID().replaceAll('-', '');
+        await tx.query(`CREATE SCHEMA ${schema}`);
+        await tx.query(`SET LOCAL search_path TO ${schema}, public`);
+        await tx.query('CREATE TABLE check_service_lines(id uuid,price numeric(12,2),quantity int)');
+        await tx.query(readFileSync(join(__dirname, '../migrations/186_check_service_price_snapshots.sql'), 'utf8'));
+        await tx.query('INSERT INTO check_service_lines(id,price,quantity) VALUES($1,150,1)', [randomUUID()]);
+        await tx.query('SAVEPOINT invalid_snapshot');
+        await assert.rejects(
+          tx.query(`UPDATE check_service_lines SET price_snapshot_status='catalog',
+        catalog_price_type=NULL,catalog_default_price=100,catalog_min_price=100,catalog_max_price=100,
+        catalog_price_version=1,price_threshold=100`),
+          (error) => error.code === '23514',
+        );
+        await tx.query('ROLLBACK TO SAVEPOINT invalid_snapshot');
+        await tx.query(`UPDATE check_service_lines SET price_snapshot_status='catalog',
+        catalog_price_type='fixed',catalog_default_price=100,catalog_min_price=100,catalog_max_price=100,
+        catalog_price_version=1,price_threshold=100`);
+        assert.equal(Number((await tx.query('SELECT price_excess FROM check_service_lines')).rows[0].price_excess), 50);
+      } finally {
+        await tx.query('ROLLBACK');
+        tx.release();
       }
     } finally {
       await q('DELETE FROM tenants WHERE id=$1', [tenant]);
