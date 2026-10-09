@@ -73,7 +73,7 @@ import type {
 
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatMoney } from '../../../shared/utils/formatters';
-import { isServicePriceSelectionValid } from '../../../shared/utils/servicePrices';
+import { applyServicePriceInput, isServicePriceSelectionValid } from '../../../shared/utils/servicePrices';
 import {
   expandServiceQuantities,
   hydrateServiceLineForCheckEdit,
@@ -94,6 +94,7 @@ import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
 import ClientCarQuickDrawer, { type QuickDrawerMode } from '../components/checks/ClientCarQuickDrawer';
 import ServiceCombobox from '../components/checks/ServiceCombobox';
 import MoneyInput from '../components/checks/MoneyInput';
+import CheckServicePriceInput from '../components/checks/CheckServicePriceInput';
 import { VinText, carVin } from '../components/vin';
 import { PlateBadge } from '../components/checks/checkBadges';
 
@@ -1783,11 +1784,16 @@ export default function CheckCreatePage() {
                         onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
                         options={(masters ?? []).map((m) => ({ value: m.id, label: m.fullName }))}
                       />
-                      <MoneyInput
+                      <CheckServicePriceInput
                         aria-label="Цена услуги"
                         value={line.price}
-                        onCommit={(n) => updateServiceLine(index, 'price', n)}
-                        onEmpty={() => updateServiceLine(index, 'priceConfirmed', false)}
+                        onPriceChange={(price, explicitlyEntered) => {
+                          setServiceLines((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? applyServicePriceInput(item, price, explicitlyEntered) : item,
+                            ),
+                          );
+                        }}
                         placeholder={(() => {
                           const service =
                             selectableCatalogServices.find((candidate) => candidate.id === line.serviceId) ??

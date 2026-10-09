@@ -11,6 +11,18 @@ const { ServicesService } = require('../dist/services/services.service');
 Logger.overrideLogger(false);
 const live = process.env.OCT10_PRICING_LIVE_DB;
 const status = (code) => (error) => error.getStatus?.() === code;
+async function runTogether(first, second) {
+  let ready = 0;
+  let release;
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const start = (operation) => (async () => {
+    ready++;
+    if (ready === 2) release();
+    await barrier;
+    return operation();
+  })();
+  return Promise.all([start(first), start(second)]);
+}
 
 test('service import preview, atomic confirm, price history, idempotency, version conflict and tenant isolation', { skip: !live, timeout: 120000 }, async (t) => {
   const url = new URL(live);
@@ -64,6 +76,26 @@ test('service import preview, atomic confirm, price history, idempotency, versio
       assert.equal(preview.rows.find((row) => row.sourceRow === 7).action, 'error');
     });
 
+    await t.test('raw malformed rows become preview errors; omitted fixed price/type cannot become zero', async () => {
+      const preview = await a.preview([
+        null,
+        { sourceRow: 3, name: 42, priceType: 'fixed', defaultPrice: 0 },
+        { sourceRow: 4, name: 'Bad category', category: {}, priceType: 'fixed', defaultPrice: 1 },
+        { sourceRow: 5, name: 'Missing amount', priceType: 'fixed' },
+        { sourceRow: 6, name: 'Missing type', defaultPrice: 0 },
+        { sourceRow: 7, name: 'Unknown type', priceType: 'free', defaultPrice: 0 },
+        { sourceRow: 8, name: 'Explicit zero', priceType: 'fixed', defaultPrice: 0 },
+      ]);
+      assert.equal(preview.summary.create, 1);
+      assert.equal(preview.summary.errors, 6);
+      assert.equal(preview.rows.find((row) => row.sourceRow === 8).action, 'create');
+      for (const sourceRow of [2, 3, 4, 5, 6, 7]) {
+        assert.equal(preview.rows.find((row) => row.sourceRow === sourceRow).action, 'error');
+      }
+      await assert.rejects(a.confirm(preview.previewId), status(400));
+      assert.equal((await q('SELECT count(*)::int AS n FROM services WHERE tenant_id=$1 AND name=$2', [a.tenant, 'Explicit zero']))[0].n, 0);
+    });
+
     await t.test('confirmed import applies all rows atomically, records history once, and replays the same result', async () => {
       const preview = await a.preview([
         { sourceRow: 2, name: 'Новая range', category: 'Подвеска/Работы', priceType: 'range', minPrice: 200, maxPrice: 500, masterPercent: 0, warrantyDays: 7 },
@@ -94,6 +126,55 @@ test('service import preview, atomic confirm, price history, idempotency, versio
       await assert.rejects(a.confirm(preview.previewId), status(409));
       const created = await q('SELECT id FROM services WHERE tenant_id=$1 AND name=$2', [a.tenant, 'Не должен сохраниться']);
       assert.equal(created.length, 0);
+    });
+
+    await t.test('concurrent replay returns the saved response; request ID reuse for another preview conflicts', async () => {
+      const preview = await a.preview([
+        { sourceRow: 2, name: 'Concurrent replay', category: 'Atomic/Replay', priceType: 'fixed', defaultPrice: 75 },
+      ]);
+      const requestId = randomUUID();
+      const [first, replay] = await runTogether(
+        () => a.confirm(preview.previewId, requestId),
+        () => a.confirm(preview.previewId, requestId),
+      );
+      assert.deepEqual(replay, JSON.parse(JSON.stringify(first)));
+      const replayServiceId = first.services[0].id;
+      assert.equal((await q('SELECT count(*)::int AS n FROM service_price_history WHERE service_id=$1', [replayServiceId]))[0].n, 1);
+
+      const one = await a.preview([
+        { sourceRow: 2, name: 'Nonce candidate one', category: 'Atomic/Nonce', priceType: 'fixed', defaultPrice: 10 },
+      ]);
+      const two = await a.preview([
+        { sourceRow: 2, name: 'Nonce candidate two', category: 'Atomic/Nonce', priceType: 'fixed', defaultPrice: 20 },
+      ]);
+      const sharedRequestId = randomUUID();
+      const outcomes = await Promise.allSettled([
+        ...[one, two].map((batch) => a.confirm(batch.previewId, sharedRequestId)),
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+      const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+      assert.equal(rejected.reason.getStatus(), 409);
+      const nonceRows = await q('SELECT name FROM services WHERE tenant_id=$1 AND category=$2 AND name LIKE $3', [a.tenant, 'Atomic/Nonce', 'Nonce candidate%']);
+      assert.equal(nonceRows.length, 1);
+    });
+
+    await t.test('concurrent empty-tenant previews cannot both create the same normalized catalog key', async () => {
+      const empty = await fixture('Empty concurrency tenant ' + randomUUID());
+      const one = await empty.preview([
+        { sourceRow: 2, name: 'Concurrent service', category: 'Atomic/Empty', priceType: 'fixed', defaultPrice: 10 },
+      ]);
+      const two = await empty.preview([
+        { sourceRow: 2, name: ' concurrent service ', category: 'Atomic / Empty', priceType: 'fixed', defaultPrice: 20 },
+      ]);
+      const outcomes = await Promise.allSettled([
+        ...[one, two].map((batch) => empty.confirm(batch.previewId)),
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+      const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+      assert.equal(rejected.reason.getStatus(), 409);
+      const rows = await q('SELECT id FROM services WHERE tenant_id=$1 AND lower(name)=lower($2) AND category=$3', [empty.tenant, 'Concurrent service', 'Atomic/Empty']);
+      assert.equal(rows.length, 1);
+      assert.equal((await q('SELECT count(*)::int AS n FROM service_price_history WHERE service_id=$1', [rows[0].id]))[0].n, 1);
     });
   } finally {
     for (const tenant of tenants) await q('DELETE FROM tenants WHERE id=$1', [tenant]);

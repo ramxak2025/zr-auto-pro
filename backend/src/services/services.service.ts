@@ -40,6 +40,13 @@ interface ServiceImportOperation extends ServiceImportRow {
 export class ServicesService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
+  /** Serialize tenant catalog writes and import confirmations under one namespaced xact lock. */
+  private async lockCatalogWrites(client: PoolClient, tenantID: string) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended('autexa.services.catalog:' || $1, 0))", [
+      tenantID,
+    ]);
+  }
+
   private mapService(row: any) {
     return {
       id: row.id,
@@ -168,6 +175,7 @@ export class ServicesService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
       await client.query("SELECT set_config('app.service_price_actor', $1, true)", [actorId ?? '']);
       const { rows } = await client.query(
         `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id,
@@ -199,6 +207,7 @@ export class ServicesService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
       const current = await client.query('SELECT * FROM services WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
         id,
         tenantID,
@@ -275,7 +284,10 @@ export class ServicesService {
     return `${normalize(category ?? '')}\u0000${normalize(name)}`;
   }
 
-  private async planServiceImport(tenantID: string, rows: ServiceImportRow[], client?: PoolClient) {
+  private async planServiceImport(tenantID: string, rawRows: unknown, client?: PoolClient) {
+    if (!Array.isArray(rawRows) || rawRows.length < 1 || rawRows.length > 2000) {
+      throw new BadRequestException({ message: 'Файл должен содержать от 1 до 2 000 строк услуг' });
+    }
     const db = client ?? this.pool;
     const existingResult = await db.query(
       'SELECT * FROM services WHERE tenant_id=$1 ORDER BY id' + (client ? ' FOR UPDATE' : ''),
@@ -294,24 +306,55 @@ export class ServicesService {
       message?: string;
       normalizedPrice?: ReturnType<typeof normalizeServicePrice>;
     }> = [];
-    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 2000) {
-      throw new BadRequestException({ message: 'Файл должен содержать от 1 до 2 000 строк услуг' });
-    }
-    for (const row of rows) {
+    for (const [index, rawRow] of rawRows.entries()) {
       let message: string | undefined;
+      if (rawRow === null || typeof rawRow !== 'object' || Array.isArray(rawRow)) {
+        preliminary.push({
+          row: { sourceRow: index + 2, name: '', priceType: 'fixed' },
+          message: 'Строка импорта должна быть объектом услуги',
+        });
+        continue;
+      }
+      const input = rawRow as Record<string, unknown>;
+      const suppliedSourceRow = input.sourceRow;
+      const validSourceRow = Number.isInteger(suppliedSourceRow) && Number(suppliedSourceRow) >= 2;
+      const row: ServiceImportRow = {
+        sourceRow: validSourceRow ? Number(suppliedSourceRow) : index + 2,
+        id: typeof input.id === 'string' ? input.id : undefined,
+        name: typeof input.name === 'string' ? input.name : '',
+        category: typeof input.category === 'string' ? input.category : undefined,
+        priceType: input.priceType as ServiceImportRow['priceType'],
+        defaultPrice: input.defaultPrice as number | undefined,
+        minPrice: input.minPrice as number | undefined,
+        maxPrice: input.maxPrice as number | undefined,
+        masterPercent: input.masterPercent as number | null | undefined,
+        warrantyDays: input.warrantyDays as number | null | undefined,
+      };
       let service: (typeof existing)[number] | undefined;
       let normalizedPrice: ReturnType<typeof normalizeServicePrice> | undefined;
       let normalizedCategory = row.category;
-      if (
-        !Number.isInteger(row.sourceRow) ||
-        row.sourceRow < 2 ||
-        typeof row.name !== 'string' ||
-        !row.name.trim() ||
-        row.name.length > 256
-      ) {
+      if (!validSourceRow) {
+        message = 'Некорректный номер исходной строки';
+      } else if (input.id != null && typeof input.id !== 'string') {
+        message = 'ID услуги должен быть строкой';
+      } else if (!row.name.trim() || row.name.length > 256) {
         message = 'Укажите название услуги';
-      } else if (row.category !== undefined && (typeof row.category !== 'string' || row.category.length > 256)) {
+      } else if (input.category !== undefined && typeof input.category !== 'string') {
+        message = 'Путь категории должен быть строкой';
+      } else if (row.category !== undefined && row.category.length > 256) {
         message = 'Путь категории слишком длинный';
+      } else if (row.priceType !== 'fixed' && row.priceType !== 'range') {
+        message = 'Укажите тип цены: фиксированная или диапазон';
+      } else if (
+        row.priceType === 'fixed' &&
+        (input.defaultPrice === undefined || input.defaultPrice === null || input.defaultPrice === '')
+      ) {
+        message = 'Для фиксированной цены укажите сумму. Для нуля введите 0.';
+      } else if (
+        row.priceType === 'range' &&
+        [input.minPrice, input.maxPrice].some((value) => value === undefined || value === null || value === '')
+      ) {
+        message = 'Для диапазона укажите обе границы. Для нуля введите 0.';
       } else {
         try {
           const category = row.category ? this.normalizeCategoryPath(row.category) : undefined;
@@ -411,7 +454,7 @@ export class ServicesService {
       rows: previewRows,
       errors,
       summary: {
-        totalRows: rows.length,
+        totalRows: rawRows.length,
         create: previewRows.filter((row) => row.action === 'create').length,
         update: previewRows.filter((row) => row.action === 'update').length,
         errors: errors.length,
@@ -420,10 +463,11 @@ export class ServicesService {
     return { operations, preview };
   }
 
-  async previewImport(tenantID: string, actorId: string, rows: ServiceImportRow[]): Promise<ServiceImportPreview> {
+  async previewImport(tenantID: string, actorId: string, rows: unknown): Promise<ServiceImportPreview> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
       const { operations, preview } = await this.planServiceImport(tenantID, rows, client);
       const previewId = randomUUID();
       await client.query(
@@ -456,6 +500,7 @@ export class ServicesService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
       const replay = await client.query(
         'SELECT id, result FROM service_import_batches WHERE tenant_id=$1 AND request_id=$2 FOR UPDATE',
         [tenantID, requestId],
@@ -568,8 +613,19 @@ export class ServicesService {
   }
 
   async remove(id: string, tenantID: string) {
-    await this.pool.query('DELETE FROM services WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
-    return { message: 'Удалено' };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      await client.query('DELETE FROM services WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+      await client.query('COMMIT');
+      return { message: 'Удалено' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private normalizeCategoryPath(value: unknown): string {

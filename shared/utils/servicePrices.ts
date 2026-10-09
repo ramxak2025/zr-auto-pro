@@ -39,6 +39,15 @@ export function isServicePriceSelectionValid(priceType: 'fixed' | 'range', price
   return Number.isFinite(price) && price >= 0 && price <= 9_999_999_999.99 && (priceType !== 'range' || explicitlyEntered);
 }
 
+/** Production form transition: clearing resets the amount, and only a valid committed value is confirmed. */
+export function applyServicePriceInput<T extends { price: number; priceConfirmed?: boolean }>(
+  line: T,
+  price: number,
+  explicitlyEntered: boolean,
+): T {
+  return { ...line, price, priceConfirmed: explicitlyEntered };
+}
+
 /** Legacy catalogue entries are fixed-price entries. A range starts at minPrice. */
 export function servicePriceBounds(service: Pick<Service, 'defaultPrice' | 'priceType' | 'minPrice' | 'maxPrice'>) {
   const priceType = service.priceType ?? 'fixed';

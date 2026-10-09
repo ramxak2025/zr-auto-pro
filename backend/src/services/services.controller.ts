@@ -17,7 +17,6 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { PutServiceVisibilityRuleDto } from './dto/put-service-visibility-rule.dto';
-import type { ServiceImportRow } from '../../../shared/api/types';
 
 // ROLE-ONLY (консолидация 2026-07). Enforcement на сервере, не в UI:
 //   • view   — смотреть услуги + добавлять в чек → @RequirePermission('services_view');
@@ -60,7 +59,7 @@ export class ServicesController {
 
   @RequirePermission('services_manage')
   @Post('import/preview')
-  previewImport(@CurrentUser() user: JwtPayload, @Body() body: { rows: ServiceImportRow[] }) {
+  previewImport(@CurrentUser() user: JwtPayload, @Body() body: { rows?: unknown }) {
     return this.servicesService.previewImport(user.tenantID, user.userID, body?.rows);
   }
 
