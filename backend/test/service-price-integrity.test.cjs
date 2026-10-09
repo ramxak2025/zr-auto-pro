@@ -136,7 +136,9 @@ test('catalogue mutation and actor stamp share one transaction and rollback on h
     /history write failed/,
   );
   assert.equal(calls[0].sql, 'BEGIN');
-  assert.match(calls[1].sql, /set_config\('app.service_price_actor', \$1, true\)/);
+  const actorIndex = calls.findIndex((call) => /set_config\('app.service_price_actor', \$1, true\)/.test(call.sql));
+  const insertIndex = calls.findIndex((call) => call.sql.startsWith('INSERT INTO services'));
+  assert.ok(actorIndex > 0 && insertIndex > actorIndex, 'stamp the actor before the catalogue mutation');
   assert.equal(calls.at(-2).sql, 'ROLLBACK');
   assert.equal(calls.at(-1).sql, 'release');
   assert.ok(!calls.some((call) => call.sql === 'COMMIT'));

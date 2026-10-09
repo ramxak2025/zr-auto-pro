@@ -15,6 +15,7 @@ import {
   dispatchAndReadCurrentPublicBooking,
   dispatchPublicBookingIntent,
   parsePublicBookingIntent,
+  PublicBookingIntentError,
   recoverPublicBookingIntent,
   type PublicBookingSavedIntent,
 } from '../utils/publicBookingIntent';
@@ -44,6 +45,7 @@ function addDays(date: string, days: number): string {
   ].join('-');
 }
 function messageFor(error: unknown, phase: 'page' | 'slots' | 'request' = 'request'): string {
+  if (error instanceof PublicBookingIntentError && error.code === 'INVALID_REQUEST') return error.message;
   const code =
     (error as { response?: { data?: { code?: string } } })?.response?.data?.code ?? (error as { code?: string })?.code;
   const intentCode = (error as { code?: string })?.code;

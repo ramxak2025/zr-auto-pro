@@ -11,8 +11,8 @@ import type {
   ServiceImportPreviewRow,
   ServiceImportResult,
   ServiceImportRow,
-} from '../../../shared/api/types';
-import type { Service } from '../../../shared/types';
+  Service,
+} from './service-import-types';
 
 interface ServiceWriteInput extends ServicePriceInput {
   name?: string;
