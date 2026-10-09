@@ -22,6 +22,7 @@ test('real Nest/Express public routing keeps privacy and anonymous budgets with 
     capability = 'PRIVATE_RECOVERY_CAPABILITY';
   const service = {
     landing: (slug) => ({ slug }),
+    landingByCode: (code) => ({ slug: `canonical-${code.slice(0, 6)}` }),
     submit: (slug, dto) => {
       calls.push({ slug, dto });
       if (slug === 'failure') throw new Error(privateName + privatePhone + capability);
@@ -111,6 +112,18 @@ test('real Nest/Express public routing keeps privacy and anonymous budgets with 
         });
       },
     );
+    await t.test('public-code GET is no-store, IP rate limited and returns only the legacy recovery slug', async () => {
+      const code = 'a'.repeat(32);
+      const response = await fetch(`${base}/api/public/bookings/by-code/${code}`, {
+        headers: { 'If-None-Match': '"price-etag"' },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(await response.json(), { slug: 'canonical-aaaaaa' });
+      const rateCall = budget.at(-1);
+      assert.equal(rateCall[0].endsWith('127.0.0.1:anon'), true);
+      assert.equal(rateCall[0].includes(code), false);
+    });
     await t.test('mixed-case 5xx and Sentry remove body/query/header and repeated private values', async () => {
       // Reset only this test's in-memory counter to exercise the error route after the quota test.
       guard.attempts.clear();

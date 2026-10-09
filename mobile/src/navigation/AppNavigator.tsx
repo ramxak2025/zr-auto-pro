@@ -89,6 +89,7 @@ import BookingCreateScreen from '../screens/BookingCreateScreen';
 import BookingSettingsScreen from '../screens/BookingSettingsScreen';
 import PublicBookingRequestsScreen from '../screens/PublicBookingRequestsScreen';
 import PublicBookingSettingsScreen from '../screens/PublicBookingSettingsScreen';
+import PublicBookingsHubScreen from '../screens/PublicBookingsHubScreen';
 import TemplatesScreen from '../screens/TemplatesScreen';
 import TemplateEditorScreen from '../screens/TemplateEditorScreen';
 import NfcTagsScreen from '../screens/NfcTagsScreen';
@@ -441,6 +442,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
       <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
       <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
+      <MoreStack.Screen name="PublicBookingsHub" component={PublicBookingsHubScreen} />
       <MoreStack.Screen name="PublicBookingRequests" component={PublicBookingRequestsScreen} />
       <MoreStack.Screen name="PublicBookingSettings" component={PublicBookingSettingsScreen} />
       {/*

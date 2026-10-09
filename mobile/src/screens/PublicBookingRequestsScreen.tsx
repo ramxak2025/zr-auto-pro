@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
@@ -13,7 +13,7 @@ import { colors, spacing, borderRadius } from '../theme';
 import type { StaffPublicBookingRequest } from '../../../shared/types';
 import { showMutationErrorToast } from '../components/Toast';
 
-export default function PublicBookingRequestsScreen() {
+export default function PublicBookingRequestsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -24,6 +24,9 @@ export default function PublicBookingRequestsScreen() {
   const scopedClientsApi = useMemo(() => (sessionClient ? createClientsApi(sessionClient) : null), [sessionClient]);
   const ownerScope = `${user?.id ?? ''}:${user?.currentPointId ?? ''}`;
   const decisionKeys = useRef(new Map<string, { accept: boolean; requestId: string }>());
+  useEffect(() => {
+    decisionKeys.current.clear();
+  }, [ownerScope]);
   const requestsQuery = useQuery<StaffPublicBookingRequest[]>({
     queryKey: ['bookings', 'public-requests', ownerScope, 'pending'],
     queryFn: async () => {
@@ -65,8 +68,8 @@ export default function PublicBookingRequestsScreen() {
   });
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Заявки онлайн-записи" onBack={() => navigation.goBack()} />
+    <View style={[embedded ? styles.embedded : styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      {!embedded && <IosScreenHeader title="Заявки онлайн-записи" onBack={() => navigation.goBack()} />}
       {!canReview ? (
         <QueryErrorState
           title="Нет доступа"
@@ -178,6 +181,7 @@ function Action({
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  embedded: { flex: 1 },
   loader: { marginTop: 48 },
   content: { padding: spacing[4], paddingBottom: spacing[10] },
   hint: { fontSize: 14, lineHeight: 21, marginBottom: spacing[4] },

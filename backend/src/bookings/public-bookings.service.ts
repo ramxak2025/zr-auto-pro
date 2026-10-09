@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'crypto';
+import { randomBytes } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
@@ -46,12 +46,14 @@ import {
   pageResources,
   resourceAvailable,
 } from './public-booking-calendar';
+import { buildPublicBookingLegalDocuments, type BookingLegalTenant } from './public-booking-legal';
 
 export interface SelectedService {
   serviceId: string;
   name: string;
   durationMinutes: number;
 }
+interface PublicTenantProfile extends BookingLegalTenant {}
 interface RequestRow {
   id: string;
   tenant_id: string;
@@ -109,29 +111,46 @@ export class PublicBookingsService {
     ).rows[0];
   }
   private async settingsResponse(client: Pick<PoolClient, 'query'>, page: BookingPageRow) {
-    const services = (
-      await client.query<{ service_id: string; duration_minutes: number }>(
+    const [services, resources, legal] = await Promise.all([
+      client.query<{ service_id: string; duration_minutes: number }>(
         'SELECT service_id,duration_minutes FROM public_booking_services WHERE tenant_id=$1 AND page_id=$2 ORDER BY service_id',
         [page.tenant_id, page.id],
-      )
-    ).rows;
-    const resources = (
-      await client.query<{ user_id: string }>(
+      ),
+      client.query<{ user_id: string }>(
         'SELECT user_id FROM public_booking_resources WHERE tenant_id=$1 AND page_id=$2 ORDER BY user_id',
         [page.tenant_id, page.id],
-      )
-    ).rows;
+      ),
+      this.legalDocuments(client, page),
+    ]);
     return {
       id: page.id,
       pointId: page.point_id,
       slug: page.slug,
+      publicCode: page.public_code,
+      publicUrl: `https://autexa.pw/${page.public_code}`,
       published: page.published,
       revision: page.revision,
-      consentVersion: page.consent_version,
       ...page.settings,
-      services: services.map((s) => ({ serviceId: s.service_id, durationMinutes: s.duration_minutes })),
-      resourceIds: resources.map((r) => r.user_id),
+      ...legal,
+      services: services.rows.map((s) => ({ serviceId: s.service_id, durationMinutes: s.duration_minutes })),
+      resourceIds: resources.rows.map((r) => r.user_id),
     };
+  }
+  private async legalDocuments(
+    client: Pick<PoolClient, 'query'>,
+    page: Pick<BookingPageRow, 'tenant_id' | 'settings'>,
+  ) {
+    const { rows } = await client.query<PublicTenantProfile>(
+      'SELECT name,legal_name,inn,address,phone,email FROM tenants WHERE id=$1',
+      [page.tenant_id],
+    );
+    if (!rows[0]) throw unavailable();
+    return buildPublicBookingLegalDocuments({
+      tenant: rows[0],
+      pageAddress: page.settings.address,
+      pageContacts: page.settings.contacts,
+      links: page.settings.links,
+    });
   }
   async getSettings(actor: JwtPayload) {
     await bookingActor(this.pool, actor, 'company_manage');
@@ -147,6 +166,26 @@ export class PublicBookingsService {
       [actor.tenantID, actorPointId(actor)],
     );
     return rows.map((r) => ({ id: r.id, name: r.full_name, role: r.role }));
+  }
+  async publicServices(actor: JwtPayload, query: { page?: unknown; limit?: unknown } = {}) {
+    await bookingActor(this.pool, actor, 'company_manage');
+    const parsePositiveInteger = (value: unknown, fallback: number, field: string) => {
+      if (value === undefined) return fallback;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 1)
+        throw new BadRequestException({ message: `Параметр ${field} должен быть положительным целым числом` });
+      return parsed;
+    };
+    const page = parsePositiveInteger(query.page, 1, 'page');
+    const limit = Math.min(500, parsePositiveInteger(query.limit, 100, 'limit'));
+    const [{ rows: countRows }, { rows }] = await Promise.all([
+      this.pool.query<{ total: string }>('SELECT COUNT(*) AS total FROM services WHERE tenant_id=$1', [actor.tenantID]),
+      this.pool.query<{ id: string; name: string; category: string | null }>(
+        `SELECT id,name,category FROM services WHERE tenant_id=$1 ORDER BY name,id LIMIT $2 OFFSET $3`,
+        [actor.tenantID, limit, (page - 1) * limit],
+      ),
+    ]);
+    return { data: rows, total: Number(countRows[0]?.total ?? 0), page, limit };
   }
   async putSettings(actor: JwtPayload, input: PublicBookingSettingsDto) {
     const dto = validatedBookingDto(PublicBookingSettingsDto, input),
@@ -169,10 +208,22 @@ export class PublicBookingsService {
       const previous = await this.pageForActor(client, actor);
       if (dto.revision !== (previous?.revision ?? 0))
         throw new ConflictException({ code: 'SETTINGS_CHANGED', message: 'Настройки изменились. Обновите страницу.' });
-      if (previous && previous.slug !== dto.slug)
+      if (previous && dto.slug !== undefined && previous.slug !== dto.slug)
         throw new BadRequestException({ message: 'Адрес созданной страницы сохраняется для восстановления заявок' });
+      const slug = previous?.slug ?? dto.slug ?? `booking-${randomBytes(8).toString('hex')}`;
+      const legal = await this.legalDocuments(client, { tenant_id: actor.tenantID, settings });
+      const persistedSettings = { ...settings, ...legal };
       const resourceIds = [...new Set(dto.resourceIds)].sort();
-      await lockBookingResources(client, actor.tenantID, resourceIds);
+      const existingResources = previous
+        ? await client.query<{ user_id: string; resource_key: string }>(
+            'SELECT user_id,resource_key FROM public_booking_resources WHERE tenant_id=$1 AND page_id=$2 ORDER BY user_id',
+            [actor.tenantID, previous.id],
+          )
+        : { rows: [] as Array<{ user_id: string; resource_key: string }> };
+      await lockBookingResources(client, actor.tenantID, [
+        ...existingResources.rows.map((resource) => resource.user_id),
+        ...resourceIds,
+      ]);
       const available = (
         await client.query<{ id: string }>(
           `SELECT id FROM users WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND is_active
@@ -196,22 +247,25 @@ export class PublicBookingsService {
         ])
       ).rows;
       if (services.length !== serviceIds.length) throw new BadRequestException({ message: 'Услуга не найдена' });
-      if (previous?.published) this.assertPublishable(settings, resourceIds.length, serviceIds.length);
-      const legal = ({ operator, policyText, consentText }: typeof settings) => ({ operator, policyText, consentText });
-      const version =
-        previous && bookingFingerprint(legal(previous.settings)) === bookingFingerprint(legal(settings))
-          ? previous.consent_version
-          : randomUUID();
+      if (previous?.published) this.assertPublishable(persistedSettings, resourceIds.length, serviceIds.length);
+      const version = legal.consentVersion;
       const { rows } = previous
         ? await client.query<BookingPageRow>(
             `UPDATE public_booking_pages SET settings=$1::jsonb,consent_version=$2,
             revision=revision+1,updated_at=now() WHERE id=$3 AND tenant_id=$4 RETURNING *`,
-            [JSON.stringify(settings), version, previous.id, actor.tenantID],
+            [JSON.stringify(persistedSettings), version, previous.id, actor.tenantID],
           )
         : await client.query<BookingPageRow>(
-            `INSERT INTO public_booking_pages(tenant_id,point_id,slug,settings,consent_version)
-            VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT(slug) DO NOTHING RETURNING *`,
-            [actor.tenantID, actorPointId(actor), dto.slug, JSON.stringify(settings), version],
+            `INSERT INTO public_booking_pages(tenant_id,point_id,slug,public_code,settings,consent_version)
+            VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(slug) DO NOTHING RETURNING *`,
+            [
+              actor.tenantID,
+              actorPointId(actor),
+              slug,
+              randomBytes(16).toString('hex'),
+              JSON.stringify(persistedSettings),
+              version,
+            ],
           );
       const page = rows[0];
       if (!page) throw new ConflictException({ code: 'SLUG_TAKEN', message: 'Этот адрес уже занят' });
@@ -219,21 +273,23 @@ export class PublicBookingsService {
         actor.tenantID,
         page.id,
       ]);
-      await client.query('DELETE FROM public_booking_resources WHERE tenant_id=$1 AND page_id=$2', [
-        actor.tenantID,
-        page.id,
-      ]);
+      await client.query(
+        'DELETE FROM public_booking_resources WHERE tenant_id=$1 AND page_id=$2 AND NOT (user_id=ANY($3::uuid[]))',
+        [actor.tenantID, page.id, resourceIds],
+      );
       for (const s of dto.services)
         await client.query(
           'INSERT INTO public_booking_services(tenant_id,page_id,service_id,duration_minutes) VALUES($1,$2,$3,$4)',
           [actor.tenantID, page.id, s.serviceId, s.durationMinutes ?? 90],
         );
-      for (const id of resourceIds)
-        await client.query('INSERT INTO public_booking_resources(tenant_id,page_id,user_id) VALUES($1,$2,$3)', [
-          actor.tenantID,
-          page.id,
-          id,
-        ]);
+      const existingResourceIds = new Set(existingResources.rows.map((resource) => resource.user_id));
+      for (const id of resourceIds) {
+        if (existingResourceIds.has(id)) continue;
+        await client.query(
+          'INSERT INTO public_booking_resources(tenant_id,page_id,user_id,resource_key) VALUES($1,$2,$3,$4)',
+          [actor.tenantID, page.id, id, randomBytes(16).toString('hex')],
+        );
+      }
       const response = await this.settingsResponse(client, page);
       await saveBookingReplay(
         client,
@@ -294,7 +350,8 @@ export class PublicBookingsService {
       );
       const current = await pageResources(client, page),
         settings = await this.settingsResponse(client, page);
-      if (published) this.assertPublishable(page.settings, current.length, settings.services.length);
+      const legal = await this.legalDocuments(client, page);
+      if (published) this.assertPublishable({ ...page.settings, ...legal }, current.length, settings.services.length);
       const { rows } = await client.query<BookingPageRow>(
         'UPDATE public_booking_pages SET published=$1,revision=revision+1,updated_at=now() WHERE id=$2 AND tenant_id=$3 RETURNING *',
         [published, page.id, actor.tenantID],
@@ -320,6 +377,17 @@ export class PublicBookingsService {
       const { rows } = await this.pool.query<{ id: string; tenant_id: string }>(
         'SELECT id,tenant_id FROM public_booking_pages WHERE slug=$1',
         [slug],
+      );
+      if (!rows[0]) throw unavailable();
+      return rows[0];
+    });
+  }
+  private async locateByCode(code: string): Promise<{ id: string; tenant_id: string; slug: string }> {
+    if (!/^[a-f0-9]{32}$/.test(code)) throw unavailable();
+    return runWithTenant('', async () => {
+      const { rows } = await this.pool.query<{ id: string; tenant_id: string; slug: string }>(
+        'SELECT id,tenant_id,slug FROM public_booking_pages WHERE public_code=$1',
+        [code],
       );
       if (!rows[0]) throw unavailable();
       return rows[0];
@@ -351,13 +419,21 @@ export class PublicBookingsService {
       const { rows } = await this.pool.query<{
         id: string;
         name: string;
+        category: string | null;
         default_price: string;
+        price_type: 'fixed' | 'range';
+        min_price: string | null;
+        max_price: string | null;
         duration_minutes: number;
       }>(
-        `SELECT s.id,s.name,s.default_price,ps.duration_minutes
+        `SELECT s.id,s.name,s.category,s.default_price,s.price_type,s.min_price,s.max_price,ps.duration_minutes
         FROM public_booking_services ps JOIN services s ON s.id=ps.service_id AND s.tenant_id=ps.tenant_id WHERE ps.page_id=$1 AND ps.tenant_id=$2 ORDER BY s.name,s.id`,
         [page.id, page.tenant_id],
       );
+      const [resources, legal] = await Promise.all([
+        pageResources(this.pool, page),
+        this.legalDocuments(this.pool, page),
+      ]);
       // Explicit projection: no internal settings, resource IDs or stale cached
       // price-bearing response can enter this public shape.
       return {
@@ -367,20 +443,38 @@ export class PublicBookingsService {
         displayName: s.displayName,
         address: s.address,
         contacts: s.contacts,
+        links: s.links,
+        resources: resources.map((resource) => ({ resourceKey: resource.resource_key, name: resource.full_name })),
         mode: s.mode,
         showPrices: s.showPrices,
-        operator: s.operator,
-        policyText: s.policyText,
-        consentText: s.consentText,
-        consentVersion: page.consent_version,
+        operator: legal.operator,
+        policyText: legal.policyText,
+        consentText: legal.consentText,
+        consentVersion: legal.consentVersion,
         services: rows.map((r) => ({
           id: r.id,
           name: r.name,
+          ...(r.category ? { category: r.category } : {}),
           durationMinutes: r.duration_minutes,
-          ...(s.showPrices ? { price: Number(r.default_price) } : {}),
+          ...(s.showPrices
+            ? r.price_type === 'range'
+              ? {
+                  priceType: 'range' as const,
+                  ...(r.min_price !== null ? { minPrice: Number(r.min_price) } : {}),
+                  ...(r.max_price !== null ? { maxPrice: Number(r.max_price) } : {}),
+                }
+              : { priceType: 'fixed' as const, price: Number(r.default_price) }
+            : {}),
         })),
       };
     });
+  }
+  /** Resolve only the immutable routing identity. Landing/availability gates
+   * are evaluated on the canonical slug route, while historical recovery keeps
+   * working after publication is withdrawn or a subscription expires. */
+  async landingByCode(code: string) {
+    const locator = await this.locateByCode(code);
+    return { slug: locator.slug };
   }
   private async selected(client: PoolClient, page: BookingPageRow, ids: string[], lock = false) {
     if (!Array.isArray(ids) || !ids.length || ids.length > 20 || new Set(ids).size !== ids.length)
@@ -400,10 +494,18 @@ export class PublicBookingsService {
       services: rows.map((r) => ({ serviceId: r.service_id, name: r.name, durationMinutes: r.duration_minutes })),
     };
   }
-  async slots(slug: string, query: { from?: string; to?: string; serviceIds?: string; after?: string }) {
+  async slots(
+    slug: string,
+    query: { from?: string; to?: string; serviceIds?: string; after?: string; resourceKey?: string },
+  ) {
     const from = bookingDate(query.from),
       to = bookingDate(query.to);
-    if (typeof query.serviceIds !== 'string' || (query.after !== undefined && typeof query.after !== 'string'))
+    if (
+      typeof query.serviceIds !== 'string' ||
+      (query.after !== undefined && typeof query.after !== 'string') ||
+      (query.resourceKey !== undefined &&
+        (typeof query.resourceKey !== 'string' || !/^[a-f0-9]{32}$/.test(query.resourceKey)))
+    )
       throw new BadRequestException({ message: 'Некорректные параметры времени и услуг' });
     if (from > to || Date.parse(to) - Date.parse(from) > 30 * 86400000)
       throw new BadRequestException({ message: 'Выберите диапазон до31 дней' });
@@ -414,7 +516,13 @@ export class PublicBookingsService {
         await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
         const page = await this.readPage(client, locator.tenant_id, locator.id),
           selection = await this.selected(client, page, (query.serviceIds ?? '').split(',')),
-          resources = await pageResources(client, page);
+          allResources = await pageResources(client, page);
+        const requestedResource = query.resourceKey
+          ? allResources.find((resource) => resource.resource_key === query.resourceKey)
+          : undefined;
+        if (query.resourceKey && !requestedResource)
+          throw new ConflictException({ code: 'RESOURCE_UNAVAILABLE', message: 'Выбранный мастер недоступен' });
+        const resources = requestedResource ? [requestedResource] : allResources;
         const availability = await pageAvailability(client, page, resources, from, to);
         const after = query.after ? Date.parse(query.after) : Number.NEGATIVE_INFINITY;
         if (Number.isNaN(after)) throw new BadRequestException({ message: 'Некорректный курсор времени' });
@@ -567,13 +675,20 @@ export class PublicBookingsService {
         const replay = await replayBooking<PublicBookingReceipt>(client, locator.tenant_id, dto.requestId, fingerprint);
         if (replay !== undefined) return { response: replay, effect: null };
         const page = await this.readPage(client, locator.tenant_id, locator.id, true);
-        if (dto.consentVersion !== page.consent_version)
+        const legal = await this.legalDocuments(client, page);
+        if (dto.consentVersion !== legal.consentVersion)
           throw new ConflictException({
             code: 'CONSENT_CHANGED',
             message: 'Документы согласия изменились. Прочитайте текущую версию.',
           });
-        const selection = await this.selected(client, page, dto.serviceIds, true),
-          resource = await this.chooseResource(client, page, start, selection.duration);
+        const selection = await this.selected(client, page, dto.serviceIds, true);
+        const publicResources = await pageResources(client, page);
+        const requested = dto.resourceKey
+          ? publicResources.find((resource) => resource.resource_key === dto.resourceKey)
+          : undefined;
+        if (dto.resourceKey && !requested)
+          throw new ConflictException({ code: 'RESOURCE_UNAVAILABLE', message: 'Выбранный мастер недоступен' });
+        const resource = await this.chooseResource(client, page, start, selection.duration, requested?.id);
         const { rows } = await client.query<RequestRow>(
           `INSERT INTO public_booking_requests(tenant_id,point_id,page_id,request_id,capability_hash,contact_name,contact_phone,comment,
           selected_services,duration_minutes,starts_at,resource_id,status,consent_version,consent_proof)
@@ -593,10 +708,10 @@ export class PublicBookingsService {
             start,
             resource,
             page.settings.mode === 'instant' ? 'confirmed' : 'pending',
-            page.consent_version,
-            JSON.stringify(page.settings.operator),
-            page.settings.policyText,
-            page.settings.consentText,
+            legal.consentVersion,
+            JSON.stringify(legal.operator),
+            legal.policyText,
+            legal.consentText,
           ],
         );
         const row = rows[0];
@@ -690,7 +805,8 @@ export class PublicBookingsService {
       let resource = row.resource_id;
       if (approve) {
         const page = await this.readPage(client, actor.tenantID, row.page_id, true);
-        if (row.consent_version !== page.consent_version)
+        const legal = await this.legalDocuments(client, page);
+        if (row.consent_version !== legal.consentVersion)
           throw new ConflictException({
             code: 'CONSENT_CHANGED',
             message: 'Согласие изменилось. Клиенту нужно отправить новую заявку.',

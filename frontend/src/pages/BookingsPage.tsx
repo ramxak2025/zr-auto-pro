@@ -4,12 +4,17 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { createSessionBoundClient } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
-import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, Select, Textarea } from '../ui';
-import type { PublicBookingResource, Service, StaffPublicBookingRequest } from '../../../shared/types';
+import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, Select } from '../ui';
+import type {
+  PublicBookingContactLinks,
+  PublicBookingResource,
+  PublicBookingServiceOption,
+  StaffPublicBookingRequest,
+} from '../../../shared/types';
 import type { PutPublicBookingSettingsRequest } from '../../../shared/api/types';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { roleLabels } from '../../../shared/utils/formatters';
-import { createBookingsApi, createClientsApi, createServicesApi } from '../../../shared/api/createServices';
+import { createBookingsApi, createClientsApi } from '../../../shared/api/createServices';
 import { readStoredToken } from '../utils/sessionToken';
 
 function operationId(): string {
@@ -17,24 +22,30 @@ function operationId(): string {
   return globalThis.crypto.randomUUID();
 }
 
+const DEFAULT_BOOKING_HOURS = Object.fromEntries(
+  Array.from({ length: 7 }, (_, day) => [String(day), { start: '09:00', end: '18:00' }]),
+);
+
 export default function BookingsPage() {
   const queryClient = useQueryClient();
   const { user, token, hasPermission } = useAuth();
   const canManage = hasPermission('company_manage');
   const canReview = hasPermission('bookings_access');
+  const [activeTab, setActiveTab] = useState<'settings' | 'requests'>(canManage ? 'settings' : 'requests');
   const ownerScope = `${user?.id ?? ''}:${user?.currentPointId ?? ''}`;
   const sessionClient = useMemo(() => (token ? createSessionBoundClient(token) : null), [token]);
   const scopedBookingsApi = useMemo(() => (sessionClient ? createBookingsApi(sessionClient) : null), [sessionClient]);
   const scopedClientsApi = useMemo(() => (sessionClient ? createClientsApi(sessionClient) : null), [sessionClient]);
-  const scopedServicesApi = useMemo(() => (sessionClient ? createServicesApi(sessionClient) : null), [sessionClient]);
   const [settingsDraft, setSettingsDraft] = useState<Partial<PutPublicBookingSettingsRequest> | null>(null);
-  const [newSlug, setNewSlug] = useState('');
   const decisionKeys = useRef(new Map<string, { accept: boolean; requestId: string }>());
   useEffect(() => {
     setSettingsDraft(null);
-    setNewSlug('');
     decisionKeys.current.clear();
   }, [ownerScope]);
+  useEffect(() => {
+    if (activeTab === 'settings' && !canManage) setActiveTab('requests');
+    else if (activeTab === 'requests' && !canReview) setActiveTab('settings');
+  }, [activeTab, canManage, canReview]);
   const pageQuery = useQuery({
     queryKey: ['bookings', 'public-settings', ownerScope],
     queryFn: async () => {
@@ -51,13 +62,25 @@ export default function BookingsPage() {
     },
     enabled: canManage && !!scopedBookingsApi,
   });
-  const servicesQuery = useQuery({
+  const servicesQuery = useQuery<PublicBookingServiceOption[]>({
     queryKey: ['bookings', 'service-options', ownerScope],
     queryFn: async () => {
-      if (!scopedServicesApi) throw new Error('Нет активной сессии');
-      return (await scopedServicesApi.getAll({ page: 1, limit: 500 })).data;
+      if (!scopedBookingsApi) throw new Error('Нет активной сессии');
+      const all: PublicBookingServiceOption[] = [];
+      let page = 1;
+      let total = 0;
+      do {
+        const result = (await scopedBookingsApi.publicServices({ page, limit: 500 })).data;
+        all.push(...result.data);
+        total = result.total;
+        if (result.data.length === 0 && all.length < total)
+          throw new Error('Не удалось загрузить весь список услуг. Повторите попытку.');
+        page += 1;
+        if (page > 10000) throw new Error('Слишком большой каталог услуг для загрузки.');
+      } while (all.length < total);
+      return all;
     },
-    enabled: canManage && !!scopedServicesApi,
+    enabled: canManage && !!scopedBookingsApi,
   });
   const requestsQuery = useQuery<StaffPublicBookingRequest[]>({
     queryKey: ['bookings', 'public-requests', ownerScope],
@@ -65,69 +88,33 @@ export default function BookingsPage() {
       if (!scopedBookingsApi) throw new Error('Нет активной сессии');
       return (await scopedBookingsApi.requests()).data;
     },
-    enabled: canReview && !!scopedBookingsApi,
+    enabled: canReview && activeTab === 'requests' && !!scopedBookingsApi,
   });
   const settings = pageQuery.data;
-  const services: Service[] = servicesQuery.data?.data ?? [];
+  const publicUrl = settings?.publicUrl;
+  const services = servicesQuery.data ?? [];
   const resources = resourcesQuery.data ?? [];
 
   const draft = useMemo<PutPublicBookingSettingsRequest | null>(() => {
-    if (settingsDraft && settings)
-      return {
-        requestId: '',
-        revision: settings.revision,
-        slug: settings.slug,
-        displayName: settingsDraft.displayName ?? settings.displayName,
-        address: settingsDraft.address ?? settings.address,
-        contacts: settingsDraft.contacts ?? settings.contacts,
-        showPrices: settingsDraft.showPrices ?? settings.showPrices,
-        mode: settingsDraft.mode ?? settings.mode,
-        slotStepMinutes: settingsDraft.slotStepMinutes ?? settings.slotStepMinutes,
-        openingHours: settingsDraft.openingHours ?? settings.openingHours,
-        operator: settingsDraft.operator ?? settings.operator,
-        policyText: settingsDraft.policyText ?? settings.policyText,
-        consentText: settingsDraft.consentText ?? settings.consentText,
-        services: settingsDraft.services ?? settings.services,
-        resourceIds: settingsDraft.resourceIds ?? settings.resourceIds,
-      };
-    if (settings)
-      return {
-        requestId: '',
-        revision: settings.revision,
-        slug: settings.slug,
-        displayName: settings.displayName,
-        address: settings.address,
-        contacts: settings.contacts,
-        showPrices: settings.showPrices,
-        mode: settings.mode,
-        slotStepMinutes: settings.slotStepMinutes,
-        openingHours: settings.openingHours,
-        operator: settings.operator,
-        policyText: settings.policyText,
-        consentText: settings.consentText,
-        services: settings.services,
-        resourceIds: settings.resourceIds,
-      };
-    if (!settings && settingsDraft && newSlug.trim())
-      return {
-        requestId: '',
-        revision: 0,
-        slug: newSlug.trim(),
-        displayName: settingsDraft.displayName ?? '',
-        address: settingsDraft.address ?? '',
-        contacts: settingsDraft.contacts ?? '',
-        showPrices: settingsDraft.showPrices ?? false,
-        mode: settingsDraft.mode ?? 'approval',
-        slotStepMinutes: settingsDraft.slotStepMinutes ?? 15,
-        openingHours: settingsDraft.openingHours,
-        operator: settingsDraft.operator ?? { name: '', requisites: '', contact: '' },
-        policyText: settingsDraft.policyText ?? '',
-        consentText: settingsDraft.consentText ?? '',
-        services: settingsDraft.services ?? [],
-        resourceIds: settingsDraft.resourceIds ?? [],
-      };
-    return null;
-  }, [newSlug, settings, settingsDraft]);
+    if (!settings && !settingsDraft) return null;
+    const tenant = user?.tenant;
+    const profileContacts = [tenant?.phone, tenant?.email].filter(Boolean).join(' · ');
+    const profileLinks: PublicBookingContactLinks = tenant?.phone ? { phone: tenant.phone } : {};
+    return {
+      requestId: '',
+      revision: settings?.revision ?? 0,
+      displayName: settingsDraft?.displayName ?? settings?.displayName ?? tenant?.name ?? '',
+      address: settingsDraft?.address ?? settings?.address ?? tenant?.address ?? '',
+      contacts: settingsDraft?.contacts ?? settings?.contacts ?? profileContacts,
+      links: settingsDraft?.links ?? settings?.links ?? profileLinks,
+      showPrices: settingsDraft?.showPrices ?? settings?.showPrices ?? false,
+      mode: settingsDraft?.mode ?? settings?.mode ?? 'approval',
+      slotStepMinutes: settingsDraft?.slotStepMinutes ?? settings?.slotStepMinutes ?? 15,
+      openingHours: settingsDraft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS,
+      services: settingsDraft?.services ?? settings?.services ?? [],
+      resourceIds: settingsDraft?.resourceIds ?? settings?.resourceIds ?? [],
+    };
+  }, [settings, settingsDraft, user?.tenant]);
 
   const save = useMutation({
     mutationFn: (body: PutPublicBookingSettingsRequest) => {
@@ -201,16 +188,44 @@ export default function BookingsPage() {
     putDraft({ resourceIds: checked ? [...current, resourceId] : current.filter((id) => id !== resourceId) });
   };
   const setDayHours = (day: string, hours: { start: string; end: string } | null) => {
-    const current = settingsDraft?.openingHours ?? settings?.openingHours ?? {};
+    const current = settingsDraft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS;
     putDraft({ openingHours: { ...current, [day]: hours } });
+  };
+  const setPublicLink = (key: keyof PublicBookingContactLinks, value: string) => {
+    const current = draft?.links ?? settings?.links ?? {};
+    putDraft({ links: { ...current, [key]: value } });
   };
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6 lg:p-9">
-      <PageHeader title="Онлайн-запись" subtitle="Настройте публичную страницу и разберите заявки клиентов." />
-      {canManage && (
+      <PageHeader title="Онлайн-запись" subtitle="Настройте страницу для клиентов и разберите входящие заявки." />
+      {canManage && canReview && (
+        <div role="group" aria-label="Онлайн-запись" className="inline-flex rounded-xl bg-slate-100 p-1">
+          {canManage && (
+            <button
+              type="button"
+              aria-pressed={activeTab === 'settings'}
+              onClick={() => setActiveTab('settings')}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeTab === 'settings' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+            >
+              Страница
+            </button>
+          )}
+          {canReview && (
+            <button
+              type="button"
+              aria-pressed={activeTab === 'requests'}
+              onClick={() => setActiveTab('requests')}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeTab === 'requests' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
+            >
+              Заявки
+            </button>
+          )}
+        </div>
+      )}
+      {canManage && activeTab === 'settings' && (
         <Card>
-          <CardHeader title="Публичная страница" subtitle="Ссылка на запись доступна клиентам без входа в Autexa." />
+          <CardHeader title="Настройки страницы" subtitle="Ссылка для записи останется постоянной." />
           <CardBody>
             {pageQuery.isLoading ? (
               <p>Загружаем настройки…</p>
@@ -223,100 +238,93 @@ export default function BookingsPage() {
               </div>
             ) : (
               <>
-                {!settings && (
-                  <Field label="Короткая ссылка slug">
-                    <Input
-                      value={newSlug}
-                      onChange={(event) =>
-                        setNewSlug(
-                          event.target.value
-                            .toLowerCase()
-                            .replace(/[^a-z0-9-]/g, '')
-                            .slice(0, 80),
-                        )
-                      }
-                      maxLength={80}
-                      placeholder="например, garage-center"
-                    />
-                    <span className="mt-1 block text-xs text-slate-500">
-                      После сохранения адрес страницы нельзя будет изменить.
-                    </span>
-                  </Field>
-                )}
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field label="Название сервиса">
                     <Input
-                      value={draft?.displayName ?? settings?.displayName ?? ''}
+                      value={draft?.displayName ?? settings?.displayName ?? user?.tenant?.name ?? ''}
                       onChange={(event) => putDraft({ displayName: event.target.value })}
                       maxLength={160}
                     />
                   </Field>
                   <Field label="Публичная ссылка">
-                    <Input
-                      value={
-                        settings?.slug
-                          ? `${window.location.origin}/book/${settings.slug}`
-                          : 'Ссылка появится после первого сохранения'
-                      }
-                      readOnly
-                    />
+                    <Input value={settings?.publicUrl ?? 'Ссылка появится после первого сохранения'} readOnly />
                   </Field>
                   <Field label="Адрес">
                     <Input
-                      value={draft?.address ?? settings?.address ?? ''}
+                      value={draft?.address ?? settings?.address ?? user?.tenant?.address ?? ''}
                       onChange={(event) => putDraft({ address: event.target.value })}
                       maxLength={300}
                     />
                   </Field>
                   <Field label="Контакты">
                     <Input
-                      value={draft?.contacts ?? settings?.contacts ?? ''}
+                      value={
+                        draft?.contacts ??
+                        settings?.contacts ??
+                        [user?.tenant?.phone, user?.tenant?.email].filter(Boolean).join(' · ')
+                      }
                       onChange={(event) => putDraft({ contacts: event.target.value })}
                       maxLength={300}
                     />
                   </Field>
-                  <Field label="Исполнитель">
+                  <Field label="Телефон для связи">
                     <Input
-                      value={draft?.operator?.name ?? settings?.operator.name ?? ''}
-                      onChange={(event) =>
-                        putDraft({
-                          operator: {
-                            ...(draft?.operator ?? settings?.operator ?? { name: '', requisites: '', contact: '' }),
-                            name: event.target.value,
-                          },
-                        })
-                      }
-                      maxLength={160}
+                      type="tel"
+                      value={draft?.links?.phone ?? settings?.links?.phone ?? user?.tenant?.phone ?? ''}
+                      onChange={(event) => setPublicLink('phone', event.target.value)}
+                      maxLength={32}
                     />
                   </Field>
-                  <Field label="Реквизиты">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {(
+                      [
+                        ['instagram', 'Instagram', 'https://instagram.com/...'],
+                        ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
+                        ['vk', 'ВКонтакте', 'https://vk.com/...'],
+                        ['telegram', 'Telegram', 'https://t.me/...'],
+                      ] as const
+                    ).map(([key, label, placeholder]) => (
+                      <Field key={key} label={label}>
+                        <Input
+                          type="url"
+                          value={draft?.links?.[key] ?? settings?.links?.[key] ?? ''}
+                          onChange={(event) => setPublicLink(key, event.target.value)}
+                          placeholder={placeholder}
+                          maxLength={500}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+                  <Field label="Телефон для связи">
                     <Input
-                      value={draft?.operator?.requisites ?? settings?.operator.requisites ?? ''}
+                      type="tel"
+                      value={draft?.links?.phone ?? settings?.links?.phone ?? user?.tenant?.phone ?? ''}
                       onChange={(event) =>
-                        putDraft({
-                          operator: {
-                            ...(draft?.operator ?? settings?.operator ?? { name: '', requisites: '', contact: '' }),
-                            requisites: event.target.value,
-                          },
-                        })
+                        putDraft({ links: { ...(draft?.links ?? settings?.links ?? {}), phone: event.target.value } })
                       }
-                      maxLength={500}
+                      maxLength={32}
                     />
                   </Field>
-                  <Field label="Контакт исполнителя">
-                    <Input
-                      value={draft?.operator?.contact ?? settings?.operator.contact ?? ''}
-                      onChange={(event) =>
-                        putDraft({
-                          operator: {
-                            ...(draft?.operator ?? settings?.operator ?? { name: '', requisites: '', contact: '' }),
-                            contact: event.target.value,
-                          },
-                        })
-                      }
-                      maxLength={160}
-                    />
-                  </Field>
+                  {(
+                    [
+                      ['instagram', 'Instagram', 'https://instagram.com/...'],
+                      ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
+                      ['vk', 'ВКонтакте', 'https://vk.com/...'],
+                      ['telegram', 'Telegram', 'https://t.me/...'],
+                    ] as const
+                  ).map(([key, label, placeholder]) => (
+                    <Field key={key} label={label}>
+                      <Input
+                        type="url"
+                        value={draft?.links?.[key] ?? settings?.links?.[key] ?? ''}
+                        onChange={(event) =>
+                          putDraft({ links: { ...(draft?.links ?? settings?.links ?? {}), [key]: event.target.value } })
+                        }
+                        placeholder={placeholder}
+                        maxLength={500}
+                      />
+                    </Field>
+                  ))}
                   <Field label="Подтверждение заявок">
                     <Select
                       value={draft?.mode ?? settings?.mode ?? 'approval'}
@@ -335,28 +343,18 @@ export default function BookingsPage() {
                       onChange={(event) => putDraft({ slotStepMinutes: Number(event.target.value) })}
                     />
                   </Field>
-                  <Field label="Текст политики">
-                    <Textarea
-                      value={draft?.policyText ?? settings?.policyText ?? ''}
-                      onChange={(event) => putDraft({ policyText: event.target.value })}
-                      rows={4}
-                    />
-                  </Field>
-                  <Field label="Текст согласия">
-                    <Textarea
-                      value={draft?.consentText ?? settings?.consentText ?? ''}
-                      onChange={(event) => putDraft({ consentText: event.target.value })}
-                      rows={4}
-                    />
-                  </Field>
                 </div>
                 <div className="mt-5 grid gap-5 md:grid-cols-2">
                   <fieldset>
                     <legend className="mb-2 font-semibold">Услуги и длительность</legend>
-                    {servicesQuery.isError ? (
+                    {servicesQuery.isLoading ? (
+                      <p className="text-sm text-slate-500">Загружаем каталог услуг…</p>
+                    ) : servicesQuery.isError ? (
                       <button className="text-blue-700 underline" onClick={() => void servicesQuery.refetch()}>
                         Не удалось загрузить услуги · Повторить
                       </button>
+                    ) : services.length === 0 ? (
+                      <p className="text-sm text-slate-500">В каталоге пока нет услуг.</p>
                     ) : (
                       services.map((service) => {
                         const chosen = (draft?.services ?? settings?.services ?? []).find(
@@ -369,7 +367,12 @@ export default function BookingsPage() {
                               checked={!!chosen}
                               onChange={(event) => toggleService(service.id, event.target.checked)}
                             />
-                            <span className="min-w-0 flex-1">{service.name}</span>
+                            <span className="min-w-0 flex-1">
+                              {service.name}
+                              {service.category && (
+                                <span className="ml-2 text-xs text-slate-500">{service.category}</span>
+                              )}
+                            </span>
                             {chosen && (
                               <input
                                 aria-label={`Длительность: ${service.name}`}
@@ -396,10 +399,14 @@ export default function BookingsPage() {
                   </fieldset>
                   <fieldset>
                     <legend className="mb-2 font-semibold">Сотрудники, принимающие записи</legend>
-                    {resourcesQuery.isError ? (
+                    {resourcesQuery.isLoading ? (
+                      <p className="text-sm text-slate-500">Загружаем сотрудников…</p>
+                    ) : resourcesQuery.isError ? (
                       <button className="text-blue-700 underline" onClick={() => void resourcesQuery.refetch()}>
                         Не удалось загрузить сотрудников · Повторить
                       </button>
+                    ) : resources.length === 0 ? (
+                      <p className="text-sm text-slate-500">Нет доступных сотрудников для записи.</p>
                     ) : (
                       resources.map((resource) => (
                         <label key={resource.id} className="flex items-center gap-3 border-t py-2 text-sm">
@@ -417,14 +424,18 @@ export default function BookingsPage() {
                 </div>
                 <fieldset className="mt-6">
                   <legend className="mb-2 font-semibold">Рабочие часы</legend>
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'].map(
                       (label, index) => {
                         const day = String(index);
-                        const hours = (draft?.openingHours ?? settings?.openingHours ?? {})[day] ?? null;
+                        const hours =
+                          (draft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS)[day] ?? null;
                         return (
-                          <div key={day} className="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
-                            <label className="flex min-w-32 items-center gap-2 text-sm">
+                          <div
+                            key={day}
+                            className="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-2"
+                          >
+                            <label className="flex min-w-28 items-center gap-2 text-sm">
                               <input
                                 type="checkbox"
                                 checked={!!hours}
@@ -441,7 +452,7 @@ export default function BookingsPage() {
                                   type="time"
                                   value={hours.start}
                                   onChange={(event) => setDayHours(day, { ...hours, start: event.target.value })}
-                                  className="rounded border px-2 py-1"
+                                  className="w-24 rounded border px-2 py-1 text-sm"
                                 />
                                 <span>—</span>
                                 <input
@@ -449,7 +460,7 @@ export default function BookingsPage() {
                                   type="time"
                                   value={hours.end}
                                   onChange={(event) => setDayHours(day, { ...hours, end: event.target.value })}
-                                  className="rounded border px-2 py-1"
+                                  className="w-24 rounded border px-2 py-1 text-sm"
                                 />
                               </>
                             )}
@@ -467,9 +478,27 @@ export default function BookingsPage() {
                   />
                   Показывать цены услуг
                 </label>
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+                  <p className="font-semibold">Политика и отдельное согласие</p>
+                  <p className="mt-1 text-slate-600">
+                    Autexa формирует оба текста из реквизитов компании и настроенных контактов. Клиент отдельно отмечает
+                    согласие перед отправкой заявки.
+                  </p>
+                  {settings ? (
+                    <details className="mt-3">
+                      <summary className="cursor-pointer font-medium">Показать текст сохранённой версии</summary>
+                      <h3 className="mt-3 font-semibold">Политика обработки</h3>
+                      <pre className="mt-1 whitespace-pre-wrap font-sans text-slate-700">{settings.policyText}</pre>
+                      <h3 className="mt-3 font-semibold">Отдельное согласие</h3>
+                      <pre className="mt-1 whitespace-pre-wrap font-sans text-slate-700">{settings.consentText}</pre>
+                    </details>
+                  ) : (
+                    <p className="mt-3 text-slate-600">Тексты появятся после первого сохранения страницы.</p>
+                  )}
+                </div>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Button
-                    disabled={!draft || save.isPending || !canManage}
+                    disabled={!draft || !settingsDraft || save.isPending || !canManage}
                     onClick={() => {
                       if (draft) save.mutate({ ...draft, requestId: operationId() });
                     }}
@@ -477,20 +506,28 @@ export default function BookingsPage() {
                     Сохранить настройки
                   </Button>
                   {settings?.published && (
-                    <Button variant="secondary" disabled={publish.isPending} onClick={() => publish.mutate(true)}>
+                    <Button
+                      variant="secondary"
+                      disabled={publish.isPending || save.isPending || !!settingsDraft}
+                      onClick={() => publish.mutate(true)}
+                    >
                       Снять с публикации
                     </Button>
                   )}
                   {settings && !settings.published && (
-                    <Button variant="secondary" disabled={publish.isPending} onClick={() => publish.mutate(false)}>
+                    <Button
+                      variant="secondary"
+                      disabled={publish.isPending || save.isPending || !!settingsDraft}
+                      onClick={() => publish.mutate(false)}
+                    >
                       Опубликовать
                     </Button>
                   )}
-                  {settings?.slug && (
+                  {publicUrl && (
                     <button
                       className="rounded-lg border px-4 py-2 text-sm font-semibold"
                       onClick={() => {
-                        const value = `${window.location.origin}/book/${settings.slug}`;
+                        const value = publicUrl;
                         if (!navigator.clipboard?.writeText) {
                           toast.error('Скопируйте ссылку из поля вручную.');
                           return;
@@ -511,7 +548,7 @@ export default function BookingsPage() {
         </Card>
       )}
 
-      {canReview && (
+      {canReview && activeTab === 'requests' && (
         <Card>
           <CardHeader title="Заявки клиентов" subtitle="Заявка становится записью только после подтверждения." />
           <CardBody>

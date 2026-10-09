@@ -172,6 +172,7 @@ import type {
   BookingSettings,
   PublicBookingPageSettings,
   PublicBookingResource,
+  PublicBookingServiceOption,
   PublicBookingLanding,
   PublicBookingSlotPage,
   PublicBookingReceipt,
@@ -2319,7 +2320,7 @@ export function createPublicBookingsApi(publicClient: PublicBookingHttpClient) {
   return {
     landing: (slug: string) => publicClient.get<PublicBookingLanding>(root(slug)),
     landingByCode: (code: string) =>
-      publicClient.get<PublicBookingLanding>(`/public/bookings/by-code/${encodeURIComponent(code)}`),
+      publicClient.get<Pick<PublicBookingLanding, 'slug'>>(`/public/bookings/by-code/${encodeURIComponent(code)}`),
     slots: (slug: string, params: PublicBookingSlotsParams) =>
       publicClient.get<PublicBookingSlotPage>(`${root(slug)}/slots`, {
         params: { ...params, serviceIds: params.serviceIds.join(',') },
@@ -2345,6 +2346,11 @@ export function createBookingsApi(api: HttpClient) {
     putPublicSettings: (data: PutPublicBookingSettingsRequest) =>
       api.put<PublicBookingPageSettings>('/bookings/public-settings', data),
     publicResources: () => api.get<PublicBookingResource[]>('/bookings/public-resources'),
+    publicServices: (params?: { page?: number; limit?: number }) =>
+      api.get<{ data: PublicBookingServiceOption[]; total: number; page: number; limit: number }>(
+        '/bookings/public-services',
+        { params },
+      ),
     publish: (data: BookingOperationRequest) =>
       api.post<PublicBookingPageSettings>('/bookings/public-settings/publish', data),
     unpublish: (data: BookingOperationRequest) =>

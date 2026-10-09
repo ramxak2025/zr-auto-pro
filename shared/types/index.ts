@@ -2549,6 +2549,11 @@ export interface PublicBookingResource {
   name: string;
   role: string;
 }
+export interface PublicBookingServiceOption {
+  id: string;
+  name: string;
+  category?: string | null;
+}
 export interface PublicBookingLanding {
   slug: string;
   /** Derive the first calendar day from this server clock in the tenant IANA zone. */
