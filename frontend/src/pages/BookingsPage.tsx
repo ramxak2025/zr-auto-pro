@@ -392,8 +392,11 @@ export default function BookingsPage() {
                       const hours =
                         (draft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS)[day] ?? null;
                       return (
-                        <div key={day} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-2">
-                          <label className="flex min-w-14 items-center gap-2 text-sm">
+                        <div
+                          key={day}
+                          className="booking-hours-row grid grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2 rounded-lg border border-slate-200 px-2 py-2"
+                        >
+                          <label className="flex items-center gap-1 text-sm">
                             <input
                               type="checkbox"
                               checked={!!hours}
@@ -410,15 +413,14 @@ export default function BookingsPage() {
                                 type="time"
                                 value={hours.start}
                                 onChange={(event) => setDayHours(day, { ...hours, start: event.target.value })}
-                                className="w-24 rounded border px-2 py-1 text-sm"
+                                className="booking-hours-input w-full min-w-0 rounded border px-1 py-1 text-sm"
                               />
-                              <span>—</span>
                               <input
                                 aria-label={`${label}: окончание`}
                                 type="time"
                                 value={hours.end}
                                 onChange={(event) => setDayHours(day, { ...hours, end: event.target.value })}
-                                className="w-24 rounded border px-2 py-1 text-sm"
+                                className="booking-hours-input w-full min-w-0 rounded border px-1 py-1 text-sm"
                               />
                             </>
                           )}
