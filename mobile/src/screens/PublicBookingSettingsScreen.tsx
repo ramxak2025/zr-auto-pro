@@ -137,7 +137,11 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
   const setText = (field: 'displayName' | 'address' | 'contacts', text: string) =>
     setDraft((current) => ({ ...current, [field]: text }));
   const setPublicLink = (key: keyof PublicBookingContactLinks, text: string) =>
-    setDraft((current) => ({ ...current, links: { ...value.links, ...current.links, [key]: text } }));
+    setDraft((current) => ({
+      ...current,
+      links: { ...value.links, ...current.links, [key]: text },
+      ...(key === 'phone' ? { contacts: [text, user?.tenant?.email].filter(Boolean).join(' · ') } : {}),
+    }));
   const toggleService = (id: string, enabled: boolean) =>
     setDraft((current) => {
       const currentRows = current.services ?? settings?.services ?? [];

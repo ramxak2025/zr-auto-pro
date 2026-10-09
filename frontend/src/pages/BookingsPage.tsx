@@ -193,7 +193,10 @@ export default function BookingsPage() {
   };
   const setPublicLink = (key: keyof PublicBookingContactLinks, value: string) => {
     const current = draft?.links ?? settings?.links ?? {};
-    putDraft({ links: { ...current, [key]: value } });
+    putDraft({
+      links: { ...current, [key]: value },
+      ...(key === 'phone' ? { contacts: [value, user?.tenant?.email].filter(Boolean).join(' · ') } : {}),
+    });
   };
 
   return (
@@ -253,17 +256,6 @@ export default function BookingsPage() {
                     <Input
                       value={draft?.address ?? settings?.address ?? user?.tenant?.address ?? ''}
                       onChange={(event) => putDraft({ address: event.target.value })}
-                      maxLength={300}
-                    />
-                  </Field>
-                  <Field label="Контакты">
-                    <Input
-                      value={
-                        draft?.contacts ??
-                        settings?.contacts ??
-                        [user?.tenant?.phone, user?.tenant?.email].filter(Boolean).join(' · ')
-                      }
-                      onChange={(event) => putDraft({ contacts: event.target.value })}
                       maxLength={300}
                     />
                   </Field>
@@ -394,50 +386,45 @@ export default function BookingsPage() {
                 </div>
                 <fieldset className="mt-6">
                   <legend className="mb-2 font-semibold">Рабочие часы</legend>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    {['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'].map(
-                      (label, index) => {
-                        const day = String(index);
-                        const hours =
-                          (draft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS)[day] ?? null;
-                        return (
-                          <div
-                            key={day}
-                            className="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-2"
-                          >
-                            <label className="flex min-w-28 items-center gap-2 text-sm">
+                  <div className="grid max-w-3xl gap-2 sm:grid-cols-2">
+                    {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((label, index) => {
+                      const day = String((index + 1) % 7);
+                      const hours =
+                        (draft?.openingHours ?? settings?.openingHours ?? DEFAULT_BOOKING_HOURS)[day] ?? null;
+                      return (
+                        <div key={day} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-2">
+                          <label className="flex min-w-14 items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={!!hours}
+                              onChange={(event) =>
+                                setDayHours(day, event.target.checked ? { start: '09:00', end: '18:00' } : null)
+                              }
+                            />
+                            {label}
+                          </label>
+                          {hours && (
+                            <>
                               <input
-                                type="checkbox"
-                                checked={!!hours}
-                                onChange={(event) =>
-                                  setDayHours(day, event.target.checked ? { start: '09:00', end: '18:00' } : null)
-                                }
+                                aria-label={`${label}: начало`}
+                                type="time"
+                                value={hours.start}
+                                onChange={(event) => setDayHours(day, { ...hours, start: event.target.value })}
+                                className="w-24 rounded border px-2 py-1 text-sm"
                               />
-                              {label}
-                            </label>
-                            {hours && (
-                              <>
-                                <input
-                                  aria-label={`${label}: начало`}
-                                  type="time"
-                                  value={hours.start}
-                                  onChange={(event) => setDayHours(day, { ...hours, start: event.target.value })}
-                                  className="w-24 rounded border px-2 py-1 text-sm"
-                                />
-                                <span>—</span>
-                                <input
-                                  aria-label={`${label}: окончание`}
-                                  type="time"
-                                  value={hours.end}
-                                  onChange={(event) => setDayHours(day, { ...hours, end: event.target.value })}
-                                  className="w-24 rounded border px-2 py-1 text-sm"
-                                />
-                              </>
-                            )}
-                          </div>
-                        );
-                      },
-                    )}
+                              <span>—</span>
+                              <input
+                                aria-label={`${label}: окончание`}
+                                type="time"
+                                value={hours.end}
+                                onChange={(event) => setDayHours(day, { ...hours, end: event.target.value })}
+                                className="w-24 rounded border px-2 py-1 text-sm"
+                              />
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </fieldset>
                 <label className="mt-5 flex items-center gap-3 text-sm">
