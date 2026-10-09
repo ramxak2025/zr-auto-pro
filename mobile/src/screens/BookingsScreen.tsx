@@ -139,7 +139,7 @@ const BookingRow = React.memo(function BookingRow({
   );
 });
 
-export default function BookingsScreen() {
+export default function BookingsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -217,34 +217,36 @@ export default function BookingsScreen() {
     [scope],
   );
 
+  const headerActions = (
+    <View style={styles.headerTrailing}>
+      <TouchableOpacity
+        onPress={() => navigation.navigate('BookingSettings')}
+        style={[styles.headerIconBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel="Настройки записей"
+      >
+        <Ionicons name="settings-outline" size={17} color={palette.text.secondary} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.addBtn}
+        onPress={openCreate}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel="Новая запись"
+      >
+        <Ionicons name="add" size={18} color={colors.white} />
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Записи"
-        onBack={() => navigation.goBack()}
-        trailing={
-          <View style={styles.headerTrailing}>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('BookingSettings')}
-              style={[styles.headerIconBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Настройки записей"
-            >
-              <Ionicons name="settings-outline" size={17} color={palette.text.secondary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.addBtn}
-              onPress={openCreate}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Новая запись"
-            >
-              <Ionicons name="add" size={18} color={colors.white} />
-            </TouchableOpacity>
-          </View>
-        }
-      />
+      {embedded ? (
+        <View style={styles.embeddedHeaderActions}>{headerActions}</View>
+      ) : (
+        <IosScreenHeader title="Записи" onBack={() => navigation.goBack()} trailing={headerActions} />
+      )}
 
       {/* ── Segmented control: Предстоящие / Прошедшие ── */}
       <View style={styles.segmentWrap}>
@@ -329,6 +331,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
 
   headerTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  embeddedHeaderActions: { alignItems: 'flex-end', paddingHorizontal: spacing[4], paddingTop: spacing[2] },
   headerIconBtn: {
     width: 32,
     height: 32,

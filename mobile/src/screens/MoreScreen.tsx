@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
+import { bookingsHubMenuEntry, canShowBookingsHubEntry } from './bookings/bookingHubTabs';
 import type { Booking } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
@@ -106,23 +107,11 @@ const menuSections: MenuSection[] = [
     title: 'Работа',
     items: [
       {
-        // Записи — внутренний инструмент персонала: запись клиента на дату/
-        // время → «приход» открывает кассу. Гейт: право bookings_access
-        // (мастер/админ). Сервер закрывает API.
-        label: 'Записи',
+        // Единственная точка входа в календарь, заявки и настройки онлайн-записи.
+        // Календарь/заявки требуют bookings_access; настройки — company_manage.
+        ...bookingsHubMenuEntry,
         description: 'Запись клиентов на дату и время',
-        screen: 'Bookings',
-        permission: 'bookings_access',
         icon: 'time-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
-      },
-      {
-        label: 'Онлайн-запись',
-        description: 'Настройки страницы и заявки клиентов',
-        screen: 'PublicBookingsHub',
-        permissionAny: ['bookings_access', 'company_manage'],
-        icon: 'calendar-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
       },
@@ -614,6 +603,11 @@ export default function MoreScreen() {
     // ROLE-ONLY menu-hide: раздел без права СКРЫТ целиком (не «с замком»).
     // Матрица роли АВТОРИТЕТНА: /auth/me отдаёт эффективные права, admin живёт
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
+    if (
+      item.screen === 'BookingsHub' &&
+      !canShowBookingsHubEntry(hasPermission('bookings_access'), hasPermission('company_manage'))
+    )
+      return false;
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.permissionAny && !item.permissionAny.some((perm) => hasPermission(perm))) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
@@ -769,7 +763,7 @@ export default function MoreScreen() {
                     badgeCount={
                       item.screen === 'KnowledgeBase'
                         ? pendingRegsCount
-                        : item.screen === 'Bookings'
+                        : item.screen === 'BookingsHub'
                           ? upcomingBookingsCount
                           : 0
                     }

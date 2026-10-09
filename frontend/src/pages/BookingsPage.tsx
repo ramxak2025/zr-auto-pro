@@ -295,36 +295,6 @@ export default function BookingsPage() {
                       </Field>
                     ))}
                   </div>
-                  <Field label="Телефон для связи">
-                    <Input
-                      type="tel"
-                      value={draft?.links?.phone ?? settings?.links?.phone ?? user?.tenant?.phone ?? ''}
-                      onChange={(event) =>
-                        putDraft({ links: { ...(draft?.links ?? settings?.links ?? {}), phone: event.target.value } })
-                      }
-                      maxLength={32}
-                    />
-                  </Field>
-                  {(
-                    [
-                      ['instagram', 'Instagram', 'https://instagram.com/...'],
-                      ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
-                      ['vk', 'ВКонтакте', 'https://vk.com/...'],
-                      ['telegram', 'Telegram', 'https://t.me/...'],
-                    ] as const
-                  ).map(([key, label, placeholder]) => (
-                    <Field key={key} label={label}>
-                      <Input
-                        type="url"
-                        value={draft?.links?.[key] ?? settings?.links?.[key] ?? ''}
-                        onChange={(event) =>
-                          putDraft({ links: { ...(draft?.links ?? settings?.links ?? {}), [key]: event.target.value } })
-                        }
-                        placeholder={placeholder}
-                        maxLength={500}
-                      />
-                    </Field>
-                  ))}
                   <Field label="Подтверждение заявок">
                     <Select
                       value={draft?.mode ?? settings?.mode ?? 'approval'}

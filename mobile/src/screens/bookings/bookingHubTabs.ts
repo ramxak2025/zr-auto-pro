@@ -1,8 +1,23 @@
-export type PublicBookingsTab = 'settings' | 'requests';
+export type BookingsHubTab = 'calendar' | 'requests' | 'settings';
 
-export function publicBookingsTabs(canManage: boolean, canReview: boolean) {
+export const bookingsHubMenuEntry = {
+  label: 'Записи',
+  screen: 'BookingsHub',
+};
+
+export function bookingsHubTabs(canAccessBookings: boolean, canManageCompany: boolean) {
   return [
-    ...(canManage ? [{ key: 'settings' as const, label: 'Страница' }] : []),
-    ...(canReview ? [{ key: 'requests' as const, label: 'Заявки' }] : []),
+    ...(canAccessBookings
+      ? [
+          { key: 'calendar' as const, label: 'Календарь' },
+          { key: 'requests' as const, label: 'Заявки' },
+        ]
+      : []),
+    ...(canManageCompany ? [{ key: 'settings' as const, label: 'Онлайн-запись' }] : []),
   ];
+}
+
+/** The More menu uses this selector so bookings owners can reach settings-only access. */
+export function canShowBookingsHubEntry(canAccessBookings: boolean, canManageCompany: boolean) {
+  return canAccessBookings || canManageCompany;
 }

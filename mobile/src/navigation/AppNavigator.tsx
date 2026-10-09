@@ -439,6 +439,7 @@ function MoreStackNavigator() {
         «Чек №…» link from a converted booking, keeping back-nav in-section.
       */}
       <MoreStack.Screen name="Bookings" component={BookingsScreen} />
+      <MoreStack.Screen name="BookingsHub" component={PublicBookingsHubScreen} />
       <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
       <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
       <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
