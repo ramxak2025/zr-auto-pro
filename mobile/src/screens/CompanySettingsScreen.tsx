@@ -57,7 +57,7 @@ interface CompanyForm {
   kpp: string;
   ogrn: string;
   receiptFooter: string;
-  shiftsEnabled: boolean;
+  attendanceMode: 'admin' | 'manual' | 'nfc';
   /** 156 — мульти-точки: общая база клиентов всех точек (true, дефолт). */
   pointsSharedClients: boolean;
   /** 157 — часовой пояс автосервиса (IANA-id). Дефолт — Москва. */
@@ -103,7 +103,7 @@ export default function CompanySettingsScreen() {
     kpp: '',
     ogrn: '',
     receiptFooter: '',
-    shiftsEnabled: false,
+    attendanceMode: 'admin',
     pointsSharedClients: true,
     timezone: DEFAULT_TIMEZONE,
   });
@@ -124,7 +124,7 @@ export default function CompanySettingsScreen() {
         kpp: company.kpp || '',
         ogrn: company.ogrn || '',
         receiptFooter: company.receiptFooter || '',
-        shiftsEnabled: company.shiftsEnabled === true,
+        attendanceMode: company.attendanceMode ?? (company.shiftsEnabled === true ? 'manual' : 'admin'),
         pointsSharedClients: company.pointsSharedClients !== false,
         timezone: company.timezone || DEFAULT_TIMEZONE,
       });
@@ -164,7 +164,7 @@ export default function CompanySettingsScreen() {
       timezone: form.timezone || DEFAULT_TIMEZONE,
       // Boolean toggle — отправляем всегда (включая false), иначе выключить
       // фичу было бы невозможно (`undefined` бэкенд игнорирует).
-      ...(canManageShifts ? { shiftsEnabled: form.shiftsEnabled } : null),
+      ...(canManageShifts ? { attendanceMode: form.attendanceMode } : null),
       // 156 — только когда есть что переключать (>1 точки) и есть право.
       ...(canManageShifts && pointsCount > 1 ? { pointsSharedClients: form.pointsSharedClients } : null),
     });
@@ -390,24 +390,36 @@ export default function CompanySettingsScreen() {
                   <Text style={cardTitleStyle}>Смены</Text>
                 </View>
 
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleTextWrap}>
-                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>
-                      Сотрудники открывают смены сами
-                    </Text>
-                    <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
-                      На главном экране у сотрудников появится кнопка «Открыть смену». Выключите, если смены ведёт
-                      администратор.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={form.shiftsEnabled}
-                    onValueChange={(v) => update({ shiftsEnabled: v })}
-                    trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
-                    thumbColor={Platform.OS === 'android' ? colors.white : undefined}
-                    ios_backgroundColor={palette.border.subtle}
-                  />
-                </View>
+                <Text style={[styles.hint, { color: palette.text.secondary }]}>
+                  Как сотрудники отмечают рабочее время
+                </Text>
+                {(
+                  [
+                    ['admin', 'Отметки ставит администратор'],
+                    ['manual', 'Сотрудники открывают и закрывают смену сами'],
+                    ['nfc', 'Сотрудники отмечаются NFC-меткой'],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <TouchableOpacity
+                    key={mode}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: form.attendanceMode === mode }}
+                    onPress={() => update({ attendanceMode: mode })}
+                    style={[styles.toggleRow, { borderColor: palette.border.subtle }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>{label}</Text>
+                      <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+                        {mode === 'admin'
+                          ? 'Администратор ставит приход и уход в графике.'
+                          : mode === 'manual'
+                            ? 'На главном экране сотрудников будет кнопка смены.'
+                            : 'Сотрудники сканируют NFC-метку Autexa; самостоятельное открытие смены отключено.'}
+                      </Text>
+                    </View>
+                    <View style={[styles.radio, form.attendanceMode === mode && styles.radioSelected]} />
+                  </TouchableOpacity>
+                ))}
                 <TouchableOpacity
                   accessibilityRole="button"
                   onPress={() => navigation.navigate('NfcTags')}
@@ -1571,7 +1583,9 @@ const styles = StyleSheet.create({
   hint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   rowFields: { flexDirection: 'row', gap: spacing[3] },
   rowFields3: { flexDirection: 'row', gap: spacing[2] },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2] },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.gray[400] },
+  radioSelected: { borderWidth: 6, borderColor: colors.primary[600] },
   toggleTextWrap: { flex: 1, minWidth: 0 },
   toggleLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   toggleSub: { fontSize: 12, lineHeight: 17, marginTop: 2 },

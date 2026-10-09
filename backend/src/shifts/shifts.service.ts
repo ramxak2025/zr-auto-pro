@@ -36,15 +36,18 @@ export class ShiftsService {
   ) {}
 
   /**
-   * Per-tenant master toggle for the «Смены» subsystem (migration 070,
-   * tenants.shifts_enabled). Reads the flag straight from the tenant row by
-   * tenantID; throws 403 when the feature is OFF. Default is false, so any
-   * tenant that has not explicitly enabled shifts is blocked — matching the
-   * additive/opt-in contract. Called from the controller before open/close/getMy.
+   * Employees may open or close their own shifts only in manual mode.
    */
-  private async ensureShiftsEnabled(tenantID: string) {
-    const { rows } = await this.pool.query(`SELECT shifts_enabled FROM tenants WHERE id = $1`, [tenantID]);
-    if (rows.length === 0 || rows[0].shifts_enabled !== true) {
+  private async ensureSelfAttendanceManual(tenantID: string) {
+    const { rows } = await this.pool.query(`SELECT attendance_mode FROM tenants WHERE id = $1`, [tenantID]);
+    if (rows.length === 0 || rows[0].attendance_mode !== 'manual') {
+      throw new ForbiddenException({ message: 'Самостоятельная отметка доступна только в ручном режиме' });
+    }
+  }
+
+  private async ensureAttendanceEnabled(tenantID: string) {
+    const { rows } = await this.pool.query(`SELECT attendance_mode FROM tenants WHERE id = $1`, [tenantID]);
+    if (rows.length === 0 || rows[0].attendance_mode === 'admin') {
       throw new ForbiddenException({ message: 'Учёт смен отключён для вашей компании' });
     }
   }
@@ -123,7 +126,7 @@ export class ShiftsService {
   }
 
   async getMy(userID: string, tenantID: string) {
-    await this.ensureShiftsEnabled(tenantID);
+    await this.ensureAttendanceEnabled(tenantID);
     await this.closeStaleForScope(tenantID, { userID });
     const { rows } = await this.pool.query(
       `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
@@ -142,7 +145,7 @@ export class ShiftsService {
    * чужую статистику и в чужой расчёт «ЗП за день».
    */
   async open(userID: string, tenantID: string, actor?: JwtPayload) {
-    await this.ensureShiftsEnabled(tenantID);
+    await this.ensureSelfAttendanceManual(tenantID);
     // Смена штампуется ФИЛИАЛОМ СЕССИИ (163). Прежде филиал резолвился на
     // месте, потому что в режиме «все филиалы» смена рождалась с point_id =
     // NULL: филиальные срезы фильтруют строгим равенством, и такая смена не
@@ -260,11 +263,17 @@ export class ShiftsService {
   }
 
   async close(id: string, tenantID: string, actor: JwtPayload) {
-    await this.ensureShiftsEnabled(tenantID);
+    const { rows: targetRows } = await this.pool.query<{ user_id: string }>(
+      'SELECT user_id FROM shifts WHERE id=$1 AND tenant_id=$2 AND closed_at IS NULL',
+      [id, tenantID],
+    );
+    if (!targetRows[0]) return { message: 'Смена не найдена' };
+    const canCloseAny = userHasPermission(actor, 'schedule_manage');
+    if (targetRows[0].user_id === actor.userID) await this.ensureSelfAttendanceManual(tenantID);
+    else if (!canCloseAny) throw new ForbiddenException({ message: 'Нет права закрывать чужие смены' });
     // Чужую смену закрывает только держатель 'schedule_manage' (матрица роли
     // АВТОРИТЕТНА: owner-class и системный «Админ» — true, кастомные роли — по
     // ячейке schedule.manage); все остальные — только СВОЮ (self-scope в WHERE).
-    const canCloseAny = userHasPermission(actor, 'schedule_manage');
     const ownerCheck = canCloseAny ? '' : ` AND user_id = $3`;
     const params: unknown[] = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
     const tzParam = `$${params.push(await getTenantTimezone(this.pool, tenantID))}` as const;

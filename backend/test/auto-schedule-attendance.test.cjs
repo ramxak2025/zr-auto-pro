@@ -252,7 +252,7 @@ async function withDatabase(now, run) {
   };
   try {
     await native.query(`
-      CREATE TABLE tenants (id uuid PRIMARY KEY, timezone text, shifts_enabled boolean DEFAULT true);
+      CREATE TABLE tenants (id uuid PRIMARY KEY, timezone text, shifts_enabled boolean DEFAULT true, attendance_mode text DEFAULT 'manual');
       CREATE TABLE users (id uuid PRIMARY KEY, tenant_id uuid, full_name text DEFAULT 'Мастер', role text DEFAULT 'master', avatar text,
         is_active boolean DEFAULT true, dismissed_at timestamptz, purged_at timestamptz, hidden_from_schedule boolean DEFAULT false,
         hidden_everywhere boolean DEFAULT false, days_off jsonb DEFAULT '[]', permissions jsonb DEFAULT '{}', salary_percent numeric DEFAULT 0,

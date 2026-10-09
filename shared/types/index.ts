@@ -80,6 +80,7 @@ export interface Tenant {
    * to open their work shift without the company_manage permission.
    */
   shiftsEnabled?: boolean;
+  attendanceMode?: AttendanceMode;
   /**
    * 092 — «Кассовая смена + роли» POS shift-mode master toggle. Absent on legacy
    * payloads → treat as `false`. When ON, a non-cashier master can only create
@@ -3670,6 +3671,8 @@ export interface Shift {
   pointId?: string | null;
 }
 
+export type AttendanceMode = 'admin' | 'manual' | 'nfc';
+
 /** NFC attendance is separate from cash shifts. Static tags are cloneable. */
 export interface AttendanceNfcTag {
   id: string;
@@ -3687,6 +3690,7 @@ export interface CreatedAttendanceNfcTag extends AttendanceNfcTag {
 }
 export interface AttendanceNfcStatus {
   shiftsEnabled: boolean;
+  attendanceMode: AttendanceMode;
   canManageTags: boolean;
   hasActiveTag: boolean;
   canScan: boolean;

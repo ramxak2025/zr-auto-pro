@@ -4651,7 +4651,7 @@ export default function DashboardScreen() {
 
   // Флаг приходит с собственным профилем: /my-company закрыт мастеру
   // правом company_manage. Отсутствие поля в старом профиле означает false.
-  const shiftsEnabled = user?.tenant?.shiftsEnabled === true;
+  const attendanceMode = user?.tenant?.attendanceMode ?? (user?.tenant?.shiftsEnabled === true ? 'manual' : 'admin');
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -4759,7 +4759,7 @@ export default function DashboardScreen() {
         {/* 155 — карточка кассира: видна только при включённом режиме
             кассовой смены и только кассиру (внутри сама рендерит null). */}
         <CashierShiftCard />
-        {shiftsEnabled && (
+        {attendanceMode === 'nfc' && (
           <TouchableOpacity
             accessibilityRole="button"
             onPress={() => navigation.navigate('NfcAttendance')}
@@ -4774,7 +4774,7 @@ export default function DashboardScreen() {
             <View style={{ flex: 1 }}>
               <Text style={[styles.nfcAttendanceTitle, { color: palette.text.primary }]}>Рабочая смена</Text>
               <Text style={[styles.nfcAttendanceSubtitle, { color: palette.text.secondary }]}>
-                Отметиться по NFC-метке
+                Сканировать рабочую NFC-метку
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
@@ -4790,7 +4790,7 @@ export default function DashboardScreen() {
               <Text style={[styles.headerSub, { color: palette.text.tertiary }]}>Обзор показателей автосервиса</Text>
               <PointIndicatorChip style={styles.pointChipUnderGreeting} />
             </View>
-            {shiftsEnabled && <ShiftControl />}
+            {attendanceMode === 'manual' && <ShiftControl />}
             <MasterDashboard />
           </>
         ) : isOwner || user?.role === UserRole.ADMIN ? (

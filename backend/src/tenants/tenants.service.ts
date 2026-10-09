@@ -17,6 +17,7 @@ import { AuditService, AuditActor } from './audit.service';
 import { UpdateMyCompanyDto } from './dto/company.dto';
 import { assertSupportedTimezone, invalidateTenantTimezone, normalizeTimezone } from '../common/timezone';
 import { computeOwnerShare, DEFAULT_OWNER_SHARE_PERCENT } from '../platform-managers/owner-share';
+import { resolveAttendanceModePatch } from './attendance-mode';
 
 /** Любой UUID (без привязки к версии) — валидация id из тела запроса до обращения к БД. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -144,7 +145,11 @@ export class TenantsService {
       kpp: row.kpp,
       ogrn: row.ogrn,
       receiptFooter: row.receipt_footer,
-      shiftsEnabled: row.shifts_enabled === true,
+      shiftsEnabled:
+        row.attendance_mode !== undefined && row.attendance_mode !== null
+          ? row.attendance_mode !== 'admin'
+          : row.shifts_enabled === true,
+      attendanceMode: row.attendance_mode ?? (row.shifts_enabled === true ? 'manual' : 'admin'),
       shiftModeEnabled: row.shift_mode_enabled === true,
       // 156 — мульти-точки: общая (true, дефолт) vs раздельная база клиентов.
       pointsSharedClients: row.points_shared_clients !== false,
@@ -1602,9 +1607,12 @@ export class TenantsService {
       sets.push(`receipt_footer=$${idx++}`);
       vals.push(dto.receiptFooter);
     }
-    if (dto.shiftsEnabled !== undefined) {
+    const attendancePatch = resolveAttendanceModePatch(dto);
+    if (attendancePatch) {
+      sets.push(`attendance_mode=$${idx++}`);
+      vals.push(attendancePatch.attendanceMode);
       sets.push(`shifts_enabled=$${idx++}`);
-      vals.push(dto.shiftsEnabled === true);
+      vals.push(attendancePatch.shiftsEnabled);
     }
     if (dto.shiftModeEnabled !== undefined) {
       sets.push(`shift_mode_enabled=$${idx++}`);

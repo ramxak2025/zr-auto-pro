@@ -1691,6 +1691,7 @@ export function createShiftsApi(api: HttpClient) {
       api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/activate`, { token }),
     renameNfcTag: (id: string, name: string) => api.patch<AttendanceNfcTag>(`/shifts/nfc/tags/${id}`, { name }),
     revokeNfcTag: (id: string) => api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/revoke`),
+    archiveNfcTag: (id: string) => api.delete<AttendanceNfcTag>(`/shifts/nfc/tags/${id}`),
     open: (data?: Record<string, unknown>) => api.post<Shift>('/shifts/open', data),
     close: (id: string) => api.post<Shift>(`/shifts/${id}/close`),
   };
