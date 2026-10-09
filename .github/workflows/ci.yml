@@ -57,14 +57,20 @@ jobs:
           PUBLIC_BOOKING_LIVE_APP_PASSWORD: oct8_app_fixture_only
           OCT8_ORDINARY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           OCT8_ORDINARY_APP_PASSWORD: oct8_app_fixture_only
+          OCT10_PRICING_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT10_PRICING_APP_PASSWORD: oct8_app_fixture_only
           RUN_BACKGROUND_JOBS: "false"
           SENTRY_DSN: ""
         run: >-
           node --test
+          --test-concurrency=1
           test/supplier-receipts-returns.test.cjs
           test/attendance-nfc.test.cjs
           test/public-booking.test.cjs
           test/oct8-ordinary-live.test.cjs
+          test/service-price-integrity-live.test.cjs
+          test/service-price-patch-live.test.cjs
+          test/service-import-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)
