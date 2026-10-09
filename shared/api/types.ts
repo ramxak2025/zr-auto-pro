@@ -648,6 +648,9 @@ export interface RemoveStorageCellParams {
 }
 
 export interface CreateServiceRequest {
+  priceType?: 'fixed' | 'range';
+  minPrice?: number;
+  maxPrice?: number;
   name: string;
   category?: string;
   defaultPrice: number;
@@ -656,6 +659,9 @@ export interface CreateServiceRequest {
 }
 
 export interface UpdateServiceRequest {
+  priceType?: 'fixed' | 'range';
+  minPrice?: number;
+  maxPrice?: number;
   name?: string;
   category?: string;
   defaultPrice?: number;
@@ -688,6 +694,7 @@ export interface CreateCheckRequest {
   cashAmount?: number;
   cardAmount?: number;
   services: Array<{
+    id?: string;
     serviceId?: string;
     masterId?: string;
     name: string;
@@ -756,6 +763,7 @@ export interface UpdateCheckRequest {
   mileage?: number;
   discount?: number;
   services?: Array<{
+    id?: string;
     serviceId?: string;
     masterId?: string;
     name: string;

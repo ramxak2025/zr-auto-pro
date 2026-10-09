@@ -4,6 +4,14 @@ import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { PutServiceVisibilityRuleDto } from './dto/put-service-visibility-rule.dto';
+import { normalizeServicePrice, ServicePriceInput } from './service-price-policy';
+
+interface ServiceWriteInput extends ServicePriceInput {
+  name?: string;
+  category?: string | null;
+  masterPercent?: unknown;
+  warrantyDays?: unknown;
+}
 
 interface ServiceListQuery {
   page?: string | number;
@@ -23,6 +31,10 @@ export class ServicesService {
       name: row.name,
       category: row.category,
       defaultPrice: parseFloat(row.default_price) || 0,
+      priceType: (row.price_type ?? 'fixed') as 'fixed' | 'range',
+      minPrice: Number(row.min_price ?? row.default_price) || 0,
+      maxPrice: Number(row.max_price ?? row.default_price) || 0,
+      priceVersion: Number(row.price_version) || 1,
       masterPercent:
         row.master_percent !== null && row.master_percent !== undefined ? parseFloat(row.master_percent) : null,
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
@@ -136,60 +148,103 @@ export class ServicesService {
     return this.mapService(rows[0]);
   }
 
-  async create(tenantID: string, dto: any) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [
-        dto.name,
-        dto.category,
-        dto.defaultPrice || 0,
-        this.normalizeMasterPercent(dto.masterPercent),
-        this.normalizeWarrantyDays(dto.warrantyDays),
-        tenantID,
-      ],
-    );
-    return this.mapService(rows[0]);
+  async create(tenantID: string, dto: ServiceWriteInput, actorId?: string) {
+    const price = normalizeServicePrice(dto);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.service_price_actor', $1, true)", [actorId ?? '']);
+      const { rows } = await client.query(
+        `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id,
+                               price_type, min_price, max_price)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [
+          dto.name,
+          dto.category,
+          price.defaultPrice,
+          this.normalizeMasterPercent(dto.masterPercent),
+          this.normalizeWarrantyDays(dto.warrantyDays),
+          tenantID,
+          price.priceType,
+          price.minPrice,
+          price.maxPrice,
+        ],
+      );
+      await client.query('COMMIT');
+      return this.mapService(rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  async update(id: string, tenantID: string, dto: any) {
-    const sets: string[] = [];
-    const vals: any[] = [];
-    let idx = 1;
+  async update(id: string, tenantID: string, dto: ServiceWriteInput, actorId?: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query('SELECT * FROM services WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+        id,
+        tenantID,
+      ]);
+      if (!current.rows.length) throw new NotFoundException({ message: 'Услуга не найдена' });
+      const prior = this.mapService(current.rows[0]);
+      const sets: string[] = [];
+      const vals: unknown[] = [];
+      const set = (column: string, value: unknown) => {
+        vals.push(value);
+        sets.push(`${column}=$${vals.length}`);
+      };
+      if (dto.name !== undefined) set('name', dto.name);
+      if (dto.category !== undefined) set('category', dto.category);
+      if ([dto.priceType, dto.defaultPrice, dto.minPrice, dto.maxPrice].some((value) => value !== undefined)) {
+        const price = normalizeServicePrice(dto, prior);
+        set('price_type', price.priceType);
+        set('default_price', price.defaultPrice);
+        set('min_price', price.minPrice);
+        set('max_price', price.maxPrice);
+      }
+      if (dto.masterPercent !== undefined) set('master_percent', this.normalizeMasterPercent(dto.masterPercent));
+      if (dto.warrantyDays !== undefined) set('warranty_days', this.normalizeWarrantyDays(dto.warrantyDays));
+      let result = prior;
+      if (sets.length) {
+        await client.query("SELECT set_config('app.service_price_actor', $1, true)", [actorId ?? '']);
+        vals.push(id, tenantID);
+        const { rows } = await client.query(
+          `UPDATE services SET ${sets.join(', ')} WHERE id=$${vals.length - 1} AND tenant_id=$${vals.length} RETURNING *`,
+          vals,
+        );
+        result = this.mapService(rows[0]);
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
-    if (dto.name !== undefined) {
-      sets.push(`name=$${idx++}`);
-      vals.push(dto.name);
-    }
-    if (dto.category !== undefined) {
-      sets.push(`category=$${idx++}`);
-      vals.push(dto.category);
-    }
-    if (dto.defaultPrice !== undefined) {
-      sets.push(`default_price=$${idx++}`);
-      vals.push(dto.defaultPrice);
-    }
-    if (dto.masterPercent !== undefined) {
-      // Range-validate (0..100) + null-clear via the shared normalizer. `null`
-      // clears the override back to «use the master's percent»; `0` is kept as a
-      // real explicit override (мастер получает 0 за эту услугу).
-      sets.push(`master_percent=$${idx++}`);
-      vals.push(this.normalizeMasterPercent(dto.masterPercent));
-    }
-    if (dto.warrantyDays !== undefined) {
-      sets.push(`warranty_days=$${idx++}`);
-      vals.push(this.normalizeWarrantyDays(dto.warrantyDays));
-    }
-
-    if (sets.length === 0) return this.getById(id, tenantID);
-
-    vals.push(id, tenantID);
+  async getPriceHistory(id: string, tenantID: string) {
+    await this.getById(id, tenantID);
     const { rows } = await this.pool.query(
-      `UPDATE services SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
+      `SELECT * FROM service_price_history WHERE service_id=$1 AND tenant_id=$2 ORDER BY version DESC`,
+      [id, tenantID],
     );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Услуга не найдена' });
-    return this.mapService(rows[0]);
+    return rows.map((row) => ({
+      id: row.id,
+      version: row.version,
+      priceType: row.price_type,
+      defaultPrice: Number(row.default_price),
+      minPrice: Number(row.min_price),
+      maxPrice: Number(row.max_price),
+      changedAt: row.changed_at,
+      changedBy: row.changed_by,
+      changedByName: row.changed_by_name,
+      source: row.source,
+    }));
   }
 
   async remove(id: string, tenantID: string) {

@@ -39,6 +39,7 @@ import type {
   Product,
   ProductPriceHistoryEntry,
   Service,
+  ServicePriceHistoryEntry,
   Check,
   TrashedCheck,
   ChecksBoard,
@@ -914,6 +915,7 @@ export function createServicesApi(api: HttpClient) {
     getAll: (params?: PaginationParams & { category?: string; preferredOnly?: boolean }) =>
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
+    priceHistory: (id: string) => api.get<ServicePriceHistoryEntry[]>(`/services/${id}/price-history`),
     create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
     update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
     remove: (id: string) => api.delete(`/services/${id}`),

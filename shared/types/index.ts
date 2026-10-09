@@ -1852,11 +1852,31 @@ export interface ProductPriceHistoryEntry {
   createdAt: string;
 }
 
+export type ServicePriceType = 'fixed' | 'range';
+
+export interface ServicePriceHistoryEntry {
+  id: string;
+  version: number;
+  priceType: ServicePriceType;
+  defaultPrice: number;
+  minPrice: number;
+  maxPrice: number;
+  changedAt: string;
+  changedBy: string | null;
+  changedByName: string | null;
+  source: 'baseline' | 'create' | 'update';
+}
+
 export interface Service {
   id: string;
   name: string;
   category?: string;
   defaultPrice: number;
+  /** Absent on older servers: treat as fixed, with defaultPrice for both bounds. */
+  priceType?: ServicePriceType;
+  minPrice?: number;
+  maxPrice?: number;
+  priceVersion?: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
@@ -1958,7 +1978,23 @@ export interface WarrantyClaim {
   createdAt?: string;
 }
 
-export interface CheckServiceLine {
+/** Server-owned snapshot/provenance; clients only round-trip the line id. */
+export interface CheckServicePriceSnapshot {
+  priceSnapshotStatus?: 'catalog' | 'legacy_unknown' | 'no_catalog';
+  catalogPriceType?: ServicePriceType | null;
+  catalogDefaultPrice?: number | null;
+  catalogMinPrice?: number | null;
+  catalogMaxPrice?: number | null;
+  catalogPriceVersion?: number | null;
+  priceThreshold?: number | null;
+  priceChangedBy?: string | null;
+  priceChangedByName?: string | null;
+  priceChangedAt?: string | null;
+  /** Positive excess over the saved fixed price/range maximum; unknown baseline = 0. */
+  priceExcess?: number;
+}
+
+export interface CheckServiceLine extends CheckServicePriceSnapshot {
   id?: string;
   serviceId?: string;
   masterId?: string;
@@ -2252,6 +2288,9 @@ export interface Check {
   carId: string;
   mileage?: number;
   services: CheckServiceLine[];
+  /** Sum of positive line excesses; reductions never offset increases. */
+  servicePriceExcessTotal?: number;
+  increasedServiceLinesCount?: number;
   products: CheckProductLine[];
   comment?: string;
   discount?: number;
