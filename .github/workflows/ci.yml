@@ -70,6 +70,7 @@ jobs:
           test/oct8-ordinary-live.test.cjs
           test/service-price-integrity-live.test.cjs
           test/service-price-patch-live.test.cjs
+          test/service-range-explicit-price-live.test.cjs
           test/service-import-live.test.cjs
 
   frontend:
