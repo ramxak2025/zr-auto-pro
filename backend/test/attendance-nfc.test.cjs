@@ -275,6 +275,45 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
       await run(f,at('09:30:00'),()=>shifts.close(events[0].id,f.tenant,f.actor));
       assert.ok((await f.events())[0].closed_at); assert.ok((await f.events()).filter(e=>!e.closed_at).length<=1);
     });
+    await t.test('manual open and close serialize with tenant mode changes while queued on their attendance row',async()=>{
+      const waitForQuery=async(fragment)=>waitUntil(async()=>(await one(
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE $1",
+        [`%${fragment}%`],
+      )).n>=1);
+      const assertModeUpdateWaits=async(tenant)=>waitUntil(async()=>(await one(
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE 'UPDATE tenants SET attendance_mode=%'",
+      )).n>=1);
+
+      const opening=await seed();
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[opening.tenant]);
+      const userBlocker=await admin.connect();
+      await userBlocker.query('BEGIN');
+      await userBlocker.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[opening.worker]);
+      const openPromise=run(opening,at('09:15:00'),()=>shifts.open(opening.worker,opening.tenant,opening.actor));
+      await waitForQuery('SELECT id FROM users WHERE id=$1 AND tenant_id=$2 FOR UPDATE');
+      const openModeChange=q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[opening.tenant]);
+      await assertModeUpdateWaits(opening.tenant);
+      await userBlocker.query('COMMIT'); userBlocker.release();
+      const opened=await openPromise; await openModeChange;
+      assert.equal((await one('SELECT attendance_mode FROM tenants WHERE id=$1',[opening.tenant])).attendance_mode,'nfc');
+      assert.equal((await one('SELECT COUNT(*)::int n FROM shifts WHERE tenant_id=$1 AND user_id=$2 AND id=$3',[opening.tenant,opening.worker,opened.id])).n,1);
+
+      const closing=await seed();
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[closing.tenant]);
+      const shift=await run(closing,at('09:15:00'),()=>shifts.open(closing.worker,closing.tenant,closing.actor));
+      const shiftBlocker=await admin.connect();
+      await shiftBlocker.query('BEGIN');
+      await shiftBlocker.query('SELECT id FROM shifts WHERE id=$1 FOR UPDATE',[shift.id]);
+      const closePromise=run(closing,at('17:00:00'),()=>shifts.close(shift.id,closing.tenant,closing.actor));
+      await waitForQuery('SELECT user_id FROM shifts WHERE id=$1 AND tenant_id=$2 AND closed_at IS NULL FOR UPDATE');
+      const closeModeChange=q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[closing.tenant]);
+      await assertModeUpdateWaits(closing.tenant);
+      await shiftBlocker.query('COMMIT'); shiftBlocker.release();
+      await closePromise; await closeModeChange;
+      const final=await one('SELECT closed_at FROM shifts WHERE id=$1',[shift.id]);
+      assert.ok(final.closed_at,'close committed before the waiting mode change');
+      assert.equal((await one('SELECT attendance_mode FROM tenants WHERE id=$1',[closing.tenant])).attendance_mode,'nfc');
+    });
     await t.test('tenant-local midnight closes old event at exact next midnight and starts a fresh day; concurrent sweep is compatible',async()=>{
       const f=await seed({timezone:'Asia/Kolkata'}),tag=await f.makeTag(),oldKey=randomUUID();
       const old=await f.scan(tag,'2026-10-08T23:59:00+05:30',oldKey);

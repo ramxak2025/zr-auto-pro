@@ -19,6 +19,7 @@ import {
   attendanceClock,
   classifyArrival,
   hasRecordedAttendance,
+  lockTenantAttendanceMode,
   lockAttendanceUser,
   plannedStart,
 } from './attendance';
@@ -122,6 +123,7 @@ export class ShiftsNfcService {
     manage: boolean,
     work: (client: PoolClient, info: ActorInfo, started: Date) => Promise<T>,
     requestId?: string,
+    lockAttendanceMode = false,
   ): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -131,6 +133,9 @@ export class ShiftsNfcService {
       const {
         rows: [{ instant: started }],
       } = await client.query<{ instant: Date }>('SELECT clock_timestamp() AS instant');
+      // Scans mutate shifts/calendar rows and must serialize with a tenant mode
+      // change just like manual open/close. Tag administration is mode-agnostic.
+      if (lockAttendanceMode) await lockTenantAttendanceMode(client, actor.tenantID);
       if (requestId)
         await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
           `attendance-nfc:${actor.tenantID}:${requestId.toLowerCase()}`,
@@ -442,6 +447,7 @@ export class ShiftsNfcService {
         return { response, push, changed: decision.action !== 'unchanged' };
       },
       dto.requestId,
+      true,
     );
     if (result.changed) invalidateReportsForTenant(actor.tenantID);
     if (result.push) {

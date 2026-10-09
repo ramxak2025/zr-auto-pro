@@ -22,6 +22,7 @@ import {
   attendanceClock,
   classifyArrival,
   hasRecordedAttendance,
+  lockTenantAttendanceMode,
   lockAttendanceUser,
   plannedStart,
 } from './attendance';
@@ -38,9 +39,8 @@ export class ShiftsService {
   /**
    * Employees may open or close their own shifts only in manual mode.
    */
-  private async ensureSelfAttendanceManual(tenantID: string) {
-    const { rows } = await this.pool.query(`SELECT attendance_mode FROM tenants WHERE id = $1`, [tenantID]);
-    if (rows.length === 0 || rows[0].attendance_mode !== 'manual') {
+  private ensureSelfAttendanceManual(attendanceMode: string) {
+    if (attendanceMode !== 'manual') {
       throw new ForbiddenException({ message: 'Самостоятельная отметка доступна только в ручном режиме' });
     }
   }
@@ -145,7 +145,6 @@ export class ShiftsService {
    * чужую статистику и в чужой расчёт «ЗП за день».
    */
   async open(userID: string, tenantID: string, actor?: JwtPayload) {
-    await this.ensureSelfAttendanceManual(tenantID);
     // Смена штампуется ФИЛИАЛОМ СЕССИИ (163). Прежде филиал резолвился на
     // месте, потому что в режиме «все филиалы» смена рождалась с point_id =
     // NULL: филиальные срезы фильтруют строгим равенством, и такая смена не
@@ -159,6 +158,8 @@ export class ShiftsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      const attendanceMode = await lockTenantAttendanceMode(client, tenantID);
+      this.ensureSelfAttendanceManual(attendanceMode);
       await lockAttendanceUser(client, tenantID, userID);
       const clock = await attendanceClock(client, tz);
       const today = clock.today;
@@ -263,36 +264,59 @@ export class ShiftsService {
   }
 
   async close(id: string, tenantID: string, actor: JwtPayload) {
-    const { rows: targetRows } = await this.pool.query<{ user_id: string }>(
-      'SELECT user_id FROM shifts WHERE id=$1 AND tenant_id=$2 AND closed_at IS NULL',
-      [id, tenantID],
-    );
-    if (!targetRows[0]) return { message: 'Смена не найдена' };
     const canCloseAny = userHasPermission(actor, 'schedule_manage');
-    if (targetRows[0].user_id === actor.userID) await this.ensureSelfAttendanceManual(tenantID);
-    else if (!canCloseAny) throw new ForbiddenException({ message: 'Нет права закрывать чужие смены' });
     // Чужую смену закрывает только держатель 'schedule_manage' (матрица роли
     // АВТОРИТЕТНА: owner-class и системный «Админ» — true, кастомные роли — по
     // ячейке schedule.manage); все остальные — только СВОЮ (self-scope в WHERE).
-    const ownerCheck = canCloseAny ? '' : ` AND user_id = $3`;
-    const params: unknown[] = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
-    const tzParam = `$${params.push(await getTenantTimezone(this.pool, tenantID))}` as const;
-    const stale = staleShiftSql(tzParam);
-    const { rows } = await this.pool.query(
-      `UPDATE shifts SET closed_at = CASE WHEN ${stale.predicate}
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const client = await this.pool.connect();
+    let rows: any[];
+    let fullRows: any[];
+    try {
+      await client.query('BEGIN');
+      const attendanceMode = await lockTenantAttendanceMode(client, tenantID);
+      const { rows: targetRows } = await client.query<{ user_id: string }>(
+        'SELECT user_id FROM shifts WHERE id=$1 AND tenant_id=$2 AND closed_at IS NULL FOR UPDATE',
+        [id, tenantID],
+      );
+      if (!targetRows[0]) {
+        await client.query('COMMIT');
+        return { message: 'Смена не найдена' };
+      }
+      const isSelf = targetRows[0].user_id === actor.userID;
+      if (isSelf) this.ensureSelfAttendanceManual(attendanceMode);
+      else if (!canCloseAny) throw new ForbiddenException({ message: 'Нет права закрывать чужие смены' });
+      const ownerCheck = canCloseAny ? '' : ` AND user_id = $3`;
+      const params: unknown[] = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
+      const tzParam = `$${params.push(tz)}` as const;
+      const stale = staleShiftSql(tzParam);
+      ({ rows } = await client.query(
+        `UPDATE shifts SET closed_at = CASE WHEN ${stale.predicate}
            THEN ${stale.closedAt} ELSE now() END,
          is_auto_closed = CASE WHEN ${stale.predicate} THEN true ELSE is_auto_closed END
        WHERE id = $1 AND tenant_id = $2${ownerCheck} AND closed_at IS NULL
        RETURNING *`,
-      params,
-    );
-    if (rows.length === 0) return { message: 'Смена не найдена' };
+        params,
+      ));
+      if (rows.length === 0) {
+        await client.query('COMMIT');
+        return { message: 'Смена не найдена' };
+      }
 
-    const { rows: fullRows } = await this.pool.query(
-      `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
-       FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
-      [id],
-    );
+      ({ rows: fullRows } = await client.query(
+        `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+         FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
+        [id],
+      ));
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof HttpException) throw err;
+      this.logger.error(`Shift close error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
     // A late manual request only recovers the midnight closure, not a real
     // departure now. Already-closed rows are never overwritten by a retry.
     if (!rows[0].is_auto_closed) {

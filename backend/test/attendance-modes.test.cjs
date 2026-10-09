@@ -22,15 +22,22 @@ test('legacy shiftsEnabled patch maps to admin/manual and explicit mode must agr
 
 test('only manual mode allows employees to open or close their own shifts', async () => {
   for (const attendanceMode of ['admin', 'nfc']) {
-    const pool = {
-      query: async (sql) => ({
-        rows: sql.includes('SELECT user_id') ? [{ user_id: 'employee' }] : [{ attendance_mode: attendanceMode }],
-      }),
+    const statements = [];
+    const client = {
+      query: async (sql) => {
+        statements.push(sql);
+        if (sql.includes('SELECT attendance_mode,shifts_enabled')) return { rows: [{ attendance_mode: attendanceMode, shifts_enabled: true }] };
+        if (sql.includes('SELECT user_id')) return { rows: [{ user_id: 'employee' }] };
+        return { rows: [] };
+      },
+      release: () => undefined,
     };
+    const pool = { query: async () => ({ rows: [{ timezone: 'Europe/Moscow' }] }), connect: async () => client };
     const service = new ShiftsService(pool, {});
     const actor = { userID: 'employee', tenantID: 'tenant', role: 'master', permissions: {} };
     await assert.rejects(service.open(actor.userID, actor.tenantID, actor), (error) => error.getStatus?.() === 403);
     await assert.rejects(service.close('shift', actor.tenantID, actor), (error) => error.getStatus?.() === 403);
+    assert.ok(statements.filter((sql) => sql.includes('SELECT attendance_mode,shifts_enabled')).length >= 2);
   }
 });
 
