@@ -43,7 +43,7 @@ function addDays(date: string, days: number): string {
     String(value.getUTCDate()).padStart(2, '0'),
   ].join('-');
 }
-function messageFor(error: unknown): string {
+function messageFor(error: unknown, phase: 'page' | 'slots' | 'request' = 'request'): string {
   const code =
     (error as { response?: { data?: { code?: string } } })?.response?.data?.code ?? (error as { code?: string })?.code;
   const intentCode = (error as { code?: string })?.code;
@@ -57,6 +57,8 @@ function messageFor(error: unknown): string {
   if (intentCode === 'STORAGE_UNAVAILABLE') return (error as Error).message;
   if (intentCode === 'PENDING_EXISTS' || intentCode === 'INTENT_CHANGED' || intentCode === 'LEASE_CHANGED')
     return (error as Error).message;
+  if (phase === 'slots') return 'Не удалось загрузить свободное время. Проверьте соединение и повторите загрузку.';
+  if (phase === 'page') return 'Не удалось загрузить страницу автосервиса. Проверьте соединение и нажмите «Повторить».';
   return 'Не удалось связаться с сервисом. Сохранённую заявку можно проверить и повторить без изменения данных.';
 }
 function dateLabel(date: string): string {
@@ -83,8 +85,10 @@ export default function PublicBookingPage() {
 function PublicBookingCodeEntry({ code }: { code: string }) {
   const [canonicalSlug, setCanonicalSlug] = useState('');
   const [failure, setFailure] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
+    setFailure(false);
     if (!/^[a-f0-9]{32}$/.test(code)) {
       setFailure(true);
       return;
@@ -92,6 +96,8 @@ function PublicBookingCodeEntry({ code }: { code: string }) {
     void publicBookingsApi
       .landingByCode(code)
       .then((response) => {
+        if (typeof response.data.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{2,63}$/.test(response.data.slug))
+          throw new Error('Invalid booking address response');
         if (active) setCanonicalSlug(response.data.slug);
       })
       .catch(() => {
@@ -100,7 +106,7 @@ function PublicBookingCodeEntry({ code }: { code: string }) {
     return () => {
       active = false;
     };
-  }, [code]);
+  }, [code, attempt]);
   if (canonicalSlug) return <PublicBookingView key={canonicalSlug} slug={canonicalSlug} />;
   return (
     <main className="public-booking">
@@ -110,6 +116,11 @@ function PublicBookingCodeEntry({ code }: { code: string }) {
           <p className="pb-description">
             {failure ? 'Проверьте ссылку или свяжитесь с автосервисом.' : 'Сейчас покажем услуги и свободное время.'}
           </p>
+          {failure && /^[a-f0-9]{32}$/.test(code) && (
+            <button type="button" className="pb-primary mt-5" onClick={() => setAttempt((value) => value + 1)}>
+              Повторить
+            </button>
+          )}
         </div>
         <footer className="pb-footer">
           <a href="https://autexa.pw" target="_blank" rel="noopener noreferrer">
@@ -169,7 +180,7 @@ function PublicBookingView({ slug }: { slug: string }) {
       setDate((existing) => existing || tenantToday(response.data.timezone, response.data.serverAt));
     } catch (cause) {
       if (!current()) return;
-      setError(messageFor(cause));
+      setError(messageFor(cause, 'page'));
     } finally {
       if (current()) setLoading(false);
     }
@@ -231,7 +242,7 @@ function PublicBookingView({ slug }: { slug: string }) {
         if (!append) setSelectedSlot(null);
       } catch (cause) {
         if (generation !== slotsGeneration.current || !isCurrent()) return;
-        setError(messageFor(cause));
+        setError(messageFor(cause, 'slots'));
       } finally {
         if (generation === slotsGeneration.current && isCurrent()) setBusy(false);
       }
@@ -488,25 +499,34 @@ function PublicBookingView({ slug }: { slug: string }) {
 
   if (!landing)
     return (
-      <main className="min-h-screen bg-slate-50 p-8 text-slate-700">
-        <p>{loading ? 'Загружаем страницу записи…' : error || 'Страница записи недоступна.'}</p>
-        {corruptRecovery && (
-          <p role="alert" className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-900">
-            Сохранённую заявку нельзя проверить безопасно. Новая отправка заблокирована, чтобы избежать дубля.
-          </p>
-        )}
-        {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
-        {receipt && saved && (
-          <ReceiptPanel
-            receipt={receipt}
-            busy={busy}
-            onRefresh={recover}
-            onNew={() => void startNewRequestAfterReceipt()}
-          />
-        )}
-        <button className="mt-4 rounded-xl bg-blue-600 px-5 py-3 text-white" onClick={() => void loadLanding()}>
-          Повторить
-        </button>
+      <main className="public-booking">
+        <div className="pb-container">
+          <div className="pb-content">
+            <p>{loading ? 'Загружаем страницу записи…' : error || 'Страница записи недоступна.'}</p>
+            {corruptRecovery && (
+              <p role="alert" className="pb-error">
+                Сохранённую заявку нельзя проверить безопасно. Новая отправка заблокирована, чтобы избежать дубля.
+              </p>
+            )}
+            {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
+            {receipt && saved && (
+              <ReceiptPanel
+                receipt={receipt}
+                busy={busy}
+                onRefresh={recover}
+                onNew={() => void startNewRequestAfterReceipt()}
+              />
+            )}
+            <button type="button" className="pb-primary mt-5" disabled={loading} onClick={() => void loadLanding()}>
+              Повторить
+            </button>
+          </div>
+          <footer className="pb-footer">
+            <a href="https://autexa.pw" target="_blank" rel="noopener noreferrer">
+              Работает на <strong>Autexa</strong>
+            </a>
+          </footer>
+        </div>
       </main>
     );
 
@@ -550,6 +570,7 @@ function PublicBookingView({ slug }: { slug: string }) {
       onConsent={setConsented}
       onSubmit={submit}
       onMoreSlots={() => void loadSlots(date, true)}
+      onRetrySlots={() => void loadSlots(date)}
       recovery={
         saved && !receipt ? <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} /> : null
       }
@@ -664,7 +685,8 @@ function ReceiptPanel({
         </div>
       </div>
       <p className="mt-2 text-slate-600">
-        {dateLabel(tenantDate(receipt.startsAt, timezone))}, {clock(receipt.startsAt, timezone)} · {timezone}
+        {dateLabel(tenantDate(receipt.startsAt, timezone))}, {clock(receipt.startsAt, timezone)} ·{' '}
+        {timezone === 'UTC' ? 'UTC' : 'местное время сервиса'}
       </p>
       <ul className="mt-5 space-y-2">
         {receipt.services.map((service) => (

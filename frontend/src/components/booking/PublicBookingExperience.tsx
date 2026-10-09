@@ -42,6 +42,7 @@ type Props = {
   onConsent: (value: boolean) => void;
   onSubmit: (event: FormEvent) => void;
   onMoreSlots: () => void;
+  onRetrySlots: () => void;
   recovery: ReactNode;
   receipt: ReactNode;
 };
@@ -407,7 +408,7 @@ export default function PublicBookingExperience(props: Props) {
                   )}
                   <p className="pb-timezone">
                     <Clock size={13} />
-                    Местное время · {landing.timezone}
+                    Местное время сервиса
                   </p>
                 </section>
               )}
@@ -559,9 +560,14 @@ export default function PublicBookingExperience(props: Props) {
             </form>
           )}
           {props.error && (
-            <p className="pb-error" role="alert">
-              {props.error}
-            </p>
+            <div className="pb-error">
+              <p role="alert">{props.error}</p>
+              {step === 1 && showForm && (
+                <button type="button" className="pb-link" disabled={busy} onClick={props.onRetrySlots}>
+                  Повторить загрузку времени
+                </button>
+              )}
+            </div>
           )}
         </div>
         <footer className="pb-footer">

@@ -218,6 +218,9 @@ export async function saveCheckServiceLines(
         price_threshold: price.price_type === 'range' ? price.max_price : price.default_price,
       };
     }
+    if (saved.catalog_price_type === 'range' && line.price == null) {
+      throw new BadRequestException({ message: 'Для услуги с диапазоном укажите цену' });
+    }
     const unitPrice = round2(Number(line.price || 0));
     // Initial price differing from the catalogue is an explicit price choice;
     // subsequent provenance changes only when the persisted unit price changes.
