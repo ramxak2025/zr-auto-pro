@@ -4,10 +4,19 @@ import { zonedDateKey } from '../common/timezone';
 import { validTime } from '../schedule/work-mode';
 import { BookingHours, PublicBookingSettingsDto } from './dto/public-booking.dto';
 
+export interface BookingContactLinks {
+  phone?: string;
+  instagram?: string;
+  whatsapp?: string;
+  vk?: string;
+  telegram?: string;
+}
+
 export interface BookingPageSettings {
   displayName: string;
   address: string;
   contacts: string;
+  links?: BookingContactLinks;
   showPrices: boolean;
   mode: 'instant' | 'approval';
   slotStepMinutes: number;
@@ -21,6 +30,7 @@ export interface BookingPageRow {
   tenant_id: string;
   point_id: string | null;
   slug: string;
+  public_code: string;
   published: boolean;
   revision: number;
   settings: BookingPageSettings;
@@ -28,6 +38,7 @@ export interface BookingPageRow {
 }
 export interface BookingResource {
   id: string;
+  resource_key: string;
   full_name: string;
   days_off: number[];
 }
@@ -60,6 +71,40 @@ export interface Availability {
 }
 export const defaultBookingHours = (): BookingHours =>
   Object.fromEntries(Array.from({ length: 7 }, (_, i) => [String(i), { start: '09:00', end: '18:00' }]));
+
+const SOCIAL_HOSTS = {
+  instagram: new Set(['instagram.com', 'www.instagram.com']),
+  whatsapp: new Set(['wa.me', 'api.whatsapp.com', 'whatsapp.com', 'www.whatsapp.com']),
+  vk: new Set(['vk.com', 'www.vk.com', 'm.vk.com']),
+  telegram: new Set(['t.me', 'telegram.me', 'www.telegram.me']),
+} as const;
+
+function normalizeBookingLinks(input: PublicBookingSettingsDto['links']): BookingContactLinks | undefined {
+  if (!input) return undefined;
+  const phone = input.phone?.trim();
+  const links: BookingContactLinks = phone ? { phone } : {};
+  for (const kind of ['instagram', 'whatsapp', 'vk', 'telegram'] as const) {
+    const value = input[kind]?.trim();
+    if (!value) continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new BadRequestException({ message: 'Ссылки на соцсети должны начинаться с https://' });
+    }
+    if (
+      url.protocol !== 'https:' ||
+      !!url.username ||
+      !!url.password ||
+      url.port !== '' ||
+      !SOCIAL_HOSTS[kind].has(url.hostname.toLowerCase())
+    )
+      throw new BadRequestException({ message: `Укажите действующую HTTPS-ссылку ${kind}` });
+    links[kind] = url.toString();
+  }
+  return Object.keys(links).length > 0 ? links : undefined;
+}
+
 export function bookingSettings(dto: PublicBookingSettingsDto): BookingPageSettings {
   const hours = dto.openingHours ?? defaultBookingHours();
   if (Object.keys(hours).length > 7) throw new BadRequestException({ message: 'Не более семи дней недели' });
@@ -78,22 +123,22 @@ export function bookingSettings(dto: PublicBookingSettingsDto): BookingPageSetti
         message: 'Укажите часы работы по дням недели; одинаковое начало и конец недопустимы',
       });
   }
-  if (!dto.operator) throw new BadRequestException({ message: 'Нужны данные оператора' });
   return {
     displayName: dto.displayName.trim(),
     address: dto.address.trim(),
     contacts: dto.contacts.trim(),
+    links: normalizeBookingLinks(dto.links),
     showPrices: dto.showPrices,
     mode: dto.mode,
     slotStepMinutes: dto.slotStepMinutes ?? 15,
     openingHours: hours,
     operator: {
-      name: dto.operator.name.trim(),
-      requisites: dto.operator.requisites.trim(),
-      contact: dto.operator.contact.trim(),
+      name: dto.operator?.name.trim() ?? '',
+      requisites: dto.operator?.requisites.trim() ?? '',
+      contact: dto.operator?.contact.trim() ?? '',
     },
-    policyText: dto.policyText.trim(),
-    consentText: dto.consentText.trim(),
+    policyText: dto.policyText?.trim() ?? '',
+    consentText: dto.consentText?.trim() ?? '',
   };
 }
 export function bookingDate(value: unknown): string {
@@ -116,7 +161,7 @@ export async function pageResources(
   page: BookingPageRow,
 ): Promise<BookingResource[]> {
   const { rows } = await client.query<BookingResource>(
-    `SELECT u.id,u.full_name,COALESCE(u.days_off,'[]'::jsonb) AS days_off
+    `SELECT u.id,r.resource_key,u.full_name,COALESCE(u.days_off,'[]'::jsonb) AS days_off
     FROM public_booking_resources r JOIN users u ON u.id=r.user_id AND u.tenant_id=r.tenant_id
     WHERE r.page_id=$1 AND r.tenant_id=$2 AND u.is_active AND u.dismissed_at IS NULL AND u.purged_at IS NULL
     AND u.role NOT IN ('manager','superadmin') AND ($3::uuid IS NULL OR autexa_point_is_allowed(u.tenant_id,u.id,$3::uuid)) ORDER BY u.id`,

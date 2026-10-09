@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -53,5 +53,11 @@ export class ShiftsNfcController {
   @Post('tags/:id/revoke')
   revoke(@CurrentUser() actor: JwtPayload, @Param('id', ParseUUIDPipe) id: string) {
     return this.service.revokeTag(actor, id);
+  }
+  @RequirePermission('company_manage')
+  @Header('Cache-Control', 'no-store')
+  @Delete('tags/:id')
+  archive(@CurrentUser() actor: JwtPayload, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.archiveTag(actor, id);
   }
 }

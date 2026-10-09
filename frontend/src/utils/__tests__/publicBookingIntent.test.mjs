@@ -25,6 +25,23 @@ const body = (name = 'Alex') => ({
   consentAccepted: true,
 });
 
+test('page-scoped master choice survives saved intent without changing legacy identity', () => {
+  const resourceKey = 'a'.repeat(32);
+  const record = { version: 1, slug, requestId, recoveryToken: token, body: { ...body(), resourceKey }, dispatches: 1 };
+  assert.equal(parsePublicBookingIntent(JSON.stringify(record), slug).body.resourceKey, resourceKey);
+  assert.equal(parsePublicBookingIntent(JSON.stringify({ ...record, body: body() }), slug).body.resourceKey, undefined);
+  assert.throws(() =>
+    parsePublicBookingIntent(JSON.stringify({ ...record, body: { ...body(), resourceKey: serviceId } }), slug),
+  );
+  assert.throws(() =>
+    parsePublicBookingIntent(JSON.stringify({ ...record, body: { ...body(), resourceId: serviceId } }), slug),
+  );
+  assert.throws(
+    () => parsePublicBookingIntent(JSON.stringify(record), 'b'.repeat(32)),
+    'alias cannot move an existing request identity',
+  );
+});
+
 function fakeEnvironment({ failWrite = false } = {}) {
   const values = new Map();
   const storage = {

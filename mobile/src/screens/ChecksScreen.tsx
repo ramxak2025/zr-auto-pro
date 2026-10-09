@@ -496,6 +496,17 @@ const CheckRow = React.memo(function CheckRow({
                   </TouchableOpacity>
                 )}
               </View>
+              {Number(check.servicePriceExcessTotal) > 0 && (
+                <Text
+                  style={{
+                    color: palette.mode === 'dark' ? colors.orange[400] : colors.orange[700],
+                    fontSize: fontSize.xs,
+                    textAlign: 'right',
+                  }}
+                >
+                  +{formatMoney(check.servicePriceExcessTotal!)} к прайсу
+                </Text>
+              )}
               <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
                 <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
                   {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}

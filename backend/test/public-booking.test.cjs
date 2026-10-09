@@ -50,7 +50,7 @@ const request = () => ({
 
 test('public DTO and route boundaries: explicit consent, limits, no actor/resource/point override; canonical staff gates', () => {
   assert.equal(Reflect.getMetadata('__guards__', PublicBookingsController), undefined);
-  for (const method of ['settings', 'put', 'resources', 'publish', 'unpublish'])
+  for (const method of ['settings', 'put', 'resources', 'publicServices', 'publish', 'unpublish'])
     assert.equal(Reflect.getMetadata(PERMISSION_KEY, BookingPublicationController.prototype[method]), 'company_manage');
   for (const method of ['requests', 'approve', 'reject'])
     assert.equal(
@@ -67,10 +67,15 @@ test('public DTO and route boundaries: explicit consent, limits, no actor/resour
     { requestId: 'bad' },
     { pointId: uuid() },
     { resourceId: uuid() },
+    { resourceKey: 'bad' },
     { tenantId: uuid() },
   ])
     assert.throws(() => validatedBookingDto(PublicBookingSubmitDto, { ...request(), ...patch }), failure(400));
   assert.equal(validatedBookingDto(PublicBookingSubmitDto, request()).consentAccepted, true);
+  assert.equal(
+    validatedBookingDto(PublicBookingSubmitDto, { ...request(), resourceKey: 'a'.repeat(32) }).resourceKey,
+    'a'.repeat(32),
+  );
 });
 
 test('public telemetry and HTTP 5xx never export contact/capability, other route telemetry remains intact, no-store survives ETag', async () => {
@@ -97,6 +102,13 @@ test('public telemetry and HTTP 5xx never export contact/capability, other route
   for (const value of [secret, name, phone]) assert.equal(output.includes(value), false);
   const ordinary = { request: { url: '/api/checks', data: { name } }, extra: { phone } };
   assert.deepEqual(redactPublicBookingTelemetry(structuredClone(ordinary)), ordinary);
+  const publicCode = 'a'.repeat(32);
+  assert.equal(
+    JSON.stringify(
+      redactPublicBookingTelemetry({ request: { url: `/api/public/bookings/by-code/${publicCode}` } }),
+    ).includes(publicCode),
+    false,
+  );
   assert.equal(
     JSON.stringify(redactNfcTelemetry({ request: { url: '/api/shifts/nfc/scan', data: { token: secret } } })).includes(
       secret,
@@ -159,6 +171,20 @@ test('public POST budgets are IP+slug and IP-only, independent of bearer/header 
     seen.slice(0, 2).map((s) => s.max),
     [5, 20],
   );
+  const publicCode = 'a'.repeat(32);
+  await guard.canActivate({
+    switchToHttp: () => ({
+      getRequest: () => ({
+        ip: '203.0.113.7',
+        socket: {},
+        method: 'GET',
+        path: `/api/public/bookings/by-code/${publicCode}`,
+        headers: {},
+      }),
+    }),
+  });
+  assert.equal(seen.at(-1).key, 'read:203.0.113.7:anon');
+  assert.equal(seen.at(-1).key.includes(publicCode), false);
   guard.bump = async (_key, max, now) => ({ overLimit: max === 5, resetAt: now + 60000 });
   await assert.rejects(guard.canActivate(context('demo', '')), failure(429));
 });
@@ -298,6 +324,7 @@ test(
       resources = 'owner',
       timezone = 'Europe/Moscow',
       publish = true,
+      savePage = true,
     } = {}) => {
       const f = Object.fromEntries(
         ['tenant', 'point', 'otherPoint', 'owner', 'worker', 'otherWorker', 'role', 'service', 'client'].map((k) => [
@@ -309,8 +336,9 @@ test(
       f.slug = 'fixture-' + uuid();
       f.phone = '+7' + ++phoneSuffix;
       await q(
-        "INSERT INTO tenants(id,name,timezone,points_shared_clients) VALUES($1,'Public booking fixture',$2,false)",
-        [f.tenant, timezone],
+        `INSERT INTO tenants(id,name,legal_name,inn,address,phone,email,timezone,points_shared_clients)
+         VALUES($1,'Public booking fixture','ИП Фикстура','7701000000','Адрес из профиля',$3,'booking@example.test',$2,false)`,
+        [f.tenant, timezone, f.phone],
       );
       if (point)
         await q(
@@ -359,6 +387,7 @@ test(
         displayName: 'Автосервис',
         address: 'Адрес',
         contacts: '+7 999 1112233',
+        links: { phone: f.phone, instagram: 'https://instagram.com/autexa-fixture' },
         showPrices: false,
         mode,
         operator: { name: 'Оператор', requisites: 'Реквизиты', contact: 'Контакт оператора' },
@@ -367,11 +396,17 @@ test(
         services: [{ serviceId: f.service }],
         resourceIds: [f[resources]],
       };
-      f.page = await run(f, () => service.putSettings(f.boss, f.settings));
-      if (publish) f.page = await run(f, () => service.publish(f.boss, { requestId: uuid() }, true));
+      f.page = savePage ? await run(f, () => service.putSettings(f.boss, f.settings)) : null;
+      if (publish && f.page) f.page = await run(f, () => service.publish(f.boss, { requestId: uuid() }, true));
       f.edit = async (patch) => {
         const current = await run(f, () => service.getSettings(f.boss));
-        f.settings = { ...f.settings, requestId: uuid(), revision: current.revision, ...patch };
+        f.settings = {
+          ...f.settings,
+          ...(current.links ? { links: current.links } : {}),
+          requestId: uuid(),
+          revision: current.revision,
+          ...patch,
+        };
         f.page = await run(f, () => service.putSettings(f.boss, f.settings));
         return f.page;
       };
@@ -438,23 +473,91 @@ test(
             body = f.body();
           const resources = await run(f, () => service.resources(f.boss));
           assert.ok(resources.some((r) => r.id === f.owner));
+          const serviceOptions = await run(f, () => service.publicServices(f.boss, { page: 1, limit: 1 }));
+          assert.equal(serviceOptions.total, 1);
+          assert.deepEqual(serviceOptions.data, [{ id: f.service, name: 'Service snapshot', category: null }]);
+          const extraServiceId = uuid();
+          await q("INSERT INTO services(id,tenant_id,name,default_price) VALUES($1,$2,'Second service',0)", [
+            extraServiceId,
+            f.tenant,
+          ]);
+          const firstServicePage = await run(f, () => service.publicServices(f.boss, { page: 1, limit: 1 }));
+          const secondServicePage = await run(f, () => service.publicServices(f.boss, { page: 2, limit: 1 }));
+          assert.equal(firstServicePage.total, 2);
+          assert.equal(secondServicePage.total, 2);
+          assert.equal(firstServicePage.data.length + secondServicePage.data.length, 2);
+          assert.ok(
+            [...firstServicePage.data, ...secondServicePage.data].some((option) => option.id === extraServiceId),
+          );
           const landing = await service.landing(f.slug);
           assert.equal(landing.timezone, 'Europe/Moscow');
           assert.ok(Math.abs(Date.parse(landing.serverAt) - Date.now()) < 5000);
           assert.equal(landing.showPrices, false);
+          assert.deepEqual(landing.links, { phone: f.phone, instagram: 'https://instagram.com/autexa-fixture' });
           assert.equal(JSON.stringify(landing).includes('1234.56'), false);
           assert.equal('price' in landing.services[0], false);
           assert.equal(JSON.stringify(landing).includes(f.owner), false);
+          assert.equal(f.page.publicCode.length, 32);
+          assert.equal(f.page.publicUrl, `https://autexa.pw/${f.page.publicCode}`);
+          assert.deepEqual(await service.landingByCode(f.page.publicCode), { slug: f.slug });
+          await assert.rejects(service.landingByCode(f.slug), failure(404, 'BOOKING_DISABLED'));
+          await assert.rejects(
+            q('UPDATE public_booking_pages SET public_code=$1 WHERE id=$2', ['a'.repeat(32), f.page.id]),
+            /immutable/,
+          );
+          assert.equal(f.page.operator.name, 'ИП Фикстура');
+          assert.equal(f.page.operator.requisites, 'ИНН 7701000000');
+          assert.notEqual(f.page.policyText, f.settings.policyText);
+          await assert.rejects(f.edit({ links: { instagram: 'http://instagram.com/autexa' } }), failure(400));
+          await assert.rejects(
+            run(f, () =>
+              service.putSettings(f.boss, {
+                ...f.settings,
+                requestId: uuid(),
+                revision: f.page.revision,
+                links: { instagram: 'https://user:password@instagram.com/autexa' },
+              }),
+            ),
+            failure(400),
+          );
+          assert.deepEqual(
+            landing.resources?.map((resource) => Object.keys(resource).sort()),
+            [['name', 'resourceKey']],
+          );
+          const resourceKey = landing.resources?.[0]?.resourceKey;
+          assert.match(resourceKey ?? '', /^[a-f0-9]{32}$/);
+          const otherKey = (await service.landing(other.slug)).resources?.[0]?.resourceKey;
+          assert.match(otherKey ?? '', /^[a-f0-9]{32}$/);
+          await assert.rejects(
+            service.slots(f.slug, {
+              from: '2060-01-12',
+              to: '2060-01-12',
+              serviceIds: f.service,
+              resourceKey: otherKey,
+            }),
+            failure(409, 'RESOURCE_UNAVAILABLE'),
+          );
+          await assert.rejects(f.submit({ ...body, resourceKey: otherKey }), failure(409, 'RESOURCE_UNAVAILABLE'));
+          const selectedSlots = await service.slots(f.slug, {
+            from: '2060-01-12',
+            to: '2060-01-12',
+            serviceIds: f.service,
+            resourceKey,
+          });
+          assert.ok(selectedSlots.slots.some((slot) => slot.startsAt === at()));
           const slots = await service.slots(f.slug, { from: '2060-01-12', to: '2060-01-12', serviceIds: f.service });
           assert.ok(slots.slots.some((s) => s.startsAt === at()));
-          const result = await f.submit(body);
+          const result = await f.submit({ ...body, resourceKey });
           assert.equal(result.status, 'confirmed');
           assert.equal((await f.booking()).master_id, f.owner);
           const row = await one('SELECT * FROM public_booking_requests WHERE tenant_id=$1', [f.tenant]);
           assert.equal(row.capability_hash.length, 64);
           assert.equal(JSON.stringify(row).includes(body.recoveryToken), false);
+          assert.equal(row.resource_id, f.owner);
           assert.equal(row.consent_proof.version, f.page.consentVersion);
-          assert.equal(row.consent_proof.policyText, f.settings.policyText);
+          assert.equal(row.consent_proof.policyText, f.page.policyText);
+          assert.equal(f.page.operator.name, 'ИП Фикстура');
+          assert.equal(f.page.operator.requisites, 'ИНН 7701000000');
           assert.ok(row.consent_proof.acceptedAt);
           for (const privateValue of [f.client, f.owner, body.name, body.phone, '1234.56'])
             assert.equal(JSON.stringify(result).includes(privateValue), false);
@@ -499,6 +602,79 @@ test(
           assert.ok(rls.every((r) => r.relrowsecurity && r.relforcerowsecurity));
         },
       );
+      await scenario('range price fields are projected only when price visibility is enabled', async () => {
+        const f = await seed();
+        await q('UPDATE services SET price_type=$1,min_price=$2,max_price=$3 WHERE id=$4', [
+          'range',
+          1000,
+          2000,
+          f.service,
+        ]);
+        const hidden = (await service.landing(f.slug)).services[0];
+        for (const field of ['price', 'priceType', 'minPrice', 'maxPrice', 'defaultPrice'])
+          assert.equal(Object.hasOwn(hidden, field), false);
+        assert.equal(JSON.stringify(hidden).includes('1000'), false);
+        assert.equal(JSON.stringify(hidden).includes('2000'), false);
+        await f.edit({ showPrices: true });
+        const shown = (await service.landing(f.slug)).services[0];
+        assert.deepEqual(
+          { priceType: shown.priceType, minPrice: shown.minPrice, maxPrice: shown.maxPrice },
+          { priceType: 'range', minPrice: 1000, maxPrice: 2000 },
+        );
+      });
+      await scenario(
+        'new settings omit owner legal text and slug; server generates stable code, legal docs, and page-scoped master keys',
+        async () => {
+          const f = await seed({ savePage: false, publish: false });
+          const {
+            slug: _legacySlug,
+            operator: _legacyOperator,
+            policyText: _legacyPolicy,
+            consentText: _legacyConsent,
+            ...pageRequest
+          } = f.settings;
+          const saved = await run(f, () => service.putSettings(f.boss, { ...pageRequest, revision: 0 }));
+          f.page = saved;
+          f.slug = saved.slug;
+          assert.match(saved.slug, /^booking-[a-f0-9]{16}$/);
+          assert.match(saved.publicCode, /^[a-f0-9]{32}$/);
+          assert.equal(saved.publicUrl, `https://autexa.pw/${saved.publicCode}`);
+          assert.match(saved.policyText, /Версия 1/);
+          assert.match(saved.consentText, /Отдельное согласие/);
+          f.settings = {
+            ...pageRequest,
+            requestId: uuid(),
+            revision: saved.revision,
+            slug: saved.slug,
+            operator: saved.operator,
+            policyText: saved.policyText,
+            consentText: saved.consentText,
+          };
+          await run(f, () => service.publish(f.boss, { requestId: uuid() }, true));
+          const firstKey = (await service.landing(saved.slug)).resources?.[0]?.resourceKey;
+          assert.match(firstKey ?? '', /^[a-f0-9]{32}$/);
+          await f.edit({ displayName: 'Название изменено' });
+          assert.equal((await service.landing(saved.slug)).resources?.[0]?.resourceKey, firstKey);
+          const acceptedIntent = f.body();
+          const accepted = await f.submit(acceptedIntent);
+          await q("UPDATE tenants SET email='updated@example.test' WHERE id=$1", [f.tenant]);
+          const updatedProfile = await run(f, () => service.getSettings(f.boss));
+          assert.notEqual(updatedProfile.consentVersion, saved.consentVersion);
+          assert.match(updatedProfile.policyText, /updated@example\.test/);
+          assert.deepEqual(await f.submit(acceptedIntent), accepted);
+          assert.deepEqual((await f.recover(acceptedIntent)).result, accepted);
+          await q("UPDATE tenants SET email='another@example.test' WHERE id=$1", [f.tenant]);
+          const newerProfile = await run(f, () => service.getSettings(f.boss));
+          assert.notEqual(newerProfile.consentVersion, updatedProfile.consentVersion);
+          assert.deepEqual(await service.landingByCode(saved.publicCode), { slug: saved.slug });
+          assert.deepEqual(await f.submit(acceptedIntent), accepted);
+          assert.deepEqual((await f.recover(acceptedIntent)).result, accepted);
+          await assert.rejects(
+            f.submit(f.body({ consentVersion: saved.consentVersion })),
+            failure(409, 'CONSENT_CHANGED'),
+          );
+        },
+      );
       await scenario(
         'same UUID parallel/retry replays one booking/client/notification; changed body/capability/operation conflicts',
         async () => {
@@ -513,6 +689,7 @@ test(
             { startsAt: at('12:00') },
             { recoveryToken: token() },
             { serviceIds: [uuid()] },
+            { resourceKey: 'a'.repeat(32) },
           ])
             await assert.rejects(f.submit({ ...body, ...patch }), failure(409, 'IDEMPOTENCY_CONFLICT'));
           await assert.rejects(
@@ -531,10 +708,13 @@ test(
         async () => {
           for (const internal of [false, true]) {
             const f = await seed(),
-              block = await admin.connect();
+              block = await admin.connect(),
+              resourceKey = (await service.landing(f.slug)).resources.find(
+                (resource) => resource.name === 'Booking resource',
+              ).resourceKey;
             await block.query('BEGIN');
             await block.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [f.owner]);
-            const first = f.submit(f.body());
+            const first = f.submit(f.body({ resourceKey }));
             await waiting('SELECT id FROM users%');
             const second = internal ? f.internal() : f.submit(f.body());
             await waiting('%pg_advisory_xact_lock%');
@@ -657,22 +837,30 @@ test(
             notices = pushes.filter((p) => p.tenant === f.tenant).length;
           await f.edit({ showPrices: true });
           assert.equal((await service.landing(f.slug)).services[0].price, 1234.56);
-          await f.edit({ showPrices: false, policyText: 'New policy' });
+          await f.edit({ showPrices: false, contacts: 'Новый контакт автосервиса' });
           await assert.rejects(
             f.submit(f.body({ startsAt: at('12:00'), consentVersion: body.consentVersion })),
             failure(409, 'CONSENT_CHANGED'),
           );
           await f.edit({ services: [{ serviceId: f.service, durationMinutes: 45 }] });
           await run(f, () => service.publish(f.boss, { requestId: uuid() }, false));
+          const alias = await service.landingByCode(f.page.publicCode);
+          assert.deepEqual(alias, { slug: f.slug });
+          await assert.rejects(service.landing(f.slug), failure(404, 'BOOKING_DISABLED'));
           await assert.rejects(f.submit(f.body({ startsAt: at('13:00') })), failure(404, 'BOOKING_DISABLED'));
           assert.deepEqual(await f.submit(body), original);
           assert.deepEqual((await f.recover(body)).result, original);
+          assert.deepEqual(await service.status(alias.slug, body.requestId, body.recoveryToken), {
+            status: 'completed',
+            result: original,
+          });
           await run(f, () => service.publish(f.boss, { requestId: uuid() }, true));
           for (const sql of [
             'UPDATE tenants SET is_active=false WHERE id=$1',
             "UPDATE tenants SET is_active=true,subscription_end='2000-01-01' WHERE id=$1",
           ]) {
             await q(sql, [f.tenant]);
+            assert.deepEqual(await service.landingByCode(f.page.publicCode), { slug: f.slug });
             await assert.rejects(f.submit(f.body({ startsAt: at('13:00') })), failure(404, 'BOOKING_DISABLED'));
             assert.deepEqual(await f.submit(body), original);
             assert.deepEqual((await f.recover(body)).result, original);
@@ -729,7 +917,7 @@ test(
             run(f, () => service.requests(f.actor)),
             failure(403),
           );
-          await f.edit({ consentText: 'Changed consent' });
+          await f.edit({ contacts: 'Изменённый контакт автосервиса' });
           await assert.rejects(
             run(f, () => service.decide(f.boss, row.id, { requestId: uuid() }, true)),
             failure(409, 'CONSENT_CHANGED'),
@@ -983,7 +1171,7 @@ test(
         async () => {
           const f = await seed({ publish: false }),
             other = await seed();
-          await f.edit({ operator: { name: '', requisites: '', contact: '' } });
+          await f.edit({ contacts: '' });
           await assert.rejects(
             run(f, () => service.publish(f.boss, { requestId: uuid() }, true)),
             failure(400, 'PUBLICATION_INCOMPLETE'),
@@ -992,6 +1180,7 @@ test(
             ...f.settings,
             requestId: uuid(),
             revision: f.page.revision,
+            contacts: '+7 999 1112233',
             operator: { name: 'Operator', requisites: 'Requisites', contact: 'Contact' },
           };
           const saved = await run(f, () => service.putSettings(f.boss, dto));

@@ -48,6 +48,7 @@ import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
 
@@ -63,6 +64,7 @@ interface EditorServiceLine {
   name: string;
   /** Строка, а не число — иначе TextInput дерётся с курсором при вводе. */
   priceText: string;
+  priceType?: 'fixed' | 'range';
 }
 
 interface EditorProductLine {
@@ -151,14 +153,14 @@ export default function TemplateEditorScreen() {
   const allServicesQuery = useQuery<Service[]>({
     queryKey: ['all-services', { preferredOnly: false }],
     queryFn: () => loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit })).data, 500),
-    enabled: showServicePicker && (catalogOwner || showAllCatalogServices),
+    enabled: (showServicePicker || serviceLines.length > 0) && (catalogOwner || showAllCatalogServices),
   });
   const allServices = allServicesQuery.data;
   const preferredServicesQuery = useQuery<Service[]>({
     queryKey: ['all-services', { preferredOnly: true }],
     queryFn: () =>
       loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly: true })).data, 500),
-    enabled: showServicePicker && !catalogOwner && !showAllCatalogServices,
+    enabled: (showServicePicker || serviceLines.length > 0) && !catalogOwner && !showAllCatalogServices,
     staleTime: 60_000,
   });
   const preferredServices = preferredServicesQuery.data;
@@ -169,6 +171,15 @@ export default function TemplateEditorScreen() {
   const refetchActiveServices =
     !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
   const selectableServices = !catalogOwner && !showAllCatalogServices ? (preferredServices ?? []) : (allServices ?? []);
+  const serviceIdsInLines = [
+    ...new Set(serviceLines.map((line) => line.serviceId).filter((id): id is string => !!id)),
+  ].sort();
+  const servicePoliciesQuery = useQuery<Service[]>({
+    queryKey: ['template-service-price-policies', serviceIdsInLines],
+    queryFn: async () => Promise.all(serviceIdsInLines.map(async (id) => (await servicesApi.getById(id)).data)),
+    enabled: serviceIdsInLines.length > 0,
+    staleTime: 60_000,
+  });
 
   const filteredServices = useMemo(() => {
     const list = selectableServices;
@@ -193,7 +204,15 @@ export default function TemplateEditorScreen() {
   // количества у услуг больше нет).
   const addService = (s: Service) => {
     haptic('tap');
-    setServiceLines((lines) => [...lines, { serviceId: s.id, name: s.name, priceText: String(s.defaultPrice ?? 0) }]);
+    setServiceLines((lines) => [
+      ...lines,
+      {
+        serviceId: s.id,
+        name: s.name,
+        priceType: s.priceType ?? 'fixed',
+        priceText: s.priceType === 'range' ? '' : String(s.defaultPrice ?? 0),
+      },
+    ]);
   };
 
   const addProduct = (p: Product) => {
@@ -236,6 +255,34 @@ export default function TemplateEditorScreen() {
 
   const save = async () => {
     if (!canSave) return;
+    if (serviceIdsInLines.length > 0 && (servicePoliciesQuery.isLoading || servicePoliciesQuery.isError)) {
+      haptic('warning');
+      Alert.alert('Не удалось проверить прайс', 'Дождитесь загрузки каталога услуг и повторите сохранение.');
+      return;
+    }
+    const invalidPrice = serviceLines.find((line) => {
+      try {
+        servicePriceFormValue('fixed', line.priceText, '', '');
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (invalidPrice) {
+      haptic('warning');
+      Alert.alert('Проверьте цену', `Введите неотрицательную сумму для услуги «${invalidPrice.name}».`);
+      return;
+    }
+    const policies = new Map((servicePoliciesQuery.data ?? []).map((service) => [service.id, service]));
+    const unpriced = serviceLines.find((line) => {
+      const type = line.priceType ?? policies.get(line.serviceId ?? '')?.priceType ?? 'fixed';
+      return type === 'range' && !line.priceText.trim();
+    });
+    if (unpriced) {
+      haptic('warning');
+      Alert.alert('Укажите цену', `Введите цену для диапазонной услуги «${unpriced.name}».`);
+      return;
+    }
     setSaving(true);
     try {
       // Услуги — без quantity (сервер хранит 1); у товаров количество остаётся.
@@ -578,7 +625,13 @@ export default function TemplateEditorScreen() {
                         onChangeText={(t) => patchServiceLine(idx, { priceText: t })}
                         keyboardType="decimal-pad"
                         style={[styles.priceInput, { color: palette.text.primary }]}
-                        placeholder="0"
+                        placeholder={
+                          (line.priceType ??
+                            servicePoliciesQuery.data?.find((service) => service.id === line.serviceId)?.priceType) ===
+                          'range'
+                            ? 'Укажите цену'
+                            : '0'
+                        }
                         placeholderTextColor={palette.text.tertiary}
                         accessibilityLabel={`Цена услуги «${line.name}»`}
                       />
@@ -772,7 +825,9 @@ export default function TemplateEditorScreen() {
                       {s.name}
                     </Text>
                     <Text style={[styles.pickSub, { color: palette.text.tertiary }]}>
-                      {formatTemplateMoney(s.defaultPrice ?? 0)}
+                      {s.priceType === 'range'
+                        ? `${formatTemplateMoney(s.minPrice ?? s.defaultPrice ?? 0)} – ${formatTemplateMoney(s.maxPrice ?? s.defaultPrice ?? 0)}`
+                        : formatTemplateMoney(s.defaultPrice ?? 0)}
                     </Text>
                   </View>
                   {rowsCount > 0 ? (

@@ -70,7 +70,15 @@ export interface CheckFormSnapshot {
   tagIds: readonly string[];
   assigneeIds: readonly string[];
   orderLocationId: string | null;
-  serviceLines: readonly { serviceId?: string; name: string; price: number; quantity: number; master: string }[];
+  serviceLines: readonly {
+    id?: string;
+    serviceId?: string;
+    name: string;
+    price: number;
+    priceConfirmed?: boolean;
+    quantity: number;
+    master: string;
+  }[];
   productLines: readonly { productId?: string; name: string; sellPrice: number; quantity: number }[];
   pendingPhotos: readonly string[];
   manualDateIso: string;
@@ -96,7 +104,15 @@ export function buildCheckFormFingerprint(f: CheckFormSnapshot): string {
     f.tagIds,
     f.assigneeIds,
     f.orderLocationId,
-    f.serviceLines.map((l) => [l.serviceId ?? '', l.name, l.price, l.quantity, l.master]),
+    f.serviceLines.map((l) => [
+      l.id ?? '',
+      l.serviceId ?? '',
+      l.name,
+      l.price,
+      !!l.priceConfirmed,
+      l.quantity,
+      l.master,
+    ]),
     f.productLines.map((l) => [l.productId ?? '', l.name, l.sellPrice, l.quantity]),
     f.pendingPhotos,
     f.manualDateIso,

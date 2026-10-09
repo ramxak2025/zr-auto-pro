@@ -11,6 +11,11 @@ const CORRECTABLE = new Set([
 ]);
 
 export function validatePublicBookingDto(body) {
+  if (
+    body?.resourceKey !== undefined &&
+    (typeof body.resourceKey !== 'string' || !/^[a-f0-9]{32}$/.test(body.resourceKey))
+  )
+    return 'Выбранный мастер недоступен. Обновите страницу и выберите мастера ещё раз.';
   if (typeof body?.name !== 'string' || !body.name.trim() || body.name.length > 100 || /[<>\p{Cc}]/u.test(body.name))
     return 'Укажите имя длиной до 100 символов без знаков < и >.';
   if (typeof body?.phone !== 'string' || !/^[+()\d\s-]{10,32}$/.test(body.phone))
@@ -41,7 +46,10 @@ function unavailable() {
 
 function isBody(value, requestId, recoveryToken) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = Object.keys(value).sort().join(',');
+  const keys = Object.keys(value)
+    .filter((key) => key !== 'resourceKey')
+    .sort()
+    .join(',');
   if (
     keys !== 'comment,consentAccepted,consentVersion,name,phone,recoveryToken,requestId,serviceIds,startsAt' &&
     keys !== 'consentAccepted,consentVersion,name,phone,recoveryToken,requestId,serviceIds,startsAt'
@@ -50,6 +58,8 @@ function isBody(value, requestId, recoveryToken) {
   return (
     value.requestId === requestId &&
     value.recoveryToken === recoveryToken &&
+    (value.resourceKey === undefined ||
+      (typeof value.resourceKey === 'string' && /^[a-f0-9]{32}$/.test(value.resourceKey))) &&
     UUID_V4.test(value.requestId) &&
     CAPABILITY.test(value.recoveryToken) &&
     Array.isArray(value.serviceIds) &&

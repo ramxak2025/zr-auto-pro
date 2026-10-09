@@ -6,6 +6,8 @@ export interface MoneyInputProps extends Omit<InputProps, 'value' | 'onChange' |
   value: number;
   /** Каждое валидное значение уходит наверх сразу; на blur поле нормализуется. */
   onCommit: (n: number) => void;
+  /** Keep a required field empty instead of coercing an erased draft to zero. */
+  onEmpty?: () => void;
   /** Только целые (пробег, количество чеков). */
   integer?: boolean;
   min?: number;
@@ -39,6 +41,7 @@ function toDraft(value: number): string {
 export default function MoneyInput({
   value,
   onCommit,
+  onEmpty,
   integer = false,
   min = 0,
   max,
@@ -77,7 +80,8 @@ export default function MoneyInput({
           const v = clamp(n);
           onCommit(v);
         } else if (raw.trim() === '') {
-          onCommit(clamp(0));
+          if (onEmpty) onEmpty();
+          else onCommit(clamp(0));
         }
       }}
       onFocus={(e) => {
@@ -89,7 +93,8 @@ export default function MoneyInput({
         focusedRef.current = false;
         const n = parseDraft(text, integer);
         if (n === null) {
-          setText(toDraft(value));
+          setText(text.trim() === '' && onEmpty ? '' : toDraft(value));
+          if (text.trim() === '' && onEmpty) onEmpty();
         } else {
           const v = clamp(n);
           setText(toDraft(v));

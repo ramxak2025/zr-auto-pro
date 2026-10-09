@@ -74,7 +74,7 @@ let mockUser: {
   fullName: string;
   role: UserRole;
   permissions: { company_manage: boolean };
-  tenant?: { id: string; shiftsEnabled?: boolean };
+  tenant?: { id: string; shiftsEnabled?: boolean; attendanceMode?: 'admin' | 'manual' | 'nfc' };
 };
 let mockShifts: { id: string; openedAt: string; closedAt: string | null }[] = [];
 jest.mock('../../contexts/AuthContext', () => ({
@@ -197,6 +197,36 @@ it.each([false, undefined])('a disabled or legacy tenant (%s) has no work-shift 
   mockUser.tenant = { id: 'tenant-b', shiftsEnabled };
   expect(shiftControl(DashboardScreen())).toBeUndefined();
   expectNoCompanyRequests();
+});
+
+it.each(['ios', 'android'] as const)('%s manual mode renders self-service open shift control', (platform) => {
+  Platform.OS = platform;
+  mockUser.tenant = { id: 'tenant-a', attendanceMode: 'manual', shiftsEnabled: true };
+  const tree = DashboardScreen();
+  expect(shiftControl(tree)).toBeDefined();
+  expect(button(shiftControl(tree)!(), 'Открыть смену')).toBeDefined();
+  expect(
+    elements(tree).some(
+      (entry) =>
+        entry.props.onPress &&
+        elements(entry).some((child) => child.props.children === 'Сканировать рабочую NFC-метку'),
+    ),
+  ).toBe(false);
+});
+
+it('NFC mode renders an explicit scan entry and does not render manual self-service controls', () => {
+  Platform.OS = 'android';
+  mockUser.tenant = { id: 'tenant-a', attendanceMode: 'nfc', shiftsEnabled: true };
+  const tree = DashboardScreen();
+  expect(shiftControl(tree)).toBeUndefined();
+  expect(button(tree, 'Сканировать рабочую NFC-метку')).toBeDefined();
+});
+
+it('admin mode keeps schedule-managed attendance and hides self-service controls', () => {
+  mockUser.tenant = { id: 'tenant-a', attendanceMode: 'admin', shiftsEnabled: false };
+  const tree = DashboardScreen();
+  expect(shiftControl(tree)).toBeUndefined();
+  expect(button(tree, 'Сканировать рабочую NFC-метку')).toBeUndefined();
 });
 
 it('a profile without a tenant has no work-shift control', () => {

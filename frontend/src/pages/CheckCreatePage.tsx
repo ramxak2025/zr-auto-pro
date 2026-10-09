@@ -73,7 +73,13 @@ import type {
 
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatMoney } from '../../../shared/utils/formatters';
-import { expandServiceQuantities, serviceLineTotal } from '../../../shared/utils/checkLines';
+import { applyServicePriceInput, isServicePriceSelectionValid } from '../../../shared/utils/servicePrices';
+import {
+  expandServiceQuantities,
+  hydrateServiceLineForCheckEdit,
+  serviceLineTotal,
+  toCheckTemplateServiceInput,
+} from '../../../shared/utils/checkLines';
 import { formatVin, isValidVin, normalizeVin } from '../../../shared/utils/vin';
 import { looksLikeRussianPlate } from '../../../shared/utils/plate';
 import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
@@ -88,6 +94,7 @@ import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
 import ClientCarQuickDrawer, { type QuickDrawerMode } from '../components/checks/ClientCarQuickDrawer';
 import ServiceCombobox from '../components/checks/ServiceCombobox';
 import MoneyInput from '../components/checks/MoneyInput';
+import CheckServicePriceInput from '../components/checks/CheckServicePriceInput';
 import { VinText, carVin } from '../components/vin';
 import { PlateBadge } from '../components/checks/checkBadges';
 
@@ -154,10 +161,13 @@ const isQueuedOffline = (res: { status?: number; data?: { queued?: boolean } } |
   res?.status === 202 && res?.data?.queued === true;
 
 interface ServiceLineForm {
+  /** Persisted line identity is retained only while editing this same check. */
+  id?: string;
   serviceId: string;
   masterId: string;
   name: string;
   price: number;
+  priceConfirmed?: boolean;
   /**
    * Только у legacy-строки старого чека («Мойка ×3», quantity > 1): значение уходит на сервер как есть,
    * чтобы сумма чека не менялась. У новых строк поля нет — строка услуги = одна услуга.
@@ -467,6 +477,19 @@ export default function CheckCreatePage() {
     !isCatalogOwner && !showAllCatalogServices ? preferredServicesQuery.refetch : allServicesQuery.refetch;
   const selectableCatalogServices =
     !isCatalogOwner && !showAllCatalogServices ? (preferredServicesQuery.data ?? []) : (allServices ?? []);
+  const visibleServiceIds = new Set(
+    [...selectableCatalogServices, ...(allServices ?? [])].map((service) => service.id),
+  );
+  const missingReferencedServiceIds = [
+    ...new Set(serviceLines.map((line) => line.serviceId).filter((id): id is string => !!id)),
+  ].filter((id) => !visibleServiceIds.has(id));
+  const referencedServicesQuery = useQuery<Service[]>({
+    queryKey: ['check-referenced-service-prices', missingReferencedServiceIds],
+    queryFn: async () =>
+      Promise.all(missingReferencedServiceIds.map(async (id) => (await servicesApi.getById(id)).data)),
+    enabled: missingReferencedServiceIds.length > 0,
+    staleTime: 60_000,
+  });
 
   // Fetch all products (cached 60s — catalog data). Полный каталог; пикер
   // фильтруется по складу на клиенте, поэтому переключение складов мгновенное.
@@ -635,12 +658,8 @@ export default function CheckCreatePage() {
     if (existingCheck.services?.length) {
       setServiceLines(
         existingCheck.services.map((s: CheckServiceLine) => ({
-          serviceId: s.serviceId || '',
-          masterId: s.masterId || user?.id || '',
-          name: s.name,
-          price: s.price,
-          // Legacy «×3» держим как есть (сумма чека не должна меняться); у обычной строки поля нет.
-          quantity: legacyQuantity(s),
+          ...hydrateServiceLineForCheckEdit(s, user?.id || ''),
+          priceConfirmed: true,
         })),
       );
     }
@@ -977,7 +996,8 @@ export default function CheckCreatePage() {
             allServices?.find((service) => service.id === value);
           if (svc) {
             updated.name = svc.name;
-            updated.price = svc.defaultPrice;
+            updated.price = svc.priceType === 'range' ? 0 : svc.defaultPrice;
+            updated.priceConfirmed = svc.priceType !== 'range';
           }
         }
         return updated;
@@ -1057,10 +1077,10 @@ export default function CheckCreatePage() {
     setServiceLines(
       // Старый шаблон с «×2» раскладываем в две строки; неразвёрнутые (дробное количество, > 100) остаются legacy «×N».
       expandServiceQuantities(template.services).map((s) => ({
+        ...toCheckTemplateServiceInput(s),
         serviceId: s.serviceId || '',
         masterId: user?.id || '',
-        name: s.name,
-        price: s.price,
+        priceConfirmed: true,
         quantity: legacyQuantity(s),
       })),
     );
@@ -1084,12 +1104,7 @@ export default function CheckCreatePage() {
   // В шаблон уходят только строки с catalog-id (как на mobile). Количества у услуг нет: legacy «×3»
   // из открытого старого чека раскладываем в три строки, иначе сервер сохранил бы её как одну.
   const templateServices = useMemo<CheckTemplateServiceInput[]>(
-    () =>
-      expandServiceQuantities(serviceLines.filter((l) => !!l.serviceId)).map((l) => ({
-        serviceId: l.serviceId,
-        name: l.name,
-        price: Number(l.price),
-      })),
+    () => expandServiceQuantities(serviceLines.filter((l) => !!l.serviceId)).map(toCheckTemplateServiceInput),
     [serviceLines],
   );
   const templateProducts = useMemo(
@@ -1111,11 +1126,34 @@ export default function CheckCreatePage() {
   // doSubmit — фактическое проведение чека. handleSubmit (ниже) может
   // перехватить сабмит наджимом «забыли клиента» (Round 12 #7).
   const doSubmit = () => {
+    if (
+      missingReferencedServiceIds.length > 0 &&
+      (referencedServicesQuery.isLoading || referencedServicesQuery.isError)
+    ) {
+      if (referencedServicesQuery.isError) void referencedServicesQuery.refetch();
+      toast.error('Не удалось проверить цену сохранённых услуг. Повторите загрузку прайса.');
+      return;
+    }
+    if (
+      serviceLines.some((line) => {
+        const service =
+          selectableCatalogServices.find((candidate) => candidate.id === line.serviceId) ??
+          allServices?.find((candidate) => candidate.id === line.serviceId) ??
+          referencedServicesQuery.data?.find((candidate) => candidate.id === line.serviceId);
+        return service
+          ? !isServicePriceSelectionValid(service.priceType ?? 'fixed', line.price, !!line.priceConfirmed)
+          : false;
+      })
+    ) {
+      toast.error('Для услуги с диапазоном укажите цену в строке');
+      return;
+    }
     // Строка услуги = одна услуга: `quantity` не шлём. Исключение — legacy-строка старого чека (> 1):
     // её количество уходит как есть, иначе правка тихо пересчитала бы сумму чека.
     const services: CreateCheckRequest['services'] = serviceLines.map((l) => {
       const legacyQty = legacyQuantity(l);
       return {
+        ...(l.id ? { id: l.id } : {}),
         serviceId: l.serviceId || undefined,
         masterId: l.masterId || undefined,
         name: l.name,
@@ -1746,11 +1784,22 @@ export default function CheckCreatePage() {
                         onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
                         options={(masters ?? []).map((m) => ({ value: m.id, label: m.fullName }))}
                       />
-                      <MoneyInput
+                      <CheckServicePriceInput
                         aria-label="Цена услуги"
                         value={line.price}
-                        onCommit={(n) => updateServiceLine(index, 'price', n)}
-                        placeholder="0"
+                        onPriceChange={(price, explicitlyEntered) => {
+                          setServiceLines((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? applyServicePriceInput(item, price, explicitlyEntered) : item,
+                            ),
+                          );
+                        }}
+                        placeholder={(() => {
+                          const service =
+                            selectableCatalogServices.find((candidate) => candidate.id === line.serviceId) ??
+                            allServices?.find((candidate) => candidate.id === line.serviceId);
+                          return service?.priceType === 'range' && !line.priceConfirmed ? 'Укажите цену' : '0';
+                        })()}
                       />
                       <div className="flex items-center justify-between gap-2 sm:justify-end">
                         {legacyQty && (

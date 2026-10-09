@@ -39,6 +39,7 @@ import type {
   Product,
   ProductPriceHistoryEntry,
   Service,
+  ServicePriceHistoryEntry,
   Check,
   TrashedCheck,
   ChecksBoard,
@@ -171,6 +172,7 @@ import type {
   BookingSettings,
   PublicBookingPageSettings,
   PublicBookingResource,
+  PublicBookingServiceOption,
   PublicBookingLanding,
   PublicBookingSlotPage,
   PublicBookingReceipt,
@@ -211,6 +213,7 @@ import type {
   RegistrationRequest,
   CheckTag,
 } from '../types';
+import type { ServiceImportRow, ServiceImportPreview, ServiceImportResult } from './types';
 import type {
   LoginRequest,
   LoginResponse,
@@ -914,6 +917,12 @@ export function createServicesApi(api: HttpClient) {
     getAll: (params?: PaginationParams & { category?: string; preferredOnly?: boolean }) =>
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
+    priceHistory: (id: string) => api.get<ServicePriceHistoryEntry[]>(`/services/${id}/price-history`),
+    exportCatalog: () => api.get<Service[]>('/services/export'),
+    previewImport: (rows: ServiceImportRow[]) =>
+      api.post<ServiceImportPreview>('/services/import/preview', { rows }, { timeout: 60_000 }),
+    confirmImport: (previewId: string, requestId: string) =>
+      api.post<ServiceImportResult>('/services/import/confirm', { previewId, requestId }, { timeout: 120_000 }),
     create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
     update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
     remove: (id: string) => api.delete(`/services/${id}`),
@@ -1689,6 +1698,7 @@ export function createShiftsApi(api: HttpClient) {
       api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/activate`, { token }),
     renameNfcTag: (id: string, name: string) => api.patch<AttendanceNfcTag>(`/shifts/nfc/tags/${id}`, { name }),
     revokeNfcTag: (id: string) => api.post<AttendanceNfcTag>(`/shifts/nfc/tags/${id}/revoke`),
+    archiveNfcTag: (id: string) => api.delete<AttendanceNfcTag>(`/shifts/nfc/tags/${id}`),
     open: (data?: Record<string, unknown>) => api.post<Shift>('/shifts/open', data),
     close: (id: string) => api.post<Shift>(`/shifts/${id}/close`),
   };
@@ -2315,6 +2325,8 @@ export function createPublicBookingsApi(publicClient: PublicBookingHttpClient) {
   const root = (slug: string) => `/public/bookings/${encodeURIComponent(slug)}`;
   return {
     landing: (slug: string) => publicClient.get<PublicBookingLanding>(root(slug)),
+    landingByCode: (code: string) =>
+      publicClient.get<Pick<PublicBookingLanding, 'slug'>>(`/public/bookings/by-code/${encodeURIComponent(code)}`),
     slots: (slug: string, params: PublicBookingSlotsParams) =>
       publicClient.get<PublicBookingSlotPage>(`${root(slug)}/slots`, {
         params: { ...params, serviceIds: params.serviceIds.join(',') },
@@ -2340,6 +2352,11 @@ export function createBookingsApi(api: HttpClient) {
     putPublicSettings: (data: PutPublicBookingSettingsRequest) =>
       api.put<PublicBookingPageSettings>('/bookings/public-settings', data),
     publicResources: () => api.get<PublicBookingResource[]>('/bookings/public-resources'),
+    publicServices: (params?: { page?: number; limit?: number }) =>
+      api.get<{ data: PublicBookingServiceOption[]; total: number; page: number; limit: number }>(
+        '/bookings/public-services',
+        { params },
+      ),
     publish: (data: BookingOperationRequest) =>
       api.post<PublicBookingPageSettings>('/bookings/public-settings/publish', data),
     unpublish: (data: BookingOperationRequest) =>

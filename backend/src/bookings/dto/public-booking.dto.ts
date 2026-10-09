@@ -38,20 +38,30 @@ export class BookingOperatorDto {
   @IsString() @MaxLength(500) @Matches(/^[^<>]*$/) requisites!: string;
   @IsString() @MaxLength(300) @Matches(/^[^<>]*$/) contact!: string;
 }
+export class PublicBookingLinksDto {
+  @IsOptional() @IsString() @MaxLength(32) @Matches(/^[+()\d\s-]{10,32}$/) phone?: string;
+  @IsOptional() @IsString() @MaxLength(500) instagram?: string;
+  @IsOptional() @IsString() @MaxLength(500) whatsapp?: string;
+  @IsOptional() @IsString() @MaxLength(500) vk?: string;
+  @IsOptional() @IsString() @MaxLength(500) telegram?: string;
+}
 export type BookingHours = Record<string, { start: string; end: string } | null>;
 export class PublicBookingSettingsDto extends BookingOperationDto {
   @IsInt() @Min(0) revision!: number;
-  @IsString() @Matches(/^[a-z0-9][a-z0-9-]{2,63}$/) slug!: string;
+  /** Accepted for old clients. New owner flows let the server generate it. */
+  @IsOptional() @IsString() @Matches(/^[a-z0-9][a-z0-9-]{2,63}$/) slug?: string;
   @IsString() @MaxLength(160) @Matches(/^[^<>]*$/) displayName!: string;
   @IsString() @MaxLength(500) @Matches(/^[^<>]*$/) address!: string;
   @IsString() @MaxLength(300) @Matches(/^[^<>]*$/) contacts!: string;
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => PublicBookingLinksDto) links?: PublicBookingLinksDto;
   @IsBoolean() showPrices!: boolean;
   @IsIn(['instant', 'approval']) mode!: 'instant' | 'approval';
   @IsOptional() @IsInt() @Min(5) @Max(120) slotStepMinutes?: number;
   @IsOptional() @IsObject() openingHours?: BookingHours;
-  @ValidateNested() @Type(() => BookingOperatorDto) operator!: BookingOperatorDto;
-  @IsString() @MaxLength(20000) @Matches(/^[^<>]*$/) policyText!: string;
-  @IsString() @MaxLength(20000) @Matches(/^[^<>]*$/) consentText!: string;
+  /** Legacy inputs remain accepted; the server always supplies legal documents. */
+  @IsOptional() @ValidateNested() @Type(() => BookingOperatorDto) operator?: BookingOperatorDto;
+  @IsOptional() @IsString() @MaxLength(20000) @Matches(/^[^<>]*$/) policyText?: string;
+  @IsOptional() @IsString() @MaxLength(20000) @Matches(/^[^<>]*$/) consentText?: string;
   @IsArray()
   @ArrayMaxSize(20)
   @ValidateNested({ each: true })
@@ -63,10 +73,11 @@ export class PublicBookingSubmitDto extends BookingOperationDto {
   @IsString() @Matches(/^[A-Za-z0-9_-]{43}$/) recoveryToken!: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @ArrayUnique() @IsUUID('4', { each: true }) serviceIds!: string[];
   @IsISO8601({ strict: true }) startsAt!: string;
+  @IsOptional() @IsString() @Matches(/^[a-f0-9]{32}$/) resourceKey?: string;
   @IsString() @MinLength(1) @MaxLength(100) @Matches(/^[^<>\p{Cc}]*$/u) name!: string;
   @IsString() @Matches(/^[+()\d\s-]{10,32}$/) phone!: string;
   @IsOptional() @IsString() @MaxLength(1000) @Matches(/^[^<>]*$/) comment?: string;
-  @IsUUID('4') consentVersion!: string;
+  @IsUUID() consentVersion!: string;
   @Equals(true) consentAccepted!: true;
 }
 export class ApprovePublicBookingDto extends BookingOperationDto {

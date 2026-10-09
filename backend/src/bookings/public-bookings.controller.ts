@@ -27,6 +27,11 @@ import {
 @Controller('public/bookings')
 export class PublicBookingsController {
   constructor(private readonly service: PublicBookingsService) {}
+  @Get('by-code/:code')
+  @Header('Cache-Control', 'no-store')
+  landingByCode(@Param('code') code: string) {
+    return this.service.landingByCode(code);
+  }
   @Get(':slug')
   @Header('Cache-Control', 'no-store')
   landing(@Param('slug') slug: string) {
@@ -36,7 +41,7 @@ export class PublicBookingsController {
   @Header('Cache-Control', 'no-store')
   slots(
     @Param('slug') slug: string,
-    @Query() query: { from?: string; to?: string; serviceIds?: string; after?: string },
+    @Query() query: { from?: string; to?: string; serviceIds?: string; after?: string; resourceKey?: string },
   ) {
     return this.service.slots(slug, query);
   }
@@ -74,6 +79,11 @@ export class BookingPublicationController {
   @RequirePermission('company_manage')
   resources(@CurrentUser() actor: JwtPayload) {
     return this.service.resources(actor);
+  }
+  @Get('public-services')
+  @RequirePermission('company_manage')
+  publicServices(@CurrentUser() actor: JwtPayload, @Query() query: { page?: string; limit?: string }) {
+    return this.service.publicServices(actor, query);
   }
   @Post('public-settings/publish')
   @RequirePermission('company_manage')

@@ -4,7 +4,7 @@
     "slug": "autexa-mobile",
     "scheme": "autexa",
     "owner": "ramxak",
-    "version": "3.13.0",
+    "version": "3.14.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -46,16 +46,32 @@
           "autoVerify": true,
           "category": ["BROWSABLE", "DEFAULT"],
           "data": [
-            { "scheme": "https", "host": "autexa-cloud.ru", "pathPrefix": "/nfc/attendance" },
-            { "scheme": "https", "host": "autexa.pw", "pathPrefix": "/nfc/attendance" }
+            {
+              "scheme": "https",
+              "host": "autexa-cloud.ru",
+              "pathPrefix": "/nfc/attendance"
+            },
+            {
+              "scheme": "https",
+              "host": "autexa.pw",
+              "pathPrefix": "/nfc/attendance"
+            }
           ]
         },
         {
           "action": "NDEF_DISCOVERED",
           "category": ["DEFAULT"],
           "data": [
-            { "scheme": "https", "host": "autexa-cloud.ru", "pathPrefix": "/nfc/attendance" },
-            { "scheme": "https", "host": "autexa.pw", "pathPrefix": "/nfc/attendance" }
+            {
+              "scheme": "https",
+              "host": "autexa-cloud.ru",
+              "pathPrefix": "/nfc/attendance"
+            },
+            {
+              "scheme": "https",
+              "host": "autexa.pw",
+              "pathPrefix": "/nfc/attendance"
+            }
           ]
         }
       ],

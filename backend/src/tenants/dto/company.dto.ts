@@ -73,6 +73,11 @@ export class UpdateMyCompanyDto {
   @IsBoolean()
   shiftsEnabled?: boolean;
 
+  /** 183 — self-service attendance method; independent from POS shifts. */
+  @IsOptional()
+  @IsIn(['admin', 'manual', 'nfc'])
+  attendanceMode?: 'admin' | 'manual' | 'nfc';
+
   /** 092 — тумблер режима кассовой смены (дублирует PATCH /checks/pos-settings). */
   @IsOptional()
   @IsBoolean()

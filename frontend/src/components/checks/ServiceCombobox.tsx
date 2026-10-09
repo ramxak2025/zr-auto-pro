@@ -193,7 +193,13 @@ export default function ServiceCombobox({
                     <span className="block truncate font-medium text-ink">{s.name}</span>
                     {s.category && <span className="block truncate text-xs text-ink-3">{s.category}</span>}
                   </span>
-                  <Money value={s.defaultPrice} className="text-sm font-medium text-ink-2" />
+                  {s.priceType === 'range' ? (
+                    <span className="shrink-0 text-sm font-medium tabular-nums text-ink-2">
+                      <Money value={s.minPrice ?? s.defaultPrice} /> – <Money value={s.maxPrice ?? s.defaultPrice} />
+                    </span>
+                  ) : (
+                    <Money value={s.defaultPrice} className="text-sm font-medium text-ink-2" />
+                  )}
                   {isSelected && <Check className="h-4 w-4 flex-shrink-0 text-accent" aria-hidden="true" />}
                 </li>
               );

@@ -19,6 +19,7 @@ import {
   attendanceClock,
   classifyArrival,
   hasRecordedAttendance,
+  lockTenantAttendanceMode,
   lockAttendanceUser,
   plannedStart,
 } from './attendance';
@@ -37,6 +38,7 @@ type TagRow = {
   created_at: Date;
   activated_at: Date | null;
   revoked_at: Date | null;
+  archived_at: Date | null;
 };
 type ShiftRow = {
   id: string;
@@ -51,7 +53,7 @@ type ShiftRow = {
   first_nfc_at: Date | null;
   nfc_closed_at: Date | null;
 };
-type ActorInfo = { actor: JwtPayload; timezone: string; enabled: boolean; fullName: string };
+type ActorInfo = { actor: JwtPayload; timezone: string; attendanceMode: 'admin' | 'manual' | 'nfc'; fullName: string };
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 const tagDto = (row: TagRow) => ({
   id: row.id,
@@ -88,7 +90,7 @@ export class ShiftsNfcService {
     const pointId = actorPointId(actor);
     const { rows } = await client.query(
       `SELECT u.role,u.full_name,u.is_active,u.dismissed_at,u.purged_at,r.matrix,
-        t.timezone,t.shifts_enabled,t.is_active AS tenant_active,
+        t.timezone,t.shifts_enabled,t.attendance_mode,t.is_active AS tenant_active,
         CASE WHEN $3::uuid IS NULL THEN NOT EXISTS(SELECT 1 FROM tenant_points p WHERE p.tenant_id=u.tenant_id AND p.is_active)
           ELSE autexa_point_is_allowed(u.tenant_id,u.id,$3::uuid) END AS point_allowed
       FROM users u JOIN tenants t ON t.id=u.tenant_id LEFT JOIN roles r ON r.id=u.role_id AND r.tenant_id=u.tenant_id
@@ -99,15 +101,13 @@ export class ShiftsNfcService {
     if (!row || !row.is_active || row.dismissed_at || row.purged_at || !row.tenant_active || !row.point_allowed) {
       throw new ForbiddenException({ message: 'Сотрудник или текущий филиал больше не доступны' });
     }
+    const attendanceMode = row.attendance_mode ?? (row.shifts_enabled === true ? 'manual' : 'admin');
     return {
       actor: { ...actor, role: row.role, permissions: mergeEffectivePermissions(row.matrix) },
       timezone: row.timezone || 'Europe/Moscow',
-      enabled: row.shifts_enabled === true,
+      attendanceMode,
       fullName: row.full_name,
     };
-  }
-  private enabled(info: ActorInfo) {
-    if (!info.enabled) throw new ForbiddenException({ message: 'Учёт смен отключён для вашей компании' });
   }
   private manage(info: ActorInfo) {
     if (!userHasPermission(info.actor, 'company_manage'))
@@ -123,6 +123,7 @@ export class ShiftsNfcService {
     manage: boolean,
     work: (client: PoolClient, info: ActorInfo, started: Date) => Promise<T>,
     requestId?: string,
+    lockAttendanceMode = false,
   ): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -132,6 +133,9 @@ export class ShiftsNfcService {
       const {
         rows: [{ instant: started }],
       } = await client.query<{ instant: Date }>('SELECT clock_timestamp() AS instant');
+      // Scans mutate shifts/calendar rows and must serialize with a tenant mode
+      // change just like manual open/close. Tag administration is mode-agnostic.
+      if (lockAttendanceMode) await lockTenantAttendanceMode(client, actor.tenantID);
       if (requestId)
         await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
           `attendance-nfc:${actor.tenantID}:${requestId.toLowerCase()}`,
@@ -152,7 +156,7 @@ export class ShiftsNfcService {
   private async lockTag(client: PoolClient, actor: JwtPayload, id: string): Promise<TagRow> {
     const { rows } = await client.query<TagRow>(
       `SELECT * FROM attendance_nfc_tags WHERE id=$1 AND tenant_id=$2
-      AND point_id IS NOT DISTINCT FROM $3::uuid FOR UPDATE`,
+      AND point_id IS NOT DISTINCT FROM $3::uuid AND archived_at IS NULL FOR UPDATE`,
       [id, actor.tenantID, actorPointId(actor)],
     );
     if (!rows[0]) throw new NotFoundException({ message: 'Метка не найдена в текущем филиале' });
@@ -163,8 +167,7 @@ export class ShiftsNfcService {
       token = randomBytes(32).toString('base64url'),
       tokenHash = nfcTokenHash(token),
       uri = nfcUri(token);
-    return this.transaction(actor, true, async (client, info) => {
-      this.enabled(info);
+    return this.transaction(actor, true, async (client) => {
       const { rows } = await client.query<TagRow>(
         `INSERT INTO attendance_nfc_tags(tenant_id,point_id,name,token_hash,created_by)
         VALUES($1,$2,$3,$4,$5) RETURNING *`,
@@ -177,7 +180,7 @@ export class ShiftsNfcService {
     return this.transaction(actor, true, async (client) => {
       const { rows } = await client.query<TagRow>(
         `SELECT * FROM attendance_nfc_tags WHERE tenant_id=$1
-        AND point_id IS NOT DISTINCT FROM $2::uuid ORDER BY created_at DESC,id`,
+        AND point_id IS NOT DISTINCT FROM $2::uuid AND archived_at IS NULL ORDER BY created_at DESC,id`,
         [actor.tenantID, actorPointId(actor)],
       );
       return rows.map(tagDto);
@@ -185,8 +188,7 @@ export class ShiftsNfcService {
   }
   async activateTag(actor: JwtPayload, id: string, dto: NfcTokenDto) {
     const readback = nfcTokenHash(dto?.token);
-    return this.transaction(actor, true, async (client, info) => {
-      this.enabled(info);
+    return this.transaction(actor, true, async (client) => {
       const tag = await this.lockTag(client, actor, id);
       if (tag.status === 'revoked') throw new ConflictException({ message: 'Метка отозвана. Создайте новую метку.' });
       if (!timingSafeEqual(Buffer.from(tag.token_hash, 'hex'), Buffer.from(readback, 'hex')))
@@ -201,7 +203,8 @@ export class ShiftsNfcService {
   async renameTag(actor: JwtPayload, id: string, dto: NfcTagNameDto) {
     const name = this.name(dto);
     return this.transaction(actor, true, async (client) => {
-      await this.lockTag(client, actor, id);
+      const tag = await this.lockTag(client, actor, id);
+      if (tag.status === 'revoked') throw new ConflictException({ message: 'Отозванную метку нельзя переименовать' });
       const { rows } = await client.query<TagRow>(
         'UPDATE attendance_nfc_tags SET name=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *',
         [name, id, actor.tenantID],
@@ -216,6 +219,19 @@ export class ShiftsNfcService {
         `UPDATE attendance_nfc_tags SET status='revoked',revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE id=$1 AND tenant_id=$2 RETURNING *`,
         [id, actor.tenantID],
       );
+      return tagDto(rows[0]);
+    });
+  }
+  async archiveTag(actor: JwtPayload, id: string) {
+    return this.transaction(actor, true, async (client) => {
+      const tag = await this.lockTag(client, actor, id);
+      if (tag.status !== 'revoked') throw new ConflictException({ message: 'Сначала отзовите NFC-метку' });
+      const { rows } = await client.query<TagRow>(
+        `UPDATE attendance_nfc_tags SET archived_at=COALESCE(archived_at,clock_timestamp())
+         WHERE id=$1 AND tenant_id=$2 AND status='revoked' AND archived_at IS NULL RETURNING *`,
+        [id, actor.tenantID],
+      );
+      if (!rows[0]) throw new NotFoundException({ message: 'Метка уже убрана из списка' });
       return tagDto(rows[0]);
     });
   }
@@ -234,10 +250,11 @@ export class ShiftsNfcService {
       );
       const current = active[0];
       return {
-        shiftsEnabled: info.enabled,
+        shiftsEnabled: info.attendanceMode !== 'admin',
+        attendanceMode: info.attendanceMode,
         canManageTags: userHasPermission(info.actor, 'company_manage'),
         hasActiveTag: tags.length > 0,
-        canScan: info.enabled && tags.length > 0,
+        canScan: info.attendanceMode === 'nfc' && tags.length > 0,
         hasOpenShift: !!current,
         needsFirstScanConfirmation: !!current && !current.first_nfc_at,
         openShiftInOtherPoint: !!current && (current.point_id ?? null) !== pointId,
@@ -271,7 +288,8 @@ export class ShiftsNfcService {
       actor,
       false,
       async (client, initialInfo, started) => {
-        this.enabled(initialInfo);
+        if (initialInfo.attendanceMode !== 'nfc')
+          throw new ForbiddenException({ message: 'Отметка NFC отключена для вашей компании' });
         // Shared lock allows different employees to scan one tag concurrently;
         // activation/revoke take FOR UPDATE and cannot race this transaction.
         const { rows: tags } = await client.query<TagRow>(
@@ -284,7 +302,8 @@ export class ShiftsNfcService {
           throw new ForbiddenException({ message: 'Метка не активна или принадлежит другому автосервису/филиалу' });
         // Membership/feature may have changed while waiting for a tag operation.
         const info = await this.actorInfo(client, actor);
-        this.enabled(info);
+        if (info.attendanceMode !== 'nfc')
+          throw new ForbiddenException({ message: 'Отметка NFC отключена для вашей компании' });
         const { rows: requests } = await client.query<{ fingerprint: string; response: unknown }>(
           'SELECT fingerprint,response FROM attendance_nfc_requests WHERE tenant_id=$1 AND request_id=$2',
           [actor.tenantID, dto.requestId],
@@ -428,6 +447,7 @@ export class ShiftsNfcService {
         return { response, push, changed: decision.action !== 'unchanged' };
       },
       dto.requestId,
+      true,
     );
     if (result.changed) invalidateReportsForTenant(actor.tenantID);
     if (result.push) {

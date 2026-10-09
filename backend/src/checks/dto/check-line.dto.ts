@@ -1,5 +1,16 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
  * Money-field validation for POST/PATCH /checks (audit round 7, item 2).
@@ -43,6 +54,11 @@ const maxM = (label: string) => ({ message: `${label}: не больше ${MAX_T
 const maxLen = (label: string, n: number) => ({ message: `${label}: слишком длинный текст (максимум ${n} символов)` });
 
 export class CheckServiceLineDto {
+  /** Existing server-issued row identity; new rows omit it. Never a snapshot input. */
+  @IsOptional()
+  @IsUUID('all', { message: 'Некорректный идентификатор строки услуги' })
+  id?: string;
+
   @IsOptional()
   @IsString()
   serviceId?: string;

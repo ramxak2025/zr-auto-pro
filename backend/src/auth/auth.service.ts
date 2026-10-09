@@ -55,7 +55,8 @@ const USER_WITH_TENANT_COLUMNS = `
       -- режим поиска по VIN, а /my-company закрыт ключом company_manage.
       'vinEnabled',COALESCE(t.vin_enabled,false),
       -- Мастер открывает рабочую смену без доступа к настройкам компании.
-      'shiftsEnabled',COALESCE(t.shifts_enabled,false),
+      'shiftsEnabled',COALESCE(t.attendance_mode <> 'admin',t.shifts_enabled,false),
+      'attendanceMode',COALESCE(t.attendance_mode,CASE WHEN t.shifts_enabled THEN 'manual' ELSE 'admin' END),
       'subscriptionEnd',t.subscription_end,
       'subscriptionNote',COALESCE(t.subscription_note,''),
       'createdAt',t.created_at,'updatedAt',t.updated_at)::text

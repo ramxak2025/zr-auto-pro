@@ -9,6 +9,8 @@ export type NfcDeviceErrorCode =
   | 'disabled'
   | 'not-ndef'
   | 'read-only'
+  | 'tag-too-small'
+  | 'tag-not-empty'
   | 'read-failed'
   | 'write-failed';
 
@@ -91,6 +93,13 @@ async function requestNdef(operation: AttendanceNfcOperation, alertMessage: stri
   }
 }
 
+async function readConnectedNdef(operation: AttendanceNfcOperation): Promise<NdefRecord[]> {
+  assertOperation(operation);
+  const result = await NfcManager.ndefHandler.getNdefMessage();
+  assertOperation(operation);
+  return result?.ndefMessage ?? [];
+}
+
 export async function readAttendanceNfcUri(
   operation: AttendanceNfcOperation,
   alertMessage = 'Поднесите NFC-метку Autexa',
@@ -111,17 +120,24 @@ export async function writeAttendanceNfcUriAndReadBack(
   return withExclusiveOperation(operation, async () => {
     try {
       assertOperation(operation);
-      await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Поднесите пустую NFC-метку для записи' });
+      await NfcManager.requestTechnology(NfcTech.Ndef, {
+        alertMessage: 'Поднесите NFC-метку к верхнему краю iPhone и удерживайте её рядом',
+      });
       assertOperation(operation);
+      const existingRecords = await readConnectedNdef(operation);
+      if (existingRecords.length > 0) {
+        const existingUri = decodeAttendanceUri(existingRecords);
+        if (existingUri === uri) return existingUri;
+        throw new AttendanceNfcDeviceError('tag-not-empty');
+      }
       const status = await NfcManager.ndefHandler.getNdefStatus();
       assertOperation(operation);
       if (status.status !== NdefStatus.ReadWrite) throw new AttendanceNfcDeviceError('read-only');
       const message = Ndef.encodeMessage([Ndef.uriRecord(uri)]);
-      await NfcManager.writeNdefMessage(message, { reconnectAfterWrite: true });
+      if (message.length > status.capacity) throw new AttendanceNfcDeviceError('tag-too-small');
+      await NfcManager.writeNdefMessage(message);
       assertOperation(operation);
-      await NfcManager.cancelTechnologyRequest({ throwOnError: false }).catch(() => undefined);
-      assertOperation(operation);
-      return await requestNdef(operation, 'Запись завершена. Ещё раз поднесите эту метку для проверки');
+      return decodeAttendanceUri(await readConnectedNdef(operation));
     } catch (error) {
       if (error instanceof AttendanceNfcDeviceError) throw error;
       if (isUserCancellation(error)) throw new AttendanceNfcDeviceError('cancelled');

@@ -123,6 +123,7 @@ export default function DashboardPage() {
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
   const isOwner =
     user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
+  const attendanceMode = user?.tenant?.attendanceMode ?? (user?.tenant?.shiftsEnabled ? 'manual' : 'admin');
 
   const greeting = getGreeting(tenantTz);
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
@@ -137,7 +138,7 @@ export default function DashboardPage() {
       />
 
       {/* Смена — сотрудникам; владельцу/директору не показывается */}
-      {!isOwner && <ShiftControl />}
+      {!isOwner && attendanceMode === 'manual' && <ShiftControl />}
 
       {isMaster ? (
         <>

@@ -456,6 +456,11 @@ export default function ChecksPage() {
               value={c.totalRevenue}
               className={cn('font-semibold', c.isReturned ? 'text-ink-3 line-through' : 'text-ink')}
             />
+            {Number(c.servicePriceExcessTotal) > 0 && (
+              <span className="text-2xs font-medium text-warn-text">
+                +<Money value={c.servicePriceExcessTotal!} /> к прайсу
+              </span>
+            )}
             {(c.discount ?? 0) > 0 && (
               <span className="text-2xs text-ink-3">
                 скидка <Money value={c.discount ?? 0} />

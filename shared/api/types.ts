@@ -19,6 +19,7 @@ import type {
   PublicBookingHours,
   PublicBookingMode,
   PublicBookingOperator,
+  Service,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -648,6 +649,9 @@ export interface RemoveStorageCellParams {
 }
 
 export interface CreateServiceRequest {
+  priceType?: 'fixed' | 'range';
+  minPrice?: number;
+  maxPrice?: number;
   name: string;
   category?: string;
   defaultPrice: number;
@@ -656,11 +660,52 @@ export interface CreateServiceRequest {
 }
 
 export interface UpdateServiceRequest {
+  priceType?: 'fixed' | 'range';
+  minPrice?: number;
+  maxPrice?: number;
   name?: string;
   category?: string;
   defaultPrice?: number;
   masterPercent?: number | null;
   warrantyDays?: number | null;
+}
+
+/** Parsed service catalog row sent to the tenant-scoped import preview endpoint. */
+export interface ServiceImportRow {
+  sourceRow: number;
+  id?: string;
+  name: string;
+  category?: string;
+  priceType: 'fixed' | 'range';
+  defaultPrice?: number;
+  minPrice?: number;
+  maxPrice?: number;
+  masterPercent?: number | null;
+  warrantyDays?: number | null;
+}
+
+export interface ServiceImportPreviewRow {
+  sourceRow: number;
+  action: 'create' | 'update' | 'error';
+  serviceId?: string;
+  expectedPriceVersion?: number;
+  name: string;
+  category?: string;
+  message?: string;
+}
+
+export interface ServiceImportPreview {
+  previewId: string;
+  rows: ServiceImportPreviewRow[];
+  errors: string[];
+  summary: { totalRows: number; create: number; update: number; errors: number };
+}
+
+export interface ServiceImportResult {
+  requestId: string;
+  created: number;
+  updated: number;
+  services: Service[];
 }
 
 export type PutServiceVisibilityRuleRequest =
@@ -688,6 +733,7 @@ export interface CreateCheckRequest {
   cashAmount?: number;
   cardAmount?: number;
   services: Array<{
+    id?: string;
     serviceId?: string;
     masterId?: string;
     name: string;
@@ -756,6 +802,7 @@ export interface UpdateCheckRequest {
   mileage?: number;
   discount?: number;
   services?: Array<{
+    id?: string;
     serviceId?: string;
     masterId?: string;
     name: string;
@@ -932,6 +979,7 @@ export interface UpdateTenantRequest {
   subscriptionNote?: string;
   /** 070 — flip the «Смены» (shifts) subsystem on/off for the tenant. */
   shiftsEnabled?: boolean;
+  attendanceMode?: 'admin' | 'manual' | 'nfc';
   /** 092 — flip POS «Кассовая смена + роли» mode on/off for the tenant. */
   shiftModeEnabled?: boolean;
   /** 115 — индивидуальная надбавка минут голосового ввода поверх тарифа (суперадмин). */
@@ -1518,17 +1566,18 @@ export interface ApprovePublicBookingRequest extends BookingOperationRequest {
 export interface PutPublicBookingSettingsRequest extends BookingOperationRequest {
   /** 0 for the first draft; otherwise the last read server revision. Slug is immutable after creation. */
   revision: number;
-  slug: string;
+  slug?: string;
   displayName: string;
   address: string;
   contacts: string;
+  links?: { phone?: string; instagram?: string; whatsapp?: string; vk?: string; telegram?: string };
   showPrices: boolean;
   mode: PublicBookingMode;
   slotStepMinutes?: number;
   openingHours?: PublicBookingHours;
-  operator: PublicBookingOperator;
-  policyText: string;
-  consentText: string;
+  operator?: PublicBookingOperator;
+  policyText?: string;
+  consentText?: string;
   services: Array<{ serviceId: string; durationMinutes?: number }>;
   resourceIds: string[];
 }
@@ -1538,12 +1587,15 @@ export interface PublicBookingSlotsParams {
   to: string;
   serviceIds: string[];
   after?: string;
+  resourceKey?: string;
 }
 export interface SubmitPublicBookingRequest extends BookingOperationRequest {
   /** Secure random 32-byte base64url capability, generated and retained BEFORE POST. Never put it in a URL/log. */
   recoveryToken: string;
   serviceIds: string[];
   startsAt: string;
+  /** Page-scoped opaque identifier of a master explicitly offered on this public page. */
+  resourceKey?: string;
   name: string;
   phone: string;
   comment?: string;

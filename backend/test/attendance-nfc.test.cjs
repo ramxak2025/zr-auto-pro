@@ -31,7 +31,7 @@ const at = time => `2026-10-08T${time}+03:00`;
 // Public contract checks never need the fixture.
 test('NFC routes require JWT, management uses company_manage, and scan DTO cannot override actor/point/clock', async () => {
   assert.deepEqual(Reflect.getMetadata('__guards__', ShiftsNfcController), [JwtAuthGuard, PermissionsGuard]);
-  for (const method of ['tags','create','activate','rename','revoke']) assert.equal(Reflect.getMetadata(PERMISSION_KEY, ShiftsNfcController.prototype[method]), 'company_manage');
+  for (const method of ['tags','create','activate','rename','revoke','archive']) assert.equal(Reflect.getMetadata(PERMISSION_KEY, ShiftsNfcController.prototype[method]), 'company_manage');
   const pipe = new ValidationPipe({ transform:true, whitelist:true });
   const parsed = await pipe.transform({token:token(),requestId:randomUUID(),userId:randomUUID(),pointId:randomUUID(),now:'2000-01-01'}, {type:'body',metatype:NfcScanDto});
   assert.deepEqual(Object.keys(parsed).sort(), ['requestId','token']);
@@ -109,7 +109,7 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
   const run=(f,when,fn,before)=>time.run({ticks:Array.isArray(when)?[...when]:[when],before},()=>runWithTenant(f.tenant,fn));
   const seed=async({point=true,timezone='Europe/Moscow'}={})=>{
     const f=Object.fromEntries(['tenant','point','otherPoint','owner','worker','otherWorker'].map(k=>[k,randomUUID()])); tenants.push(f.tenant);
-    await q("INSERT INTO tenants(id,name,timezone,shifts_enabled) VALUES($1,$2,$3,true)",[f.tenant,'NFC fixture '+f.tenant,timezone]);
+    await q("INSERT INTO tenants(id,name,timezone,shifts_enabled,attendance_mode) VALUES($1,$2,$3,true,'nfc')",[f.tenant,'NFC fixture '+f.tenant,timezone]);
     if(point) await q("INSERT INTO tenant_points(id,tenant_id,name,is_main) VALUES($1,$3,'Main',true),($2,$3,'Other',false)",[f.point,f.otherPoint,f.tenant]);
     else { f.point=null; f.otherPoint=null; }
     for(const [id,role] of [[f.owner,'director'],[f.worker,'master'],[f.otherWorker,'master']]) await q("INSERT INTO users(id,tenant_id,phone,password,full_name,role) VALUES($1,$2,$4,'fixture-only','NFC worker',$3)",[id,f.tenant,role,id]);
@@ -131,6 +131,11 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
   try {
     await t.test('real FORCE RLS is active; no token stored/listed; pending activation is readback-bound; owner permission is fresh',async()=>{
       const f=await seed(), other=await seed(), tag=await f.makeTag(false);
+      await q("UPDATE tenants SET shifts_enabled=false,attendance_mode='admin' WHERE id=$1",[f.tenant]);
+      const ownerStatus=await run(f,at('08:00:00'),()=>service.status(f.boss));assert.equal(ownerStatus.canManageTags,true);assert.equal(ownerStatus.attendanceMode,'admin');
+      const adminPrepared=await f.makeTag();
+      await assert.rejects(f.scan(adminPrepared),status(403));
+      const adminList=await run(f,at('08:00:00'),()=>service.listTags(f.boss));assert.ok(adminList.some((item)=>item.id===adminPrepared.id));
       assert.equal(tag.status,'pending'); assert.equal(tag.token.length,43);
       const row=await one('SELECT * FROM attendance_nfc_tags WHERE id=$1',[tag.id]);
       assert.equal(row.token_hash,nfcTokenHash(tag.token)); assert.ok(!JSON.stringify(row).includes(tag.token));
@@ -138,7 +143,18 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
       await assert.rejects(f.scan(tag),status(403));
       await assert.rejects(run(f,at('08:00:00'),()=>service.activateTag(f.boss,tag.id,{token:token()})),status(400));
       const active=await run(f,at('08:00:00'),()=>service.activateTag(f.boss,tag.id,{token:tag.token})); assert.equal(active.status,'active');
+      await assert.rejects(f.scan(tag),status(403),'tag activation does not enable attendance scans in admin mode');
       const renamed=await run(f,at('08:00:00'),()=>service.renameTag(f.boss,tag.id,{name:'Бокс 1'})); assert.equal(renamed.name,'Бокс 1');
+      await q("UPDATE tenants SET shifts_enabled=true,attendance_mode='nfc' WHERE id=$1",[f.tenant]);
+      const archivedTag=await f.makeTag(); await f.scan(archivedTag,at('09:00:00'));
+      await assert.rejects(run(f,at('09:01:00'),()=>service.archiveTag(f.boss,archivedTag.id)),status(409));
+      await run(f,at('09:01:00'),()=>service.revokeTag(f.boss,archivedTag.id));
+      const archived=await run(f,at('09:02:00'),()=>service.archiveTag(f.boss,archivedTag.id));
+      assert.equal(archived.status,'revoked');
+      const archivedRow=await one('SELECT archived_at FROM attendance_nfc_tags WHERE id=$1',[archivedTag.id]);
+      assert.ok(archivedRow.archived_at,'archive preserves the tag row');
+      assert.equal((await one('SELECT tag_id FROM attendance_nfc_requests WHERE tag_id=$1 LIMIT 1',[archivedTag.id])).tag_id,archivedTag.id);
+      assert.ok(!(await run(f,at('09:02:00'),()=>service.listTags(f.boss))).some((item)=>item.id===archivedTag.id));
       await assert.rejects(run(f,at('08:00:00'),()=>service.createTag({...f.actor,role:'director',permissions:{company_manage:true}},{name:'Spoof'})),status(403));
       await q("UPDATE users SET role='admin' WHERE id=$1",[f.worker]);
       await assert.rejects(run(f,at('08:00:00'),()=>service.createTag({...f.actor,role:'admin',permissions:{company_manage:true}},{name:'Admin without company gate'})),status(403));
@@ -171,14 +187,18 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
     });
     await t.test('manually opened shift first scan only confirms; manual new open takes precedence over prior NFC-close cooldown',async()=>{
       const f=await seed(),tag=await f.makeTag();
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[f.tenant]);
       const manual=await run(f,at('09:15:00'),()=>shifts.open(f.worker,f.tenant,f.actor)), entry=await f.entry();
+      await q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[f.tenant]);
       const reportKey='reports-builder:'+f.tenant+':nfc';ttlCache.set(reportKey,{version:'before-confirmation'},60000);
       const confirmed=await f.scan(tag,at('12:00:00')); assert.equal(confirmed.action,'confirmed'); assert.equal(confirmed.shift.id,manual.id); assert.equal(confirmed.firstNfcAt,instant(at('12:00:00')));
       assert.deepEqual(await f.entry(),entry);assert.equal(ttlCache.get(reportKey),undefined);
       const warm={version:'after-confirmation'};ttlCache.set(reportKey,warm,60000);
       assert.equal((await f.scan(tag,at('12:10:00'))).action,'unchanged');assert.equal(ttlCache.get(reportKey),warm);
       await f.scan(tag,at('12:10:01'));
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[f.tenant]);
       const next=await run(f,at('12:10:02'),()=>shifts.open(f.worker,f.tenant,f.actor));
+      await q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[f.tenant]);
       const duringCooldown=await f.scan(tag,at('12:10:03')); assert.equal(duringCooldown.action,'confirmed'); assert.equal(duringCooldown.shift.id,next.id);
       assert.deepEqual(await f.entry(),entry);
     });
@@ -241,16 +261,58 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
         assert.deepEqual(await f.entry(),original);
       }
     });
-    await t.test('manual schedule/open and NFC serialize on the employee; manual close locks the same shift without lost closure',async()=>{
+    await t.test('self-service open and close require manual mode; NFC confirms the open shift in NFC mode',async()=>{
       const f=await seed(),tag=await f.makeTag();
-      await Promise.all([
-        f.scan(tag,at('09:15:00')),
-        run(f,at('09:15:00'),()=>schedule.create(f.tenant,{userId:f.worker,date:'2026-10-08',lateStatus:'on_time'},f.boss)),
-        run(f,at('09:15:00'),()=>shifts.open(f.worker,f.tenant,f.actor)),
-      ]);
+      await assert.rejects(run(f,at('09:14:00'),()=>shifts.open(f.worker,f.tenant,f.actor)),status(403));
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[f.tenant]);
+      await run(f,at('09:15:00'),()=>schedule.create(f.tenant,{userId:f.worker,date:'2026-10-08',lateStatus:'on_time'},f.boss));
+      const opened=await run(f,at('09:15:00'),()=>shifts.open(f.worker,f.tenant,f.actor));
+      await q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[f.tenant]);
+      const confirmed=await f.scan(tag,at('09:16:00'));assert.equal(confirmed.action,'confirmed');assert.equal(confirmed.shift.id,opened.id);
       const events=await f.events(); assert.equal(events.length,1); assert.equal((await f.entry()).late_status,'on_time'); assert.equal((await f.entry()).is_manual_override,true);
-      await Promise.all([f.scan(tag,at('09:30:00')),run(f,at('09:30:00'),()=>shifts.close(events[0].id,f.tenant,f.actor))]);
+      await assert.rejects(run(f,at('09:30:00'),()=>shifts.close(events[0].id,f.tenant,f.actor)),status(403));
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[f.tenant]);
+      await run(f,at('09:30:00'),()=>shifts.close(events[0].id,f.tenant,f.actor));
       assert.ok((await f.events())[0].closed_at); assert.ok((await f.events()).filter(e=>!e.closed_at).length<=1);
+    });
+    await t.test('manual open and close serialize with tenant mode changes while queued on their attendance row',async()=>{
+      const waitForQuery=async(fragment)=>waitUntil(async()=>(await one(
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE $1",
+        [`%${fragment}%`],
+      )).n>=1);
+      const assertModeUpdateWaits=async(tenant)=>waitUntil(async()=>(await one(
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE 'UPDATE tenants SET attendance_mode=%'",
+      )).n>=1);
+
+      const opening=await seed();
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[opening.tenant]);
+      const userBlocker=await admin.connect();
+      await userBlocker.query('BEGIN');
+      await userBlocker.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[opening.worker]);
+      const openPromise=run(opening,at('09:15:00'),()=>shifts.open(opening.worker,opening.tenant,opening.actor));
+      await waitForQuery('SELECT id FROM users WHERE id=$1 AND tenant_id=$2 FOR UPDATE');
+      const openModeChange=q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[opening.tenant]);
+      await assertModeUpdateWaits(opening.tenant);
+      await userBlocker.query('COMMIT'); userBlocker.release();
+      const opened=await openPromise; await openModeChange;
+      assert.equal((await one('SELECT attendance_mode FROM tenants WHERE id=$1',[opening.tenant])).attendance_mode,'nfc');
+      assert.equal((await one('SELECT COUNT(*)::int n FROM shifts WHERE tenant_id=$1 AND user_id=$2 AND id=$3',[opening.tenant,opening.worker,opened.id])).n,1);
+
+      const closing=await seed();
+      await q("UPDATE tenants SET attendance_mode='manual' WHERE id=$1",[closing.tenant]);
+      const shift=await run(closing,at('09:15:00'),()=>shifts.open(closing.worker,closing.tenant,closing.actor));
+      const shiftBlocker=await admin.connect();
+      await shiftBlocker.query('BEGIN');
+      await shiftBlocker.query('SELECT id FROM shifts WHERE id=$1 FOR UPDATE',[shift.id]);
+      const closePromise=run(closing,at('17:00:00'),()=>shifts.close(shift.id,closing.tenant,closing.actor));
+      await waitForQuery('SELECT user_id FROM shifts WHERE id=$1 AND tenant_id=$2 AND closed_at IS NULL FOR UPDATE');
+      const closeModeChange=q("UPDATE tenants SET attendance_mode='nfc' WHERE id=$1",[closing.tenant]);
+      await assertModeUpdateWaits(closing.tenant);
+      await shiftBlocker.query('COMMIT'); shiftBlocker.release();
+      await closePromise; await closeModeChange;
+      const final=await one('SELECT closed_at FROM shifts WHERE id=$1',[shift.id]);
+      assert.ok(final.closed_at,'close committed before the waiting mode change');
+      assert.equal((await one('SELECT attendance_mode FROM tenants WHERE id=$1',[closing.tenant])).attendance_mode,'nfc');
     });
     await t.test('tenant-local midnight closes old event at exact next midnight and starts a fresh day; concurrent sweep is compatible',async()=>{
       const f=await seed({timezone:'Asia/Kolkata'}),tag=await f.makeTag(),oldKey=randomUUID();
@@ -270,9 +332,9 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
       await q('UPDATE user_points SET point_id=$1 WHERE user_id=$2',[f.otherPoint,f.worker]);
       await assert.rejects(f.scan(tag,at('09:30:00'),requestId),status(403));
       await q('UPDATE user_points SET point_id=$1 WHERE user_id=$2',[f.point,f.worker]);
-      await q('UPDATE tenants SET shifts_enabled=false WHERE id=$1',[f.tenant]); await assert.rejects(f.scan(tag,at('09:30:00'),requestId),status(403));
+      await q("UPDATE tenants SET shifts_enabled=false,attendance_mode='admin' WHERE id=$1",[f.tenant]); await assert.rejects(f.scan(tag,at('09:30:00'),requestId),status(403));
       assert.equal((await run(f,at('09:30:00'),()=>service.status(f.actor))).canScan,false);
-      await q('UPDATE tenants SET shifts_enabled=true WHERE id=$1',[f.tenant]);
+      await q("UPDATE tenants SET shifts_enabled=true,attendance_mode='nfc' WHERE id=$1",[f.tenant]);
       await q('UPDATE users SET is_active=false WHERE id=$1',[f.worker]); await assert.rejects(f.scan(tag,at('09:30:00'),requestId),status(403));
       await q('UPDATE users SET is_active=true,dismissed_at=now() WHERE id=$1',[f.worker]); await assert.rejects(f.scan(tag,at('09:30:00'),requestId),status(403));
       await q('UPDATE users SET dismissed_at=NULL WHERE id=$1',[f.worker]);

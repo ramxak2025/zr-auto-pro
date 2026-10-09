@@ -61,6 +61,21 @@ export async function lockAttendanceUser(client: PoolClient, tenantID: string, u
   if (rows.length === 0) throw new BadRequestException({ message: 'Сотрудник не найден' });
 }
 
+/**
+ * Serialize attendance mutations with tenant attendance-mode updates. The
+ * shared row lock is held until the caller's transaction commits, so a mode
+ * change either precedes the authorization check or waits for the authorized
+ * attendance mutation to finish.
+ */
+export async function lockTenantAttendanceMode(client: PoolClient, tenantID: string) {
+  const { rows } = await client.query<{ attendance_mode: string | null; shifts_enabled: boolean }>(
+    'SELECT attendance_mode,shifts_enabled FROM tenants WHERE id=$1 FOR SHARE',
+    [tenantID],
+  );
+  if (!rows[0]) throw new BadRequestException({ message: 'Компания не найдена' });
+  return rows[0].attendance_mode ?? (rows[0].shifts_enabled ? 'manual' : 'admin');
+}
+
 export async function attendanceClock(client: PoolClient, timezone: string) {
   // Read AFTER the employee lock: transaction-start now() may predate a long wait.
   const { rows } = await client.query<{ instant: Date }>('SELECT clock_timestamp() AS instant');

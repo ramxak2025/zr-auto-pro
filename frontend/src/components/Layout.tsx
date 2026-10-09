@@ -287,6 +287,7 @@ const routeTitles: Record<string, string> = {
   knowledge: 'База знаний',
   'company-settings': 'Настройки компании',
   integrations: 'Интеграции',
+  bookings: 'Записи',
 };
 
 const subRouteTitles: Record<string, string> = {

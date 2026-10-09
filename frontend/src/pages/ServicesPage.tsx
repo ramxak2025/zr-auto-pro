@@ -1,6 +1,18 @@
-import { useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Wrench, Pencil, Trash2, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import {
+  Plus,
+  Wrench,
+  Pencil,
+  Trash2,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  History,
+  FileSpreadsheet,
+  Download,
+  Upload,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,23 +28,32 @@ import {
   Modal,
   Money,
   PageHeader,
-  Pagination,
   SearchInput,
   Toolbar,
 } from '../ui';
 import type { DataTableColumn } from '../ui';
-import type { Service, PaginatedResponse, ServiceVisibilityConfig } from '../types';
+import type { Service, PaginatedResponse, ServiceVisibilityConfig, ServicePriceHistoryEntry } from '../types';
 import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
 import { countLabel, formatPercent, parseNumberInput } from '../components/warehouse/format';
-import { pageParam, useUrlParams } from '../components/warehouse/useUrlParams';
+import { useUrlParams } from '../components/warehouse/useUrlParams';
+import type { ServiceImportPreview } from '../../../shared/api/types';
+import {
+  assertNoServiceWorkbookFormulas,
+  assertServiceWorkbookSafe,
+  parseServiceImportMatrix,
+  serviceExportMatrix,
+} from '../../../shared/utils/serviceSpreadsheet';
+import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 
-const LIMIT = 20;
 const FORM_ID = 'service-form';
 
 interface ServicePayload {
   name: string;
   category?: string;
+  priceType: 'fixed' | 'range';
   defaultPrice: number;
+  minPrice?: number;
+  maxPrice?: number;
   masterPercent?: number | null;
   warrantyDays?: number | null;
 }
@@ -52,7 +73,6 @@ export default function ServicesPage() {
   // Поиск и страница — в URL: F5 и «Назад» сохраняют список.
   const [params, setParam] = useUrlParams();
   const search = params.get('q') ?? '';
-  const page = pageParam(params);
 
   // Модалка формы
   const [modalOpen, setModalOpen] = useState(false);
@@ -60,10 +80,26 @@ export default function ServicesPage() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
+  const [priceType, setPriceType] = useState<'fixed' | 'range'>('fixed');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [masterPercent, setMasterPercent] = useState('');
   const [warrantyDays, setWarrantyDays] = useState('');
 
   const [deleteTarget, setDeleteTarget] = useState<Service | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<ServiceImportPreview | null>(null);
+  const [importRequestId, setImportRequestId] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [historyTarget, setHistoryTarget] = useState<Service | null>(null);
+  const historyQuery = useQuery<ServicePriceHistoryEntry[]>({
+    queryKey: ['service-price-history', historyTarget?.id],
+    queryFn: async () => {
+      if (!historyTarget) return [];
+      return (await servicesApi.priceHistory(historyTarget.id)).data;
+    },
+    enabled: !!historyTarget,
+  });
   const [visibilityTarget, setVisibilityTarget] = useState<
     { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string } | null
   >(null);
@@ -72,9 +108,9 @@ export default function ServicesPage() {
   const [folderListOpen, setFolderListOpen] = useState(false);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery<PaginatedResponse<Service>>({
-    queryKey: ['services', { search, page, limit: LIMIT, category: undefined, preferredOnly }],
+    queryKey: ['services', { search, preferredOnly, limit: 10000 }],
     queryFn: async () => {
-      const res = await servicesApi.getAll({ search, page, limit: LIMIT, preferredOnly });
+      const res = await servicesApi.getAll({ search, page: 1, limit: 10000, preferredOnly });
       return res.data;
     },
   });
@@ -172,11 +208,74 @@ export default function ServicesPage() {
     onError: () => toast.error('Ошибка при удалении услуги'),
   });
 
+  const exportCatalog = async () => {
+    try {
+      const XLSX = await import('xlsx-service-import');
+      const response = await servicesApi.exportCatalog();
+      const sheet = XLSX.utils.aoa_to_sheet(serviceExportMatrix(response.data));
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, sheet, 'Услуги');
+      XLSX.writeFile(book, 'Каталог услуг Autexa.xlsx');
+    } catch {
+      toast.error('Не удалось выгрузить каталог услуг');
+    }
+  };
+
+  const previewFile = async (file?: File) => {
+    if (!file) return;
+    setImportBusy(true);
+    try {
+      if (file.size > 5 * 1024 * 1024) throw new Error('Файл больше 5 МБ');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      assertServiceWorkbookSafe(bytes);
+      const XLSX = await import('xlsx-service-import');
+      const book = XLSX.read(bytes, { type: 'array', raw: true, cellFormula: true, sheetRows: 2001 });
+      assertNoServiceWorkbookFormulas(Object.values(book.Sheets) as Array<Record<string, { f?: unknown }>>);
+      const sheet = book.Sheets[book.SheetNames[0]];
+      if (!sheet) throw new Error('В книге нет листа с услугами');
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true });
+      const rows = parseServiceImportMatrix(matrix);
+      const result = await servicesApi.previewImport(rows);
+      setImportPreview(result.data);
+      setImportRequestId(crypto.randomUUID());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось прочитать файл услуг');
+      setImportPreview(null);
+      setImportRequestId(null);
+    } finally {
+      setImportBusy(false);
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importPreview || !importRequestId || importPreview.summary.errors > 0) return;
+    setImportBusy(true);
+    try {
+      const result = await servicesApi.confirmImport(importPreview.previewId, importRequestId);
+      await queryClient.invalidateQueries({ queryKey: ['services'] });
+      await queryClient.invalidateQueries({ queryKey: ['services-all'] });
+      toast.success(`Импорт завершён: создано ${result.data.created}, обновлено ${result.data.updated}`);
+      setImportPreview(null);
+      setImportRequestId(null);
+    } catch (error) {
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        status === 409 ? 'Каталог изменился. Загрузите файл повторно для нового просмотра.' : 'Импорт не выполнен',
+      );
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
   const openCreate = () => {
     setEditingService(null);
     setName('');
     setCategory('');
     setDefaultPrice('');
+    setPriceType('fixed');
+    setMinPrice('');
+    setMaxPrice('');
     setMasterPercent('');
     setWarrantyDays('');
     setModalOpen(true);
@@ -187,6 +286,9 @@ export default function ServicesPage() {
     setName(service.name);
     setCategory(service.category || '');
     setDefaultPrice(String(service.defaultPrice));
+    setPriceType(service.priceType ?? 'fixed');
+    setMinPrice(String(service.minPrice ?? service.defaultPrice));
+    setMaxPrice(String(service.maxPrice ?? service.defaultPrice));
     setMasterPercent(service.masterPercent != null ? String(service.masterPercent) : '');
     setWarrantyDays(service.warrantyDays != null ? String(service.warrantyDays) : '');
     setModalOpen(true);
@@ -203,9 +305,11 @@ export default function ServicesPage() {
       toast.error('Введите название услуги');
       return;
     }
-    const price = parseNumberInput(defaultPrice);
-    if (price === null || price < 0) {
-      toast.error('Введите цену по умолчанию');
+    let pricePolicy;
+    try {
+      pricePolicy = servicePriceFormValue(priceType, defaultPrice, minPrice, maxPrice);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Проверьте цену услуги');
       return;
     }
     const pctRaw = masterPercent.trim();
@@ -223,7 +327,7 @@ export default function ServicesPage() {
     const payload: ServicePayload = {
       name: name.trim(),
       category: category.trim() || undefined,
-      defaultPrice: price,
+      ...pricePolicy,
       masterPercent: pct,
       warrantyDays: wdParsed === null ? null : Math.max(0, Math.floor(wdParsed)),
     };
@@ -233,6 +337,24 @@ export default function ServicesPage() {
 
   const services = data?.data ?? [];
   const total = data?.total ?? 0;
+  const [activePath, setActivePath] = useState<string[]>([]);
+  const { folders, visibleServices } = useMemo(() => {
+    const folderNames = new Set<string>();
+    const visible: Service[] = [];
+    for (const service of services) {
+      const parts = (service.category || '')
+        .split('/')
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (activePath.some((part, index) => parts[index] !== part)) continue;
+      if (!search && parts.length > activePath.length) folderNames.add(parts[activePath.length]);
+      else if (search || parts.length === activePath.length) visible.push(service);
+    }
+    return {
+      folders: [...folderNames].sort((a, b) => a.localeCompare(b, 'ru')),
+      visibleServices: visible,
+    };
+  }, [services, activePath, search]);
   const saving = createMutation.isPending || updateMutation.isPending;
 
   const columns: DataTableColumn<Service>[] = [
@@ -276,7 +398,14 @@ export default function ServicesPage() {
       header: 'Цена по умолчанию',
       numeric: true,
       sortable: true,
-      render: (s) => <Money value={s.defaultPrice} className="font-medium text-ink" />,
+      render: (s) =>
+        s.priceType === 'range' ? (
+          <span className="font-medium text-ink">
+            <Money value={s.minPrice ?? s.defaultPrice} /> – <Money value={s.maxPrice ?? s.defaultPrice} />
+          </span>
+        ) : (
+          <Money value={s.defaultPrice} className="font-medium text-ink" />
+        ),
     },
     ...(canManage
       ? ([
@@ -313,7 +442,7 @@ export default function ServicesPage() {
             header: <span className="sr-only">Действия</span>,
             interactive: true,
             align: 'right',
-            width: 148,
+            width: 184,
             render: (s) => (
               <span className="inline-flex items-center justify-end gap-1">
                 <IconButton
@@ -322,6 +451,12 @@ export default function ServicesPage() {
                   size="sm"
                   disabled={!visibilityConfigQuery.isSuccess}
                   onClick={() => openVisibilityEditor({ kind: 'service', id: s.id, label: s.name })}
+                />
+                <IconButton
+                  label={`История цены: ${s.name}`}
+                  icon={History}
+                  size="sm"
+                  onClick={() => setHistoryTarget(s)}
                 />
                 <IconButton label={`Изменить: ${s.name}`} icon={Pencil} size="sm" onClick={() => openEdit(s)} />
                 <IconButton
@@ -346,9 +481,30 @@ export default function ServicesPage() {
         subtitle={data ? `${countLabel(total, ['услуга', 'услуги', 'услуг'])} в прайс-листе` : undefined}
         actions={
           canManage ? (
-            <Button icon={Plus} onClick={openCreate}>
-              Новая услуга
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" icon={Download} onClick={() => void exportCatalog()}>
+                Excel
+              </Button>
+              <Button
+                variant="secondary"
+                icon={Upload}
+                onClick={() => importInputRef.current?.click()}
+                loading={importBusy}
+              >
+                Импорт
+              </Button>
+              <Button icon={Plus} onClick={openCreate}>
+                Новая услуга
+              </Button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="sr-only"
+                aria-label="Выбрать файл каталога услуг"
+                onChange={(event) => void previewFile(event.target.files?.[0])}
+              />
+            </div>
           ) : undefined
         }
       />
@@ -356,8 +512,11 @@ export default function ServicesPage() {
       <Toolbar>
         <SearchInput
           value={search}
-          onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
-          placeholder="Название услуги…"
+          onChange={(value) => {
+            setActivePath([]);
+            setParam({ q: value, page: null }, { replace: true });
+          }}
+          placeholder="Название или категория…"
           className="w-full sm:w-72"
         />
         {canManage && (
@@ -385,6 +544,43 @@ export default function ServicesPage() {
         )}
       </Toolbar>
 
+      {!search && activePath.length > 0 && (
+        <nav aria-label="Путь в каталоге" className="flex flex-wrap items-center gap-2 text-sm text-ink-2">
+          <button type="button" className="hover:text-accent" onClick={() => setActivePath([])}>
+            Все услуги
+          </button>
+          {activePath.map((part, index) => (
+            <span key={`${part}-${index}`} className="flex items-center gap-2">
+              <span aria-hidden="true">/</span>
+              <button
+                type="button"
+                className={index === activePath.length - 1 ? 'font-semibold text-ink' : 'hover:text-accent'}
+                onClick={() => setActivePath((path) => path.slice(0, index + 1))}
+              >
+                {part}
+              </button>
+            </span>
+          ))}
+        </nav>
+      )}
+
+      {!search && folders.length > 0 && (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {folders.map((folder) => (
+            <button
+              key={folder}
+              type="button"
+              onClick={() => setActivePath((path) => [...path, folder])}
+              className="flex items-center gap-3 rounded-xl border border-line bg-surface-1 px-4 py-3 text-left hover:bg-surface-2"
+            >
+              <Wrench className="h-4 w-4 text-accent" aria-hidden="true" />
+              <span className="font-medium text-ink">{folder}</span>
+              <span className="ml-auto text-xs text-ink-3">Папка</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {canManage && visibilityConfigQuery.isError && (
         <div
           role="alert"
@@ -398,7 +594,7 @@ export default function ServicesPage() {
       )}
 
       <DataTable
-        rows={services}
+        rows={visibleServices}
         rowKey={(s) => s.id}
         columns={columns}
         caption="Прайс-лист услуг"
@@ -427,7 +623,7 @@ export default function ServicesPage() {
         }}
       />
 
-      <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => setParam({ page: p === 1 ? null : p })} />
+      {!search && total > 10000 && <p className="text-sm text-ink-3">Показаны первые 10 000 услуг.</p>}
 
       <Modal
         isOpen={folderListOpen}
@@ -557,7 +753,11 @@ export default function ServicesPage() {
             />
           </Field>
 
-          <Field label="Категория" htmlFor="service-category" hint="Например: Диагностика, ТО, Ходовая">
+          <Field
+            label="Категория"
+            htmlFor="service-category"
+            hint="Путь папки через «/», например: Диагностика/Двигатель/Работы"
+          >
             <Input
               id="service-category"
               value={category}
@@ -567,16 +767,53 @@ export default function ServicesPage() {
             />
           </Field>
 
-          <Field label="Цена по умолчанию, ₽" htmlFor="service-price" required>
-            <Input
-              id="service-price"
-              inputMode="decimal"
-              value={defaultPrice}
-              onChange={(e) => setDefaultPrice(e.target.value)}
-              placeholder="0"
-              className="tabular-nums"
-            />
+          <Field label="Тип цены" htmlFor="service-price-type">
+            <select
+              id="service-price-type"
+              value={priceType}
+              onChange={(e) => setPriceType(e.target.value as 'fixed' | 'range')}
+              className="w-full rounded-lg border border-line bg-surface-1 px-3 py-2 text-ink"
+            >
+              <option value="fixed">Фиксированная</option>
+              <option value="range">Диапазон</option>
+            </select>
           </Field>
+
+          {priceType === 'fixed' ? (
+            <Field label="Цена, ₽" htmlFor="service-price" required>
+              <Input
+                id="service-price"
+                inputMode="decimal"
+                value={defaultPrice}
+                onChange={(e) => setDefaultPrice(e.target.value)}
+                placeholder="0"
+                className="tabular-nums"
+              />
+            </Field>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="От, ₽" htmlFor="service-price-min" required>
+                <Input
+                  id="service-price-min"
+                  inputMode="decimal"
+                  value={minPrice}
+                  onChange={(e) => setMinPrice(e.target.value)}
+                  placeholder="Минимум"
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field label="До, ₽" htmlFor="service-price-max" required>
+                <Input
+                  id="service-price-max"
+                  inputMode="decimal"
+                  value={maxPrice}
+                  onChange={(e) => setMaxPrice(e.target.value)}
+                  placeholder="Максимум"
+                  className="tabular-nums"
+                />
+              </Field>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field
@@ -620,6 +857,120 @@ export default function ServicesPage() {
         confirmText="Удалить"
         variant="danger"
       />
+
+      <Modal
+        isOpen={!!historyTarget}
+        onClose={() => setHistoryTarget(null)}
+        title="История цены"
+        description={historyTarget?.name}
+      >
+        {historyQuery.isLoading ? <p className="py-4 text-sm text-ink-3">Загружаем историю…</p> : null}
+        {historyQuery.isError ? (
+          <p role="alert" className="py-4 text-sm text-danger">
+            Не удалось загрузить историю цены.
+          </p>
+        ) : null}
+        {historyQuery.isSuccess && historyQuery.data.length === 0 ? (
+          <p className="py-4 text-sm text-ink-3">Записей пока нет.</p>
+        ) : null}
+        <ol className="max-h-[55vh] space-y-3 overflow-y-auto">
+          {historyQuery.data?.map((entry) => (
+            <li key={entry.id} className="rounded-lg border border-line p-3">
+              <div className="flex items-start justify-between gap-3">
+                <span className="font-medium text-ink">
+                  {entry.priceType === 'range'
+                    ? `Диапазон ${entry.minPrice}–${entry.maxPrice} ₽`
+                    : `Фиксированная ${entry.defaultPrice} ₽`}
+                </span>
+                <span className="text-xs text-ink-3">v{entry.version}</span>
+              </div>
+              <p className="mt-1 text-xs text-ink-3">
+                {new Date(entry.changedAt).toLocaleString('ru-RU')} · {entry.changedByName || 'Система'} ·{' '}
+                {entry.source === 'baseline'
+                  ? 'Снимок при включении контроля цен'
+                  : entry.source === 'create'
+                    ? 'Создание услуги'
+                    : 'Изменение цены'}
+              </p>
+            </li>
+          ))}
+        </ol>
+      </Modal>
+
+      <Modal
+        isOpen={!!importPreview}
+        onClose={() => {
+          if (!importBusy) {
+            setImportPreview(null);
+            setImportRequestId(null);
+          }
+        }}
+        title="Предварительный просмотр импорта"
+        description="Сервер сверил строки с вашим каталогом. Подтвердите только полностью корректный файл."
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              disabled={importBusy}
+              onClick={() => {
+                setImportPreview(null);
+                setImportRequestId(null);
+              }}
+            >
+              Отмена
+            </Button>
+            <Button
+              disabled={!importPreview || importPreview.summary.errors > 0 || importBusy}
+              loading={importBusy}
+              onClick={() => void confirmImport()}
+            >
+              Подтвердить импорт
+            </Button>
+          </>
+        }
+      >
+        {importPreview && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-2 text-center text-sm">
+              <div className="rounded-lg bg-surface-2 p-3">
+                <strong className="block text-lg">{importPreview.summary.totalRows}</strong>строк
+              </div>
+              <div className="rounded-lg bg-surface-2 p-3">
+                <strong className="block text-lg">{importPreview.summary.create}</strong>создать
+              </div>
+              <div className="rounded-lg bg-surface-2 p-3">
+                <strong className="block text-lg">{importPreview.summary.update}</strong>обновить
+              </div>
+            </div>
+            <div className="max-h-[45vh] space-y-2 overflow-y-auto">
+              {importPreview.rows.map((row) => (
+                <div
+                  key={row.sourceRow}
+                  className={`rounded-lg border p-3 text-sm ${row.action === 'error' ? 'border-bad-soft bg-bad-soft/30' : 'border-line'}`}
+                >
+                  <div className="flex justify-between gap-2">
+                    <span className="font-medium text-ink">{row.name}</span>
+                    <span className="shrink-0 text-xs text-ink-3">Строка {row.sourceRow}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-2">
+                    {row.category || 'Без категории'} ·{' '}
+                    {row.action === 'create'
+                      ? 'Создать'
+                      : row.action === 'update'
+                        ? 'Обновить существующую'
+                        : row.message}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {importPreview.errors.length > 0 && (
+              <p role="alert" className="text-sm text-danger">
+                Есть ошибки. Исправьте файл и загрузите его снова; ни одна строка не будет применена.
+              </p>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -28,7 +28,7 @@ function fakePool(rows = []) {
     async query(sql, params) {
       calls.push({ sql: flat(sql), params });
       if (sql.includes('SELECT timezone FROM tenants')) return { rows: [{ timezone: 'Europe/Moscow' }] };
-      if (sql.includes('SELECT shifts_enabled FROM tenants')) return { rows: [{ shifts_enabled: true }] };
+      if (sql.includes('SELECT attendance_mode FROM tenants')) return { rows: [{ attendance_mode: 'manual' }] };
       return { rows: /^\s*SELECT s\.\*/.test(sql) ? rows : [], rowCount: 0 };
     },
   };
@@ -169,7 +169,7 @@ async function withDatabase(now, scenario) {
     await client.query('BEGIN');
     await client.query('SET LOCAL search_path = pg_temp');
     await client.query(`
-      CREATE TEMP TABLE tenants (id uuid PRIMARY KEY, timezone text, shifts_enabled boolean DEFAULT true) ON COMMIT DROP;
+      CREATE TEMP TABLE tenants (id uuid PRIMARY KEY, timezone text, shifts_enabled boolean DEFAULT true, attendance_mode text DEFAULT 'manual') ON COMMIT DROP;
       CREATE TEMP TABLE users (
         id uuid PRIMARY KEY, tenant_id uuid, full_name text DEFAULT 'Мастер', role text DEFAULT 'master', avatar text,
         is_active boolean DEFAULT true, dismissed_at timestamptz, purged_at timestamptz,

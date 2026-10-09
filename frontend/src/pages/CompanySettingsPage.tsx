@@ -49,6 +49,7 @@ interface CompanyForm {
   kpp: string;
   ogrn: string;
   receiptFooter: string;
+  attendanceMode: 'admin' | 'manual' | 'nfc';
   /** 157 — часовой пояс автосервиса (IANA-id). Дефолт — Москва. */
   timezone: string;
   /**
@@ -71,6 +72,7 @@ function formFromCompany(company: Tenant): CompanyForm {
     kpp: company.kpp || '',
     ogrn: company.ogrn || '',
     receiptFooter: company.receiptFooter || '',
+    attendanceMode: company.attendanceMode ?? (company.shiftsEnabled === true ? 'manual' : 'admin'),
     timezone: company.timezone || DEFAULT_TIMEZONE,
     pointsSharedClients: company.pointsSharedClients !== false,
   };
@@ -87,11 +89,30 @@ const EMPTY_FORM: CompanyForm = {
   kpp: '',
   ogrn: '',
   receiptFooter: '',
+  attendanceMode: 'admin',
   timezone: DEFAULT_TIMEZONE,
   pointsSharedClients: true,
 };
 
 type SettingsTab = 'company' | 'cars' | 'cash' | 'loyalty' | 'oneC';
+
+const ATTENDANCE_MODE_OPTIONS = [
+  {
+    value: 'admin',
+    label: 'Отметки ставит администратор',
+    description: 'Администратор отмечает приход и уход в графике.',
+  },
+  {
+    value: 'manual',
+    label: 'Сотрудники управляют сменой сами',
+    description: 'На главном экране сотрудников появятся кнопки открытия и закрытия смены.',
+  },
+  {
+    value: 'nfc',
+    label: 'Сотрудники отмечаются NFC-меткой',
+    description: 'Сотрудники сканируют рабочую метку Autexa; кнопки ручного открытия смены скрыты.',
+  },
+] as const;
 
 // ---------------------------------------------------------------------------
 // POS «Кассовая смена + роли». Один тумблер под settings_manage: GET
@@ -602,6 +623,7 @@ function CompanyDetailsTab() {
       kpp: form.kpp || undefined,
       ogrn: form.ogrn || undefined,
       receiptFooter: form.receiptFooter || undefined,
+      attendanceMode: form.attendanceMode,
       // 157 — пояс отправляем всегда: это значение поля, а не тумблер, и
       // сервер принимает только id из белого списка.
       timezone: form.timezone || DEFAULT_TIMEZONE,
@@ -797,6 +819,28 @@ function CompanyDetailsTab() {
             </CardBody>
           </Card>
         )}
+
+        <Card padding="none">
+          <CardHeader icon={Building2} title="Учёт рабочего времени" subtitle="Способ отметки прихода и ухода" />
+          <CardBody className="space-y-3">
+            {ATTENDANCE_MODE_OPTIONS.map(({ value, label, description }) => (
+              <label key={value} className="flex cursor-pointer items-start gap-3 rounded-xl border border-line p-3">
+                <input
+                  type="radio"
+                  name="attendanceMode"
+                  aria-label={label}
+                  checked={form.attendanceMode === value}
+                  onChange={() => update({ attendanceMode: value })}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-ink">{label}</span>
+                  <span className="mt-1 block text-sm text-ink-3">{description}</span>
+                </span>
+              </label>
+            ))}
+          </CardBody>
+        </Card>
 
         <StickySaveBar
           visible={dirty}

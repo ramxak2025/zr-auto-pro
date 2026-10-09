@@ -469,3 +469,19 @@
   descent-override: 29%;
   line-gap-override: 0%;
 }
+
+/* Give localized time text the full field width on compact booking settings. */
+@media (max-width: 640px) {
+  .booking-hours-input::-webkit-calendar-picker-indicator {
+    display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .booking-hours-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .booking-hours-row > label {
+    grid-column: 1 / -1;
+  }
+}

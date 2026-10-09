@@ -2,8 +2,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../../../database.module';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../../common/check-money-sql';
-import { BuiltReport, MAIN_ROW_LIMIT, ReportBuilder, ReportContext } from '../report-context';
-import { ReportColumn, ReportRow } from '../report-types';
+import { BuiltReport, MAIN_ROW_LIMIT, SECTION_ROW_LIMIT, ReportBuilder, ReportContext } from '../report-context';
+import { ReportColumn, ReportRow, ReportSection, ReportKpi } from '../report-types';
 import { avg, baseParams, idsFilter, inPeriod, num, pushPoint, round2 } from '../report-sql';
 
 /**
@@ -172,7 +172,9 @@ export class MastersBuilder implements ReportBuilder {
     });
     totals.avgCheck = avg(totals.revenue as number, totals.checks as number);
 
+    const priceIncreases = await this.priceIncreases(ctx);
     return {
+      sections: priceIncreases.sections,
       kpis: [
         { key: 'revenue', title: 'Выручка', value: totals.revenue as number, type: 'money' },
         {
@@ -184,6 +186,7 @@ export class MastersBuilder implements ReportBuilder {
         },
         { key: 'checks', title: 'Чеков', value: totals.checks as number, type: 'int' },
         { key: 'discounts', title: 'Скидки', value: totals.discounts as number, type: 'money' },
+        ...priceIncreases.kpis,
       ],
       columns,
       rows: tableRows,
@@ -194,7 +197,134 @@ export class MastersBuilder implements ReportBuilder {
         'Скидка в чеке действует на товары: «Товары» показаны до скидки, выручка — после.',
         'Начислено ЗП считается так же, как в отчёте по зарплате: процент с работ — исполнителю строки, с товаров — мастеру чека; премии и мотивация сюда не входят.',
         'Возвраты — по дате оформления возврата в периоде.',
+        'Повышения цен относятся к автору последнего изменения цены, а не к исполнителю. Считаются по дате чека, без черновиков, гарантий и полностью возвращённых услуг; частичный возврат уменьшает количество для суммы превышения. Строки без исторического снимка не сравниваются с сегодняшним каталогом.',
         '«Клиентов» — в скоупе колонки итога уникальность не суммируется: итог складывает строки.',
+      ],
+    };
+  }
+
+  private async priceIncreases(ctx: ReportContext): Promise<{ sections: ReportSection[]; kpis: ReportKpi[] }> {
+    const params = baseParams(ctx);
+    const point = pushPoint(params, ctx.pointId);
+    const selectedActors = idsFilter('sl.price_changed_by', ctx.ids, params);
+    const { rows } = await this.pool.query(
+      `WITH base AS (
+         SELECT sl.*, ch.date, ch.number, ch.master_id AS check_master_id
+           FROM checks ch JOIN check_service_lines sl ON sl.check_id=ch.id
+          WHERE ch.tenant_id=$1 AND ${inPeriod('ch.date')} AND ${checkMoneyBaseWhere('ch')}
+            AND ch.payment_method IS DISTINCT FROM 'warranty'
+            AND NOT (ch.is_returned=true AND ch.return_scope='full')
+            AND sl.price_snapshot_status='catalog' AND sl.price_excess>0
+            ${point ? `AND ch.point_id=${point}` : ''}${selectedActors}
+       ), returned AS (
+         SELECT rl.service_line_id, SUM(rl.quantity) AS quantity
+           FROM check_return_lines rl JOIN check_returns cr ON cr.id=rl.return_id AND cr.tenant_id=$1
+          WHERE rl.service_line_id IN (SELECT id FROM base)
+          GROUP BY rl.service_line_id
+       ), priced AS (
+         SELECT b.*, GREATEST(0, COALESCE(NULLIF(b.quantity,0),1)-COALESCE(r.quantity,0)) AS remaining_quantity
+           FROM base b LEFT JOIN returned r ON r.service_line_id=b.id
+       ), increased AS (
+         SELECT p.*, GREATEST(0, ROUND((price-price_threshold)*remaining_quantity,2)) AS excess
+           FROM priced p WHERE remaining_quantity>0
+       )
+       SELECT (SELECT COUNT(*)::int FROM increased WHERE excess>0) AS lines_count,
+              (SELECT COUNT(DISTINCT check_id)::int FROM increased WHERE excess>0) AS checks_count,
+              (SELECT COALESCE(SUM(excess),0) FROM increased) AS excess_total,
+              COALESCE((SELECT json_agg(a) FROM (
+                SELECT i.price_changed_by AS actor_id, COALESCE(u.full_name,'Автор неизвестен') AS actor_name,
+                       COUNT(*)::int AS lines_count, COUNT(DISTINCT i.check_id)::int AS checks_count,
+                       SUM(i.excess) AS excess_total
+                  FROM increased i LEFT JOIN users u ON u.id=i.price_changed_by AND u.tenant_id=$1
+                 WHERE i.excess>0 GROUP BY i.price_changed_by,u.full_name
+                 ORDER BY excess_total DESC,actor_name LIMIT ${SECTION_ROW_LIMIT + 1}
+              ) a),'[]'::json) AS actors,
+              COALESCE((SELECT json_agg(d) FROM (
+                SELECT i.id,i.check_id,i.number,i.date,i.name,i.price_threshold,i.price,
+                       i.catalog_price_type,i.remaining_quantity,i.excess,i.price_changed_at,
+                       COALESCE(u.full_name,'Автор неизвестен') AS actor_name,
+                       COALESCE(m.full_name,'Исполнитель неизвестен') AS executor_name
+                  FROM increased i
+                  LEFT JOIN users u ON u.id=i.price_changed_by AND u.tenant_id=$1
+                  LEFT JOIN users m ON m.id=COALESCE(i.master_id,i.check_master_id) AND m.tenant_id=$1
+                 WHERE i.excess>0 ORDER BY i.date DESC,i.check_id,i.id LIMIT ${SECTION_ROW_LIMIT + 1}
+              ) d),'[]'::json) AS details`,
+      params,
+    );
+    const row = rows[0];
+    const count = num(row?.lines_count),
+      checks = num(row?.checks_count),
+      excess = num(row?.excess_total);
+    const actors: Array<Record<string, unknown>> = row?.actors ?? [];
+    const details: Array<Record<string, unknown>> = row?.details ?? [];
+    const columns: ReportColumn[] = [
+      { key: 'name', title: 'Изменил цену', type: 'text' },
+      { key: 'increasedServiceLinesCount', title: 'Услуг с повышением', type: 'int' },
+      { key: 'increasedChecksCount', title: 'Чеков с повышением', type: 'int' },
+      { key: 'servicePriceExcessTotal', title: 'Сумма превышения', type: 'money' },
+    ];
+    return {
+      kpis: [
+        { key: 'increasedServiceLinesCount', title: 'Услуг с повышением', value: count, type: 'int' },
+        { key: 'increasedChecksCount', title: 'Чеков с повышением', value: checks, type: 'int' },
+        { key: 'servicePriceExcessTotal', title: 'Превышение цен', value: excess, type: 'money' },
+      ],
+      sections: [
+        {
+          key: 'servicePriceIncreases',
+          title: 'Повышения цен услуг по сотрудникам',
+          columns,
+          description: 'Автор последнего изменения цены. Итог по чекам считает каждый чек один раз.',
+          rows: actors.slice(0, SECTION_ROW_LIMIT).map((a) => ({
+            _id: a.actor_id == null ? null : String(a.actor_id),
+            name: String(a.actor_name),
+            increasedServiceLinesCount: num(a.lines_count),
+            increasedChecksCount: num(a.checks_count),
+            servicePriceExcessTotal: num(a.excess_total),
+          })),
+          totals: {
+            name: 'Итого',
+            increasedServiceLinesCount: count,
+            increasedChecksCount: checks,
+            servicePriceExcessTotal: excess,
+          },
+          truncated: actors.length > SECTION_ROW_LIMIT,
+          emptyText: 'Повышений цен за период нет',
+        },
+        {
+          key: 'servicePriceIncreaseDetails',
+          title: 'Услуги с повышенной ценой',
+          description:
+            'Порог — сохранённая фиксированная цена или верхняя граница диапазона. Возвраты учтены в оставшемся количестве.',
+          columns: [
+            { key: 'date', title: 'Дата чека', type: 'datetime' },
+            { key: 'checkNumber', title: 'Чек', type: 'int' },
+            { key: 'service', title: 'Услуга', type: 'text' },
+            { key: 'actor', title: 'Изменил цену', type: 'text' },
+            { key: 'executor', title: 'Исполнитель', type: 'text' },
+            { key: 'priceThreshold', title: 'Порог цены', type: 'money' },
+            { key: 'price', title: 'Цена в чеке', type: 'money' },
+            { key: 'quantity', title: 'Количество после возвратов', type: 'number' },
+            { key: 'priceExcess', title: 'Превышение', type: 'money' },
+            { key: 'priceChangedAt', title: 'Цена изменена', type: 'datetime' },
+          ],
+          rows: details.slice(0, SECTION_ROW_LIMIT).map((d) => ({
+            _id: String(d.id),
+            _href: `/checks/${d.check_id}`,
+            date: String(d.date),
+            checkNumber: num(d.number),
+            service: String(d.name),
+            actor: String(d.actor_name),
+            executor: String(d.executor_name),
+            priceThreshold: num(d.price_threshold),
+            price: num(d.price),
+            quantity: num(d.remaining_quantity),
+            priceExcess: num(d.excess),
+            priceChangedAt: d.price_changed_at == null ? null : String(d.price_changed_at),
+          })),
+          truncated: details.length > SECTION_ROW_LIMIT,
+          emptyText: 'Повышений цен за период нет',
+        },
       ],
     };
   }

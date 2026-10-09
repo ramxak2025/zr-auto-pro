@@ -11,6 +11,8 @@
  *   - serviceLineTotal        — сумма строки, как её считает сервер
  */
 
+import type { CheckServiceLine } from '../types';
+
 /**
  * Минимальная форма строки услуги. Под неё подходят и `CheckServiceLine`, и строка
  * шаблона `CheckTemplate.services[]` (у неё нет `total`).
@@ -26,6 +28,37 @@ export interface ServiceLineLike {
  * они остаются legacy-строкой «×N» (иначе битый `quantity: 1000000` завесил бы клиент).
  */
 export const MAX_EXPANDED_QUANTITY = 100;
+
+/** Explicit edit hydration keeps the persisted line id and editable fields only. */
+export function hydrateServiceLineForCheckEdit(line: CheckServiceLine, fallbackMasterId: string): {
+  id?: string;
+  serviceId: string;
+  masterId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  total: number;
+} {
+  const quantity = Number(line.quantity);
+  return {
+    ...(line.id ? { id: line.id } : {}),
+    serviceId: line.serviceId || '',
+    masterId: line.masterId || fallbackMasterId,
+    name: line.name,
+    price: line.price,
+    quantity: Number.isFinite(quantity) && quantity > 1 ? quantity : 1,
+    total: line.total,
+  };
+}
+
+/** Copy only user-editable template fields; persisted line IDs and server snapshots are never copied. */
+export function toCheckTemplateServiceInput(line: {
+  serviceId?: string;
+  name: string;
+  price: number;
+}): { serviceId?: string; name: string; price: number } {
+  return { ...(line.serviceId ? { serviceId: line.serviceId } : {}), name: line.name, price: line.price };
+}
 
 /** Как на сервере (checks.service.ts): до копеек, с защитой от артефактов float. */
 function round2(value: number): number {

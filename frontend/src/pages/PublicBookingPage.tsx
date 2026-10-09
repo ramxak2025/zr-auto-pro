@@ -1,4 +1,5 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import PublicBookingExperience from '../components/booking/PublicBookingExperience';
 import { useParams } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import type { PublicBookingLanding, PublicBookingReceipt, PublicBookingSlotPage } from '../../../shared/types';
@@ -14,6 +15,7 @@ import {
   dispatchAndReadCurrentPublicBooking,
   dispatchPublicBookingIntent,
   parsePublicBookingIntent,
+  PublicBookingIntentError,
   recoverPublicBookingIntent,
   type PublicBookingSavedIntent,
 } from '../utils/publicBookingIntent';
@@ -42,7 +44,8 @@ function addDays(date: string, days: number): string {
     String(value.getUTCDate()).padStart(2, '0'),
   ].join('-');
 }
-function messageFor(error: unknown): string {
+function messageFor(error: unknown, phase: 'page' | 'slots' | 'request' = 'request'): string {
+  if (error instanceof PublicBookingIntentError && error.code === 'INVALID_REQUEST') return error.message;
   const code =
     (error as { response?: { data?: { code?: string } } })?.response?.data?.code ?? (error as { code?: string })?.code;
   const intentCode = (error as { code?: string })?.code;
@@ -56,6 +59,8 @@ function messageFor(error: unknown): string {
   if (intentCode === 'STORAGE_UNAVAILABLE') return (error as Error).message;
   if (intentCode === 'PENDING_EXISTS' || intentCode === 'INTENT_CHANGED' || intentCode === 'LEASE_CHANGED')
     return (error as Error).message;
+  if (phase === 'slots') return 'Не удалось загрузить свободное время. Проверьте соединение и повторите загрузку.';
+  if (phase === 'page') return 'Не удалось загрузить страницу автосервиса. Проверьте соединение и нажмите «Повторить».';
   return 'Не удалось связаться с сервисом. Сохранённую заявку можно проверить и повторить без изменения данных.';
 }
 function dateLabel(date: string): string {
@@ -71,12 +76,65 @@ function clock(iso: string, timezone: string): string {
 }
 
 export default function PublicBookingPage() {
-  const { slug = '' } = useParams<{ slug: string }>();
-  return <PublicBookingView key={slug} slug={slug} />;
+  const { slug = '', publicCode = '' } = useParams<{ slug: string; publicCode: string }>();
+  return publicCode ? (
+    <PublicBookingCodeEntry key={publicCode} code={publicCode} />
+  ) : (
+    <PublicBookingView key={slug} slug={slug} />
+  );
+}
+
+function PublicBookingCodeEntry({ code }: { code: string }) {
+  const [canonicalSlug, setCanonicalSlug] = useState('');
+  const [failure, setFailure] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setFailure(false);
+    if (!/^[a-f0-9]{32}$/.test(code)) {
+      setFailure(true);
+      return;
+    }
+    void publicBookingsApi
+      .landingByCode(code)
+      .then((response) => {
+        if (typeof response.data.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{2,63}$/.test(response.data.slug))
+          throw new Error('Invalid booking address response');
+        if (active) setCanonicalSlug(response.data.slug);
+      })
+      .catch(() => {
+        if (active) setFailure(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [code, attempt]);
+  if (canonicalSlug) return <PublicBookingView key={canonicalSlug} slug={canonicalSlug} />;
+  return (
+    <main className="public-booking">
+      <div className="pb-container">
+        <div className="pb-content">
+          <h1>{failure ? 'Страница записи недоступна' : 'Загружаем запись…'}</h1>
+          <p className="pb-description">
+            {failure ? 'Проверьте ссылку или свяжитесь с автосервисом.' : 'Сейчас покажем услуги и свободное время.'}
+          </p>
+          {failure && /^[a-f0-9]{32}$/.test(code) && (
+            <button type="button" className="pb-primary mt-5" onClick={() => setAttempt((value) => value + 1)}>
+              Повторить
+            </button>
+          )}
+        </div>
+        <footer className="pb-footer">
+          <a href="https://autexa.pw" target="_blank" rel="noopener noreferrer">
+            Работает на <strong>Autexa</strong>
+          </a>
+        </footer>
+      </div>
+    </main>
+  );
 }
 
 function PublicBookingView({ slug }: { slug: string }) {
-  const reduceMotion = useReducedMotion();
   const [landing, setLanding] = useState<PublicBookingLanding | null>(null);
   const [date, setDate] = useState('');
   const [slots, setSlots] = useState<PublicBookingSlotPage | null>(null);
@@ -84,6 +142,7 @@ function PublicBookingView({ slug }: { slug: string }) {
   slotsRef.current = slots;
   const [selected, setSelected] = useState<string[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [resourceKey, setResourceKey] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [comment, setComment] = useState('');
@@ -123,7 +182,7 @@ function PublicBookingView({ slug }: { slug: string }) {
       setDate((existing) => existing || tenantToday(response.data.timezone, response.data.serverAt));
     } catch (cause) {
       if (!current()) return;
-      setError(messageFor(cause));
+      setError(messageFor(cause, 'page'));
     } finally {
       if (current()) setLoading(false);
     }
@@ -175,6 +234,7 @@ function PublicBookingView({ slug }: { slug: string }) {
           from: nextDate,
           to: nextDate,
           serviceIds: selected,
+          ...(resourceKey ? { resourceKey } : {}),
           ...(append && slotsRef.current?.nextAfter ? { after: slotsRef.current.nextAfter } : {}),
         });
         if (generation !== slotsGeneration.current || !isCurrent()) return;
@@ -184,12 +244,12 @@ function PublicBookingView({ slug }: { slug: string }) {
         if (!append) setSelectedSlot(null);
       } catch (cause) {
         if (generation !== slotsGeneration.current || !isCurrent()) return;
-        setError(messageFor(cause));
+        setError(messageFor(cause, 'slots'));
       } finally {
         if (generation === slotsGeneration.current && isCurrent()) setBusy(false);
       }
     },
-    [date, isCurrent, landing, selected, slug, slotsRef],
+    [date, isCurrent, landing, selected, resourceKey, slug, slotsRef],
   );
 
   useEffect(() => {
@@ -203,11 +263,6 @@ function PublicBookingView({ slug }: { slug: string }) {
     }
   }, [landing, selected, date, loadSlots]);
 
-  const selectedServices = useMemo(
-    () => landing?.services.filter((service) => selected.includes(service.id)) ?? [],
-    [landing, selected],
-  );
-  const totalDuration = selectedServices.reduce((sum, service) => sum + service.durationMinutes, 0);
   const consentedForCurrentVersion = consented && !!landing && consentVersionRef.current === landing.consentVersion;
   const actionInFlightRef = useRef(false);
   const intentStorage = {
@@ -348,6 +403,7 @@ function PublicBookingView({ slug }: { slug: string }) {
         ...identity,
         serviceIds: [...selected],
         startsAt: selectedSlot,
+        ...(resourceKey ? { resourceKey } : {}),
         name: name.trim(),
         phone: phone.trim(),
         ...(comment.trim() ? { comment: comment.trim() } : {}),
@@ -445,250 +501,93 @@ function PublicBookingView({ slug }: { slug: string }) {
 
   if (!landing)
     return (
-      <main className="min-h-screen bg-slate-50 p-8 text-slate-700">
-        <p>{loading ? 'Загружаем страницу записи…' : error || 'Страница записи недоступна.'}</p>
-        {corruptRecovery && (
-          <p role="alert" className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-900">
-            Сохранённую заявку нельзя проверить безопасно. Новая отправка заблокирована, чтобы избежать дубля.
-          </p>
-        )}
-        {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
-        {receipt && saved && (
-          <ReceiptPanel
-            receipt={receipt}
-            busy={busy}
-            onRefresh={recover}
-            onNew={() => void startNewRequestAfterReceipt()}
-          />
-        )}
-        <button className="mt-4 rounded-xl bg-blue-600 px-5 py-3 text-white" onClick={() => void loadLanding()}>
-          Повторить
-        </button>
+      <main className="public-booking">
+        <div className="pb-container">
+          <div className="pb-content">
+            <p>{loading ? 'Загружаем страницу записи…' : error || 'Страница записи недоступна.'}</p>
+            {corruptRecovery && (
+              <p role="alert" className="pb-error">
+                Сохранённую заявку нельзя проверить безопасно. Новая отправка заблокирована, чтобы избежать дубля.
+              </p>
+            )}
+            {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
+            {receipt && saved && (
+              <ReceiptPanel
+                receipt={receipt}
+                busy={busy}
+                onRefresh={recover}
+                onNew={() => void startNewRequestAfterReceipt()}
+              />
+            )}
+            <button type="button" className="pb-primary mt-5" disabled={loading} onClick={() => void loadLanding()}>
+              Повторить
+            </button>
+          </div>
+          <footer className="pb-footer">
+            <a href="https://autexa.pw" target="_blank" rel="noopener noreferrer">
+              Работает на <strong>Autexa</strong>
+            </a>
+          </footer>
+        </div>
       </main>
     );
 
   return (
-    <main className="min-h-screen bg-[#f5f7fb] px-4 py-8 text-slate-900 sm:py-12">
-      <div className="mx-auto max-w-2xl">
-        <header className="mb-7 rounded-3xl bg-[#101a2e] px-6 py-7 text-white shadow-xl sm:px-9">
-          <div className="mb-5 flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-600 font-bold">A</span>
-            <span className="font-semibold tracking-tight">Autexa</span>
-          </div>
-          <p className="text-sm font-semibold uppercase tracking-[.15em] text-blue-300">Онлайн-запись</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{landing.displayName}</h1>
-          <p className="mt-3 text-slate-300">{landing.address}</p>
-          <p className="mt-1 text-slate-300">{landing.contacts}</p>
-          <div className="mt-5 border-t border-white/15 pt-4 text-sm text-slate-300">
-            <strong className="text-white">Исполнитель:</strong> {landing.operator.name} · {landing.operator.contact}
-            <p className="mt-1">{landing.operator.requisites}</p>
-          </div>
-        </header>
-
-        {corruptRecovery && (
-          <section
-            role="alert"
-            className="mb-5 rounded-2xl border border-rose-300 bg-rose-50 p-5 text-sm text-rose-900"
-          >
-            Не удалось прочитать сохранённые данные прежней заявки. Новая отправка заблокирована, чтобы не создать
-            дубль. Обратитесь в сервис: {landing.contacts}
-          </section>
-        )}
-        {saved && !receipt && <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} />}
-
-        {receipt ? (
+    <PublicBookingExperience
+      landing={landing}
+      date={date || tenantToday(landing.timezone, landing.serverAt)}
+      minDate={tenantToday(landing.timezone, landing.serverAt)}
+      maxDate={addDays(tenantToday(landing.timezone, landing.serverAt), 30)}
+      selected={selected}
+      selectedSlot={selectedSlot}
+      resourceKey={resourceKey}
+      slots={slots}
+      busy={busy}
+      blocked={!!saved || corruptRecovery}
+      error={
+        corruptRecovery
+          ? 'Сохранённую заявку нельзя проверить безопасно. Свяжитесь с сервисом, чтобы не создать повторную запись.'
+          : error
+      }
+      name={name}
+      phone={phone}
+      comment={comment}
+      consented={consentedForCurrentVersion}
+      onSelected={(value) => {
+        setSelected(value);
+        setSelectedSlot(null);
+      }}
+      onDate={(value) => {
+        setDate(value);
+        setSelectedSlot(null);
+      }}
+      onResource={(value) => {
+        setResourceKey(value);
+        setSelectedSlot(null);
+      }}
+      onSlot={setSelectedSlot}
+      onName={setName}
+      onPhone={setPhone}
+      onComment={setComment}
+      onConsent={setConsented}
+      onSubmit={submit}
+      onMoreSlots={() => void loadSlots(date, true)}
+      onRetrySlots={() => void loadSlots(date)}
+      recovery={
+        saved && !receipt ? <RecoveryPanel saved={saved} busy={busy} onRecover={recover} onRetry={retrySaved} /> : null
+      }
+      receipt={
+        receipt ? (
           <ReceiptPanel
             receipt={receipt}
+            timezone={landing.timezone}
             busy={busy}
             onRefresh={recover}
             onNew={() => void startNewRequestAfterReceipt()}
           />
-        ) : (
-          <form onSubmit={submit} className="space-y-5">
-            <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
-              <Step number="01" title="Выберите услуги" />
-              <div className="mt-5 space-y-3">
-                {landing.services.map((service) => (
-                  <label
-                    key={service.id}
-                    className={`flex cursor-pointer items-center justify-between gap-4 rounded-2xl border p-4 transition-colors duration-150 focus-within:ring-2 focus-within:ring-blue-600 focus-within:ring-offset-2 ${selected.includes(service.id) ? 'border-blue-500 bg-blue-50/60' : 'border-slate-200 hover:border-slate-300'}`}
-                  >
-                    <span>
-                      <span className="block font-semibold">{service.name}</span>
-                      <span className="mt-1 block text-sm text-slate-500">
-                        {service.durationMinutes} мин
-                        {landing.showPrices && service.price !== undefined
-                          ? ` · ${service.price.toLocaleString('ru-RU')} ₽`
-                          : ''}
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      aria-label={service.name}
-                      className="h-5 w-5 accent-blue-600"
-                      checked={selected.includes(service.id)}
-                      onChange={(event) =>
-                        setSelected((current) =>
-                          event.target.checked ? [...current, service.id] : current.filter((id) => id !== service.id),
-                        )
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-              {totalDuration > 0 && (
-                <p className="mt-4 text-sm font-medium text-slate-600">Общая длительность: {totalDuration} мин</p>
-              )}
-            </section>
-            <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
-              <Step number="02" title="Выберите время" />
-              <label className="mt-5 block text-sm font-semibold">
-                Дата, {landing.timezone}
-                <input
-                  type="date"
-                  value={date}
-                  min={tenantToday(landing.timezone, landing.serverAt)}
-                  max={addDays(tenantToday(landing.timezone, landing.serverAt), 30)}
-                  onChange={(event) => setDate(event.target.value)}
-                  className="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base"
-                />
-              </label>
-              {selected.length === 0 ? (
-                <p className="mt-4 text-sm text-slate-500">Сначала отметьте одну или несколько услуг.</p>
-              ) : (
-                <>
-                  <p className="mt-4 text-sm text-slate-500">{dateLabel(date)}</p>
-                  {busy && !slots ? <p className="mt-3 text-slate-500">Ищем свободное время…</p> : null}
-                  <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {slots?.slots.map((slot) => (
-                      <button
-                        type="button"
-                        key={slot.startsAt}
-                        onClick={() => setSelectedSlot(slot.startsAt)}
-                        aria-pressed={selectedSlot === slot.startsAt}
-                        className={`rounded-xl border px-3 py-3 font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 ${selectedSlot === slot.startsAt ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white hover:border-blue-400'}`}
-                      >
-                        {clock(slot.startsAt, landing.timezone)}
-                      </button>
-                    ))}
-                  </div>
-                  {slots?.slots.length === 0 && !busy && (
-                    <p className="mt-3 text-sm text-slate-600">
-                      На эту дату нет доступного времени. Попробуйте другой день.
-                    </p>
-                  )}
-                  {slots?.nextAfter && (
-                    <button
-                      type="button"
-                      className="mt-4 text-sm font-semibold text-blue-700"
-                      onClick={() => void loadSlots(date, true)}
-                    >
-                      Показать следующие варианты
-                    </button>
-                  )}
-                </>
-              )}
-            </section>
-            <section className="rounded-3xl bg-white p-6 shadow-sm sm:p-8">
-              <Step number="03" title="Оставьте контакты" />
-              <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                <label className="text-sm font-semibold">
-                  Имя
-                  <input
-                    required
-                    maxLength={100}
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-base font-normal"
-                    autoComplete="name"
-                  />
-                </label>
-                <label className="text-sm font-semibold">
-                  Телефон
-                  <input
-                    required
-                    maxLength={32}
-                    value={phone}
-                    onChange={(event) => setPhone(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-base font-normal"
-                    autoComplete="tel"
-                    inputMode="tel"
-                  />
-                </label>
-              </div>
-              <label className="mt-4 block text-sm font-semibold">
-                Комментарий <span className="font-normal text-slate-500">(необязательно)</span>
-                <textarea
-                  maxLength={1000}
-                  value={comment}
-                  onChange={(event) => setComment(event.target.value)}
-                  className="mt-2 min-h-24 w-full rounded-xl border border-slate-300 px-4 py-3 text-base font-normal"
-                />
-              </label>
-              <label className="mt-5 flex items-start gap-3 text-sm leading-6 text-slate-700">
-                <input
-                  type="checkbox"
-                  className="mt-1 h-4 w-4 accent-blue-600"
-                  checked={consentedForCurrentVersion}
-                  onChange={(event) => setConsented(event.target.checked)}
-                />
-                <span>
-                  {landing.consentText} Ознакомьтесь с{' '}
-                  <a href="#policy" className="font-semibold text-blue-700 underline">
-                    условиями записи
-                  </a>
-                  .
-                </span>
-              </label>
-              <details id="policy" className="mt-4 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-                <summary className="cursor-pointer font-semibold text-slate-800">Условия обработки данных</summary>
-                <p className="mt-3 whitespace-pre-wrap">{landing.policyText}</p>
-                <p className="mt-3">
-                  <strong>Исполнитель:</strong> {landing.operator.name}, {landing.operator.requisites},{' '}
-                  {landing.operator.contact}
-                </p>
-              </details>
-              <button
-                type="submit"
-                disabled={
-                  busy || !!saved || !selectedSlot || !consentedForCurrentVersion || !name.trim() || !phone.trim()
-                }
-                className="mt-6 w-full rounded-xl bg-blue-600 px-5 py-4 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? 'Отправляем…' : landing.mode === 'approval' ? 'Отправить заявку' : 'Записаться'}
-              </button>
-              <p className="mt-3 text-center text-xs leading-5 text-slate-500">
-                {landing.mode === 'approval'
-                  ? 'Время будет подтверждено сотрудником сервиса.'
-                  : 'После отправки проверьте статус заявки.'}
-              </p>
-            </section>
-          </form>
-        )}
-        {error && (
-          <p role="alert" className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-            {error}{' '}
-            {saved && !receipt && (
-              <button className="ml-1 font-semibold underline" onClick={() => void recover()}>
-                Проверить ещё раз
-              </button>
-            )}
-          </p>
-        )}
-        <footer className="py-7 text-center text-xs text-slate-500">
-          Страница записи сервиса · {landing.timezone}
-        </footer>
-      </div>
-    </main>
-  );
-}
-
-function Step({ number, title }: { number: string; title: string }) {
-  return (
-    <div className="flex items-baseline gap-3">
-      <span className="font-mono text-sm font-semibold text-blue-600">{number}</span>
-      <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-    </div>
+        ) : null
+      }
+    />
   );
 }
 
@@ -735,11 +634,13 @@ function RecoveryPanel({
 
 function ReceiptPanel({
   receipt,
+  timezone = 'UTC',
   busy,
   onRefresh,
   onNew,
 }: {
   receipt: PublicBookingReceipt;
+  timezone?: string;
   busy: boolean;
   onRefresh: () => void;
   onNew: () => void;
@@ -786,7 +687,8 @@ function ReceiptPanel({
         </div>
       </div>
       <p className="mt-2 text-slate-600">
-        {dateLabel(tenantDate(receipt.startsAt, 'UTC'))}, {clock(receipt.startsAt, 'UTC')} · UTC
+        {dateLabel(tenantDate(receipt.startsAt, timezone))}, {clock(receipt.startsAt, timezone)} ·{' '}
+        {timezone === 'UTC' ? 'UTC' : 'местное время сервиса'}
       </p>
       <ul className="mt-5 space-y-2">
         {receipt.services.map((service) => (

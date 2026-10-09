@@ -51,10 +51,34 @@ export class ServicesController {
     return this.servicesService.deleteVisibilityRule(user.tenantID, { categoryPath: path });
   }
 
+  @RequirePermission('services_manage')
+  @Get('export')
+  exportCatalog(@CurrentUser() user: JwtPayload) {
+    return this.servicesService.exportCatalog(user.tenantID);
+  }
+
+  @RequirePermission('services_manage')
+  @Post('import/preview')
+  previewImport(@CurrentUser() user: JwtPayload, @Body() body: { rows?: unknown }) {
+    return this.servicesService.previewImport(user.tenantID, user.userID, body?.rows);
+  }
+
+  @RequirePermission('services_manage')
+  @Post('import/confirm')
+  confirmImport(@CurrentUser() user: JwtPayload, @Body() body: { previewId: string; requestId: string }) {
+    return this.servicesService.confirmImport(user.tenantID, user.userID, body?.previewId, body?.requestId);
+  }
+
   @RequirePermission('services_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.servicesService.getAll(user.tenantID, query, user);
+  }
+
+  @RequirePermission('services_view')
+  @Get(':id/price-history')
+  getPriceHistory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: JwtPayload) {
+    return this.servicesService.getPriceHistory(id, user.tenantID);
   }
 
   @RequirePermission('services_view')
@@ -66,13 +90,13 @@ export class ServicesController {
   @RequirePermission('services_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.servicesService.create(user.tenantID, dto);
+    return this.servicesService.create(user.tenantID, dto, user.userID);
   }
 
   @RequirePermission('services_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.servicesService.update(id, user.tenantID, dto);
+    return this.servicesService.update(id, user.tenantID, dto, user.userID);
   }
 
   @RequirePermission('services_manage')

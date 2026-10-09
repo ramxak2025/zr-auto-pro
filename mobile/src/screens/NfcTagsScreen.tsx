@@ -23,6 +23,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { parseAttendanceNfcUri } from '../../../shared/utils/attendanceNfcUri';
 import type { AttendanceNfcTag, CreatedAttendanceNfcTag } from '../../../shared/types';
 import {
+  AttendanceNfcDeviceError,
   checkAttendanceNfcHardware,
   writeAttendanceNfcUriAndReadBack,
   cancelAttendanceNfcOperation,
@@ -171,6 +172,20 @@ export default function NfcTagsScreen() {
     },
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: async (id: string) => {
+      if (!api || !session?.isCurrent()) throw new Error('Нет активной сессии');
+      const lease = session.lease;
+      return { tag: (await api.archiveNfcTag(id)).data, lease };
+    },
+    onSuccess: ({ tag: archived, lease }) => {
+      if (!session?.isCurrent() || session.lease !== lease) return;
+      queryClient.setQueryData<AttendanceNfcTag[]>(nfcTagsQueryKey(session), (current) =>
+        current?.filter((tag) => tag.id !== archived.id),
+      );
+    },
+  });
+
   const writeAndActivate = async () => {
     if (!pendingTag || busyId || !session) return;
     const tag = pendingTag;
@@ -207,7 +222,7 @@ export default function NfcTagsScreen() {
       );
     } catch (error) {
       if (!isCurrent()) return;
-      const message = error instanceof Error ? error.message : 'Не удалось записать NFC-метку.';
+      const message = describeNfcTagWriteError(error);
       Alert.alert('Метка не активирована', message);
     } finally {
       if (nativeOperationRef.current === nativeOperation) nativeOperationRef.current = null;
@@ -276,10 +291,10 @@ export default function NfcTagsScreen() {
                   <Text style={[styles.heading, { color: palette.text.primary }]}>Запишите «{pendingTag.name}»</Text>
                   <Text style={[styles.body, { color: palette.text.secondary }]}>
                     {statusText ||
-                      'Поднесите пустую NFC-метку к устройству. После записи приложение попросит приложить её ещё раз.'}
+                      'Поднесите пустую метку к верхнему краю iPhone и удерживайте. Если не сработало, снимите чехол и уберите другие метки от телефона. После записи приложение сразу прочитает её ещё раз.'}
                   </Text>
                   <PrimaryButton
-                    label={busyId ? 'Записываем и проверяем…' : 'Записать и проверить'}
+                    label={busyId ? 'Записываем и проверяем…' : 'Записать или проверить метку'}
                     disabled={
                       busyId !== null || hardware === 'loading' || hardware === 'unsupported' || hardware === 'disabled'
                     }
@@ -306,22 +321,26 @@ export default function NfcTagsScreen() {
                 >
                   {tagStatus(tag)}
                 </Text>
-                <TextInput
-                  value={renameValues[tag.id] ?? tag.name}
-                  onChangeText={(value) => setRenameValues((current) => ({ ...current, [tag.id]: value }))}
-                  style={[styles.input, { color: palette.text.primary, borderColor: palette.border.subtle }]}
-                  maxLength={80}
-                />
-                <View style={styles.row}>
-                  <SecondaryButton
-                    label="Сохранить имя"
-                    disabled={
-                      renameMutation.isPending ||
-                      !(renameValues[tag.id] ?? tag.name).trim() ||
-                      (renameValues[tag.id] ?? tag.name).trim() === tag.name
-                    }
-                    onPress={() => renameMutation.mutate({ id: tag.id, value: renameValues[tag.id] ?? tag.name })}
+                {tag.status !== 'revoked' && (
+                  <TextInput
+                    value={renameValues[tag.id] ?? tag.name}
+                    onChangeText={(value) => setRenameValues((current) => ({ ...current, [tag.id]: value }))}
+                    style={[styles.input, { color: palette.text.primary, borderColor: palette.border.subtle }]}
+                    maxLength={80}
                   />
+                )}
+                <View style={styles.row}>
+                  {tag.status !== 'revoked' && (
+                    <SecondaryButton
+                      label="Сохранить имя"
+                      disabled={
+                        renameMutation.isPending ||
+                        !(renameValues[tag.id] ?? tag.name).trim() ||
+                        (renameValues[tag.id] ?? tag.name).trim() === tag.name
+                      }
+                      onPress={() => renameMutation.mutate({ id: tag.id, value: renameValues[tag.id] ?? tag.name })}
+                    />
+                  )}
                   {tag.status !== 'revoked' && (
                     <SecondaryButton
                       label="Отозвать"
@@ -331,6 +350,22 @@ export default function NfcTagsScreen() {
                           { text: 'Отмена', style: 'cancel' },
                           { text: 'Отозвать', style: 'destructive', onPress: () => revokeMutation.mutate(tag.id) },
                         ])
+                      }
+                    />
+                  )}
+                  {tag.status === 'revoked' && (
+                    <SecondaryButton
+                      label="Убрать из списка"
+                      disabled={archiveMutation.isPending}
+                      onPress={() =>
+                        Alert.alert(
+                          'Убрать отозванную метку?',
+                          'Записи отметок и история восстановления сохранятся. Метка исчезнет из списка.',
+                          [
+                            { text: 'Отмена', style: 'cancel' },
+                            { text: 'Убрать', style: 'destructive', onPress: () => archiveMutation.mutate(tag.id) },
+                          ],
+                        )
                       }
                     />
                   )}
@@ -345,6 +380,31 @@ export default function NfcTagsScreen() {
       </ScrollView>
     </View>
   );
+}
+
+function describeNfcTagWriteError(error: unknown): string {
+  if (!(error instanceof AttendanceNfcDeviceError))
+    return error instanceof Error ? error.message : 'Не удалось записать метку. Проверьте соединение и повторите.';
+  switch (error.code) {
+    case 'cancelled':
+      return 'Сканирование отменено. Метка не активирована.';
+    case 'read-only':
+      return 'Эта метка защищена от записи. Используйте пустую NFC-метку.';
+    case 'tag-too-small':
+      return 'В метке недостаточно памяти для ссылки Autexa. Используйте NFC-метку большей ёмкости.';
+    case 'tag-not-empty':
+      return 'На метке уже записаны данные. Используйте пустую метку или приложите метку, которую начали записывать для этой компании.';
+    case 'read-failed':
+      return 'Не удалось прочитать метку после записи. Подержите её у верхнего края iPhone; при необходимости снимите чехол и повторите. Если запись уже прошла, повторная проверка не будет записывать метку заново.';
+    case 'not-ndef':
+      return 'Эта метка не поддерживает запись ссылок Autexa. Используйте NFC-метку формата NDEF.';
+    case 'unsupported':
+      return 'Это устройство не поддерживает NFC.';
+    case 'disabled':
+      return 'Включите NFC в настройках устройства.';
+    default:
+      return 'Не удалось записать метку. Поднесите её к верхнему краю iPhone и повторите.';
+  }
 }
 
 function Retry({ onPress }: { onPress: () => void }) {

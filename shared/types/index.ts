@@ -80,6 +80,7 @@ export interface Tenant {
    * to open their work shift without the company_manage permission.
    */
   shiftsEnabled?: boolean;
+  attendanceMode?: AttendanceMode;
   /**
    * 092 — «Кассовая смена + роли» POS shift-mode master toggle. Absent on legacy
    * payloads → treat as `false`. When ON, a non-cashier master can only create
@@ -1852,11 +1853,31 @@ export interface ProductPriceHistoryEntry {
   createdAt: string;
 }
 
+export type ServicePriceType = 'fixed' | 'range';
+
+export interface ServicePriceHistoryEntry {
+  id: string;
+  version: number;
+  priceType: ServicePriceType;
+  defaultPrice: number;
+  minPrice: number;
+  maxPrice: number;
+  changedAt: string;
+  changedBy: string | null;
+  changedByName: string | null;
+  source: 'baseline' | 'create' | 'update';
+}
+
 export interface Service {
   id: string;
   name: string;
   category?: string;
   defaultPrice: number;
+  /** Absent on older servers: treat as fixed, with defaultPrice for both bounds. */
+  priceType?: ServicePriceType;
+  minPrice?: number;
+  maxPrice?: number;
+  priceVersion?: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
@@ -1958,7 +1979,23 @@ export interface WarrantyClaim {
   createdAt?: string;
 }
 
-export interface CheckServiceLine {
+/** Server-owned snapshot/provenance; clients only round-trip the line id. */
+export interface CheckServicePriceSnapshot {
+  priceSnapshotStatus?: 'catalog' | 'legacy_unknown' | 'no_catalog';
+  catalogPriceType?: ServicePriceType | null;
+  catalogDefaultPrice?: number | null;
+  catalogMinPrice?: number | null;
+  catalogMaxPrice?: number | null;
+  catalogPriceVersion?: number | null;
+  priceThreshold?: number | null;
+  priceChangedBy?: string | null;
+  priceChangedByName?: string | null;
+  priceChangedAt?: string | null;
+  /** Positive excess over the saved fixed price/range maximum; unknown baseline = 0. */
+  priceExcess?: number;
+}
+
+export interface CheckServiceLine extends CheckServicePriceSnapshot {
   id?: string;
   serviceId?: string;
   masterId?: string;
@@ -2252,6 +2289,9 @@ export interface Check {
   carId: string;
   mileage?: number;
   services: CheckServiceLine[];
+  /** Sum of positive line excesses; reductions never offset increases. */
+  servicePriceExcessTotal?: number;
+  increasedServiceLinesCount?: number;
   products: CheckProductLine[];
   comment?: string;
   discount?: number;
@@ -2473,15 +2513,26 @@ export interface PublicBookingOperator {
   requisites: string;
   contact: string;
 }
+export interface PublicBookingContactLinks {
+  phone?: string;
+  instagram?: string;
+  whatsapp?: string;
+  vk?: string;
+  telegram?: string;
+}
 export interface PublicBookingPageSettings {
   id: string;
   pointId: string | null;
   slug: string;
+  /** Server-generated immutable alias. Legacy slug remains the recovery identity. */
+  publicCode?: string;
+  publicUrl?: string;
   published: boolean;
   revision: number;
   displayName: string;
   address: string;
   contacts: string;
+  links?: PublicBookingContactLinks;
   showPrices: boolean;
   mode: PublicBookingMode;
   slotStepMinutes: number;
@@ -2498,6 +2549,11 @@ export interface PublicBookingResource {
   name: string;
   role: string;
 }
+export interface PublicBookingServiceOption {
+  id: string;
+  name: string;
+  category?: string | null;
+}
 export interface PublicBookingLanding {
   slug: string;
   /** Derive the first calendar day from this server clock in the tenant IANA zone. */
@@ -2506,6 +2562,8 @@ export interface PublicBookingLanding {
   displayName: string;
   address: string;
   contacts: string;
+  links?: PublicBookingContactLinks;
+  resources?: Array<{ resourceKey: string; name: string }>;
   mode: PublicBookingMode;
   showPrices: boolean;
   operator: PublicBookingOperator;
@@ -2513,7 +2571,16 @@ export interface PublicBookingLanding {
   consentText: string;
   consentVersion: string;
   /** price is ABSENT, not null/zero, whenever showPrices=false. */
-  services: Array<{ id: string; name: string; durationMinutes: number; price?: number }>;
+  services: Array<{
+    id: string;
+    name: string;
+    category?: string;
+    durationMinutes: number;
+    price?: number;
+    priceType?: 'fixed' | 'range';
+    minPrice?: number;
+    maxPrice?: number;
+  }>;
 }
 export interface PublicBookingSlotPage {
   timezone: string;
@@ -3631,6 +3698,8 @@ export interface Shift {
   pointId?: string | null;
 }
 
+export type AttendanceMode = 'admin' | 'manual' | 'nfc';
+
 /** NFC attendance is separate from cash shifts. Static tags are cloneable. */
 export interface AttendanceNfcTag {
   id: string;
@@ -3648,6 +3717,7 @@ export interface CreatedAttendanceNfcTag extends AttendanceNfcTag {
 }
 export interface AttendanceNfcStatus {
   shiftsEnabled: boolean;
+  attendanceMode: AttendanceMode;
   canManageTags: boolean;
   hasActiveTag: boolean;
   canScan: boolean;

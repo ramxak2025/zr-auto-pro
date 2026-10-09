@@ -121,14 +121,14 @@ test('мастер получает флаг рабочих смен своег�
   const otherTenant = '55555555-5555-4555-8555-555555555555';
   const otherUser = '66666666-6666-4666-8666-666666666666';
   const rows = [
-    userRow({ tenant_json: JSON.stringify({ id: TENANT, shiftsEnabled: true }) }),
+    userRow({ tenant_json: JSON.stringify({ id: TENANT, shiftsEnabled: true, attendanceMode: 'manual' }) }),
     userRow({
       id: otherUser,
       phone: '+79990000001',
       tenant_id: otherTenant,
       role_id: '77777777-7777-4777-8777-777777777777',
       role_matrix: { settings: { company: false } },
-      tenant_json: JSON.stringify({ id: otherTenant, shiftsEnabled: false }),
+      tenant_json: JSON.stringify({ id: otherTenant, shiftsEnabled: false, attendanceMode: 'admin' }),
     }),
   ];
   const pool = fakePool([
@@ -138,7 +138,8 @@ test('мастер получает флаг рабочих смен своег�
         const sql = calls.at(-1).text;
         // Check the SQL actually issued by AuthService, not just a fabricated
         // response: omitting the projection caused the original master bug.
-        assert.match(sql, /'shiftsEnabled',\s*COALESCE\(t\.shifts_enabled,\s*false\)/);
+        assert.match(sql, /'shiftsEnabled',\s*COALESCE\(t\.attendance_mode <> 'admin',t\.shifts_enabled,false\)/);
+        assert.match(sql, /'attendanceMode',\s*COALESCE\(t\.attendance_mode/);
         assert.match(sql, /LEFT JOIN tenants t ON t\.id = u\.tenant_id/);
         if (/WHERE u\.id = \$1/.test(sql)) return rows.filter((row) => row.id === params[0]);
         assert.match(sql, /WHERE u\.phone = \$1 OR u\.phone = \$2/);
@@ -161,6 +162,7 @@ test('мастер получает флаг рабочих смен своег�
     assert.equal(profile.permissions.company_manage, false);
     assert.equal(profile.tenant.id, row.tenant_id);
     assert.equal(profile.tenant.shiftsEnabled, row.tenant_id === TENANT);
+    assert.equal(profile.tenant.attendanceMode, row.tenant_id === TENANT ? 'manual' : 'admin');
     assert.equal(profile.currentPointId, MAIN);
     const login = await auth.login({ phone: row.phone, password: PASSWORD });
     assert.deepEqual(
