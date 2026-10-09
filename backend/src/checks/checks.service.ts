@@ -40,6 +40,7 @@ import {
   zonedMidnight,
 } from '../common/timezone';
 import { ComparePeriod, previousComparableWindow } from '../common/period-compare';
+import { hydrateOmittedCheckLines, mapServiceLinePrice, saveCheckServiceLines } from './check-service-prices';
 
 /** Actor context for visibility decisions (checks_view_all). */
 interface ChecksActor {
@@ -1035,6 +1036,8 @@ export class ChecksService {
       cashAmount: parseFloat(row.cash_amount) || 0,
       cardAmount: parseFloat(row.card_amount) || 0,
       serviceTotal: parseFloat(row.service_total) || 0,
+      servicePriceExcessTotal: Number(row.service_price_excess_total) || 0,
+      increasedServiceLinesCount: Number(row.increased_service_lines_count) || 0,
       productTotal: parseFloat(row.product_total) || 0,
       totalRevenue: parseFloat(row.total_revenue) || 0,
       // Прибыль/себестоимость — только держателю profit_view (R7): без него
@@ -1320,7 +1323,7 @@ export class ChecksService {
       // страницы. mapCheck строит ответ по явным полям — служебные колонки в
       // клиентский payload не протекают.
       const res = await this.pool.query(
-        `SELECT ch.*,
+        `SELECT ch.*, price_summary.service_price_excess_total, price_summary.increased_service_lines_count,
                 ch.date::text AS _cursor_date, ch.created_at::text AS _cursor_created,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
@@ -1336,6 +1339,11 @@ export class ChecksService {
                    JOIN check_tag_defs d ON d.id = tl.tag_id
                   WHERE tl.check_id = ch.id AND tl.tenant_id = ch.tenant_id) AS tags_json
          FROM checks ch
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(sl.price_excess), 0) AS service_price_excess_total,
+                  COUNT(*) FILTER (WHERE sl.price_excess > 0)::int AS increased_service_lines_count
+             FROM check_service_lines sl WHERE sl.check_id=ch.id
+         ) price_summary ON true
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
@@ -1352,7 +1360,7 @@ export class ChecksService {
       idx++;
       params.push(limit, offset);
       const res = await this.pool.query(
-        `SELECT ch.*,
+        `SELECT ch.*, price_summary.service_price_excess_total, price_summary.increased_service_lines_count,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model, ca.vin AS car_vin,
@@ -1367,6 +1375,11 @@ export class ChecksService {
                    JOIN check_tag_defs d ON d.id = tl.tag_id
                   WHERE tl.check_id = ch.id AND tl.tenant_id = ch.tenant_id) AS tags_json
          FROM checks ch
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(sl.price_excess), 0) AS service_price_excess_total,
+                  COUNT(*) FILTER (WHERE sl.price_excess > 0)::int AS increased_service_lines_count
+             FROM check_service_lines sl WHERE sl.check_id=ch.id
+         ) price_summary ON true
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
@@ -1528,14 +1541,16 @@ export class ChecksService {
 
     // Load service lines (check_id already verified against tenant above)
     const { rows: svcRows } = await this.pool.query(
-      `SELECT sl.*, u.full_name as master_name
+      `SELECT sl.*, u.full_name as master_name, price_actor.full_name AS price_changed_by_name
        FROM check_service_lines sl
        JOIN checks c ON c.id = sl.check_id AND c.tenant_id = $2
        LEFT JOIN users u ON u.id = sl.master_id AND u.tenant_id = c.tenant_id
+       LEFT JOIN users price_actor ON price_actor.id=sl.price_changed_by AND price_actor.tenant_id=c.tenant_id
        WHERE sl.check_id=$1`,
       [id, tenantID],
     );
     ch.services = svcRows.map((s) => ({
+      ...mapServiceLinePrice(s),
       id: s.id,
       serviceId: s.service_id,
       masterId: s.master_id,
@@ -1545,6 +1560,9 @@ export class ChecksService {
       quantity: s.quantity,
       total: parseFloat(s.total) || 0,
     }));
+
+    ch.servicePriceExcessTotal = round2(svcRows.reduce((sum, line) => sum + (Number(line.price_excess) || 0), 0));
+    ch.increasedServiceLinesCount = svcRows.filter((line) => Number(line.price_excess) > 0).length;
 
     // Load product lines (tenant-scoped via JOIN). LEFT JOIN products даёт
     // единицу измерения товара (120, дробные количества) — опциональное поле
@@ -3248,23 +3266,8 @@ export class ChecksService {
 
       const checkId = checkRows[0].id;
 
-      // Insert service lines
-      for (const svc of serviceLines) {
-        await client.query(
-          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            checkId,
-            svc.serviceId || null,
-            svc.masterId || null,
-            svc.name,
-            svc.price || 0,
-            svc.quantity || 1,
-            svc.total,
-            svc.salaryAmount ?? 0,
-          ],
-        );
-      }
+      // First-save price policy and identity are written in the check transaction.
+      await saveCheckServiceLines(client, tenantID, checkId, serviceLines, actor?.userID ?? userID);
 
       // Insert product lines and update stock.
       // NEW-4 (антидедлок): при активной продаже строки products лочатся FOR
@@ -4350,7 +4353,7 @@ export class ChecksService {
       // can't BOTH see is_deferred=true and both decrement stock. The locked
       // value is the authority for whether to fire activation effects below.
       const { rows: lockedRows } = await client.query(
-        'SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
+        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
         [id, tenantID],
       );
       if (lockedRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -4364,6 +4367,8 @@ export class ChecksService {
         throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
       }
 
+      const preserve = { services: dto.services === undefined, products: dto.products === undefined };
+      dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
       const services = dto.services || [];
       const products = dto.products || [];
 
@@ -4505,13 +4510,13 @@ export class ChecksService {
       for (const svc of services) {
         // Money precision (audit round 7, item 6): the line total is a real
         // 2-decimal amount, same round2 discipline as lineSalary below.
-        const total = round2((svc.price || 0) * (svc.quantity || 1));
+        const total = preserve.services ? svc.total : round2((svc.price || 0) * (svc.quantity || 1));
         serviceTotal += total;
         const masterId = svc.masterId || primaryMasterId;
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
         const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
         // #56: bake the per-line salary for THIS line's executor (see create()).
-        const lineSalary = round2((total * salaryPct) / 100);
+        const lineSalary = preserve.services ? svc.salaryAmount : round2((total * salaryPct) / 100);
         serviceSalaryTotal += lineSalary;
         serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
       }
@@ -4522,11 +4527,17 @@ export class ChecksService {
       let productSalaryTotal = 0;
       const productLines: any[] = [];
 
-      // Fetch master's product commission settings (tenant-scoped).
-      // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
-      // приоритет product_commissions (COALESCE в цикле ниже) сохранён.
-      const { rows: masterProdRows } = await client.query(
-        `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
+      if (preserve.products) {
+        productLines.push(...products);
+        productTotal = Number(lockedRows[0].product_total) || 0;
+        productCostTotal = Number(lockedRows[0].product_cost_total) || 0;
+        productSalaryTotal = Number(lockedRows[0].product_salary_total) || 0;
+      } else {
+        // Fetch master's product commission settings (tenant-scoped).
+        // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
+        // приоритет product_commissions (COALESCE в цикле ниже) сохранён.
+        const { rows: masterProdRows } = await client.query(
+          `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
            FROM users u
            LEFT JOIN LATERAL (
              SELECT mrh.product_salary_percent
@@ -4536,67 +4547,72 @@ export class ChecksService {
               LIMIT 1
            ) h ON true
           WHERE u.id = $1 AND u.tenant_id = $2`,
-        [primaryMasterId, tenantID, rateMonth],
-      );
-      const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
+          [primaryMasterId, tenantID, rateMonth],
+        );
+        const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
 
-      const productCommissionMap: Record<string, number> = {};
-      if (products.length > 0) {
-        const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
-        if (prodIds.length > 0) {
-          const { rows: pcRows } = await client.query(
-            `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
-            [primaryMasterId, prodIds, tenantID],
-          );
-          for (const r of pcRows) {
-            productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+        const productCommissionMap: Record<string, number> = {};
+        if (products.length > 0) {
+          const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
+          if (prodIds.length > 0) {
+            const { rows: pcRows } = await client.query(
+              `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
+              [primaryMasterId, prodIds, tenantID],
+            );
+            for (const r of pcRows) {
+              productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+            }
           }
         }
-      }
 
-      // Product price lock (same rule as create): warehouse sell_price wins.
-      const warehouseSellMap = await this.loadWarehouseSellPrices(
-        client,
-        tenantID,
-        referencedProductIds,
-        actorPointId(actor),
-      );
-      // Product cost lock (round-11 #10): warehouse cost_price wins too.
-      const warehouseCostMap = await this.loadWarehouseCostPrices(
-        client,
-        tenantID,
-        referencedProductIds,
-        actorPointId(actor),
-      );
+        // Product price lock (same rule as create): warehouse sell_price wins.
+        const warehouseSellMap = await this.loadWarehouseSellPrices(
+          client,
+          tenantID,
+          referencedProductIds,
+          actorPointId(actor),
+        );
+        // Product cost lock (round-11 #10): warehouse cost_price wins too.
+        const warehouseCostMap = await this.loadWarehouseCostPrices(
+          client,
+          tenantID,
+          referencedProductIds,
+          actorPointId(actor),
+        );
 
-      for (const prod of products) {
-        const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
-        const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
-        const effectiveCostPrice = prod.productId
-          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
-          : prod.costPrice || 0;
-        // Money precision (item 6): per-line sell/cost are real 2-decimal
-        // amounts, so Σ(lines) matches the stored totals cent-for-cent.
-        const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
-        const productProfit = totalSell - totalCost;
-        productTotal += totalSell;
-        productCostTotal += totalCost;
+        for (const prod of products) {
+          const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
+          const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+          const effectiveCostPrice = prod.productId
+            ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+            : prod.costPrice || 0;
+          // Money precision (item 6): per-line sell/cost are real 2-decimal
+          // amounts, so Σ(lines) matches the stored totals cent-for-cent.
+          const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
+          const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
+          const productProfit = totalSell - totalCost;
+          productTotal += totalSell;
+          productCostTotal += totalCost;
 
-        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
-        if (pct > 0 && productProfit > 0) {
-          // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
-          // accumulated commission is an exact money amount, not float dust.
-          productSalaryTotal += round2((productProfit * pct) / 100);
+          const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+          if (pct > 0 && productProfit > 0) {
+            // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
+            // accumulated commission is an exact money amount, not float dust.
+            productSalaryTotal += round2((productProfit * pct) / 100);
+          }
+
+          productLines.push({
+            ...prod,
+            sellPrice: effectiveSellPrice,
+            costPrice: effectiveCostPrice,
+            totalSell,
+            totalCost,
+          });
         }
-
-        productLines.push({
-          ...prod,
-          sellPrice: effectiveSellPrice,
-          costPrice: effectiveCostPrice,
-          totalSell,
-          totalCost,
-        });
+      }
+      if (preserve.services) {
+        serviceTotal = Number(lockedRows[0].service_total) || 0;
+        serviceSalaryTotal = Number(lockedRows[0].service_salary_total) || 0;
       }
 
       // Normalise the accumulated sums once before deriving totals (item 6) —
@@ -4731,45 +4747,32 @@ export class ChecksService {
         updateVals,
       );
 
-      // Delete existing lines and re-insert
-      await client.query('DELETE FROM check_service_lines WHERE check_id=$1', [id]);
-      await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
-
-      for (const svc of serviceLines) {
-        await client.query(
-          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            id,
-            svc.serviceId || null,
-            svc.masterId || null,
-            svc.name,
-            svc.price || 0,
-            svc.quantity || 1,
-            svc.total,
-            svc.salaryAmount ?? 0,
-          ],
-        );
+      if (!preserve.services) {
+        await saveCheckServiceLines(client, tenantID, id, serviceLines, actor?.userID ?? actorUserId);
       }
+      if (!preserve.products) {
+        await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
 
-      for (const prod of productLines) {
-        await client.query(
-          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            id,
-            prod.productId || null,
-            prod.name,
-            prod.sellPrice || 0,
-            prod.costPrice || 0,
-            prod.quantity || 1,
-            prod.totalSell,
-            prod.totalCost,
-          ],
-        );
+        for (const prod of productLines) {
+          await client.query(
+            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [
+              id,
+              prod.productId || null,
+              prod.name,
+              prod.sellPrice || 0,
+              prod.costPrice || 0,
+              prod.quantity || 1,
+              prod.totalSell,
+              prod.totalCost,
+            ],
+          );
+        }
       }
 
       // ── Deferred → active side-effects ───────────────────────────────────
       // ONLY on the genuine true→false transition: now that the final lines are
-      // persisted (deleted + re-inserted above), decrement stock and spawn
+      // persisted above, decrement stock and spawn
       // warranties exactly like create() does for a non-deferred sale. Runs in
       // THIS transaction so stock + warranties + the check commit atomically.
       // Idempotent: gated by the prior is_deferred from the DB, and warranties
@@ -4865,6 +4868,7 @@ export class ChecksService {
     // текущим users.*, чтобы правка июльского чека в августе не перепекала
     // его по августовской ставке. Передаёт editClosedCheck.
     rateMonth: string,
+    preserve = { services: false, products: false },
   ) {
     const services = dto.services || [];
     const products = dto.products || [];
@@ -4915,12 +4919,12 @@ export class ChecksService {
     const serviceLines: any[] = [];
     for (const svc of services) {
       // Money precision (item 6) — same round2 discipline as create/fullUpdate.
-      const total = round2((svc.price || 0) * (svc.quantity || 1));
+      const total = preserve.services ? svc.total : round2((svc.price || 0) * (svc.quantity || 1));
       serviceTotal += total;
       const masterId = svc.masterId || primaryMasterId;
       const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
       const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
-      const lineSalary = round2((total * salaryPct) / 100);
+      const lineSalary = preserve.services ? svc.salaryAmount : round2((total * salaryPct) / 100);
       serviceSalaryTotal += lineSalary;
       serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
     }
@@ -4931,10 +4935,19 @@ export class ChecksService {
     let productSalaryTotal = 0;
     const productLines: any[] = [];
 
-    // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
-    // приоритет product_commissions (COALESCE ниже) сохранён.
-    const { rows: masterProdRows } = await client.query(
-      `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
+    const referencedProductIds: string[] = products
+      .map((p: any) => p.productId)
+      .filter((x: string | undefined): x is string => !!x);
+    if (preserve.products) {
+      productLines.push(...products);
+      productTotal = Number(prior.product_total) || 0;
+      productCostTotal = Number(prior.product_cost_total) || 0;
+      productSalaryTotal = Number(prior.product_salary_total) || 0;
+    } else {
+      // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
+      // приоритет product_commissions (COALESCE ниже) сохранён.
+      const { rows: masterProdRows } = await client.query(
+        `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
          FROM users u
          LEFT JOIN LATERAL (
            SELECT mrh.product_salary_percent
@@ -4944,57 +4957,59 @@ export class ChecksService {
             LIMIT 1
          ) h ON true
         WHERE u.id = $1 AND u.tenant_id = $2`,
-      [primaryMasterId, tenantID, rateMonth],
-    );
-    const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
-
-    const referencedProductIds: string[] = products
-      .map((p: any) => p.productId)
-      .filter((x: string | undefined): x is string => !!x);
-    const productCommissionMap: Record<string, number> = {};
-    if (referencedProductIds.length > 0) {
-      const { rows: pcRows } = await client.query(
-        `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
-        [primaryMasterId, referencedProductIds, tenantID],
+        [primaryMasterId, tenantID, rateMonth],
       );
-      for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+      const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
+
+      const productCommissionMap: Record<string, number> = {};
+      if (referencedProductIds.length > 0) {
+        const { rows: pcRows } = await client.query(
+          `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
+          [primaryMasterId, referencedProductIds, tenantID],
+        );
+        for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+      }
+
+      const warehouseSellMap = await this.loadWarehouseSellPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        (prior?.point_id as string | null) ?? null,
+      );
+      // Product cost lock (round-11 #10): warehouse cost_price wins too.
+      const warehouseCostMap = await this.loadWarehouseCostPrices(
+        client,
+        tenantID,
+        referencedProductIds,
+        (prior?.point_id as string | null) ?? null,
+      );
+
+      for (const prod of products) {
+        const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
+        const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+        const effectiveCostPrice = prod.productId
+          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+          : prod.costPrice || 0;
+        // Money precision (item 6) — same round2 discipline as create/fullUpdate.
+        const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
+        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
+        const productProfit = totalSell - totalCost;
+        productTotal += totalSell;
+        productCostTotal += totalCost;
+        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+        if (pct > 0 && productProfit > 0) productSalaryTotal += round2((productProfit * pct) / 100);
+        productLines.push({
+          ...prod,
+          sellPrice: effectiveSellPrice,
+          costPrice: effectiveCostPrice,
+          totalSell,
+          totalCost,
+        });
+      }
     }
-
-    const warehouseSellMap = await this.loadWarehouseSellPrices(
-      client,
-      tenantID,
-      referencedProductIds,
-      (prior?.point_id as string | null) ?? null,
-    );
-    // Product cost lock (round-11 #10): warehouse cost_price wins too.
-    const warehouseCostMap = await this.loadWarehouseCostPrices(
-      client,
-      tenantID,
-      referencedProductIds,
-      (prior?.point_id as string | null) ?? null,
-    );
-
-    for (const prod of products) {
-      const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
-      const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
-      const effectiveCostPrice = prod.productId
-        ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
-        : prod.costPrice || 0;
-      // Money precision (item 6) — same round2 discipline as create/fullUpdate.
-      const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-      const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
-      const productProfit = totalSell - totalCost;
-      productTotal += totalSell;
-      productCostTotal += totalCost;
-      const pct = productCommissionMap[prod.productId] ?? globalProductPct;
-      if (pct > 0 && productProfit > 0) productSalaryTotal += round2((productProfit * pct) / 100);
-      productLines.push({
-        ...prod,
-        sellPrice: effectiveSellPrice,
-        costPrice: effectiveCostPrice,
-        totalSell,
-        totalCost,
-      });
+    if (preserve.services) {
+      serviceTotal = Number(prior.service_total) || 0;
+      serviceSalaryTotal = Number(prior.service_salary_total) || 0;
     }
 
     // Normalise the accumulated sums once before deriving totals (item 6) —
@@ -5279,6 +5294,8 @@ export class ChecksService {
 
       // Cross-tenant integrity guards (same as create()/fullUpdate): every
       // client-supplied reference must belong to this tenant.
+      const preserve = { services: dto.services === undefined, products: dto.products === undefined };
+      dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
       const services = dto.services || [];
       const products = dto.products || [];
       if (dto.masterId) await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');
@@ -5313,7 +5330,7 @@ export class ChecksService {
       // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
       // правка июльского чека в августе перепекается по июльской ставке.
       const rateMonth = tenantDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs, tz).slice(0, 7);
-      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth);
+      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth, preserve);
 
       // NEW-4 (антидедлок): реверс СТАРОГО и списание НОВОГО стока лочат строки
       // products в РАЗНЫХ множествах внутри одной транзакции. Лочим ОБЪЕДИНЕНИЕ
@@ -5337,7 +5354,7 @@ export class ChecksService {
       }
 
       // ── 1) Reverse OLD stock: add back exactly what the sale deducted ──────
-      for (const r of oldProdRows) {
+      for (const r of preserve.products ? [] : oldProdRows) {
         const qty = parseFloat(r.qty) || 0;
         if (qty <= 0) continue;
         await client.query(`UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3`, [
@@ -5486,43 +5503,32 @@ export class ChecksService {
         updateVals,
       );
 
-      // ── 3) Replace the lines ──────────────────────────────────────────────
-      await client.query('DELETE FROM check_service_lines WHERE check_id=$1', [id]);
-      await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
-      for (const svc of c.serviceLines) {
-        await client.query(
-          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            id,
-            svc.serviceId || null,
-            svc.masterId || null,
-            svc.name,
-            svc.price || 0,
-            svc.quantity || 1,
-            svc.total,
-            svc.salaryAmount ?? 0,
-          ],
-        );
+      // Keep service identities and original price snapshots through closed edits.
+      if (!preserve.services) {
+        await saveCheckServiceLines(client, tenantID, id, c.serviceLines, actor?.userID ?? actorUserId);
       }
-      for (const prod of c.productLines) {
-        await client.query(
-          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            id,
-            prod.productId || null,
-            prod.name,
-            prod.sellPrice || 0,
-            prod.costPrice || 0,
-            prod.quantity || 1,
-            prod.totalSell,
-            prod.totalCost,
-          ],
-        );
+      if (!preserve.products) {
+        await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
+        for (const prod of c.productLines) {
+          await client.query(
+            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [
+              id,
+              prod.productId || null,
+              prod.name,
+              prod.sellPrice || 0,
+              prod.costPrice || 0,
+              prod.quantity || 1,
+              prod.totalSell,
+              prod.totalCost,
+            ],
+          );
+        }
       }
 
       // ── 4) Apply NEW stock: deduct the new quantities (aggregated per product) ─
       const newAgg: Record<string, number> = {};
-      for (const prod of c.productLines) {
+      for (const prod of preserve.products ? [] : c.productLines) {
         if (!prod.productId) continue;
         // ||1 — та же нормализация, что в строке чека и в деньгах (INSERT выше
         // пишет `quantity || 1`): строка без quantity продаётся как 1 шт и

@@ -23,7 +23,7 @@ function money(value: unknown): number {
 }
 
 export function normalizeServicePrice(input: ServicePriceInput, prior?: ServicePricePolicy): ServicePricePolicy {
-  const priceType = input.priceType ?? prior?.priceType ?? 'fixed';
+  const priceType = input.priceType === undefined ? (prior?.priceType ?? 'fixed') : input.priceType;
   if (priceType !== 'fixed' && priceType !== 'range') {
     throw new BadRequestException({ message: 'Тип цены услуги: выберите фиксированную цену или диапазон' });
   }

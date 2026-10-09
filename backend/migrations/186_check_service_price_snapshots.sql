@@ -20,7 +20,7 @@ ALTER TABLE check_service_lines
          AND catalog_price_type IS NULL AND catalog_default_price IS NULL
          AND catalog_min_price IS NULL AND catalog_max_price IS NULL
          AND catalog_price_version IS NULL AND price_threshold IS NULL)
-        OR (price_snapshot_status = 'catalog' AND catalog_price_type IN ('fixed', 'range')
+        OR (price_snapshot_status = 'catalog' AND catalog_price_type IS NOT NULL AND catalog_price_type IN ('fixed', 'range')
             AND catalog_default_price IS NOT NULL AND catalog_min_price IS NOT NULL
             AND catalog_max_price IS NOT NULL AND catalog_price_version IS NOT NULL
             AND price_threshold IS NOT NULL AND catalog_price_version > 0
