@@ -32,7 +32,8 @@
     "react-markdown": "^9.1.0",
     "react-router-dom": "^6.21.0",
     "remark-gfm": "^4.0.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-service-import": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",

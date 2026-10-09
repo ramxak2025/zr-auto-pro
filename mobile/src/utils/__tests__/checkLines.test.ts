@@ -2,7 +2,13 @@
  * Строки услуг заказ-наряда — `shared/utils/checkLines.ts` (2026-09-30, услуги без
  * количества). Сервер считает сумму строки как round2(price × (quantity || 1)).
  */
-import { MAX_EXPANDED_QUANTITY, expandServiceQuantities, serviceLineTotal } from '../../../../shared/utils/checkLines';
+import {
+  MAX_EXPANDED_QUANTITY,
+  expandServiceQuantities,
+  hydrateServiceLineForCheckEdit,
+  serviceLineTotal,
+  toCheckTemplateServiceInput,
+} from '../../../../shared/utils/checkLines';
 
 describe('serviceLineTotal', () => {
   it('новая строка — просто цена', () => {
@@ -111,5 +117,51 @@ describe('expandServiceQuantities', () => {
     const before = serviceLineTotal(legacy);
     const after = expandServiceQuantities([legacy]).reduce((sum, l) => sum + serviceLineTotal(l), 0);
     expect(after).toBe(before);
+  });
+});
+
+describe('check service line identity mapping', () => {
+  const saved = {
+    id: 'check-line-1',
+    serviceId: 'catalog-service-1',
+    masterId: 'master-1',
+    name: 'Работа',
+    price: 700,
+    quantity: 2,
+    total: 1400,
+    priceSnapshotStatus: 'catalog' as const,
+    catalogPriceType: 'range' as const,
+    catalogDefaultPrice: 400,
+    catalogMinPrice: 400,
+    catalogMaxPrice: 600,
+    catalogPriceVersion: 3,
+    priceThreshold: 600,
+    priceChangedBy: 'owner-1',
+    priceChangedByName: 'Владелец',
+    priceChangedAt: '2026-10-01T00:00:00Z',
+    priceExcess: 200,
+  };
+
+  it('hydrates edits with the persisted id and legacy quantity but no server-owned provenance', () => {
+    expect(hydrateServiceLineForCheckEdit(saved, 'fallback')).toEqual({
+      id: 'check-line-1',
+      serviceId: 'catalog-service-1',
+      masterId: 'master-1',
+      name: 'Работа',
+      price: 700,
+      quantity: 2,
+      total: 1400,
+    });
+  });
+
+  it('template copies carry user fields and catalog id, never check-line id or snapshots', () => {
+    const copied = toCheckTemplateServiceInput(saved);
+    expect(copied).toEqual({ serviceId: 'catalog-service-1', name: 'Работа', price: 700 });
+    expect(copied).not.toHaveProperty('id');
+    expect(copied).not.toHaveProperty('priceSnapshotStatus');
+    expect(expandServiceQuantities([saved])).toEqual([
+      { ...saved, quantity: 1, total: 700 },
+      { ...saved, quantity: 1, total: 700 },
+    ]);
   });
 });

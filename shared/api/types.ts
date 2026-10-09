@@ -19,6 +19,7 @@ import type {
   PublicBookingHours,
   PublicBookingMode,
   PublicBookingOperator,
+  Service,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -667,6 +668,44 @@ export interface UpdateServiceRequest {
   defaultPrice?: number;
   masterPercent?: number | null;
   warrantyDays?: number | null;
+}
+
+/** Parsed service catalog row sent to the tenant-scoped import preview endpoint. */
+export interface ServiceImportRow {
+  sourceRow: number;
+  id?: string;
+  name: string;
+  category?: string;
+  priceType: 'fixed' | 'range';
+  defaultPrice?: number;
+  minPrice?: number;
+  maxPrice?: number;
+  masterPercent?: number | null;
+  warrantyDays?: number | null;
+}
+
+export interface ServiceImportPreviewRow {
+  sourceRow: number;
+  action: 'create' | 'update' | 'error';
+  serviceId?: string;
+  expectedPriceVersion?: number;
+  name: string;
+  category?: string;
+  message?: string;
+}
+
+export interface ServiceImportPreview {
+  previewId: string;
+  rows: ServiceImportPreviewRow[];
+  errors: string[];
+  summary: { totalRows: number; create: number; update: number; errors: number };
+}
+
+export interface ServiceImportResult {
+  requestId: string;
+  created: number;
+  updated: number;
+  services: Service[];
 }
 
 export type PutServiceVisibilityRuleRequest =

@@ -1539,6 +1539,11 @@ export default function CheckDetailScreen() {
               >
                 <View style={styles.lineItemLeft}>
                   <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
+                  {line.priceSnapshotStatus === 'catalog' && Number(line.priceExcess) > 0 && (
+                    <Text style={{ color: colors.orange[600], fontSize: fontSize.xs, marginTop: 2 }}>
+                      +{formatMoney(Number(line.priceExcess))} к прайсу
+                    </Text>
+                  )}
                   <View style={styles.lineItemMeta}>
                     {line.master && (
                       <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>

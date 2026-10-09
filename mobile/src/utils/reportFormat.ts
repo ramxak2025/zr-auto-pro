@@ -208,6 +208,7 @@ const HREF_ROUTES: Array<{ prefix: string; name: string; param: string }> = [
   { prefix: '/employees/', name: 'EmployeeDetail', param: 'id' },
   { prefix: '/users/', name: 'EmployeeDetail', param: 'id' },
   { prefix: '/cars/', name: 'CarDetail', param: 'carId' },
+  { prefix: '/checks/', name: 'CheckDetail', param: 'id' },
 ];
 
 /** '/clients/abc?tab=x' → ClientDetail { id: 'abc' }; неизвестный путь → null (строка не кликабельна). */

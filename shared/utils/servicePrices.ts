@@ -1,5 +1,44 @@
 import type { CheckServiceLine, Service } from '../types';
 
+export interface ServicePriceFormValue {
+  priceType: 'fixed' | 'range';
+  defaultPrice: number;
+  minPrice: number;
+  maxPrice: number;
+}
+
+function parseFormPrice(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const value = Number(raw.replace(/[\s\u00a0]/g, '').replace(',', '.'));
+  return Number.isFinite(value) && value >= 0 && value <= 9_999_999_999.99
+    ? Math.round((value + Number.EPSILON) * 100) / 100
+    : null;
+}
+
+/** Shared catalogue form validation. Range bounds are descriptive; a check price may be outside them. */
+export function servicePriceFormValue(
+  priceType: 'fixed' | 'range',
+  fixedRaw: string,
+  minRaw: string,
+  maxRaw: string,
+): ServicePriceFormValue {
+  if (priceType === 'fixed') {
+    const price = parseFormPrice(fixedRaw);
+    if (price === null) throw new Error('Введите неотрицательную цену');
+    return { priceType, defaultPrice: price, minPrice: price, maxPrice: price };
+  }
+  const minPrice = parseFormPrice(minRaw);
+  const maxPrice = parseFormPrice(maxRaw);
+  if (minPrice === null || maxPrice === null) throw new Error('Введите обе цены диапазона');
+  if (maxPrice < minPrice) throw new Error('Максимум не может быть меньше минимума');
+  return { priceType, defaultPrice: minPrice, minPrice, maxPrice };
+}
+
+/** Range catalogue prices require an explicit entered/selected check price; bounds are never auto-picked. */
+export function isServicePriceSelectionValid(priceType: 'fixed' | 'range', price: number, explicitlyEntered: boolean): boolean {
+  return Number.isFinite(price) && price >= 0 && price <= 9_999_999_999.99 && (priceType !== 'range' || explicitlyEntered);
+}
+
 /** Legacy catalogue entries are fixed-price entries. A range starts at minPrice. */
 export function servicePriceBounds(service: Pick<Service, 'defaultPrice' | 'priceType' | 'minPrice' | 'maxPrice'>) {
   const priceType = service.priceType ?? 'fixed';

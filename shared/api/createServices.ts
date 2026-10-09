@@ -213,6 +213,7 @@ import type {
   RegistrationRequest,
   CheckTag,
 } from '../types';
+import type { ServiceImportRow, ServiceImportPreview, ServiceImportResult } from './types';
 import type {
   LoginRequest,
   LoginResponse,
@@ -917,6 +918,11 @@ export function createServicesApi(api: HttpClient) {
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
     priceHistory: (id: string) => api.get<ServicePriceHistoryEntry[]>(`/services/${id}/price-history`),
+    exportCatalog: () => api.get<Service[]>('/services/export'),
+    previewImport: (rows: ServiceImportRow[]) =>
+      api.post<ServiceImportPreview>('/services/import/preview', { rows }, { timeout: 60_000 }),
+    confirmImport: (previewId: string, requestId: string) =>
+      api.post<ServiceImportResult>('/services/import/confirm', { previewId, requestId }, { timeout: 120_000 }),
     create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
     update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
     remove: (id: string) => api.delete(`/services/${id}`),

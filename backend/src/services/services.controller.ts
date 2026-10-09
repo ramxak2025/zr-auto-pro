@@ -17,6 +17,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { PutServiceVisibilityRuleDto } from './dto/put-service-visibility-rule.dto';
+import type { ServiceImportRow } from '../../../shared/api/types';
 
 // ROLE-ONLY (консолидация 2026-07). Enforcement на сервере, не в UI:
 //   • view   — смотреть услуги + добавлять в чек → @RequirePermission('services_view');
@@ -49,6 +50,24 @@ export class ServicesController {
   @Delete('visibility/category')
   deleteCategoryVisibilityRule(@Query('path') path: string, @CurrentUser() user: JwtPayload) {
     return this.servicesService.deleteVisibilityRule(user.tenantID, { categoryPath: path });
+  }
+
+  @RequirePermission('services_manage')
+  @Get('export')
+  exportCatalog(@CurrentUser() user: JwtPayload) {
+    return this.servicesService.exportCatalog(user.tenantID);
+  }
+
+  @RequirePermission('services_manage')
+  @Post('import/preview')
+  previewImport(@CurrentUser() user: JwtPayload, @Body() body: { rows: ServiceImportRow[] }) {
+    return this.servicesService.previewImport(user.tenantID, user.userID, body?.rows);
+  }
+
+  @RequirePermission('services_manage')
+  @Post('import/confirm')
+  confirmImport(@CurrentUser() user: JwtPayload, @Body() body: { previewId: string; requestId: string }) {
+    return this.servicesService.confirmImport(user.tenantID, user.userID, body?.previewId, body?.requestId);
   }
 
   @RequirePermission('services_view')

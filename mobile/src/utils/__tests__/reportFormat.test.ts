@@ -151,6 +151,7 @@ describe('mapReportHref', () => {
     expect(mapReportHref('/products/p1')).toEqual({ name: 'ProductDetail', params: { productId: 'p1' } });
     expect(mapReportHref('/employees/u1')).toEqual({ name: 'EmployeeDetail', params: { id: 'u1' } });
     expect(mapReportHref('/cars/c1')).toEqual({ name: 'CarDetail', params: { carId: 'c1' } });
+    expect(mapReportHref('/checks/check-1')).toEqual({ name: 'CheckDetail', params: { id: 'check-1' } });
   });
 
   test('неизвестное / пустое — null (строка не кликабельна)', () => {

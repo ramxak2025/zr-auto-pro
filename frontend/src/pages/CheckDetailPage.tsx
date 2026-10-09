@@ -323,6 +323,11 @@ export default function CheckDetailPage() {
             {Number(s.quantity) > 1 && (
               <span className="ml-1.5 font-normal tabular-nums text-ink-3">×{formatQty(s.quantity)}</span>
             )}
+            {s.priceSnapshotStatus === 'catalog' && Number(s.priceExcess) > 0 && (
+              <span className="ml-2 rounded-full bg-warn-soft px-2 py-0.5 text-xs font-medium text-warn-text">
+                +<Money value={Number(s.priceExcess)} /> к прайсу
+              </span>
+            )}
           </span>
         ),
       },

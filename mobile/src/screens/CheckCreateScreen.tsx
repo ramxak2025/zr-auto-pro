@@ -68,7 +68,13 @@ import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { carVin, type CarWithVin } from '../utils/vinUi';
 import { isValidVin } from '../../../shared/utils/vin';
-import { expandServiceQuantities, serviceLineTotal } from '../../../shared/utils/checkLines';
+import {
+  expandServiceQuantities,
+  hydrateServiceLineForCheckEdit,
+  serviceLineTotal,
+  toCheckTemplateServiceInput,
+} from '../../../shared/utils/checkLines';
+import { isServicePriceSelectionValid } from '../../../shared/utils/servicePrices';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -551,7 +557,9 @@ export default function CheckCreateScreen() {
   const [showInstallmentDatePicker, setShowInstallmentDatePicker] = useState(false);
 
   // Line items
-  const [serviceLines, setServiceLines] = useState<(CheckServiceLine & { lineMasterId?: string })[]>([]);
+  const [serviceLines, setServiceLines] = useState<
+    (CheckServiceLine & { lineMasterId?: string; priceConfirmed?: boolean })[]
+  >([]);
   const [productLines, setProductLines] = useState<CheckProductLine[]>([]);
 
   // ── Photo attachments ─────────────────────────────────────────────────────
@@ -899,6 +907,17 @@ export default function CheckCreateScreen() {
   const activeServiceFetchStatus =
     !catalogOwner && !showAllCatalogServices ? preferredServicesQuery.fetchStatus : allServicesQuery.fetchStatus;
   const selectableServices = !catalogOwner && !showAllCatalogServices ? (preferredServices ?? []) : (allServices ?? []);
+  const visibleServiceIds = new Set([...selectableServices, ...(allServices ?? [])].map((service) => service.id));
+  const missingReferencedServiceIds = [
+    ...new Set(serviceLines.map((line) => line.serviceId).filter((id): id is string => !!id)),
+  ].filter((id) => !visibleServiceIds.has(id));
+  const referencedServicesQuery = useQuery<Service[]>({
+    queryKey: ['check-referenced-service-prices', missingReferencedServiceIds],
+    queryFn: async () =>
+      Promise.all(missingReferencedServiceIds.map(async (id) => (await servicesApi.getById(id)).data)),
+    enabled: missingReferencedServiceIds.length > 0,
+    staleTime: 60_000,
+  });
 
   // Тот же сетевой сбой, что и в поиске клиента: список услуг не загрузился
   // из-за сети (упал / приостановлен офлайном) → показываем «Нет связи» +
@@ -1183,9 +1202,9 @@ export default function CheckCreateScreen() {
       expandServiceQuantities(template.services).map((s) => {
         const quantity = Number(s.quantity) > 1 ? s.quantity : 1;
         return {
-          serviceId: s.serviceId,
-          name: s.name,
-          price: s.price,
+          ...toCheckTemplateServiceInput(s),
+          serviceId: s.serviceId || '',
+          priceConfirmed: true,
           quantity,
           total: serviceLineTotal({ price: s.price, quantity }),
           masterId: defaultMasterId,
@@ -1237,11 +1256,7 @@ export default function CheckCreateScreen() {
         // старого чека разворачиваем в три строки, чтобы шаблон сохранил её честный состав.
         services: expandServiceQuantities(serviceLines)
           .filter((l) => !!l.serviceId)
-          .map((l) => ({
-            serviceId: l.serviceId!,
-            name: l.name,
-            price: l.price,
-          })),
+          .map((l) => toCheckTemplateServiceInput({ serviceId: l.serviceId!, name: l.name, price: l.price })),
         products: productLines
           .filter((l) => !!l.productId)
           .map((l) => ({
@@ -1339,7 +1354,13 @@ export default function CheckCreateScreen() {
       setInstallmentFirst(String((c.cashAmount || 0) + (c.cardAmount || 0)));
     }
     setIsDeferred(c.isDeferred || false);
-    setServiceLines(c.services || []);
+    setServiceLines(
+      (c.services || []).map((line) => ({
+        ...hydrateServiceLineForCheckEdit(line, line.masterId || ''),
+        priceConfirmed: true,
+        lineMasterId: line.masterId || '',
+      })),
+    );
     setProductLines(c.products || []);
     // Round 14: гидрируем исполнителей и место БЕЗ dirty-флагов — payload
     // отправит их только после явной правки (см. proceed()).
@@ -1939,9 +1960,11 @@ export default function CheckCreateScreen() {
         assigneeIds,
         orderLocationId,
         serviceLines: serviceLines.map((l) => ({
+          id: l.id,
           serviceId: l.serviceId,
           name: l.name,
           price: l.price,
+          priceConfirmed: l.priceConfirmed,
           quantity: l.quantity,
           master: l.lineMasterId || l.masterId || '',
         })),
@@ -2404,7 +2427,8 @@ export default function CheckCreateScreen() {
       {
         serviceId: service.id,
         name: service.name,
-        price: service.defaultPrice,
+        price: service.priceType === 'range' ? 0 : service.defaultPrice,
+        priceConfirmed: service.priceType !== 'range',
         quantity: 1,
         total: service.defaultPrice,
         masterId: defaultMasterId,
@@ -2556,6 +2580,30 @@ export default function CheckCreateScreen() {
     // Рассрочку нельзя откладывать — продажа реальна (остаток = долг по ней).
     const shouldDefer =
       effectiveMethod === ('installment' as PaymentMethod) ? false : deferred !== undefined ? deferred : isDeferred;
+    if (
+      missingReferencedServiceIds.length > 0 &&
+      (referencedServicesQuery.isLoading || referencedServicesQuery.isError)
+    ) {
+      if (referencedServicesQuery.isError) void referencedServicesQuery.refetch();
+      haptic('warning');
+      Alert.alert('Не удалось проверить прайс', 'Повторите загрузку сохранённых услуг и попробуйте снова.');
+      return;
+    }
+    if (
+      serviceLines.some((line) => {
+        const service =
+          selectableServices.find((candidate) => candidate.id === line.serviceId) ??
+          allServices?.find((candidate) => candidate.id === line.serviceId) ??
+          referencedServicesQuery.data?.find((candidate) => candidate.id === line.serviceId);
+        return service
+          ? !isServicePriceSelectionValid(service.priceType ?? 'fixed', line.price, !!line.priceConfirmed)
+          : false;
+      })
+    ) {
+      haptic('warning');
+      Alert.alert('Укажите цену', 'Для услуги с диапазоном введите согласованную цену в строке.');
+      return;
+    }
     if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
       haptic('warning');
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
@@ -2711,6 +2759,7 @@ export default function CheckCreateScreen() {
         // шаблона): её количество уходит как есть, иначе сумма строки на сервере разошлась
         // бы с той, что видит кассир.
         services: serviceLines.map((l) => ({
+          ...(l.id ? { id: l.id } : {}),
           serviceId: l.serviceId,
           masterId: l.lineMasterId || l.masterId || resolvedMasterId,
           name: l.name,
@@ -4070,8 +4119,19 @@ export default function CheckCreateScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
                     <TextInput
-                      value={String(line.price)}
-                      onChangeText={(v) => updateServiceLine(idx, 'price', parseMoneyInput(v))}
+                      value={line.priceConfirmed === false ? '' : String(line.price)}
+                      onChangeText={(v) => {
+                        if (!v.trim()) {
+                          setServiceLines((current) =>
+                            current.map((entry, i) =>
+                              i === idx ? { ...entry, price: 0, priceConfirmed: false } : entry,
+                            ),
+                          );
+                        } else {
+                          updateServiceLine(idx, 'price', parseMoneyInput(v));
+                          updateServiceLine(idx, 'priceConfirmed', true);
+                        }
+                      }}
                       style={[
                         styles.lineInput,
                         {
@@ -4082,6 +4142,7 @@ export default function CheckCreateScreen() {
                       ]}
                       keyboardType="numeric"
                       selectTextOnFocus
+                      placeholder={line.priceConfirmed === false ? 'Укажите цену' : '0'}
                     />
                   </View>
                   {/* Сумма строки отдельно показывается только у legacy-строки («×3»): у новой
@@ -4909,7 +4970,11 @@ export default function CheckCreateScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.pickerName, { color: palette.text.primary }]}>{service.name}</Text>
               </View>
-              <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
+              <Text style={styles.pickerPrice}>
+                {service.priceType === 'range'
+                  ? `${formatMoney(service.minPrice ?? service.defaultPrice)} – ${formatMoney(service.maxPrice ?? service.defaultPrice)}`
+                  : formatMoney(service.defaultPrice)}
+              </Text>
             </TouchableOpacity>
           ))}
           {activeServicesLoading && filteredServices.length === 0 ? (

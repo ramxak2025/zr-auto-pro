@@ -29,8 +29,27 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Service, PaginatedResponse, ServiceVisibilityConfig } from '../../../shared/types';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as Crypto from 'expo-crypto';
+import * as XLSX from 'xlsx';
+import type {
+  Service,
+  PaginatedResponse,
+  ServiceVisibilityConfig,
+  ServicePriceHistoryEntry,
+} from '../../../shared/types';
+import type { ServiceImportPreview } from '../../../shared/api/types';
 import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
+import {
+  assertNoServiceWorkbookFormulas,
+  assertServiceWorkbookSafe,
+  parseServiceImportMatrix,
+  serviceExportMatrix,
+  serviceWorkbookBytesFromBase64,
+} from '../../../shared/utils/serviceSpreadsheet';
+import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 
 function formatMoney(v: number) {
   return (
@@ -49,6 +68,7 @@ interface ServiceRowProps {
   item: Service;
   index: number;
   onOpen: (s: Service) => void;
+  onHistory: (s: Service) => void;
   /** ROLE-ONLY: без services_manage строка не открывает редактор (только просмотр). */
   canManage: boolean;
   onVisibility?: (target: { kind: 'service'; id: string; label: string }) => void;
@@ -59,6 +79,7 @@ const ServiceRow = React.memo(function ServiceRow({
   item,
   index,
   onOpen,
+  onHistory,
   canManage,
   onVisibility,
   visibilityEnabled,
@@ -103,8 +124,21 @@ const ServiceRow = React.memo(function ServiceRow({
             <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
           </TouchableOpacity>
         )}
+        <TouchableOpacity
+          onPress={(event) => {
+            event.stopPropagation();
+            onHistory(item);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`История цены: ${item.name}`}
+          style={{ padding: spacing[2] }}
+        >
+          <Ionicons name="time-outline" size={17} color={palette.text.tertiary} />
+        </TouchableOpacity>
         <Text style={[styles.servicePrice, { color: palette.accent.primaryText }]}>
-          {formatMoney(item.defaultPrice)}
+          {item.priceType === 'range'
+            ? `${formatMoney(item.minPrice ?? item.defaultPrice)} – ${formatMoney(item.maxPrice ?? item.defaultPrice)}`
+            : formatMoney(item.defaultPrice)}
         </Text>
       </View>
     </AnimatedCard>
@@ -129,7 +163,7 @@ export default function ServicesScreen() {
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const limit = 30;
+  const limit = 10000;
   const [refreshing, setRefreshing] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -137,6 +171,9 @@ export default function ServicesScreen() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
+  const [priceType, setPriceType] = useState<'fixed' | 'range'>('fixed');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   // Особый % мастера — необязательное поле. Пусто = null (берётся личный
   // процент мастера, сегодняшнее поведение). Явный 0 сохраняется как 0
   // (мастер получает 0 за эту услугу). Заданное число 0..100 переопределяет
@@ -148,12 +185,24 @@ export default function ServicesScreen() {
   // включения её в чек. Используется для авто-создания WarrantyClaim'ов.
   const [warrantyDays, setWarrantyDays] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<Service | null>(null);
+  const historyQuery = useQuery<ServicePriceHistoryEntry[]>({
+    queryKey: ['service-price-history', historyTarget?.id],
+    queryFn: async () => {
+      if (!historyTarget) return [];
+      return (await servicesApi.priceHistory(historyTarget.id)).data;
+    },
+    enabled: !!historyTarget,
+  });
   const [visibilityTarget, setVisibilityTarget] = useState<
     { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string } | null
   >(null);
   const [visibilityRoleIds, setVisibilityRoleIds] = useState<string[]>([]);
   const [visibilityRuleActive, setVisibilityRuleActive] = useState(false);
   const [folderListOpen, setFolderListOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<ServiceImportPreview | null>(null);
+  const [importRequestId, setImportRequestId] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Service>>({
     queryKey: ['services', { search, page, limit, preferredOnly }],
@@ -262,6 +311,9 @@ export default function ServicesScreen() {
     setName('');
     setCategory('');
     setDefaultPrice('');
+    setPriceType('fixed');
+    setMinPrice('');
+    setMaxPrice('');
     setMasterPercent('');
     setWarrantyDays('');
     setModalOpen(true);
@@ -272,6 +324,9 @@ export default function ServicesScreen() {
     setName(s.name);
     setCategory(s.category || '');
     setDefaultPrice(String(s.defaultPrice));
+    setPriceType(s.priceType ?? 'fixed');
+    setMinPrice(String(s.minPrice ?? s.defaultPrice));
+    setMaxPrice(String(s.maxPrice ?? s.defaultPrice));
     // masterPercent — number | null. Пустая строка = null (личный процент
     // мастера). Явный 0 показываем как «0», не как пусто.
     setMasterPercent(s.masterPercent != null ? String(s.masterPercent) : '');
@@ -308,10 +363,17 @@ export default function ServicesScreen() {
       const n = Number(trimmedPercent);
       masterPercentPayload = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
     }
+    let pricePolicy;
+    try {
+      pricePolicy = servicePriceFormValue(priceType, defaultPrice, minPrice, maxPrice);
+    } catch (error) {
+      Alert.alert('Проверьте цену', error instanceof Error ? error.message : 'Введите корректную цену.');
+      return;
+    }
     const payload = {
       name,
       category: category || undefined,
-      defaultPrice: Number(defaultPrice) || 0,
+      ...pricePolicy,
       masterPercent: masterPercentPayload,
       warrantyDays: warrantyPayload,
     };
@@ -326,6 +388,86 @@ export default function ServicesScreen() {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['services'] });
     setRefreshing(false);
+  };
+
+  const exportCatalog = async () => {
+    try {
+      const response = await servicesApi.exportCatalog();
+      const sheet = XLSX.utils.aoa_to_sheet(serviceExportMatrix(response.data));
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, sheet, 'Услуги');
+      const base64 = XLSX.write(book, { type: 'base64', bookType: 'xlsx' }) as string;
+      const directory = FileSystem.cacheDirectory;
+      if (!directory) throw new Error('Нет временной папки для файла');
+      const uri = `${directory}Каталог-услуг-Autexa.xlsx`;
+      await FileSystem.writeAsStringAsync(uri, base64, { encoding: 'base64' });
+      if (!(await Sharing.isAvailableAsync())) throw new Error('На этом устройстве недоступна отправка файла');
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Экспорт услуг',
+      });
+    } catch (error) {
+      Alert.alert('Экспорт не выполнен', error instanceof Error ? error.message : 'Не удалось выгрузить каталог услуг');
+    }
+  };
+
+  const chooseImportFile = async () => {
+    setImportBusy(true);
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+          'text/csv',
+        ],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (picked.canceled) return;
+      const file = picked.assets[0];
+      if ((file.size ?? 0) > 5 * 1024 * 1024) throw new Error('Файл больше 5 МБ');
+      const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+      const bytes = serviceWorkbookBytesFromBase64(base64);
+      assertServiceWorkbookSafe(bytes);
+      const book = XLSX.read(base64, { type: 'base64', raw: true, cellFormula: true, sheetRows: 2001 });
+      assertNoServiceWorkbookFormulas(Object.values(book.Sheets) as Array<Record<string, { f?: unknown }>>);
+      const sheet = book.Sheets[book.SheetNames[0]];
+      if (!sheet) throw new Error('В книге нет листа с услугами');
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true });
+      const rows = parseServiceImportMatrix(matrix);
+      const preview = await servicesApi.previewImport(rows);
+      setImportPreview(preview.data);
+      setImportRequestId(Crypto.randomUUID());
+    } catch (error) {
+      Alert.alert('Импорт не выполнен', error instanceof Error ? error.message : 'Не удалось прочитать файл услуг');
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importPreview || !importRequestId || importPreview.summary.errors > 0) return;
+    setImportBusy(true);
+    try {
+      const result = await servicesApi.confirmImport(importPreview.previewId, importRequestId);
+      await queryClient.invalidateQueries({ queryKey: ['services'] });
+      await queryClient.invalidateQueries({ queryKey: ['all-services'] });
+      haptic('success');
+      Alert.alert('Импорт завершён', `Создано: ${result.data.created}. Обновлено: ${result.data.updated}.`);
+      setImportPreview(null);
+      setImportRequestId(null);
+    } catch (error) {
+      haptic('error');
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      Alert.alert(
+        'Импорт не выполнен',
+        status === 409
+          ? 'Каталог изменился после просмотра. Загрузите файл повторно.'
+          : 'Изменения не применены. Повторите подтверждение.',
+      );
+    } finally {
+      setImportBusy(false);
+    }
   };
 
   const services = Array.isArray(data?.data) ? data.data : [];
@@ -375,6 +517,7 @@ export default function ServicesScreen() {
         item={item}
         index={index}
         onOpen={openEdit}
+        onHistory={setHistoryTarget}
         canManage={canManageServices}
         onVisibility={openVisibility}
         visibilityEnabled={visibilityConfigQuery.isSuccess}
@@ -459,6 +602,32 @@ export default function ServicesScreen() {
           <Text style={{ color: colors.red[500], flex: 1 }}>Не удалось загрузить настройки видимости.</Text>
           <TouchableOpacity onPress={() => void visibilityConfigQuery.refetch()} accessibilityRole="button">
             <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {canManageServices && (
+        <View
+          style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], paddingHorizontal: spacing[4] }}
+        >
+          <TouchableOpacity
+            onPress={() => void exportCatalog()}
+            accessibilityRole="button"
+            accessibilityLabel="Экспортировать каталог в Excel"
+          >
+            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Экспорт Excel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => void chooseImportFile()}
+            disabled={importBusy}
+            accessibilityRole="button"
+            accessibilityLabel="Импортировать услуги из Excel"
+          >
+            <Text
+              style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, opacity: importBusy ? 0.5 : 1 }}
+            >
+              Импорт Excel
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -621,6 +790,117 @@ export default function ServicesScreen() {
         </ScrollView>
       </Modal>
 
+      <Modal
+        visible={!!importPreview}
+        onClose={() => {
+          if (!importBusy) {
+            setImportPreview(null);
+            setImportRequestId(null);
+          }
+        }}
+        title="Просмотр импорта"
+      >
+        {importPreview && (
+          <>
+            <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold, marginBottom: spacing[3] }}>
+              {importPreview.summary.totalRows} строк · создать {importPreview.summary.create} · обновить{' '}
+              {importPreview.summary.update} · ошибок {importPreview.summary.errors}
+            </Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {importPreview.rows.map((row) => (
+                <View
+                  key={row.sourceRow}
+                  style={{
+                    paddingVertical: spacing[2],
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: palette.border.subtle,
+                  }}
+                >
+                  <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold }} numberOfLines={2}>
+                    {row.name}
+                  </Text>
+                  <Text
+                    style={{
+                      color: row.action === 'error' ? colors.red[500] : palette.text.tertiary,
+                      fontSize: fontSize.xs,
+                    }}
+                  >
+                    Строка {row.sourceRow} ·{' '}
+                    {row.action === 'create' ? 'создать' : row.action === 'update' ? 'обновить' : row.message}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+            {importPreview.summary.errors > 0 && (
+              <Text style={{ color: colors.red[500], marginTop: spacing[3] }}>
+                Исправьте ошибки и загрузите файл снова. Ни одна строка не будет применена.
+              </Text>
+            )}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], marginTop: spacing[4] }}>
+              <TouchableOpacity
+                disabled={importBusy}
+                onPress={() => {
+                  setImportPreview(null);
+                  setImportRequestId(null);
+                }}
+              >
+                <Text style={{ color: palette.text.secondary }}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={importBusy || importPreview.summary.errors > 0}
+                onPress={() => void confirmImport()}
+              >
+                <Text
+                  style={{
+                    color: importBusy || importPreview.summary.errors > 0 ? palette.text.tertiary : colors.primary[600],
+                    fontWeight: fontWeight.bold,
+                  }}
+                >
+                  {importBusy ? 'Импорт…' : 'Подтвердить'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </Modal>
+
+      <Modal visible={!!historyTarget} onClose={() => setHistoryTarget(null)} title="История цены">
+        <Text style={{ color: palette.text.secondary, fontWeight: fontWeight.semibold, marginBottom: spacing[3] }}>
+          {historyTarget?.name}
+        </Text>
+        {historyQuery.isLoading && <ActivityIndicator color={colors.primary[500]} />}
+        {historyQuery.isError && <Text style={{ color: colors.red[500] }}>Не удалось загрузить историю.</Text>}
+        {historyQuery.isSuccess && historyQuery.data.length === 0 && (
+          <Text style={{ color: palette.text.tertiary }}>Записей пока нет.</Text>
+        )}
+        <ScrollView style={{ maxHeight: 320 }}>
+          {historyQuery.data?.map((entry) => (
+            <View
+              key={entry.id}
+              style={{
+                paddingVertical: spacing[2],
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: palette.border.subtle,
+              }}
+            >
+              <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold }}>
+                {entry.priceType === 'range'
+                  ? `${formatMoney(entry.minPrice)} – ${formatMoney(entry.maxPrice)}`
+                  : formatMoney(entry.defaultPrice)}
+              </Text>
+              <Text style={{ color: palette.text.tertiary, fontSize: fontSize.xs }}>
+                v{entry.version} · {new Date(entry.changedAt).toLocaleString()} · {entry.changedByName || 'Система'} ·{' '}
+                {entry.source === 'baseline'
+                  ? 'Снимок при включении контроля цен'
+                  : entry.source === 'create'
+                    ? 'Создание услуги'
+                    : 'Изменение цены'}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+      </Modal>
+
       <Modal visible={!!visibilityTarget} onClose={() => setVisibilityTarget(null)} title="Предпочтительная видимость">
         <ScrollView style={{ maxHeight: 420 }}>
           <Text style={{ color: palette.text.secondary, marginBottom: spacing[3] }}>
@@ -720,24 +1000,86 @@ export default function ServicesScreen() {
               styles.formInput,
               { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
             ]}
-            placeholder="ТО, кузов..."
+            placeholder="Диагностика/Двигатель/Работы"
             placeholderTextColor={palette.text.tertiary}
           />
+          <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
+            Для вложенной папки разделяйте путь символом «/».
+          </Text>
         </View>
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Цена по умолчанию</Text>
-          <TextInput
-            value={defaultPrice}
-            onChangeText={setDefaultPrice}
-            style={[
-              styles.formInput,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-            ]}
-            keyboardType="numeric"
-            placeholder="0"
-            placeholderTextColor={palette.text.tertiary}
-          />
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Тип цены</Text>
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {(['fixed', 'range'] as const).map((kind) => (
+              <TouchableOpacity
+                key={kind}
+                onPress={() => setPriceType(kind)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: priceType === kind }}
+                style={{
+                  flex: 1,
+                  paddingVertical: spacing[2],
+                  borderRadius: borderRadius.lg,
+                  alignItems: 'center',
+                  backgroundColor: priceType === kind ? palette.accent.primary : palette.bg.muted,
+                }}
+              >
+                <Text
+                  style={{
+                    color: priceType === kind ? colors.white : palette.text.secondary,
+                    fontWeight: fontWeight.semibold,
+                  }}
+                >
+                  {kind === 'fixed' ? 'Фиксированная' : 'Диапазон'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
+        {priceType === 'fixed' ? (
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Цена по умолчанию</Text>
+            <TextInput
+              value={defaultPrice}
+              onChangeText={setDefaultPrice}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={palette.text.tertiary}
+            />
+          </View>
+        ) : (
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {(
+              [
+                [minPrice, setMinPrice, 'От'],
+                [maxPrice, setMaxPrice, 'До'],
+              ] as const
+            ).map(([value, setValue, label]) => (
+              <View key={label} style={[styles.formField, { flex: 1 }]}>
+                <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{label}, ₽</Text>
+                <TextInput
+                  value={value}
+                  onChangeText={(text) => setValue(text.replace(',', '.').replace(/[^0-9.]/g, ''))}
+                  style={[
+                    styles.formInput,
+                    {
+                      backgroundColor: palette.bg.muted,
+                      borderColor: palette.border.subtle,
+                      color: palette.text.primary,
+                    },
+                  ]}
+                  keyboardType="decimal-pad"
+                  placeholder={label === 'От' ? 'Минимум' : 'Максимум'}
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </View>
+            ))}
+          </View>
+        )}
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Особый % мастера</Text>
           <TextInput
