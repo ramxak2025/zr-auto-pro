@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { generatePublicBookingCode, isPublicBookingCode } from './public-booking-code';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
@@ -126,8 +127,8 @@ export class PublicBookingsService {
       id: page.id,
       pointId: page.point_id,
       slug: page.slug,
-      publicCode: page.public_code,
-      publicUrl: `https://autexa.pw/${page.public_code}`,
+      publicCode: page.short_code ?? page.public_code,
+      publicUrl: `https://autexa.pw/${page.short_code ?? page.public_code}`,
       published: page.published,
       revision: page.revision,
       ...page.settings,
@@ -249,24 +250,44 @@ export class PublicBookingsService {
       if (services.length !== serviceIds.length) throw new BadRequestException({ message: 'Услуга не найдена' });
       if (previous?.published) this.assertPublishable(persistedSettings, resourceIds.length, serviceIds.length);
       const version = legal.consentVersion;
-      const { rows } = previous
+      let { rows } = previous
         ? await client.query<BookingPageRow>(
             `UPDATE public_booking_pages SET settings=$1::jsonb,consent_version=$2,
             revision=revision+1,updated_at=now() WHERE id=$3 AND tenant_id=$4 RETURNING *`,
             [JSON.stringify(persistedSettings), version, previous.id, actor.tenantID],
           )
         : await client.query<BookingPageRow>(
-            `INSERT INTO public_booking_pages(tenant_id,point_id,slug,public_code,settings,consent_version)
-            VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(slug) DO NOTHING RETURNING *`,
+            `INSERT INTO public_booking_pages(tenant_id,point_id,slug,public_code,short_code,settings,consent_version)
+            VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) ON CONFLICT DO NOTHING RETURNING *`,
             [
               actor.tenantID,
               actorPointId(actor),
               slug,
               randomBytes(16).toString('hex'),
+              generatePublicBookingCode(),
               JSON.stringify(persistedSettings),
               version,
             ],
           );
+      // A unique constraint is the final authority; regenerate aliases on the
+      // vanishingly rare random collision, without replacing an existing page.
+      for (let attempt = 0; !previous && !rows[0] && attempt < 2; attempt += 1) {
+        rows = (
+          await client.query<BookingPageRow>(
+            `INSERT INTO public_booking_pages(tenant_id,point_id,slug,public_code,short_code,settings,consent_version)
+           VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) ON CONFLICT DO NOTHING RETURNING *`,
+            [
+              actor.tenantID,
+              actorPointId(actor),
+              slug,
+              randomBytes(16).toString('hex'),
+              generatePublicBookingCode(),
+              JSON.stringify(persistedSettings),
+              version,
+            ],
+          )
+        ).rows;
+      }
       const page = rows[0];
       if (!page) throw new ConflictException({ code: 'SLUG_TAKEN', message: 'Этот адрес уже занят' });
       await client.query('DELETE FROM public_booking_services WHERE tenant_id=$1 AND page_id=$2', [
@@ -383,10 +404,10 @@ export class PublicBookingsService {
     });
   }
   private async locateByCode(code: string): Promise<{ id: string; tenant_id: string; slug: string }> {
-    if (!/^[a-f0-9]{32}$/.test(code)) throw unavailable();
+    if (!isPublicBookingCode(code)) throw unavailable();
     return runWithTenant('', async () => {
       const { rows } = await this.pool.query<{ id: string; tenant_id: string; slug: string }>(
-        'SELECT id,tenant_id,slug FROM public_booking_pages WHERE public_code=$1',
+        'SELECT id,tenant_id,slug FROM public_booking_pages WHERE short_code=$1 OR public_code=$1',
         [code],
       );
       if (!rows[0]) throw unavailable();
@@ -444,7 +465,12 @@ export class PublicBookingsService {
         address: s.address,
         contacts: s.contacts,
         links: s.links,
-        resources: resources.map((resource) => ({ resourceKey: resource.resource_key, name: resource.full_name })),
+        resources: resources.map((resource) => ({
+          resourceKey: resource.resource_key,
+          name: resource.full_name,
+          avatar: resource.avatar ?? null,
+          profession: resource.profession || 'Мастер',
+        })),
         mode: s.mode,
         showPrices: s.showPrices,
         operator: legal.operator,

@@ -91,7 +91,7 @@ function PublicBookingCodeEntry({ code }: { code: string }) {
   useEffect(() => {
     let active = true;
     setFailure(false);
-    if (!/^[a-f0-9]{32}$/.test(code)) {
+    if (!/^(?:[A-Za-z0-9_-]{16}|[a-f0-9]{32})$/.test(code)) {
       setFailure(true);
       return;
     }
@@ -118,7 +118,7 @@ function PublicBookingCodeEntry({ code }: { code: string }) {
           <p className="pb-description">
             {failure ? 'Проверьте ссылку или свяжитесь с автосервисом.' : 'Сейчас покажем услуги и свободное время.'}
           </p>
-          {failure && /^[a-f0-9]{32}$/.test(code) && (
+          {failure && /^(?:[A-Za-z0-9_-]{16}|[a-f0-9]{32})$/.test(code) && (
             <button type="button" className="pb-primary mt-5" onClick={() => setAttempt((value) => value + 1)}>
               Повторить
             </button>
@@ -604,10 +604,10 @@ function RecoveryPanel({
 }) {
   return (
     <section className="my-5 rounded-2xl border border-amber-300 bg-amber-50 p-5" aria-live="polite">
-      <h2 className="font-semibold">Заявка уже сохранена</h2>
+      <h2 className="font-semibold">Проверьте результат отправки</h2>
       <p className="mt-1 text-sm text-amber-900">
         {saved.body
-          ? 'Сначала восстановите результат. Если отправите заявку повторно, она сохранит те же данные и номер.'
+          ? 'Ответ сервиса нужно проверить. Повторная отправка сохранит те же данные и номер.'
           : 'Сохранён только ключ восстановления. Проверьте результат; повторная отправка недоступна.'}
       </p>
       <div className="mt-4 flex flex-wrap gap-3">
@@ -651,7 +651,7 @@ function ReceiptPanel({
   const statusColor = confirmed ? '#2563eb' : rejected ? '#e11d48' : '#64748b';
   const path = confirmed ? 'M6 12.5l4 4L18.5 8' : rejected ? 'M7 7l10 10M17 7L7 17' : '';
   return (
-    <section className="my-5 rounded-3xl bg-white p-7 shadow-sm" aria-live="polite">
+    <section className="pb-receipt" aria-live="polite">
       <div className="mb-4 flex items-center gap-3">
         <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-50" aria-hidden="true">
           <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none">
@@ -672,14 +672,12 @@ function ReceiptPanel({
           </svg>
         </span>
         <div>
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
-            Заявка {receipt.requestId.slice(0, 8)}
-          </p>
+          <p className="text-sm text-slate-600">Заявка {receipt.requestId.slice(0, 8)}</p>
           <h2 className="mt-2 text-2xl font-bold">
             {receipt.status === 'confirmed'
-              ? 'Запись подтверждена'
+              ? 'Ваша запись зарегистрирована'
               : receipt.status === 'pending'
-                ? 'Заявка отправлена на подтверждение'
+                ? 'Ваша запись зарегистрирована'
                 : receipt.status === 'rejected'
                   ? 'Заявка отклонена'
                   : 'Запись отменена'}
@@ -700,25 +698,27 @@ function ReceiptPanel({
       </ul>
       <p className="mt-5 text-sm text-slate-600">
         {receipt.status === 'pending'
-          ? 'Сотрудник сервиса ещё не подтвердил выбранное время.'
+          ? 'Заявка ожидает подтверждения. Сотрудник сервиса ещё не подтвердил выбранное время.'
           : 'Сохраните номер заявки для обращения в сервис.'}
       </p>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-5 rounded-xl border border-slate-300 px-5 py-3 font-semibold disabled:opacity-50"
-        onClick={onRefresh}
-      >
-        {busy ? 'Проверяем…' : 'Обновить статус'}
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-5 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
-        onClick={onNew}
-      >
-        Новая заявка
-      </button>
+      <div className="pb-receipt-actions">
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-xl border border-slate-300 px-5 py-3 font-semibold disabled:opacity-50"
+          onClick={onRefresh}
+        >
+          {busy ? 'Проверяем…' : 'Обновить статус'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
+          onClick={onNew}
+        >
+          Новая заявка
+        </button>
+      </div>
     </section>
   );
 }

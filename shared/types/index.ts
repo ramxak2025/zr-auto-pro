@@ -2563,7 +2563,7 @@ export interface PublicBookingLanding {
   address: string;
   contacts: string;
   links?: PublicBookingContactLinks;
-  resources?: Array<{ resourceKey: string; name: string }>;
+  resources?: Array<{ resourceKey: string; name: string; avatar?: string | null; profession?: string }>;
   mode: PublicBookingMode;
   showPrices: boolean;
   operator: PublicBookingOperator;
