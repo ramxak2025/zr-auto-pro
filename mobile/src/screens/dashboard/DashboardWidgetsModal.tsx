@@ -10,7 +10,7 @@
  * к дефолту (всё включено). Android-safe: Switch кроссплатформенный.
  */
 import React from 'react';
-import { Modal, View, ScrollView, StyleSheet, Switch, Pressable, Platform } from 'react-native';
+import { Modal, View, StyleSheet, Switch, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../../platform/Typography';
 import { useColors } from '../../contexts/ThemeContext';
@@ -20,6 +20,7 @@ import { haptic } from '../../platform/haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { DashboardWidgetDef, WidgetVisibility } from './dashboardWidgets';
 import { isWidgetVisible } from './dashboardWidgets';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 interface Props {
   visible: boolean;
@@ -96,6 +97,7 @@ export default function DashboardWidgetsModal({
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing[8] }]}
           showsVerticalScrollIndicator={false}
+          reserveBottomNavigation={false}
         >
           <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
             ПОРЯДОК И ВИДИМОСТЬ

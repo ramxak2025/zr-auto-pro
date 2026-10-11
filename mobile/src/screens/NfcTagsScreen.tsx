@@ -1,14 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import {
@@ -37,6 +28,7 @@ import { runNfcTagActivation } from '../utils/nfcTagActivation';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { extractApiErrorMessage } from '../utils/apiError';
 import type { NfcTagReplacement, NfcWritePhase } from '../utils/attendanceNfcDevice';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type EnrollmentPhase = 'ready' | NfcWritePhase | 'activating' | 'success' | 'error';
 const phaseLabels: Record<EnrollmentPhase, string> = {

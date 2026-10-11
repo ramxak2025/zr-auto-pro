@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -65,6 +64,7 @@ import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
 import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // Incremental history rendering (RNPERF-6): the ScrollView is not
 // virtualized, so building 200 CheckRow trees on mount is pure waste —

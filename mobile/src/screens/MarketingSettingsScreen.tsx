@@ -23,7 +23,7 @@
  * messaging. The screen self-gates; the hub row is roles-filtered too.
  */
 import React, { useRef, useState } from 'react';
-import { View, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -39,6 +39,7 @@ import EmptyState from '../components/EmptyState';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Constants

@@ -22,14 +22,13 @@ import {
   Alert,
   Platform,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Switch,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -75,6 +74,7 @@ import {
 import { MAX_BULK_CELLS, normalizeCellCode } from '../../../shared/utils/storageCells';
 import type { UpdateStorageCellRequest } from '../../../shared/api/types';
 import type { StorageCell, Warehouse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 /** Пауза между закрытием одной модалки и открытием следующей — та же, что в ProductsScreen. */
 const MODAL_CHAIN_DELAY_MS = 300;

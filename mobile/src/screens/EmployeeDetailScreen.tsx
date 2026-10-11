@@ -56,7 +56,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   Share,
   StyleSheet,
   TouchableOpacity,
@@ -102,6 +101,7 @@ import { AwardAchievementModal } from '../components/employee/AwardAchievementMo
 import { UserPointsSheet } from '../components/employee/UserPointsSheet';
 import { usePointAccess } from '../hooks/usePoints';
 import { rankFromLifetime, progressToNextRank, rankLabelUpper } from '../components/employee/rank';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type RouteParams = { EmployeeDetail: { id: string } };
 
@@ -1853,6 +1853,7 @@ function AchievementsModal({
             style={{ flexShrink: 1 }}
             contentContainerStyle={styles.modalScroll}
             showsVerticalScrollIndicator={false}
+            reserveBottomNavigation={false}
           >
             {achievements.length === 0 && (
               <View

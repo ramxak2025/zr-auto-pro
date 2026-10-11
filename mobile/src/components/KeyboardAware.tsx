@@ -21,13 +21,15 @@
  * `bottomOffset`/contentContainerStyle, а не хардкодим.
  */
 import React from 'react';
-import { RefreshControlProps, StyleProp, ViewProps, ViewStyle } from 'react-native';
+import { RefreshControlProps, StyleProp, StyleSheet, ViewProps, ViewStyle } from 'react-native';
 import {
   KeyboardAvoidingView as KCAvoidingView,
   KeyboardAwareScrollView as KCAwareScrollView,
 } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useBottomNavigationReservation } from './TabBarScrollable';
+import { reservedScrollBottom } from '../utils/tabBarGeometry';
 
 interface KeyboardAwareViewProps {
   style?: StyleProp<ViewStyle>;
@@ -107,13 +109,30 @@ export function KeyboardAwareScroll({
   stickyHeaderIndices,
 }: KeyboardAwareScrollProps) {
   const tabBarHeight = useTabBarHeight();
+  const reservation = useBottomNavigationReservation();
+  const contentStyle = StyleSheet.flatten(contentContainerStyle) ?? {};
+  const reservedContentStyle =
+    reserveTabBar && reservation > 0
+      ? [
+          contentContainerStyle,
+          {
+            paddingBottom: reservedScrollBottom(
+              typeof (contentStyle.paddingBottom ?? contentStyle.paddingVertical ?? contentStyle.padding) === 'number'
+                ? ((contentStyle.paddingBottom ?? contentStyle.paddingVertical ?? contentStyle.padding) as number)
+                : 0,
+              0,
+              reservation,
+            ),
+          },
+        ]
+      : contentContainerStyle;
   // Отступ фокуса над клавиатурой: не даём активному полю уйти под
   // плавающий tab bar + запас под фикс-кнопку, если есть.
   const bottomOffset = (reserveTabBar ? tabBarHeight : 0) + extraKeyboardBottomOffset;
   return (
     <KCAwareScrollView
       style={style}
-      contentContainerStyle={contentContainerStyle}
+      contentContainerStyle={reservedContentStyle}
       bottomOffset={bottomOffset}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"

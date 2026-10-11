@@ -25,16 +25,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * Android-совместимо: только кросс-платформенные примитивы.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -56,6 +47,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { CHECK_MONEY_DEPENDENT_KEYS } from './CheckDetailScreen';
 import type { Check, PaymentMethod } from '../../../shared/types';
 import { serviceLineTotal } from '../../../shared/utils/checkLines';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (

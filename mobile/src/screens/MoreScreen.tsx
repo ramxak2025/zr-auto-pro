@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
 import EmployeeAvatar from '../components/EmployeeAvatar';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,6 +19,7 @@ import { usePointAccess } from '../hooks/usePoints';
 import { pendingChecksLogoutNotice, pendingOfflineCheckCount } from '../utils/offlineCheckQueue';
 import AccountPickerSheet from './AccountPickerSheet';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',

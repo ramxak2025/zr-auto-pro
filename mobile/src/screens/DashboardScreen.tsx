@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -99,6 +98,7 @@ import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { formatShiftTime } from './shiftAttendanceHelpers';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 

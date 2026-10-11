@@ -11,7 +11,7 @@
  * Данные — ключи ['manager', …], в persistent cache не попадают (деньги не кешируем на диск).
  */
 import React from 'react';
-import { FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { RefreshControl, StyleSheet, View } from 'react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { managerApi } from '../../api/services';
@@ -31,6 +31,7 @@ import {
   buildLedgerFeed,
   type LedgerFeedItem,
 } from './LedgerFeed';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 const keyExtractor = (item: LedgerFeedItem) => item.key;
 const renderItem = ({ item }: { item: LedgerFeedItem }) => <LedgerFeedRow item={item} />;

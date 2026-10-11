@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -47,6 +46,7 @@ import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { formatPhone } from '../../../shared/validation/phone';
 import { RU_TIMEZONES, DEFAULT_TIMEZONE, timezoneOption, formatDateTime } from '../../../shared/utils/formatters';
 import { haptic } from '../platform/haptics';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 interface CompanyForm {
   name: string;

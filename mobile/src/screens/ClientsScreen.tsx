@@ -8,8 +8,6 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
-  ScrollView,
-  FlatList,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -46,6 +44,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { Client, Car, Check, PaginatedResponse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
 
 // Avatar helpers (initials / colour) moved to components/ClientListRow.tsx —
 // they belong to the row, and the row now lives at module scope behind

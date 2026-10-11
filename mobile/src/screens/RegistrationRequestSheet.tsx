@@ -16,16 +16,7 @@
  * closing immediately, so the owner clearly understands what happens next.
  */
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Modal,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../components/Button';
@@ -35,6 +26,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../shared/validation/phone';
 import { registrationApi } from '../api/services';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 interface Props {
   visible: boolean;
@@ -166,6 +158,7 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
                   contentContainerStyle={styles.scroll}
                   showsVerticalScrollIndicator={false}
                   keyboardShouldPersistTaps="handled"
+                  reserveBottomNavigation={false}
                 >
                   <Text style={[styles.intro, { color: palette.text.secondary }]}>
                     Оставьте заявку — после одобрения вы войдёте под указанным телефоном и паролем.

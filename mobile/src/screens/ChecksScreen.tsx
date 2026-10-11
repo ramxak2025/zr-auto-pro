@@ -7,9 +7,7 @@ import {
   StyleSheet,
   RefreshControl,
   Alert,
-  ScrollView,
   Platform,
-  FlatList,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -62,6 +60,8 @@ import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared
 // новых способов оплаты и журнал показывает сырой англ. ключ.
 import { formatDateShort, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
+
 function formatMoney(v: number) {
   return (
     Math.round(v)

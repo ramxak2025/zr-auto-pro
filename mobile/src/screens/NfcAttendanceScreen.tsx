@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -22,6 +22,7 @@ import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
 import { refreshNfcStatusForCurrentSession } from '../utils/nfcStatusRefresh';
 import type { AttendanceNfcScanResult } from '../../../shared/types';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ScreenState = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error';
 

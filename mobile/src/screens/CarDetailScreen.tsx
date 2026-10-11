@@ -22,7 +22,7 @@
  * Android-safe: no iOS-only APIs; haptics go through the platform helper.
  */
 import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -42,6 +42,7 @@ import type { Check } from '../../../shared/types';
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number): string {
   return (

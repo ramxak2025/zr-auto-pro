@@ -6,7 +6,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -123,6 +122,7 @@ import VoiceCommentSheet from '../components/VoiceCommentSheet';
 import PointIndicator from '../components/PointIndicator';
 import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -4691,7 +4691,11 @@ export default function CheckCreateScreen() {
         onClose={() => setShowMasterPicker(null)}
         title={showMasterPicker === CHECK_MASTER_PICKER_INDEX ? 'Мастер заказ-наряда' : 'Выберите мастера'}
       >
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {masters.map((m) => {
             const isSelected =
               showMasterPicker === CHECK_MASTER_PICKER_INDEX
@@ -4765,7 +4769,11 @@ export default function CheckCreateScreen() {
         <Text style={[styles.assignSheetHint, { color: palette.text.tertiary }]}>
           Заказ появится на доске у каждого выбранного. Зарплата считается по строкам услуг, как раньше.
         </Text>
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {masters.map((m) => {
             const isSelected = assigneeIds.includes(m.id);
             return (
@@ -4819,7 +4827,11 @@ export default function CheckCreateScreen() {
 
       {/* ── Шит «Место» (Round 14) — справочник + создание нового ─────────── */}
       <Modal visible={showLocationSheet} onClose={() => setShowLocationSheet(false)} title="Место">
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           <TouchableOpacity
             style={[styles.pickerItem, { borderBottomColor: palette.border.subtle }]}
             onPress={() => {
@@ -4960,7 +4972,11 @@ export default function CheckCreateScreen() {
           placeholderTextColor={palette.text.tertiary}
           autoFocus
         />
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {filteredServices.map((service) => (
             <TouchableOpacity
               key={service.id}
@@ -5065,7 +5081,11 @@ export default function CheckCreateScreen() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {/* Папки текущего уровня */}
           {pickerFolders.map((folder) => {
             const count = pickerFolderTplCount.get(folder.id) ?? 0;

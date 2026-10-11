@@ -18,16 +18,7 @@
  * задваивает списание SMS.
  */
 import React, { useMemo, useRef, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  RefreshControl,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { View, TouchableOpacity, TextInput, StyleSheet, RefreshControl, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -47,6 +38,7 @@ import type {
   SegmentBroadcastResult,
   AutoMailingOverview,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type TabKey = 'manual' | 'auto';
 type SegmentKey = 'all' | 'inactive' | 'source' | 'debt' | 'clients';

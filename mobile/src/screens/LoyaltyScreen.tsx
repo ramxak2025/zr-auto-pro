@@ -10,7 +10,7 @@
  * row is roles-filtered too).
  */
 import React, { useRef, useState } from 'react';
-import { View, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -23,6 +23,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function clampPercent(raw: string): number {
   const n = parseInt(raw.replace(/[^0-9]/g, ''), 10);

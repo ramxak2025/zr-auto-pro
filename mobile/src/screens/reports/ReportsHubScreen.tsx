@@ -18,7 +18,7 @@
  * чтобы шторка фильтра на следующем экране открывалась без спиннера.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Platform, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Platform, RefreshControl, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -42,6 +42,7 @@ import {
   type ReportGroup,
 } from '../../../../shared/reports/catalog';
 import type { ReportCatalogResponse, ReportId } from '../../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 export const REPORT_CATALOG_QUERY_KEY = ['report-catalog'] as const;
 

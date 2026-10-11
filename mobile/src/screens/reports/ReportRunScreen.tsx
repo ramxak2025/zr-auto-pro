@@ -25,11 +25,11 @@
  * «Обновляется…». Ошибки 400/403 показываются текстом сервера.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Platform, StyleSheet, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import { FlashList, type FlashListRef, type ListRenderItem } from '@shopify/flash-list';
+import { type FlashListRef, type ListRenderItem } from '@shopify/flash-list';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import IosScreenHeader from '../../components/IosScreenHeader';
@@ -87,6 +87,7 @@ import {
   type DateRange,
   type PeriodKey,
 } from './reportPeriod';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../../components/TabBarScrollable';
 
 export interface ReportRunParams {
   reportId: ReportId;

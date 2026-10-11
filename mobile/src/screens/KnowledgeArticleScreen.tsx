@@ -18,7 +18,7 @@
  *   • for regulations: «Кто ознакомился: N/M» → modal (who read / who hasn't).
  */
 import React from 'react';
-import { Linking, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Linking, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,6 +45,7 @@ import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatDateShort } from '../../../shared/utils/formatters';
 import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
 
@@ -658,7 +659,7 @@ export default function KnowledgeArticleScreen() {
                 {acks.acknowledgedCount} из {acks.totalAudience} сотрудников
               </Text>
             ) : null}
-            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false} reserveBottomNavigation={false}>
               {(acks?.acknowledged ?? []).map((a) => (
                 <View key={`ack-${a.userId}`} style={styles.ackPersonRow}>
                   <Ionicons name="checkmark-circle" size={18} color={colors.green[600]} />

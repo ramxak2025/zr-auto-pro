@@ -28,14 +28,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  ScrollView,
   RefreshControl,
   ActivityIndicator,
   Alert,
   Switch,
   Platform,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -56,6 +55,7 @@ import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
 import type { MotivationPromo, MotivationAccrual, Product } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

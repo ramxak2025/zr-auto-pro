@@ -46,17 +46,7 @@
  *     в светлой и тёмной теме. Apple Wallet — адаптивный «графит».
  */
 import React, { useMemo, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  Platform,
-  Share,
-} from 'react-native';
+import { View, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert, Platform, Share } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -74,6 +64,7 @@ import OneCIntegrationCard from '../components/OneCIntegrationCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { MessagingIntegration, TelephonySettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Provider catalogue

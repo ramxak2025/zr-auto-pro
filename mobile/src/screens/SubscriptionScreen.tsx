@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { ALL_FEATURES } from '../../../shared/constants/features';
 import type { SubscriptionInfo, Plan, FeatureGroup } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const WHATSAPP_PHONE = '79884444436';
 

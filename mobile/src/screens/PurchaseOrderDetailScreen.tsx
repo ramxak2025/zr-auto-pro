@@ -25,7 +25,7 @@ import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel
  * Android-safe: ScrollView + навигация на экран приёмки, без iOS-only API.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { Alert, View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { Alert, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -54,6 +54,7 @@ import {
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function PurchaseOrderDetailScreen() {
   const navigation = useNavigation<any>();

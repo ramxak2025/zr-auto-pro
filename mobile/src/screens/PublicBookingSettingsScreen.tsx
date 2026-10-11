@@ -1,15 +1,5 @@
 import React, { ReactNode, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Share, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { useNavigation } from '@react-navigation/native';
@@ -28,6 +18,7 @@ import type {
 } from '../../../shared/types';
 import type { PutPublicBookingSettingsRequest } from '../../../shared/api/types';
 import { showMutationErrorToast } from '../components/Toast';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const WEEK_DAYS = [
   { key: '1', short: 'Пн', label: 'Понедельник' },

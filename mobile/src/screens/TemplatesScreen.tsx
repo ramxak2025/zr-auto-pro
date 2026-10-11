@@ -22,7 +22,6 @@ import {
   View,
   Text,
   TextInput,
-  ScrollView,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -47,6 +46,7 @@ import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import type { CheckTemplate, CheckTemplateFolder } from '../../../shared/types';
 import { serviceLineTotal } from '../../../shared/utils/checkLines';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Помощники домена шаблонов — экспортируются: их переиспользуют

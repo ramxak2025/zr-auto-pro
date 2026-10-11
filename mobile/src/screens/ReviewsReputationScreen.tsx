@@ -22,7 +22,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   View,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -47,6 +46,7 @@ import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { Client, EmployeeReviewRating, ReviewSettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const MAX_SOURCE_LEN = 100;
 
@@ -827,7 +827,11 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
         ) : clients.length === 0 ? (
           <Text style={[styles.platformsHint, { color: palette.text.tertiary }]}>Ничего не найдено</Text>
         ) : (
-          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            reserveBottomNavigation={false}
+          >
             {clients.map((c) => {
               const active = selected?.id === c.id;
               return (

@@ -20,16 +20,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * the very bottom (destructive), reusing DeleteAccountModal.
  */
 import React, { useCallback, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  Platform,
-} from 'react-native';
+import { View, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -51,6 +42,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { ProfileChangeRequest, ProfileChangeDiff, ProfileChangeField } from '../../../shared/types';
 import type { UpdateProfileRequest, ChangePasswordRequest, DeleteAccountResponse } from '../../../shared/api/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const QK_MINE = ['profile-change-request-mine'] as const;
 const QK_LIST = ['profile-change-requests'] as const;

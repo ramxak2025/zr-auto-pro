@@ -31,7 +31,7 @@
  * avgRating — 0–5. Кеш — тёплый ['subscription']-style (staleTime + SWR).
  */
 import React from 'react';
-import { View, ScrollView, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -50,6 +50,7 @@ import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import type { MarketingReport, MarketingTrendPoint } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Формат — единый источник правды по числам/деньгам/процентам.

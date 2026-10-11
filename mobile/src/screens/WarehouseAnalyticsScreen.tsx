@@ -26,7 +26,7 @@
  *     top 10 client-side — backend already filters, this is defensive.
  */
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
-import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -53,6 +53,7 @@ import type {
   Warehouse,
   WarehouseSummary,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 // Period switcher chip group

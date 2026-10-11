@@ -26,7 +26,6 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -53,6 +52,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { CASHIER_ROLE_PRESET } from '../../../shared/types';
 import type { Role } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 /** «5 сотрудников» / «1 сотрудник» / «3 сотрудника». */
 function employeesLabel(n: number): string {

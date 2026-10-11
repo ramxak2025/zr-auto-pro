@@ -23,17 +23,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * Switch, TextInput, общий Modal).
  */
 import React, { useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Switch,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -51,6 +41,7 @@ import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { WORK_COLUMN_PRESETS, columnVisual } from '../constants/workStatus';
 import type { WorkBoardColumn } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const COLUMNS_KEY = ['checks', 'board-columns'] as const;
 const BOARD_KEY = ['checks', 'board'] as const;

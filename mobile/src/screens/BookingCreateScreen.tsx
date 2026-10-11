@@ -17,16 +17,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * Android-safe: никаких iOS-only API; пикер кроссплатформенный.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -48,6 +39,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Client, type Car, type User } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatBookingDay, formatBookingTime } from './bookings/bookingHelpers';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // Высота липкой панели «Сохранить»: paddingTop (spacing[3]=12) + paddingBottom
 // (spacing[3]=12) + кнопка (paddingVertical spacing[3.5]=14 ×2 + текст ~16) ≈ 68.

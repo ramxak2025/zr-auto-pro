@@ -7,7 +7,7 @@
  * Данные — ключ ['admin-managers', 'list'], в persistent cache не попадает.
  */
 import React from 'react';
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -24,6 +24,7 @@ import { formatPhone } from '../../../../shared/validation/phone';
 import type { PlatformManager } from '../../../../shared/types';
 import { InitialAvatar, StatusChip, balanceCaption, balanceColor, inactiveStatusInfo, pluralRu } from './adminShared';
 import ManagerFormSheet from './ManagerFormSheet';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 /** Активные выше отключённых; внутри — по убыванию долга, затем по имени. */
 function sortManagers(list: PlatformManager[]): PlatformManager[] {

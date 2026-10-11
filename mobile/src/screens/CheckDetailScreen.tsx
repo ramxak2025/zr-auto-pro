@@ -5,7 +5,6 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -66,6 +65,7 @@ import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/t
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';

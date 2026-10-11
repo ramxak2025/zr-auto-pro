@@ -30,7 +30,6 @@ import {
   View,
   Text,
   TextInput,
-  ScrollView,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -67,6 +66,7 @@ import {
   orderActivitySlot,
 } from '../utils/liveActivityStore';
 import type { Check, ChecksBoard } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 

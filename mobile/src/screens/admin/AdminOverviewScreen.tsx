@@ -19,7 +19,7 @@
  * On the visual system — IosScreenHeader, iosCard, theme palette.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
+import { View, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -57,6 +57,7 @@ import {
 } from './adminShared';
 import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
 import ManagerCreateTenantSheet from './ManagerCreateTenantSheet';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 const CHART_HEIGHT = 56;
 /** Окно «Истекают» на обзоре: у суперадмина месяц, у менеджера — неделя (как плитка «Истекает за 7 дней»). */

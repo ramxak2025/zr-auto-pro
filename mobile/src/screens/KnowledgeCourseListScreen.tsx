@@ -9,7 +9,7 @@
  * short staleTime and revalidate on focus rather than persisting.
  */
 import React from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,6 +27,7 @@ import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { KnowledgeCourse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function KnowledgeCourseListScreen() {
   const navigation = useNavigation<any>();

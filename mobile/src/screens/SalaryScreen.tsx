@@ -18,14 +18,13 @@ import {
   View,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   RefreshControl,
   Platform,
   TextInput,
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -58,6 +57,7 @@ import {
   buildPayoutSuggestions,
   payoutSheetTitle,
 } from '../components/salary/salaryFormat';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ── Row status ─────────────────────────────────────────────────────────────
 

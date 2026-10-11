@@ -14,8 +14,8 @@
  * BookingCreate — всё кроссплатформенно.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ScrollView, Platform } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Platform } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -32,6 +32,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { type Booking } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { statusChip, formatBookingTime, formatBookingDay, masterLabel } from './bookings/bookingHelpers';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type Scope = 'upcoming' | 'past';
 

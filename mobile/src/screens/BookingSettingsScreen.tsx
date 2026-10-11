@@ -13,16 +13,7 @@
  * Android-safe: только Switch + TouchableOpacity, никаких iOS-only API.
  */
 import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Switch,
-  TouchableOpacity,
-  ActivityIndicator,
-  Platform,
-} from 'react-native';
+import { View, Text, StyleSheet, Switch, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -38,6 +29,7 @@ import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { BookingSettings } from '../../../shared/types';
 import type { UpdateBookingSettingsRequest } from '../../../shared/api/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const REMINDER_HOUR_OPTIONS = [1, 2, 3, 6, 12, 24];
 

@@ -21,17 +21,7 @@
  * просмотра: без правок, сохранения и удаления (backend всё равно 403).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  Switch,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Switch, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -51,6 +41,7 @@ import { expandServiceQuantities } from '../../../shared/utils/checkLines';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 /** RU-дружественный парсер цены: запятая → точка, мусор → 0. */
 function parsePrice(v: string): number {

@@ -39,7 +39,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -69,6 +68,7 @@ import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PressableScale } from '../platform/PressableScale';
 import { haptic } from '../platform/haptics';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type Tab = 'employees' | 'storage';
 type CategoryType = 'tools' | 'uniform' | 'other';

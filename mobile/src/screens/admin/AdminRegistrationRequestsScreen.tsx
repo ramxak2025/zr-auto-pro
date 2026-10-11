@@ -23,7 +23,6 @@ import React from 'react';
 import {
   View,
   StyleSheet,
-  ScrollView,
   Pressable,
   Alert,
   ActivityIndicator,
@@ -47,6 +46,7 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { formatPhone } from '../../../../shared/validation/phone';
 import type { RegistrationRequest, Tenant } from '../../../../shared/types';
 import { formatDateTime, formatFullDate, StatusChip, InitialAvatar, type StatusInfo } from './adminShared';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 type StatusFilter = 'pending' | 'approved' | 'rejected';
 
@@ -426,6 +426,7 @@ export default function AdminRegistrationRequestsScreen() {
               contentContainerStyle={styles.sheetScroll}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
+              reserveBottomNavigation={false}
             >
               {approving ? (
                 <View style={[styles.recap, surface.cardCompact]}>

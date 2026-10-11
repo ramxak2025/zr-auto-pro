@@ -20,18 +20,7 @@
  */
 import React from 'react';
 import { AdminSheet } from './adminSheet';
-import {
-  View,
-  StyleSheet,
-  TextInput,
-  Pressable,
-  ScrollView,
-  FlatList,
-  Modal,
-  Switch,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { View, StyleSheet, TextInput, Pressable, Modal, Switch, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -59,6 +48,7 @@ import {
   InitialAvatar,
 } from './adminShared';
 import ManagerCreateTenantSheet from './ManagerCreateTenantSheet';
+import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 type FilterKey = 'all' | 'active' | 'expiring' | 'expired' | 'suspended';
 
@@ -851,7 +841,7 @@ function OptionPickerModal({
       <Pressable style={styles.pickerBackdrop} onPress={onClose}>
         <Pressable style={[styles.pickerSheet, { backgroundColor: palette.bg.canvas }]} onPress={() => {}}>
           <Text style={[styles.pickerTitle, { color: palette.text.primary }]}>{title}</Text>
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerList}>
+          <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerList} reserveBottomNavigation={false}>
             {options.map((o) => (
               <Pressable
                 key={o.id}

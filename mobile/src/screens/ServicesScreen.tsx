@@ -4,13 +4,12 @@ import {
   Text,
   TouchableOpacity,
   TextInput,
-  ScrollView,
   StyleSheet,
   RefreshControl,
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -50,6 +49,7 @@ import {
   serviceWorkbookBytesFromBase64,
 } from '../../../shared/utils/serviceSpreadsheet';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (
@@ -760,7 +760,7 @@ export default function ServicesScreen() {
       )}
 
       <Modal visible={folderListOpen} onClose={() => setFolderListOpen(false)} title="Папки услуг">
-        <ScrollView style={{ maxHeight: 420 }}>
+        <ScrollView style={{ maxHeight: 420 }} reserveBottomNavigation={false}>
           {(visibilityConfigQuery.data?.categoryPaths ?? []).map((path: string) => (
             <TouchableOpacity
               key={path}
@@ -806,7 +806,7 @@ export default function ServicesScreen() {
               {importPreview.summary.totalRows} строк · создать {importPreview.summary.create} · обновить{' '}
               {importPreview.summary.update} · ошибок {importPreview.summary.errors}
             </Text>
-            <ScrollView style={{ maxHeight: 300 }}>
+            <ScrollView style={{ maxHeight: 300 }} reserveBottomNavigation={false}>
               {importPreview.rows.map((row) => (
                 <View
                   key={row.sourceRow}
@@ -873,7 +873,7 @@ export default function ServicesScreen() {
         {historyQuery.isSuccess && historyQuery.data.length === 0 && (
           <Text style={{ color: palette.text.tertiary }}>Записей пока нет.</Text>
         )}
-        <ScrollView style={{ maxHeight: 320 }}>
+        <ScrollView style={{ maxHeight: 320 }} reserveBottomNavigation={false}>
           {historyQuery.data?.map((entry) => (
             <View
               key={entry.id}
@@ -902,7 +902,7 @@ export default function ServicesScreen() {
       </Modal>
 
       <Modal visible={!!visibilityTarget} onClose={() => setVisibilityTarget(null)} title="Предпочтительная видимость">
-        <ScrollView style={{ maxHeight: 420 }}>
+        <ScrollView style={{ maxHeight: 420 }} reserveBottomNavigation={false}>
           <Text style={{ color: palette.text.secondary, marginBottom: spacing[3] }}>
             Это влияет только на список каталога. Любую услугу можно добавить в чек.
           </Text>
