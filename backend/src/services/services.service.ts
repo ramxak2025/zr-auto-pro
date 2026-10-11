@@ -916,46 +916,52 @@ export class ServicesService {
       throw new BadRequestException({ message: 'Одна или несколько ролей не принадлежат этому автосервису' });
     }
 
-    if (hasService) {
-      const service = await this.pool.query('SELECT id FROM services WHERE id=$1 AND tenant_id=$2', [
-        dto.serviceId,
-        tenantID,
-      ]);
-      if (service.rows.length === 0) throw new NotFoundException({ message: 'Услуга не найдена' });
-    }
     const serviceId = hasService ? dto.serviceId : null;
-
+    const client = await this.pool.connect();
     try {
-      const { rows } = await this.pool.query(
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      await this.assertVisibilityTarget(client, tenantID, serviceId, categoryPath);
+      const conflictTarget = hasService
+        ? '(tenant_id, service_id) WHERE service_id IS NOT NULL'
+        : '(tenant_id, category_path) WHERE category_path IS NOT NULL';
+      const { rows } = await client.query(
         `INSERT INTO service_visibility_rules (tenant_id, service_id, category_path, visible_role_ids)
          VALUES ($1, $2, $3, $4::uuid[])
-         ON CONFLICT (tenant_id, service_id) WHERE service_id IS NOT NULL
+         ON CONFLICT ${conflictTarget}
            DO UPDATE SET visible_role_ids=EXCLUDED.visible_role_ids, updated_at=now()
          RETURNING service_id, category_path, visible_role_ids`,
         [tenantID, serviceId, categoryPath, roleIds],
       );
+      await client.query('COMMIT');
       return {
         serviceId: rows[0].service_id ?? null,
         categoryPath: rows[0].category_path ?? null,
         visibleRoleIds: rows[0].visible_role_ids,
       };
     } catch (error) {
-      if ((error as { code?: string }).code === '23505') {
-        // Partial unique indexes cannot be targeted by one generic ON CONFLICT
-        // target in all supported Postgres versions; category rules use a
-        // separate update path below.
-        if (categoryPath) {
-          const { rows } = await this.pool.query(
-            `UPDATE service_visibility_rules SET visible_role_ids=$1::uuid[], updated_at=now()
-              WHERE tenant_id=$2 AND category_path=$3
-              RETURNING service_id, category_path, visible_role_ids`,
-            [roleIds, tenantID, categoryPath],
-          );
-          if (rows.length > 0)
-            return { serviceId: null, categoryPath: rows[0].category_path, visibleRoleIds: rows[0].visible_role_ids };
-        }
-      }
+      await client.query('ROLLBACK');
       throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Validate after the catalog lock: a stale path must not recreate a moved ACL. */
+  private async assertVisibilityTarget(
+    client: PoolClient,
+    tenantID: string,
+    serviceId: string | null | undefined,
+    categoryPath: string | null,
+  ) {
+    if (serviceId != null) {
+      const service = await client.query('SELECT id FROM services WHERE id=$1 AND tenant_id=$2', [serviceId, tenantID]);
+      if (!service.rows.length) throw new NotFoundException({ message: 'Услуга не найдена' });
+    } else {
+      const folders = await this.getFolders(tenantID, client);
+      if (!folders.some((folder) => folder.path === categoryPath)) {
+        throw new NotFoundException({ message: 'Папка не найдена. Обновите каталог.' });
+      }
     }
   }
 
@@ -963,19 +969,24 @@ export class ServicesService {
     const hasService = typeof target.serviceId === 'string';
     const hasCategory = typeof target.categoryPath === 'string';
     if (hasService === hasCategory) throw new BadRequestException({ message: 'Укажите один объект правила' });
-    if (hasService) {
-      await this.pool.query('DELETE FROM service_visibility_rules WHERE tenant_id=$1 AND service_id=$2', [
-        tenantID,
-        target.serviceId,
-      ]);
-    } else {
-      const path = this.normalizeCategoryPath(target.categoryPath);
-      await this.pool.query('DELETE FROM service_visibility_rules WHERE tenant_id=$1 AND category_path=$2', [
-        tenantID,
-        path,
-      ]);
+    const categoryPath = hasCategory ? this.normalizeCategoryPath(target.categoryPath) : null;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      await this.assertVisibilityTarget(client, tenantID, hasService ? target.serviceId : null, categoryPath);
+      await client.query(
+        `DELETE FROM service_visibility_rules WHERE tenant_id=$1 AND ${hasService ? 'service_id' : 'category_path'}=$2`,
+        [tenantID, hasService ? target.serviceId : categoryPath],
+      );
+      await client.query('COMMIT');
+      return { message: 'Правило удалено; применяется наследование' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-    return { message: 'Правило удалено; применяется наследование' };
   }
 
   private async getVisibleRoleIds(tenantID: string): Promise<string[]> {

@@ -41,6 +41,7 @@ import {
 } from '../common/timezone';
 import { ComparePeriod, previousComparableWindow } from '../common/period-compare';
 import { hydrateOmittedCheckLines, mapServiceLinePrice, saveCheckServiceLines } from './check-service-prices';
+import { resolveTemplateProductSources } from '../check-templates/template-product-source';
 
 /** Actor context for visibility decisions (checks_view_all). */
 interface ChecksActor {
@@ -2848,7 +2849,7 @@ export class ChecksService {
     }
 
     const services = dto.services || [];
-    const products = dto.products || [];
+    let products = dto.products || [];
 
     // ── POS shift-mode role-gate (092) ───────────────────────────────────
     // When the tenant's shift-mode is ON, a NON-cashier actor (a master without
@@ -2956,6 +2957,13 @@ export class ChecksService {
       await client.query('BEGIN');
 
       // ── Cross-tenant integrity guard ─────────────────────────────────
+      products = await resolveTemplateProductSources(
+        client,
+        tenantID,
+        actor?.userID ?? userID,
+        products,
+        actorPointId(actor),
+      );
       // Every referenced ID (master, client, car, services, products) MUST
       // belong to the caller's tenant. Without this, a director from
       // tenant A who knows a UUID from tenant B could persist a check
@@ -3526,7 +3534,8 @@ export class ChecksService {
           this.logger.error(`Check create idempotent-recovery error: ${recoveryErr}`);
         }
       }
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
       // Log the full reason server-side (pino + Sentry) for diagnosis; return a
       // generic message to the client so raw SQL/internals are never exposed.
       this.logger.error(`Check create error: ${err}`);
@@ -4408,7 +4417,14 @@ export class ChecksService {
       const preserve = { services: dto.services === undefined, products: dto.products === undefined };
       dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
       const services = dto.services || [];
-      const products = dto.products || [];
+      dto.products = await resolveTemplateProductSources(
+        client,
+        tenantID,
+        actor?.userID ?? actorUserId,
+        dto.products || [],
+        actorPointId(actor),
+      );
+      const products = dto.products;
 
       // ── Cross-tenant integrity guard (same as create()) ───────────────
       // fullUpdate persists client-supplied master/client/car/service/product
@@ -5334,6 +5350,14 @@ export class ChecksService {
       // client-supplied reference must belong to this tenant.
       const preserve = { services: dto.services === undefined, products: dto.products === undefined };
       dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
+      if (dto.products)
+        dto.products = await resolveTemplateProductSources(
+          client,
+          tenantID,
+          actor?.userID ?? actorUserId,
+          dto.products,
+          actorPointId(actor),
+        );
       const services = dto.services || [];
       const products = dto.products || [];
       if (dto.masterId) await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');

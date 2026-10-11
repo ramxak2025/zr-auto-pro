@@ -3,6 +3,11 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { CreateCheckTemplateDto, UpdateCheckTemplateDto, normalizeTemplateServices } from './dto/check-template.dto';
+import {
+  isManualTemplateProduct,
+  manualTemplateProductCost,
+  resolveTemplateProductSources,
+} from './template-product-source';
 
 export interface TemplateActor {
   userID: string;
@@ -10,8 +15,10 @@ export interface TemplateActor {
   permissions?: Record<string, boolean>;
 }
 
-const TEMPLATE_COLS = 'id, name, services, products, user_id, folder_id, created_at, updated_at';
+const TEMPLATE_COLS =
+  'id, name, services, products, user_id, folder_id, created_at, updated_at, xmin::text AS product_version';
 const FOLDER_COLS = 'id, name, parent_id, sort, created_at, user_id';
+const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
 @Injectable()
 export class CheckTemplatesService {
@@ -62,21 +69,33 @@ export class CheckTemplatesService {
     const serviceMap = new Map(services.map((row) => [row.id, row]));
     const productMap = new Map(products.map((row) => [row.id, row]));
     return rows.map((row) => {
-      const productLines = records(row.products).map((line) => {
-        const current = productMap.get(line.productId);
-        const cost = current?.cost_price == null ? null : Number(current.cost_price);
-        const knownCost = cost !== null && Number.isFinite(cost) && cost >= 0;
-        return {
-          ...(typeof line.productId === 'string' ? { productId: line.productId } : {}),
-          name: line.name,
-          quantity: line.quantity,
-          sellPrice: current ? Number(current.sell_price) : line.sellPrice,
-          catalogStatus: current ? 'current' : line.productId ? 'unavailable' : 'manual',
-          ...(canSeeCost
-            ? { costStatus: knownCost ? 'known' : 'unknown', ...(knownCost ? { costPrice: cost } : {}) }
-            : {}),
-        };
-      });
+      const productLines = (Array.isArray(row.products) ? row.products : []).flatMap(
+        (value: unknown, productIndex: number) => {
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) return [];
+          const line = value as Record<string, unknown>;
+          const current = productMap.get(line.productId);
+          const manual = isManualTemplateProduct(line);
+          const cost = manual
+            ? manualTemplateProductCost(line)
+            : current?.cost_price == null
+              ? null
+              : Number(current.cost_price);
+          const knownCost = cost !== null && Number.isFinite(cost) && cost >= 0;
+          return [
+            {
+              ...(typeof line.productId === 'string' ? { productId: line.productId } : {}),
+              name: line.name,
+              quantity: line.quantity,
+              sellPrice: current ? Number(current.sell_price) : line.sellPrice,
+              catalogStatus: current ? 'current' : manual ? 'manual' : 'unavailable',
+              sourceTemplateProduct: { templateId: row.id, productIndex, version: row.product_version },
+              ...(canSeeCost
+                ? { costStatus: knownCost ? 'known' : 'unknown', ...(knownCost ? { costPrice: cost } : {}) }
+                : {}),
+            },
+          ];
+        },
+      );
       const costKnown = productLines.every(
         (line) =>
           line.costStatus === 'known' &&
@@ -113,9 +132,11 @@ export class CheckTemplatesService {
               costStatus: costKnown ? 'known' : 'unknown',
               ...(costKnown
                 ? {
-                    productCostTotal: productLines.reduce(
-                      (sum, line) => sum + Number(line.costPrice) * Number(line.quantity),
-                      0,
+                    productCostTotal: round2(
+                      productLines.reduce(
+                        (sum, line) => sum + round2(Number(line.costPrice) * Number(line.quantity)),
+                        0,
+                      ),
                     ),
                   }
                 : {}),
@@ -289,6 +310,7 @@ export class CheckTemplatesService {
         await this.assertFolderScope(client, dto.folderId, tenantId, actor, shared);
         folderId = dto.folderId;
       }
+      const products = await resolveTemplateProductSources(client, tenantId, actor.userID, dto.products || []);
       const { rows } = await client.query(
         `INSERT INTO check_templates (tenant_id, name, services, products, user_id, folder_id)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -297,7 +319,7 @@ export class CheckTemplatesService {
           tenantId,
           dto.name.trim(),
           JSON.stringify(normalizeTemplateServices(dto.services)),
-          JSON.stringify(dto.products || []),
+          JSON.stringify(products),
           ownerId,
           folderId,
         ],
@@ -346,7 +368,7 @@ export class CheckTemplatesService {
       }
       if (dto.products !== undefined) {
         sets.push(`products=$${idx++}`);
-        vals.push(JSON.stringify(dto.products));
+        vals.push(JSON.stringify(await resolveTemplateProductSources(client, tenantId, actor.userID, dto.products)));
       }
       if (current.user_id !== this.scopeOwner(actor, shared)) {
         sets.push(`user_id=$${idx++}`);

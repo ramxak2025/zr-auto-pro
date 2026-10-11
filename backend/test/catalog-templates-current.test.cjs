@@ -11,7 +11,8 @@ function fixture() {
   const calls = [];
   const rows = [
     {
-      id: 'template',
+      id: '00000000-0000-0000-0000-000000000004',
+      product_version: '1234',
       name: 'ТО',
       user_id: null,
       services: [
@@ -56,7 +57,7 @@ test('all template product cost data is omitted for unauthorized staff even when
   assert.equal(/costPrice|costStatus|productCostTotal/.test(JSON.stringify(result)), false);
   assert.equal(pool.calls.find((call) => call.sql.includes('FROM products')).sql.includes('cost_price'), false);
 });
-test('deleted/unlinked product cost is unknown; zero-cost catalog product is a real known zero', async () => {
+test('broken linked cost is unknown; manual saved costs and explicit zero retain their economics', async () => {
   const pool = fixture();
   pool.rows[0].products.push(
     { productId: missingId, name: 'Deleted', costPrice: 123, sellPrice: 60, quantity: 2 },
@@ -67,7 +68,13 @@ test('deleted/unlinked product cost is unknown; zero-cost catalog product is a r
   assert.equal(result.productCostTotal, undefined);
   assert.equal(result.products[1].costPrice, undefined);
   assert.equal(result.products[1].catalogStatus, 'unavailable');
-  assert.equal(result.products[2].costStatus, 'unknown');
+  assert.equal(result.products[2].costStatus, 'known');
+  assert.equal(result.products[2].costPrice, 500);
+  assert.deepEqual(result.products[2].sourceTemplateProduct, {
+    templateId: pool.rows[0].id,
+    productIndex: 2,
+    version: '1234',
+  });
   assert.equal(result.products[2].catalogStatus, 'manual');
   assert.ok(pool.calls.find((call) => call.sql.includes('FROM products')).sql.includes('deleted_at IS NULL'));
   const zero = fixture();
@@ -122,4 +129,27 @@ test('malformed legacy linked identifiers are unavailable rather than sent to a 
     pool.calls.some((call) => call.sql.includes('FROM products')),
     false,
   );
+});
+
+test('template cost rounds each fractional product line before summing', async () => {
+  const pool = fixture();
+  pool.rows[0].products = [
+    { productId, name: 'A', sellPrice: 20, quantity: 1.5 },
+    { productId, name: 'B', sellPrice: 20, quantity: 1.5 },
+  ];
+  const original = pool.query;
+  pool.query = async (...args) => {
+    const result = await original(...args);
+    if (args[0].includes('FROM products'))
+      result.rows.forEach((row) => {
+        row.cost_price = '10.01';
+      });
+    return result;
+  };
+  const result = (await new CheckTemplatesService(pool).getAll('tenant', owner))[0];
+  assert.equal(result.productCostTotal, 30.04);
+  pool.rows[0].products = [{ name: 'Unknown', sellPrice: 20, quantity: 1 }];
+  assert.equal((await new CheckTemplatesService(pool).getAll('tenant', owner))[0].productCostTotal, undefined);
+  pool.rows[0].products[0].costPrice = 0;
+  assert.equal((await new CheckTemplatesService(pool).getAll('tenant', owner))[0].productCostTotal, 0);
 });

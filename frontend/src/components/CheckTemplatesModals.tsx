@@ -18,6 +18,7 @@ import {
 import toast from 'react-hot-toast';
 import { checkTemplatesApi, type CheckTemplateServiceInput } from '../api/services';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { templateProductCost } from '../../../shared/utils/templateProducts';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
@@ -755,9 +756,9 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
                 )}
                 {viewTemplate.costStatus && (
                   <p className="mt-1 text-sm text-ink-2">
-                    Себестоимость:{' '}
-                    {line.costStatus === 'known' && line.costPrice != null
-                      ? `${line.costPrice} ₽ × ${line.quantity} = ${(line.costPrice * line.quantity).toLocaleString('ru-RU')} ₽`
+                    {line.catalogStatus === 'manual' ? 'Себестоимость указана вручную:' : 'Себестоимость:'}{' '}
+                    {templateProductCost(line) !== undefined
+                      ? `${line.costPrice} ₽ × ${line.quantity} = ${templateProductCost(line)?.toLocaleString('ru-RU')} ₽`
                       : 'Нет данных'}
                   </p>
                 )}

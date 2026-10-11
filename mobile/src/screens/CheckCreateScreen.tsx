@@ -1231,6 +1231,7 @@ export default function CheckCreateScreen() {
           name: p.name,
           sellPrice: p.sellPrice,
           costPrice: p.costPrice ?? 0,
+          sourceTemplateProduct: p.sourceTemplateProduct,
           quantity: p.quantity,
           totalSell: p.sellPrice * p.quantity,
           totalCost: (p.costPrice ?? 0) * p.quantity,
@@ -1266,9 +1267,10 @@ export default function CheckCreateScreen() {
           .filter((l) => !!l.serviceId)
           .map((l) => toCheckTemplateServiceInput({ serviceId: l.serviceId!, name: l.name, price: l.price })),
         products: productLines
-          .filter((l) => !!l.productId)
+          .filter((l) => !!l.productId || !!l.sourceTemplateProduct)
           .map((l) => ({
-            productId: l.productId!,
+            productId: l.productId,
+            sourceTemplateProduct: l.sourceTemplateProduct,
             name: l.name,
             sellPrice: l.sellPrice,
             costPrice: l.costPrice,
@@ -2775,6 +2777,7 @@ export default function CheckCreateScreen() {
           ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
         products: productLines.map((l) => ({
+          sourceTemplateProduct: l.sourceTemplateProduct,
           productId: l.productId,
           name: l.name,
           sellPrice: l.sellPrice,

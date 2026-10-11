@@ -2033,7 +2033,15 @@ export interface CheckServiceLine extends CheckServicePriceSnapshot {
   total: number;
 }
 
+/** Opaque template source; the server resolves manual or current catalog cost on write. */
+export interface TemplateProductSource {
+  templateId: string;
+  productIndex: number;
+  version: string;
+}
+
 export interface CheckProductLine {
+  sourceTemplateProduct?: TemplateProductSource;
   id?: string;
   productId?: string;
   name: string;
@@ -4018,6 +4026,7 @@ export interface CheckTemplate {
     catalogStatus?: 'current' | 'unavailable' | 'manual';
   }>;
   products: Array<{
+    sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
     sellPrice: number;

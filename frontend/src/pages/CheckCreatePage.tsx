@@ -182,6 +182,7 @@ const legacyQuantity = (line: { quantity?: number | null }): number | undefined 
 };
 
 interface ProductLineForm {
+  sourceTemplateProduct?: CheckProductLine['sourceTemplateProduct'];
   productId: string;
   name: string;
   sellPrice: number;
@@ -1092,6 +1093,7 @@ export default function CheckCreatePage() {
           name: p.name,
           sellPrice: p.sellPrice,
           costPrice: p.costPrice ?? 0,
+          sourceTemplateProduct: p.sourceTemplateProduct,
           quantity: p.quantity,
           unit: catalogProduct?.unit || DEFAULT_UNIT,
         };
@@ -1110,9 +1112,10 @@ export default function CheckCreatePage() {
   const templateProducts = useMemo(
     () =>
       productLines
-        .filter((l) => !!l.productId)
+        .filter((l) => !!l.productId || !!l.sourceTemplateProduct)
         .map((l) => ({
-          productId: l.productId,
+          productId: l.productId || undefined,
+          sourceTemplateProduct: l.sourceTemplateProduct,
           name: l.name,
           sellPrice: Number(l.sellPrice),
           costPrice: Number(l.costPrice),
@@ -1163,6 +1166,7 @@ export default function CheckCreatePage() {
     });
 
     const products: CheckProductLine[] = productLines.map((l) => ({
+      sourceTemplateProduct: l.sourceTemplateProduct,
       productId: l.productId || undefined,
       name: l.name,
       sellPrice: Number(l.sellPrice),

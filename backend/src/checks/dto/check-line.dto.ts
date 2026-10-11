@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -10,6 +11,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 /**
@@ -87,7 +89,25 @@ export class CheckServiceLineDto {
   quantity?: number;
 }
 
+export class TemplateProductSourceDto {
+  @IsUUID('all')
+  templateId!: string;
+
+  @IsInt()
+  @Min(0)
+  productIndex!: number;
+
+  @IsString()
+  @MaxLength(10)
+  version!: string;
+}
+
 export class CheckProductLineDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TemplateProductSourceDto)
+  sourceTemplateProduct?: TemplateProductSourceDto;
+
   @IsOptional()
   @IsString()
   productId?: string;

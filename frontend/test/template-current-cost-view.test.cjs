@@ -109,3 +109,20 @@ test('staff response contains no cost UI or subtotal', () => {
   assert.equal(texts(tree).includes('Себестоимость'), false);
   Renderer.act(() => tree.unmount());
 });
+
+test('fractional cost lines show kopecks and the sum of rounded lines; manual costs are labelled', () => {
+  const tree = openTemplate({
+    ...base,
+    costStatus: 'known',
+    productCostTotal: 30.04,
+    products: [
+      { name: 'A', sellPrice: 20, quantity: 1.5, costPrice: 10.01, costStatus: 'known', catalogStatus: 'manual' },
+      { name: 'B', sellPrice: 20, quantity: 1.5, costPrice: 10.01, costStatus: 'known', catalogStatus: 'manual' },
+    ],
+  });
+  assert.ok(texts(tree).includes('15,02 ₽'));
+  assert.ok(texts(tree).includes('30,04 ₽'));
+  assert.ok(texts(tree).includes('Себестоимость указана вручную:'));
+  assert.equal(texts(tree).includes('15,015'), false);
+  Renderer.act(() => tree.unmount());
+});

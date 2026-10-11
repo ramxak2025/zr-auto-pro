@@ -38,6 +38,7 @@ import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { formatTemplateCost, templateProductCost, templateProductsCost } from '../../../shared/utils/templateProducts';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
@@ -62,6 +63,7 @@ interface EditorServiceLine {
 }
 
 interface EditorProductLine {
+  sourceTemplateProduct?: CheckTemplate['products'][number]['sourceTemplateProduct'];
   productId?: string;
   name: string;
   sellPrice: number;
@@ -145,6 +147,7 @@ export default function TemplateEditorScreen() {
         name: p.name,
         sellPrice: p.sellPrice ?? 0,
         costPrice: p.costPrice,
+        sourceTemplateProduct: p.sourceTemplateProduct,
         costStatus: p.costStatus,
         catalogStatus: p.catalogStatus,
         quantity: p.quantity || 1,
@@ -268,8 +271,7 @@ export default function TemplateEditorScreen() {
   );
   const grandTotal = servicesTotal + productsTotal;
   const canSeeCost = hasPermission('warehouse_manage');
-  const costKnown = productLines.every((line) => line.costPrice != null && line.costStatus !== 'unknown');
-  const productCostTotal = productLines.reduce((sum, line) => sum + (line.costPrice ?? 0) * line.quantity, 0);
+  const productCostTotal = templateProductsCost(productLines);
 
   // ── Сохранение / удаление ───────────────────────────────────────────────────
 
@@ -314,6 +316,7 @@ export default function TemplateEditorScreen() {
         price: parsePrice(l.priceText),
       }));
       const products = productLines.map((l) => ({
+        sourceTemplateProduct: l.sourceTemplateProduct,
         productId: l.productId,
         name: l.name,
         sellPrice: l.sellPrice,
@@ -746,9 +749,9 @@ export default function TemplateEditorScreen() {
                 )}
                 {canSeeCost && (
                   <Text style={{ color: palette.text.secondary, fontSize: 13 }}>
-                    Себестоимость:{' '}
-                    {line.costPrice != null && line.costStatus !== 'unknown'
-                      ? `${formatTemplateMoney(line.costPrice)} × ${line.quantity} = ${formatTemplateMoney(line.costPrice * line.quantity)}`
+                    {line.catalogStatus === 'manual' ? 'Себестоимость указана вручную:' : 'Себестоимость:'}{' '}
+                    {templateProductCost(line) !== undefined
+                      ? `${formatTemplateCost(line.costPrice!)} × ${line.quantity} = ${formatTemplateCost(templateProductCost(line)!)}`
                       : 'Нет данных'}
                   </Text>
                 )}
@@ -785,7 +788,7 @@ export default function TemplateEditorScreen() {
                 <View style={styles.totalRow}>
                   <Text style={[styles.totalLabel, { color: palette.text.secondary }]}>Себестоимость шаблона</Text>
                   <Text style={[styles.totalValue, { color: palette.text.primary }]}>
-                    {costKnown ? formatTemplateMoney(productCostTotal) : 'Нет данных'}
+                    {productCostTotal !== undefined ? formatTemplateCost(productCostTotal) : 'Нет данных'}
                   </Text>
                 </View>
               )}
