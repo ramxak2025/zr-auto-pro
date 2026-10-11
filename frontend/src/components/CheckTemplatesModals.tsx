@@ -1,3 +1,4 @@
+import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -97,14 +98,9 @@ function templateSummary(t: CheckTemplate): string {
 // Общие данные. Оба модала переиспользуют одни query-ключи — React Query
 // дедуплицирует; staleTime 60с как у остальных справочников кассы.
 function useTemplatesData(isOpen: boolean) {
-  const templatesQuery = useQuery<CheckTemplate[]>({
-    queryKey: ['check-templates'],
-    queryFn: async () => (await checkTemplatesApi.list()).data,
-    enabled: isOpen,
-    refetchInterval: isOpen ? 15_000 : false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-  });
+  const templatesQuery = useQuery<CheckTemplate[]>(
+    templatePickerQueryOptions(async () => (await checkTemplatesApi.list()).data, isOpen),
+  );
   const foldersQuery = useQuery<CheckTemplateFolder[]>({
     queryKey: ['check-template-folders'],
     queryFn: async () => (await checkTemplatesApi.folders.list()).data,
@@ -116,6 +112,7 @@ function useTemplatesData(isOpen: boolean) {
     isLoading: templatesQuery.isLoading || foldersQuery.isLoading,
     isError: templatesQuery.isError || foldersQuery.isError,
     isFetching: templatesQuery.isFetching || foldersQuery.isFetching,
+    isPaused: templatesQuery.isPaused || foldersQuery.isPaused,
     refetch: () => {
       templatesQuery.refetch();
       foldersQuery.refetch();
@@ -145,7 +142,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
 
-  const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData(isOpen);
+  const { templates, folders, isLoading, isError, isFetching, isPaused, refetch } = useTemplatesData(isOpen);
 
   const [mode, setMode] = useState<'pick' | 'manage'>('pick');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -290,9 +287,9 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     <li key={t.id} className="flex items-center">
       <button
         type="button"
-        disabled={isFetching || isError}
+        disabled={isFetching || isError || isPaused}
         onClick={() => {
-          if (!isFetching && !isError) onApply(t);
+          if (canApplyTemplateSnapshot({ isFetching, isError, isPaused })) onApply(t);
         }}
         className={cn(rowBtn, 'group', focusRing)}
         style={{ paddingLeft: 12 + depth * 18 }}
@@ -615,6 +612,10 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               Повторить
             </Button>
           </div>
+        ) : isPaused && mode === 'pick' ? (
+          <p className="py-8 text-center text-sm text-ink-2" role="alert">
+            Нет соединения. Для применения шаблона нужно обновить цены.
+          </p>
         ) : isLoading || (mode === 'pick' && isFetching) ? (
           <p className="py-8 text-center text-sm text-ink-3" role="status">
             Обновляем цены шаблонов…

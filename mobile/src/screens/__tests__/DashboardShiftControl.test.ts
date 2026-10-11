@@ -1,3 +1,5 @@
+// This harness tests screen handlers; native scrolling is checked separately.
+jest.mock('../../components/TabBarScrollable', () => ({ TabBarScrollView: 'ScrollView' }));
 // Exercise the real Dashboard JSX and ShiftControl handlers, following the
 // ShiftAttendanceHistory test harness. No native renderer or live API is needed.
 const mockSetState = jest.fn();

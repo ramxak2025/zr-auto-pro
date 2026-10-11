@@ -72,7 +72,7 @@ test('NFC URI uses a trusted HTTPS origin and fragment token; exact ten-minute/t
 const live=process.env.NFC_LIVE_DB;
 test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}, async t => {
   const url=new URL(live);
-  assert.ok(['127.0.0.1','localhost'].includes(url.hostname) && url.port==='55438' && url.pathname==='/autexa_oct8_test','Only the explicit disposable October-8 database may be mutated');
+  assert.ok(['127.0.0.1','localhost'].includes(url.hostname) && ((url.port==='55438' && url.pathname==='/autexa_oct8_test') || (url.port==='55440' && url.pathname==='/autexa_oct12_core')),'Only the explicitly approved disposable database may be mutated');
   const admin=new Pool({connectionString:live,max:16,statement_timeout:8000});
   const appUrl=new URL(live); appUrl.username='autexa_app'; appUrl.password=process.env.NFC_LIVE_APP_PASSWORD||'oct8_app_fixture_only';
   const app=new Pool({connectionString:appUrl.toString(),max:16,statement_timeout:8000});
@@ -127,7 +127,7 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
     return f;
   };
   const waitUntil=async(predicate)=>{for(let i=0;i<200;i++){if(await predicate())return;await delay(5);}throw Error('Controlled concurrency barrier timed out');};
-  const waiting=async(count)=>waitUntil(async()=>(await one("SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM users%'")).n>=count);
+  const waiting=async(count)=>waitUntil(async()=>(await one("SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM users%'")).n>=count);
   try {
     await t.test('real FORCE RLS is active; no token stored/listed; pending activation is readback-bound; owner permission is fresh',async()=>{
       const f=await seed(), other=await seed(), tag=await f.makeTag(false);
@@ -236,7 +236,7 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
         // another UUID and can open while B retains its ingress instant.
         await blocker.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`attendance-nfc:${f.tenant}:${requestId}`]);
         delayed=f.scan(tag,[at('09:11:01'),at('09:30:00'),at('09:30:00')],requestId);
-        await waitUntil(async()=>(await one("SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE 'SELECT pg_advisory_xact_lock%'")).n===1);
+        await waitUntil(async()=>(await one("SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT pg_advisory_xact_lock%'")).n===1);
         fresh=await f.scan(tag,at('09:11:10.001'));assert.equal(fresh.action,'opened');
         await Promise.all(notifications.filter(p=>p.tenant===f.tenant).map(p=>p.pending));
         assert.equal(pushes.filter(p=>p.tenant===f.tenant).length,3);
@@ -277,11 +277,11 @@ test('PostgreSQL16 / real RLS and locks: NFC attendance lifecycle', {skip:!live}
     });
     await t.test('manual open and close serialize with tenant mode changes while queued on their attendance row',async()=>{
       const waitForQuery=async(fragment)=>waitUntil(async()=>(await one(
-        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE $1",
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1",
         [`%${fragment}%`],
       )).n>=1);
       const assertModeUpdateWaits=async(tenant)=>waitUntil(async()=>(await one(
-        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE 'UPDATE tenants SET attendance_mode=%'",
+        "SELECT COUNT(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'UPDATE tenants SET attendance_mode=%'",
       )).n>=1);
 
       const opening=await seed();

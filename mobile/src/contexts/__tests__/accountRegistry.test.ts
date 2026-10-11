@@ -367,3 +367,16 @@ it('keeps avatar metadata after session expiry without exposing saved credential
   expect(expired.needsReauth).toBe(true);
   expect(expired.avatar).toBe(user.avatar);
 });
+
+it('does not substitute an impersonated employee avatar for the original saved account', async () => {
+  const f = setup();
+  const manager = { ...profile('original'), tenantId: undefined, role: 'manager', avatar: null };
+  let r = await f.registry.read();
+  r = (await f.registry.install(session(manager), r.generation)).registry;
+  const originalId = r.activeId!;
+  const impersonated = { ...profile('employee'), avatar: '/uploads/employee.jpg' };
+  r = (await f.registry.install(session(impersonated, manager.id), r.generation, { originalAccountId: originalId }))
+    .registry;
+  expect(accountSummaries(r)[0].identity.userId).toBe(manager.id);
+  expect(accountSummaries(r)[0].avatar).toBeNull();
+});

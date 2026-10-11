@@ -4,7 +4,7 @@
     "slug": "autexa-mobile",
     "scheme": "autexa",
     "owner": "ramxak",
-    "version": "3.14.0",
+    "version": "3.15.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

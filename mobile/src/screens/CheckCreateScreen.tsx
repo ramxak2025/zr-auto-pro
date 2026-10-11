@@ -1,3 +1,4 @@
+import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { captureCheckSaveSession } from './checkCreate/saveSession';
 import { updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
 import { captureDataSession } from '../contexts/dataSession';
@@ -1127,15 +1128,12 @@ export default function CheckCreateScreen() {
   const {
     data: templates = [],
     isFetching: templatesRefreshing,
+    isPaused: templatesPaused,
     isError: templatesRefreshFailed,
     refetch: refreshTemplates,
-  } = useQuery<CheckTemplate[]>({
-    queryKey: ['check-templates'],
-    queryFn: async () => (await checkTemplatesApi.list()).data,
-    enabled: showTemplatesPicker,
-    staleTime: 0,
-    refetchInterval: showTemplatesPicker ? 15_000 : false,
-  });
+  } = useQuery<CheckTemplate[]>(
+    templatePickerQueryOptions(async () => (await checkTemplatesApi.list()).data, showTemplatesPicker),
+  );
   // Личные папки шаблонов (round 8 #3) — ключ общий с TemplatesScreen и web,
   // поэтому мутации в разделе «Ещё → Шаблоны» мгновенно видны здесь.
   const { data: templateFolders = [] } = useQuery<CheckTemplateFolder[]>({
@@ -1201,7 +1199,14 @@ export default function CheckCreateScreen() {
   };
 
   const applyTemplate = (template: CheckTemplate) => {
-    if (templatesRefreshing || templatesRefreshFailed) return;
+    if (
+      !canApplyTemplateSnapshot({
+        isFetching: templatesRefreshing,
+        isError: templatesRefreshFailed,
+        isPaused: templatesPaused,
+      })
+    )
+      return;
     // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
     // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
     // развернуть нельзя («×150», «×2.5»), остаётся legacy-строкой и считается serviceLineTotal.
@@ -5056,6 +5061,11 @@ export default function CheckCreateScreen() {
           (applyTemplate без изменений); «Управлять» уводит в раздел
           «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
       <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+        {templatesPaused && (
+          <Text accessibilityRole="alert" style={{ color: palette.text.secondary, paddingVertical: 12 }}>
+            Нет соединения. Для применения шаблона нужно обновить цены.
+          </Text>
+        )}
         {templatesRefreshing && (
           <View style={{ flexDirection: 'row', gap: 10, paddingVertical: 12 }}>
             <ActivityIndicator size="small" color={colors.primary[600]} />
@@ -5186,7 +5196,7 @@ export default function CheckCreateScreen() {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <TouchableOpacity
-                  disabled={templatesRefreshing || templatesRefreshFailed}
+                  disabled={templatesRefreshing || templatesRefreshFailed || templatesPaused}
                   onPress={() => applyTemplate(tpl)}
                   style={{
                     backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
@@ -5284,7 +5294,7 @@ export default function CheckCreateScreen() {
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                     <TouchableOpacity
-                      disabled={templatesRefreshing || templatesRefreshFailed}
+                      disabled={templatesRefreshing || templatesRefreshFailed || templatesPaused}
                       onPress={() => applyTemplate(tpl)}
                       style={{
                         backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],

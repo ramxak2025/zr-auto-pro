@@ -18,8 +18,11 @@ test(
   async (t) => {
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.equal(url.port, '55440');
-    assert.equal(url.pathname, '/autexa_oct12_core');
+    assert.ok(
+      (url.port === '55440' && url.pathname === '/autexa_oct12_core') ||
+        (url.port === '55438' && url.pathname === '/autexa_oct8_test'),
+      'Only the explicitly approved disposable database may be mutated',
+    );
     const admin = new Pool({ connectionString: live });
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';
@@ -144,6 +147,16 @@ test(
           ),
         );
         assert.equal(history.data.length, 2);
+      });
+      await t.test('malformed history filters fail with400 without a SQL error', async () => {
+        await assert.rejects(
+          run(() => checks.getClientHistory(ids.client, ids.tenant, { page: '-1' }, actor)),
+          status(400),
+        );
+        await assert.rejects(
+          run(() => checks.getClientHistory(ids.client, ids.tenant, { carId: [ids.client] }, actor)),
+          status(400),
+        );
       });
       await t.test('separate branch client database still denies inaccessible clients', async () => {
         await admin.query('UPDATE tenants SET points_shared_clients=false WHERE id=$1', [ids.tenant]);

@@ -511,7 +511,8 @@ export function accountSummaries<U>(registry: AccountRegistry<U> | null): SavedA
       ...account,
       avatar:
         account.avatar ??
-        (session?.user &&
+        (!session?.impersonating &&
+        session?.user &&
         typeof session.user === 'object' &&
         'avatar' in session.user &&
         typeof session.user.avatar === 'string'

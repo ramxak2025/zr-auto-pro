@@ -35,8 +35,7 @@ const deferred = () => {
 test('October-8 ordinary contracts / PostgreSQL16 real RLS and HTTP', { skip: !live, timeout: 120000 }, async (t) => {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '55438');
-  assert.equal(url.pathname, '/autexa_oct8_test');
+  assert.ok((url.port === '55438' && url.pathname === '/autexa_oct8_test') || (url.port === '55440' && url.pathname === '/autexa_oct12_core'), 'disposable QA database only');
   const appUrl = new URL(live);
   appUrl.username = 'autexa_app';
   appUrl.password = process.env.OCT8_ORDINARY_APP_PASSWORD;
@@ -456,9 +455,15 @@ test('October-8 ordinary contracts / PostgreSQL16 real RLS and HTTP', { skip: !l
         }),
       );
       const saved = (await f.run(() => templates.getAll(f.tenant, f.viewer))).find((row) => row.id === tpl.id);
-      assert.deepEqual(saved.services, [
-        { serviceId: hidden, name: 'Historical saved label', price: 777, quantity: 1 },
-      ]);
+      assert.equal(saved.services.length, 1);
+      assert.equal(saved.services[0].serviceId, hidden);
+      assert.equal(saved.services[0].name, 'Historical saved label');
+      assert.equal(
+        saved.services[0].price,
+        1234,
+        'template follows current catalog price without filtering hidden service',
+      );
+      assert.equal(saved.services[0].quantity, 1);
       assert.equal((await f.run(() => services.getAll(f.tenant, { preferredOnly: true }, f.viewer))).total, 0);
     });
 

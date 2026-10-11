@@ -138,8 +138,8 @@ test('статика: контроллер шаблонов принимает D
   const normalizeCalls = service.match(/normalizeTemplateServices\(dto\.services\)/g) || [];
   assert.equal(normalizeCalls.length, 2, 'нормализация услуг — и на create, и на update');
   assert.doesNotMatch(service, /normalizeTemplateServices\(dto\.products/, 'товары не нормализуются');
-  assert.match(service, /JSON\.stringify\(dto\.products \|\| \[\]\)/, 'create: товары как пришли');
-  assert.match(service, /JSON\.stringify\(dto\.products\)/, 'update: товары как пришли');
+  assert.match(service, /resolveTemplateProductSources/, 'проверяется источник стоимости товаров шаблона');
+  assert.match(service, /JSON\.stringify\(products\)/, 'сохраняются товары с проверенной стоимостью');
 
   const main = read('src/main.ts');
   assert.match(
@@ -700,3 +700,15 @@ test(
     }
   },
 );
+
+test('ordinary template product rows without a source keep quantity, price and cost intact', async () => {
+  const { resolveTemplateProductSources } = require('../dist/check-templates/template-product-source');
+  const rows = [{ name: 'Manual product', quantity: 2.5, sellPrice: 100, costPrice: 40 }];
+  const db = {
+    query: async () => {
+      throw new Error('no source must not query template data');
+    },
+  };
+  const result = await resolveTemplateProductSources(db, 'tenant', 'user', rows, null);
+  assert.deepEqual(result, rows);
+});

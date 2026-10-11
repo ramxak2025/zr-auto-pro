@@ -23,8 +23,11 @@ const live = process.env.OCT10_PRICING_LIVE_DB;
 async function fixture(work) {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '55440');
-  assert.equal(url.pathname, '/autexa_oct12_integrity');
+  assert.ok(
+    (url.port === '55440' && url.pathname === '/autexa_oct12_integrity') ||
+      (url.port === '55438' && url.pathname === '/autexa_oct8_test'),
+    'Only the explicitly approved disposable database may be mutated',
+  );
   const appUrl = new URL(url);
   appUrl.username = 'autexa_app';
   appUrl.password = process.env.OCT10_PRICING_APP_PASSWORD;
@@ -364,6 +367,30 @@ test(
         }
         await q('UPDATE products SET warehouse_id=NULL WHERE id=$1', [productId]);
         assert.equal((await read(staff)).length, 0, 'legacy catalog template outside the current warehouse is unsafe');
+        for (const actor of [owner, staff]) {
+          const current = await read(actor, '?sourceAware=1');
+          const inaccessible = current.find((row) => row.name === 'Catalog');
+          assert.equal(inaccessible.products[0].catalogStatus, 'unavailable');
+          assert.equal(inaccessible.products[0].costPrice, undefined);
+          assert.equal(inaccessible.productCostTotal, undefined);
+        }
+        const otherPoint = (
+          await q("INSERT INTO tenant_points(tenant_id,name) VALUES($1,'Other branch') RETURNING id", [tenant])
+        )[0].id;
+        const otherWarehouse = (
+          await q(
+            "INSERT INTO warehouses(tenant_id,point_id,name,kind) VALUES($1,$2,'Other stock','main') RETURNING id",
+            [tenant, otherPoint],
+          )
+        )[0].id;
+        await q('UPDATE products SET warehouse_id=$2,cost_price=999 WHERE id=$1', [productId, otherWarehouse]);
+        for (const actor of [owner, staff]) {
+          const current = await read(actor, '?sourceAware=1');
+          const inaccessible = current.find((row) => row.name === 'Catalog');
+          assert.equal(inaccessible.products[0].catalogStatus, 'unavailable');
+          assert.equal(inaccessible.products[0].costPrice, undefined);
+          assert.equal(inaccessible.productCostTotal, undefined);
+        }
       } finally {
         if (app) await app.close();
         if (priorSecret === undefined) delete process.env.JWT_SECRET;

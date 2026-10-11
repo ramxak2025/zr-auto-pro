@@ -1108,8 +1108,11 @@ export class ChecksService {
 
   async getClientHistory(clientId: string, tenantID: string, query: Record<string, string>, actor: ChecksActor) {
     await this.clients.getById(clientId, tenantID, actorPointId(actor));
-    if (query.carId && !UUID_RE.test(query.carId))
+    if (query.carId && (typeof query.carId !== 'string' || !UUID_RE.test(query.carId)))
       throw new BadRequestException({ message: 'Некорректный автомобиль' });
+    if (query.page !== undefined && (!Number.isSafeInteger(Number(query.page)) || Number(query.page) < 1)) {
+      throw new BadRequestException({ message: 'Некорректная страница истории' });
+    }
     // Only pagination and an optional car filter are accepted. The URL owns the client, and
     // callers cannot turn this read scope into a journal/board query.
     return this.getAll(
