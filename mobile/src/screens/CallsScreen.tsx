@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { setAudioModeAsync } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -18,6 +18,7 @@ import { haptic } from '../platform/haptics';
 // (Round 13 #8 — деталка рассрочки показывает звонки той же строкой). Визуал и
 // perf-паттерны (React.memo + playerRef) сохранены один-в-один.
 import { CallRow, type Call } from '../components/calls/CallRow';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ---------------------------------------------------------------------------
 // Types

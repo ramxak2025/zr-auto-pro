@@ -20,6 +20,7 @@ import type {
   PublicBookingMode,
   PublicBookingOperator,
   Service,
+  TemplateProductSource,
 } from '../types';
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
@@ -748,6 +749,7 @@ export interface CreateCheckRequest {
     quantity?: number;
   }>;
   products: Array<{
+    sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
     sellPrice: number;
@@ -811,6 +813,7 @@ export interface UpdateCheckRequest {
     quantity?: number;
   }>;
   products?: Array<{
+    sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
     sellPrice: number;

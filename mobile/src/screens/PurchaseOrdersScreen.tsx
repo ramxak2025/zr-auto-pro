@@ -14,17 +14,8 @@
  * Android-safe: FlashList + RefreshControl + inline-dropdown (без iOS-only API).
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  RefreshControl,
-  ScrollView,
-  Platform,
-  Pressable,
-} from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Platform, Pressable } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -48,6 +39,7 @@ import {
   formatPoDate,
   type PoStatusMeta,
 } from './purchaseOrders/purchaseOrderHelpers';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type StatusFilter = 'all' | PurchaseOrderStatus;
 

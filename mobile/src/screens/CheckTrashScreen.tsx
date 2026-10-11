@@ -27,7 +27,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -43,6 +43,7 @@ import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { TrashedCheck } from '../../../shared/types';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // Бэкенд хранит удалённые чеки 30 дней с момента deletedAt, потом вычищает
 // навсегда (см. shared/api/createServices.ts → checksApi.trash).

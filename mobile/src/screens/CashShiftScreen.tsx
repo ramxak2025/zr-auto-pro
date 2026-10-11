@@ -28,7 +28,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -63,6 +62,7 @@ import type {
   SafeState,
   SafeTransaction,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Formatting helpers

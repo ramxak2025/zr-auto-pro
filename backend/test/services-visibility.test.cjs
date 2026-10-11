@@ -21,14 +21,24 @@ function makePool(handler = () => undefined) {
     log.push({ sql: text, values: Array.isArray(values) ? values.slice() : values });
     return (await handler(text, values)) || { rows: [] };
   };
-  return { log, query };
+  return { log, query, connect: async () => ({ query, release() {} }) };
 }
 
 const actor = (role = 'master') => ({ userID: USER_ID, tenantID: TENANT_A, role, permissions: {} });
-const serviceRow = { id: SERVICE_ID, name: 'Замена масла', category: 'Двигатель/Масло', default_price: '1500', master_percent: null, warranty_days: null, created_at: '2026-10-08' };
+const serviceRow = {
+  id: SERVICE_ID,
+  name: 'Замена масла',
+  category: 'Двигатель/Масло',
+  default_price: '1500',
+  master_percent: null,
+  warranty_days: null,
+  created_at: '2026-10-08',
+};
 
 test('migration stores exactly one tenant-scoped target; visibility remains separate from service/check authorization', () => {
-  const sql = readFileSync(join(__dirname, '..', 'migrations', '178_service_visibility_rules.sql'), 'utf8').replace(/--[^\n]*/g, '').replace(/\s+/g, ' ');
+  const sql = readFileSync(join(__dirname, '..', 'migrations', '178_service_visibility_rules.sql'), 'utf8')
+    .replace(/--[^\n]*/g, '')
+    .replace(/\s+/g, ' ');
   assert.match(sql, /service_id IS NOT NULL AND category_path IS NULL/);
   assert.match(sql, /service_id IS NULL AND category_path IS NOT NULL/);
   assert.match(sql, /FOREIGN KEY \(tenant_id, service_id\) REFERENCES services \(tenant_id, id\)/);
@@ -49,7 +59,11 @@ test('legacy service list stays full; preferred filtering is opt-in, before coun
   assert.doesNotMatch(pool.log[1].sql, /service_visibility_rules/);
 
   pool.log.length = 0;
-  const filtered = await service.getAll(TENANT_A, { page: 2, limit: 20, preferredOnly: 'true', search: 'масло' }, actor());
+  const filtered = await service.getAll(
+    TENANT_A,
+    { page: 2, limit: 20, preferredOnly: 'true', search: 'масло' },
+    actor(),
+  );
   assert.equal(filtered.total, 1);
   assert.match(pool.log[0].sql, /SELECT COUNT\(\*\).*LATERAL/);
   assert.match(pool.log[0].sql, /visibility_viewer\.role_id = ANY\(visibility_rule\.visible_role_ids\)/);
@@ -62,7 +76,7 @@ test('legacy service list stays full; preferred filtering is opt-in, before coun
 });
 
 test('specific service overrides the closest folder; folder matching is segment-safe for %/_ and sibling prefixes', async () => {
-  const pool = makePool((sql) => sql.startsWith('SELECT COUNT(*)') ? { rows: [{ total: '0' }] } : { rows: [] });
+  const pool = makePool((sql) => (sql.startsWith('SELECT COUNT(*)') ? { rows: [{ total: '0' }] } : { rows: [] }));
   await new ServicesService(pool).getAll(TENANT_A, { preferredOnly: true }, actor());
   const sql = pool.log[0].sql;
   assert.match(sql, /rule\.service_id=s\.id/);
@@ -77,16 +91,24 @@ test('specific service overrides the closest folder; folder matching is segment-
 
 test('rule validation accepts visible system/tenant roles only and normalizes path segments without wildcard semantics', async () => {
   const pool = makePool((sql) => {
-    if (sql.includes('FROM roles')) return { rows: [
-      { id: ROLE_ID, tenant_id: null, system_key: 'master' },
-      { id: OTHER_ROLE_ID, tenant_id: TENANT_B, system_key: null },
-    ] };
+    if (sql.includes('FROM roles'))
+      return {
+        rows: [
+          { id: ROLE_ID, tenant_id: null, system_key: 'master' },
+          { id: OTHER_ROLE_ID, tenant_id: TENANT_B, system_key: null },
+        ],
+      };
     if (sql.includes('SELECT id FROM services')) return { rows: [{ id: SERVICE_ID }] };
-    if (sql.startsWith('INSERT INTO service_visibility_rules')) return { rows: [{ service_id: null, category_path: 'Двигатель/Масло/%_тест', visible_role_ids: [ROLE_ID] }] };
+    if (sql.includes('SELECT path FROM service_folders')) return { rows: [{ path: 'Двигатель/Масло/%_тест' }] };
+    if (sql.startsWith('INSERT INTO service_visibility_rules'))
+      return { rows: [{ service_id: null, category_path: 'Двигатель/Масло/%_тест', visible_role_ids: [ROLE_ID] }] };
     return undefined;
   });
   const service = new ServicesService(pool);
-  const dto = Object.assign(new PutServiceVisibilityRuleDto(), { categoryPath: ' Двигатель / Масло // %_тест ', visibleRoleIds: [ROLE_ID] });
+  const dto = Object.assign(new PutServiceVisibilityRuleDto(), {
+    categoryPath: ' Двигатель / Масло // %_тест ',
+    visibleRoleIds: [ROLE_ID],
+  });
   const result = await service.putVisibilityRule(TENANT_A, dto);
   assert.equal(result.categoryPath, 'Двигатель/Масло/%_тест');
   const insert = pool.log.find((q) => q.sql.startsWith('INSERT INTO service_visibility_rules'));
@@ -101,9 +123,17 @@ test('rule validation accepts visible system/tenant roles only and normalizes pa
   const config = await new ServicesService(configPool).getVisibilityConfig(TENANT_A);
   assert.deepEqual(config.categoryPaths, ['Двигатель', 'Двигатель/Масло', 'Двигатель/Масло/Фильтр']);
 
-  const foreignRolePool = makePool((sql) => sql.includes('FROM roles') ? { rows: [{ id: ROLE_ID, tenant_id: TENANT_A, system_key: null }] } : undefined);
-  const foreignDto = Object.assign(new PutServiceVisibilityRuleDto(), { categoryPath: 'Двигатель', visibleRoleIds: [OTHER_ROLE_ID] });
-  await assert.rejects(new ServicesService(foreignRolePool).putVisibilityRule(TENANT_A, foreignDto), (err) => err instanceof BadRequestException);
+  const foreignRolePool = makePool((sql) =>
+    sql.includes('FROM roles') ? { rows: [{ id: ROLE_ID, tenant_id: TENANT_A, system_key: null }] } : undefined,
+  );
+  const foreignDto = Object.assign(new PutServiceVisibilityRuleDto(), {
+    categoryPath: 'Двигатель',
+    visibleRoleIds: [OTHER_ROLE_ID],
+  });
+  await assert.rejects(
+    new ServicesService(foreignRolePool).putVisibilityRule(TENANT_A, foreignDto),
+    (err) => err instanceof BadRequestException,
+  );
 });
 
 test('service rule requires a tenant-owned service; reset deletes only that service or exact category rule', async () => {
@@ -113,13 +143,28 @@ test('service rule requires a tenant-owned service; reset deletes only that serv
     return undefined;
   });
   const dto = Object.assign(new PutServiceVisibilityRuleDto(), { serviceId: SERVICE_ID, visibleRoleIds: [ROLE_ID] });
-  await assert.rejects(new ServicesService(pool).putVisibilityRule(TENANT_A, dto), (err) => err instanceof NotFoundException);
+  await assert.rejects(
+    new ServicesService(pool).putVisibilityRule(TENANT_A, dto),
+    (err) => err instanceof NotFoundException,
+  );
 
-  const deletions = makePool();
+  const deletions = makePool((sql) =>
+    sql.includes('SELECT id FROM services')
+      ? { rows: [{ id: SERVICE_ID }] }
+      : sql.includes('SELECT path FROM service_folders')
+        ? { rows: [{ path: 'Двигатель/%_тест' }] }
+        : undefined,
+  );
   const service = new ServicesService(deletions);
   await service.deleteVisibilityRule(TENANT_A, { serviceId: SERVICE_ID });
   await service.deleteVisibilityRule(TENANT_A, { categoryPath: 'Двигатель/%_тест' });
-  assert.deepEqual(deletions.log.map((q) => q.values), [[TENANT_A, SERVICE_ID], [TENANT_A, 'Двигатель/%_тест']]);
+  assert.deepEqual(
+    deletions.log.filter((q) => q.sql.startsWith('DELETE')).map((q) => q.values),
+    [
+      [TENANT_A, SERVICE_ID],
+      [TENANT_A, 'Двигатель/%_тест'],
+    ],
+  );
 });
 
 test('list preferredOnly is optional and rule mutations remain under services_manage', () => {

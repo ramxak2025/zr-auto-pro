@@ -5,7 +5,6 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -66,6 +65,7 @@ import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/t
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -150,7 +150,7 @@ export default function CheckDetailScreen() {
   // formula. The light branch always keeps the exact legacy `[50]` token so
   // LIGHT mode stays pixel-identical.
   const isDark = palette.mode === 'dark';
-  const { id } = route.params;
+  const { id, clientId } = route.params;
   // ── Возврат заказ-наряда ────────────────────────────────────────────
   // Возврат — денежная операция над проведённым чеком → ключ матрицы
   // payment_edit («Меняет оплату чека»). Сид «Администратора» true — админ
@@ -213,9 +213,9 @@ export default function CheckDetailScreen() {
     isError,
     refetch,
   } = useQuery<Check>({
-    queryKey: ['check', id],
+    queryKey: clientId ? ['check', id, 'client-history', clientId] : ['check', id],
     queryFn: async () => {
-      const res = await checksApi.getById(id);
+      const res = clientId ? await checksApi.clientHistoryCheck(clientId, id) : await checksApi.getById(id);
       return res.data;
     },
     // CRITICAL screen for an ACTIVE check — payment status must

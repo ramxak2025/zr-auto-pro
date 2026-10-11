@@ -21,17 +21,7 @@
  * просмотра: без правок, сохранения и удаления (backend всё равно 403).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  Switch,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Switch, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -48,9 +38,11 @@ import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { formatTemplateCost, templateProductCost, templateProductsCost } from '../../../shared/utils/templateProducts';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 /** RU-дружественный парсер цены: запятая → точка, мусор → 0. */
 function parsePrice(v: string): number {
@@ -65,13 +57,19 @@ interface EditorServiceLine {
   /** Строка, а не число — иначе TextInput дерётся с курсором при вводе. */
   priceText: string;
   priceType?: 'fixed' | 'range';
+  minPrice?: number;
+  maxPrice?: number;
+  catalogStatus?: 'current' | 'unavailable' | 'manual';
 }
 
 interface EditorProductLine {
+  sourceTemplateProduct?: CheckTemplate['products'][number]['sourceTemplateProduct'];
   productId?: string;
   name: string;
   sellPrice: number;
-  costPrice: number;
+  costPrice?: number;
+  costStatus?: 'known' | 'unknown';
+  catalogStatus?: 'current' | 'unavailable' | 'manual';
   quantity: number;
 }
 
@@ -90,10 +88,17 @@ export default function TemplateEditorScreen() {
   const templateId: string | undefined = route.params?.templateId;
   const isEditing = !!templateId;
 
-  const { data: templates = [], isLoading: templatesLoading } = useQuery<CheckTemplate[]>({
+  const {
+    data: templates = [],
+    isLoading: templatesLoading,
+    isFetching: templatesFetching,
+    isError: templatesError,
+    refetch: refetchTemplates,
+  } = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const { data: folders = [] } = useQuery<CheckTemplateFolder[]>({
     queryKey: ['check-template-folders'],
@@ -118,7 +123,7 @@ export default function TemplateEditorScreen() {
   // должна перетирать правки (паттерн editCheck из CheckCreateScreen).
   const hydratedRef = useRef(false);
   useEffect(() => {
-    if (!isEditing || hydratedRef.current || !template) return;
+    if (!isEditing || hydratedRef.current || !template || templatesFetching || templatesError) return;
     hydratedRef.current = true;
     setName(template.name);
     // Старые шаблоны бывают со строкой «×N» (степпер и «+1 при повторном
@@ -130,6 +135,10 @@ export default function TemplateEditorScreen() {
         serviceId: s.serviceId,
         name: s.name,
         priceText: String(s.price ?? 0),
+        priceType: s.priceType,
+        minPrice: s.minPrice,
+        maxPrice: s.maxPrice,
+        catalogStatus: s.catalogStatus,
       })),
     );
     setProductLines(
@@ -137,13 +146,16 @@ export default function TemplateEditorScreen() {
         productId: p.productId,
         name: p.name,
         sellPrice: p.sellPrice ?? 0,
-        costPrice: p.costPrice ?? 0,
+        costPrice: p.costPrice,
+        sourceTemplateProduct: p.sourceTemplateProduct,
+        costStatus: p.costStatus,
+        catalogStatus: p.catalogStatus,
         quantity: p.quantity || 1,
       })),
     );
     setFolderId(template.folderId ?? null);
     setShared(isSharedTemplate(template));
-  }, [isEditing, template]);
+  }, [isEditing, template, templatesFetching, templatesError]);
 
   // ── Пикеры состава ──────────────────────────────────────────────────────────
 
@@ -211,6 +223,9 @@ export default function TemplateEditorScreen() {
         name: s.name,
         priceType: s.priceType ?? 'fixed',
         priceText: s.priceType === 'range' ? '' : String(s.defaultPrice ?? 0),
+        minPrice: s.minPrice,
+        maxPrice: s.maxPrice,
+        catalogStatus: 'current',
       },
     ]);
   };
@@ -226,7 +241,14 @@ export default function TemplateEditorScreen() {
       }
       return [
         ...lines,
-        { productId: p.id, name: p.name, sellPrice: p.sellPrice ?? 0, costPrice: p.costPrice ?? 0, quantity: 1 },
+        {
+          productId: p.id,
+          name: p.name,
+          sellPrice: p.sellPrice ?? 0,
+          costPrice: canSeeCost ? p.costPrice : undefined,
+          costStatus: canSeeCost ? 'known' : undefined,
+          quantity: 1,
+        },
       ];
     });
   };
@@ -248,6 +270,8 @@ export default function TemplateEditorScreen() {
     [productLines],
   );
   const grandTotal = servicesTotal + productsTotal;
+  const canSeeCost = hasPermission('warehouse_manage');
+  const productCostTotal = templateProductsCost(productLines);
 
   // ── Сохранение / удаление ───────────────────────────────────────────────────
 
@@ -292,6 +316,7 @@ export default function TemplateEditorScreen() {
         price: parsePrice(l.priceText),
       }));
       const products = productLines.map((l) => ({
+        sourceTemplateProduct: l.sourceTemplateProduct,
         productId: l.productId,
         name: l.name,
         sellPrice: l.sellPrice,
@@ -370,7 +395,7 @@ export default function TemplateEditorScreen() {
   // ── Рендер ──────────────────────────────────────────────────────────────────
 
   // Правка по прямой ссылке, пока список ещё грузится.
-  if (isEditing && !template && templatesLoading) {
+  if (isEditing && !hydratedRef.current && !templatesError && (templatesLoading || templatesFetching)) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Шаблон" onBack={() => navigation.goBack()} />
@@ -380,6 +405,18 @@ export default function TemplateEditorScreen() {
       </View>
     );
   }
+  if (isEditing && templatesError && !hydratedRef.current)
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Шаблон" onBack={() => navigation.goBack()} />
+        <View style={styles.centerFill}>
+          <Text style={{ color: palette.text.primary }}>Не удалось обновить цены шаблона.</Text>
+          <TouchableOpacity onPress={() => void refetchTemplates()} style={{ padding: 16 }}>
+            <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   if (isEditing && !template && !templatesLoading) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -606,6 +643,16 @@ export default function TemplateEditorScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+                {line.priceType === 'range' && (
+                  <Text style={{ color: palette.text.secondary, fontSize: 13 }}>
+                    Прайс: {formatTemplateMoney(line.minPrice ?? 0)} – {formatTemplateMoney(line.maxPrice ?? 0)}
+                  </Text>
+                )}
+                {line.catalogStatus === 'unavailable' && (
+                  <Text style={{ color: palette.text.tertiary, fontSize: 13 }}>
+                    Нет в каталоге · цена не подтверждена
+                  </Text>
+                )}
                 {/* Только цена: количества у услуги нет, отдельной «суммы строки»
                     тоже (она равна цене). */}
                 <View style={styles.lineControls}>
@@ -697,6 +744,17 @@ export default function TemplateEditorScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
+                {line.catalogStatus === 'unavailable' && (
+                  <Text style={{ color: palette.text.tertiary }}>Нет в каталоге · цена не подтверждена</Text>
+                )}
+                {canSeeCost && (
+                  <Text style={{ color: palette.text.secondary, fontSize: 13 }}>
+                    {line.catalogStatus === 'manual' ? 'Себестоимость указана вручную:' : 'Себестоимость:'}{' '}
+                    {templateProductCost(line) !== undefined
+                      ? `${formatTemplateCost(line.costPrice!)} × ${line.quantity} = ${formatTemplateCost(templateProductCost(line)!)}`
+                      : 'Нет данных'}
+                  </Text>
+                )}
                 <View style={styles.lineControls}>
                   <Text style={[styles.lineStatic, { color: palette.text.secondary }]}>
                     {formatTemplateMoney(line.sellPrice)}
@@ -726,6 +784,14 @@ export default function TemplateEditorScreen() {
                   {formatTemplateMoney(productsTotal)}
                 </Text>
               </View>
+              {canSeeCost && (
+                <View style={styles.totalRow}>
+                  <Text style={[styles.totalLabel, { color: palette.text.secondary }]}>Себестоимость шаблона</Text>
+                  <Text style={[styles.totalValue, { color: palette.text.primary }]}>
+                    {productCostTotal !== undefined ? formatTemplateCost(productCostTotal) : 'Нет данных'}
+                  </Text>
+                </View>
+              )}
               <View style={[styles.totalDivider, { backgroundColor: palette.border.subtle }]} />
               <View style={styles.totalRow}>
                 <Text style={[styles.totalLabelGrand, { color: palette.text.primary }]}>Итого</Text>

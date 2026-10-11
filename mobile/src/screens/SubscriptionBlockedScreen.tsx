@@ -21,7 +21,7 @@
  * deliberately takes NO navigation prop — it lives outside any navigator.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, Linking, ActivityIndicator, Platform } from 'react-native';
+import { View, StyleSheet, Pressable, Linking, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -33,6 +33,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useIosSurface } from '../platform/iosSurface';
 import { colors, spacing, borderRadius, softTint } from '../theme';
 import type { SubscriptionInfo, SubscriptionStatus } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SUPPORT_EMAIL = 'info@autexa.pw';
 

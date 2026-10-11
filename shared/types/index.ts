@@ -1868,6 +1868,22 @@ export interface ServicePriceHistoryEntry {
   source: 'baseline' | 'create' | 'update';
 }
 
+export interface ServiceFolder {
+  path: string;
+  name: string;
+  parentPath: string | null;
+}
+
+export interface ServiceExecutionHistoryEntry {
+  id: string;
+  checkId: string;
+  checkNumber: number;
+  clientId: string | null;
+  date: string;
+  executorName: string | null;
+  price: number;
+}
+
 export interface Service {
   id: string;
   name: string;
@@ -2017,7 +2033,15 @@ export interface CheckServiceLine extends CheckServicePriceSnapshot {
   total: number;
 }
 
+/** Opaque template source; the server resolves manual or current catalog cost on write. */
+export interface TemplateProductSource {
+  templateId: string;
+  productIndex: number;
+  version: string;
+}
+
 export interface CheckProductLine {
+  sourceTemplateProduct?: TemplateProductSource;
   id?: string;
   productId?: string;
   name: string;
@@ -2563,7 +2587,7 @@ export interface PublicBookingLanding {
   address: string;
   contacts: string;
   links?: PublicBookingContactLinks;
-  resources?: Array<{ resourceKey: string; name: string }>;
+  resources?: Array<{ resourceKey: string; name: string; avatar?: string | null; profession?: string }>;
   mode: PublicBookingMode;
   showPrices: boolean;
   operator: PublicBookingOperator;
@@ -3991,8 +4015,29 @@ export interface CheckTemplate {
    * `expandServiceQuantities` из `shared/utils/checkLines`). В ТЕЛЕ запроса он необязателен —
    * см. `CheckTemplateServiceInput` в `shared/api/types.ts`.
    */
-  services: Array<{ serviceId?: string; name: string; price: number; quantity: number }>;
-  products: Array<{ productId?: string; name: string; sellPrice: number; costPrice: number; quantity: number }>;
+  services: Array<{
+    serviceId?: string;
+    name: string;
+    price: number;
+    quantity: number;
+    priceType?: ServicePriceType;
+    minPrice?: number;
+    maxPrice?: number;
+    catalogStatus?: 'current' | 'unavailable' | 'manual';
+  }>;
+  products: Array<{
+    sourceTemplateProduct?: TemplateProductSource;
+    productId?: string;
+    name: string;
+    sellPrice: number;
+    costPrice?: number;
+    quantity: number;
+    costStatus?: 'known' | 'unknown';
+    catalogStatus?: 'current' | 'unavailable' | 'manual';
+  }>;
+  /** Only present for warehouse_manage. Unknown never means zero. */
+  costStatus?: 'known' | 'unknown';
+  productCostTotal?: number;
   createdAt: string;
   /**
    * Personal templates (round 8, migration 110). `userId` NULL/undefined =

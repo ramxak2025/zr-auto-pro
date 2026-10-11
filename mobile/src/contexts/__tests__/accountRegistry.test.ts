@@ -1,6 +1,7 @@
 import {
   ACCOUNT_REGISTRY_KEY,
   accountId,
+  accountSummaries,
   activeAccount,
   createAccountRegistry,
   type AccountKeyValueStorage,
@@ -13,6 +14,7 @@ interface Profile {
   fullName: string;
   role: string;
   currentPointId?: string;
+  avatar?: string | null;
 }
 const profile = (id: string, tenantId: string | undefined = 'tenant-' + id): Profile => ({
   id,
@@ -349,4 +351,32 @@ it('an explicit JWT point cannot be paired with a stale cached profile from anot
   a.token = 'x.' + btoa(JSON.stringify({ sub: 'a', tenantId: 'tenant-a', pointId: 'correct' })) + '.x';
   await expect(f.registry.install(a, state.generation)).rejects.toMatchObject({ code: 'ACCOUNT_MISMATCH' });
   expect((await f.registry.read()).accounts).toHaveLength(0);
+});
+
+it('keeps avatar metadata after session expiry without exposing saved credentials in account menu', async () => {
+  const f = setup();
+  const current = await f.registry.read();
+  const user = { ...profile('avatar-owner'), avatar: '/uploads/avatar-owner.jpg' };
+  await f.registry.install(session(user), current.generation);
+  const active = await f.registry.read();
+  const menu = accountSummaries(active)[0];
+  expect(menu.avatar).toBe(user.avatar);
+  expect(menu).not.toHaveProperty('session');
+  await f.registry.expire(active.generation);
+  const expired = accountSummaries(await f.registry.read())[0];
+  expect(expired.needsReauth).toBe(true);
+  expect(expired.avatar).toBe(user.avatar);
+});
+
+it('does not substitute an impersonated employee avatar for the original saved account', async () => {
+  const f = setup();
+  const manager = { ...profile('original'), tenantId: undefined, role: 'manager', avatar: null };
+  let r = await f.registry.read();
+  r = (await f.registry.install(session(manager), r.generation)).registry;
+  const originalId = r.activeId!;
+  const impersonated = { ...profile('employee'), avatar: '/uploads/employee.jpg' };
+  r = (await f.registry.install(session(impersonated, manager.id), r.generation, { originalAccountId: originalId }))
+    .registry;
+  expect(accountSummaries(r)[0].identity.userId).toBe(manager.id);
+  expect(accountSummaries(r)[0].avatar).toBeNull();
 });

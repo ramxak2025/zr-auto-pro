@@ -27,17 +27,7 @@ import { captureCheckSaveSession } from './checkCreate/saveSession';
  *   8. «Напоминание клиенту» — как раньше, внизу, только при manual-режиме.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-  Share,
-  Linking,
-} from 'react-native';
+import { View, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Alert, Share, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -81,6 +71,7 @@ import type {
   CheckPhoto,
   SubscriptionInfo,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatDateTime(iso?: string | null): string {
   if (!iso) return '';

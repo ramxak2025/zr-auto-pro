@@ -27,7 +27,7 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, RefreshControl, Alert, Platform } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -49,6 +49,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, spacing } from '../theme';
 import type { User } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const AVATAR_SIZE = 44;
 const RESTORE_WINDOW_DAYS = 365; // restorable within a year of dismissal

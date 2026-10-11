@@ -15,7 +15,7 @@
  * Deliberately utilitarian — no live preview. Fast and predictable.
  */
 import React from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,6 +33,7 @@ import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { KnowledgeCourse, KnowledgeLesson, KnowledgeQuizQuestion } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeCourseEditor: { id?: string } };
 type Palette = ReturnType<typeof useColors>;
@@ -227,7 +228,11 @@ export default function KnowledgeCourseEditorScreen() {
             </View>
           )}
           {coverImage ? (
-            <Pressable onPress={() => setCoverImage(null)} hitSlop={8} style={[styles.coverRemove, { backgroundColor: 'rgba(0,0,0,0.55)' }]}>
+            <Pressable
+              onPress={() => setCoverImage(null)}
+              hitSlop={8}
+              style={[styles.coverRemove, { backgroundColor: 'rgba(0,0,0,0.55)' }]}
+            >
               <Ionicons name="close" size={16} color={colors.white} />
             </Pressable>
           ) : null}
@@ -252,7 +257,11 @@ export default function KnowledgeCourseEditorScreen() {
           placeholderTextColor={palette.text.tertiary}
           multiline
           textAlignVertical="top"
-          style={[styles.input, styles.descInput, { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary }]}
+          style={[
+            styles.input,
+            styles.descInput,
+            { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
+          ]}
         />
 
         {/* Published */}
@@ -451,7 +460,12 @@ function LessonEditorSheet({
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.sheetBackdrop}>
-        <View style={[styles.sheet, { backgroundColor: palette.bg.canvas, paddingBottom: Math.max(insets.bottom, spacing[3]) }]}>
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: palette.bg.canvas, paddingBottom: Math.max(insets.bottom, spacing[3]) },
+          ]}
+        >
           <View style={[styles.sheetHandle, { backgroundColor: palette.border.strong }]} />
           <View style={styles.sheetHeader}>
             <Pressable onPress={onClose} hitSlop={8}>
@@ -475,6 +489,7 @@ function LessonEditorSheet({
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            reserveBottomNavigation={false}
           >
             <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>Название</Text>
             <TextInput
@@ -482,7 +497,10 @@ function LessonEditorSheet({
               onChangeText={setTitle}
               placeholder="Название урока"
               placeholderTextColor={palette.text.tertiary}
-              style={[styles.input, { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary }]}
+              style={[
+                styles.input,
+                { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
+              ]}
             />
 
             <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>Текст (Markdown)</Text>
@@ -493,11 +511,17 @@ function LessonEditorSheet({
               placeholderTextColor={palette.text.tertiary}
               multiline
               textAlignVertical="top"
-              style={[styles.input, styles.bodyInput, { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary }]}
+              style={[
+                styles.input,
+                styles.bodyInput,
+                { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
+              ]}
             />
 
             {/* Quiz toggle */}
-            <View style={[styles.toggleCard, { backgroundColor: inputBg, borderColor: inputBorder, marginTop: spacing[4] }]}>
+            <View
+              style={[styles.toggleCard, { backgroundColor: inputBg, borderColor: inputBorder, marginTop: spacing[4] }]}
+            >
               <View style={styles.toggleRow}>
                 <View style={{ flex: 1 }}>
                   <Text variant="bodyEmph" style={{ color: palette.text.primary }}>
@@ -523,7 +547,10 @@ function LessonEditorSheet({
                     onRemove={() => setQuiz((prev) => prev.filter((_, i) => i !== qIdx))}
                   />
                 ))}
-                <Pressable onPress={addQuestion} style={[styles.addQuestionBtn, { borderColor: palette.accent.primary }]}>
+                <Pressable
+                  onPress={addQuestion}
+                  style={[styles.addQuestionBtn, { borderColor: palette.accent.primary }]}
+                >
                   <Ionicons name="add-circle-outline" size={18} color={palette.accent.primary} />
                   <Text variant="bodyEmph" style={{ color: palette.accent.primary }}>
                     Добавить вопрос
@@ -586,7 +613,10 @@ function QuestionEditor({
         onChangeText={(t) => onChange({ ...draft, question: t })}
         placeholder="Текст вопроса"
         placeholderTextColor={palette.text.tertiary}
-        style={[styles.input, { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary, marginBottom: spacing[2] }]}
+        style={[
+          styles.input,
+          { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary, marginBottom: spacing[2] },
+        ]}
       />
       <Text variant="caption" style={{ color: palette.text.tertiary, marginBottom: spacing[1.5] }}>
         Отметьте правильный вариант
@@ -605,16 +635,22 @@ function QuestionEditor({
               </Pressable>
               <TextInput
                 value={opt}
-                onChangeText={(t) => onChange({ ...draft, options: draft.options.map((o, i) => (i === optIdx ? t : o)) })}
+                onChangeText={(t) =>
+                  onChange({ ...draft, options: draft.options.map((o, i) => (i === optIdx ? t : o)) })
+                }
                 placeholder={`Вариант ${optIdx + 1}`}
                 placeholderTextColor={palette.text.tertiary}
-                style={[styles.optionInput, { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary }]}
+                style={[
+                  styles.optionInput,
+                  { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
+                ]}
               />
               {draft.options.length > 2 ? (
                 <Pressable
                   onPress={() => {
                     const nextOptions = draft.options.filter((_, i) => i !== optIdx);
-                    const nextCorrect = draft.correctIndex >= nextOptions.length ? nextOptions.length - 1 : draft.correctIndex;
+                    const nextCorrect =
+                      draft.correctIndex >= nextOptions.length ? nextOptions.length - 1 : draft.correctIndex;
                     onChange({ ...draft, options: nextOptions, correctIndex: Math.max(0, nextCorrect) });
                   }}
                   hitSlop={6}
@@ -748,7 +784,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[3],
   },
-  questionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[2] },
+  questionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
   optionEditRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   optionInput: {
     flex: 1,

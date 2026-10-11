@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Trash2,
@@ -135,6 +135,8 @@ function InfoCard({
 export default function CheckDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const historyClientId = searchParams.get('clientId');
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   // Дата/время чека и гейт «комментарий день в день» — в поясе автосервиса.
@@ -160,9 +162,11 @@ export default function CheckDetailPage() {
     isFetching,
     refetch,
   } = useQuery<Check>({
-    queryKey: ['check', id],
+    queryKey: historyClientId ? ['check', id, 'client-history', historyClientId] : ['check', id],
     queryFn: async () => {
-      const res = await checksApi.getById(id!);
+      const res = historyClientId
+        ? await checksApi.clientHistoryCheck(historyClientId, id!)
+        : await checksApi.getById(id!);
       return res.data;
     },
     enabled: !!id,

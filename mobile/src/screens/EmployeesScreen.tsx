@@ -32,8 +32,8 @@
  * (`onPressIn`) канонического `['employee-full-profile', id]`.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, RefreshControl, Platform, ScrollView, TouchableOpacity } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import { View, StyleSheet, RefreshControl, Platform, TouchableOpacity } from 'react-native';
+
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -57,6 +57,7 @@ import { useAllStaff, decideStaffListView } from '../hooks/useUsers';
 import { colors, spacing } from '../theme';
 import type { User, TodayEmployeeStatus, EmployeeRanking } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const SCREEN_PADDING = spacing[4]; // 16pt
 const AVATAR_SIZE = 44;

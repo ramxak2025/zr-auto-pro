@@ -5,7 +5,7 @@
  * «Решение» (markdown) → tags. Managers get a header «изменить» → editor.
  */
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +23,7 @@ import { spacing, borderRadius } from '../theme';
 import { haptic } from '../platform/haptics';
 import { severityStyle } from '../components/knowledge/severity';
 import type { Troubleshooting } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeTroubleshootingDetail: { id: string; title?: string } };
 

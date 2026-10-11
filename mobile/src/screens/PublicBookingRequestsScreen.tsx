@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { useNavigation } from '@react-navigation/native';
@@ -12,6 +12,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
 import type { StaffPublicBookingRequest } from '../../../shared/types';
 import { showMutationErrorToast } from '../components/Toast';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function PublicBookingRequestsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();

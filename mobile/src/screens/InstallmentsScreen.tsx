@@ -12,7 +12,7 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -29,6 +29,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentPlan } from '../../../shared/types';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type Filter = 'open' | 'closed';
 

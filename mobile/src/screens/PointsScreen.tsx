@@ -61,7 +61,7 @@
  * admin-панели) — их количество и есть лимит. Этот экран их не создаёт.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native';
+import { View, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -85,6 +85,7 @@ import { pendingChecksSwitchNotice, resolvePointSwitchFailure } from './pointSwi
 import { formatMoney } from '../../../shared/utils/formatters';
 import { buildPointCardRows, type PointCardRow } from '../../../shared/utils/pointCards';
 import type { TenantPoint, PointsListResponse, PointsSummaryResponse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function PointsScreen() {
   const navigation = useNavigation<any>();

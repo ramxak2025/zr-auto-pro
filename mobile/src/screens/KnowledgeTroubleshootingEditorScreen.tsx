@@ -10,7 +10,7 @@
  * (markdown), tags (comma / space separated). Delete available when editing.
  */
 import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +25,7 @@ import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
 import { severityStyle } from '../components/knowledge/severity';
 import type { Troubleshooting, TroubleshootingSeverity } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeTroubleshootingEditor: { id?: string } };
 
@@ -205,12 +206,8 @@ export default function KnowledgeTroubleshootingEditorScreen() {
         {field('Заголовок', title, setTitle, { placeholder: 'Напр.: Стук в подвеске на кочках' })}
 
         <View style={styles.twoCol}>
-          <View style={{ flex: 1 }}>
-            {field('Система', system, setSystem, { placeholder: 'Двигатель' })}
-          </View>
-          <View style={{ flex: 1 }}>
-            {field('Марка', carMake, setCarMake, { placeholder: 'Lada' })}
-          </View>
+          <View style={{ flex: 1 }}>{field('Система', system, setSystem, { placeholder: 'Двигатель' })}</View>
+          <View style={{ flex: 1 }}>{field('Марка', carMake, setCarMake, { placeholder: 'Lada' })}</View>
         </View>
 
         {/* Severity segment */}
@@ -228,7 +225,10 @@ export default function KnowledgeTroubleshootingEditorScreen() {
                 }}
                 style={[styles.segmentItem, active && { backgroundColor: palette.bg.card }]}
               >
-                <Text variant="bodyEmph" style={{ color: active ? sev?.color ?? palette.text.primary : palette.text.secondary }}>
+                <Text
+                  variant="bodyEmph"
+                  style={{ color: active ? (sev?.color ?? palette.text.primary) : palette.text.secondary }}
+                >
                   {sev?.label}
                 </Text>
               </Pressable>
@@ -236,7 +236,11 @@ export default function KnowledgeTroubleshootingEditorScreen() {
           })}
         </View>
 
-        {field('Симптом', symptom, setSymptom, { placeholder: 'Что наблюдает клиент / мастер', multiline: true, minHeight: 80 })}
+        {field('Симптом', symptom, setSymptom, {
+          placeholder: 'Что наблюдает клиент / мастер',
+          multiline: true,
+          minHeight: 80,
+        })}
         {field('Причина', cause, setCause, { placeholder: 'Вероятная причина', multiline: true, minHeight: 80 })}
         {field('Решение (Markdown)', solution, setSolution, {
           placeholder: '1. Проверить…\n2. Заменить…',

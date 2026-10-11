@@ -17,7 +17,7 @@
  * sequential-unlock state and the «N из M» counters refresh everywhere.
  */
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,6 +34,7 @@ import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { KnowledgeCourse, KnowledgeLesson, LessonProgress } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeLesson: { courseId: string; lessonId: string; title?: string } };
 

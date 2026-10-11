@@ -1,7 +1,9 @@
+import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  Eye,
   Check as CheckIcon,
   ChevronRight,
   FileText,
@@ -17,6 +19,7 @@ import {
 import toast from 'react-hot-toast';
 import { checkTemplatesApi, type CheckTemplateServiceInput } from '../api/services';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
+import { templateProductCost } from '../../../shared/utils/templateProducts';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
@@ -94,12 +97,10 @@ function templateSummary(t: CheckTemplate): string {
 
 // Общие данные. Оба модала переиспользуют одни query-ключи — React Query
 // дедуплицирует; staleTime 60с как у остальных справочников кассы.
-function useTemplatesData() {
-  const templatesQuery = useQuery<CheckTemplate[]>({
-    queryKey: ['check-templates'],
-    queryFn: async () => (await checkTemplatesApi.list()).data,
-    staleTime: 60_000,
-  });
+function useTemplatesData(isOpen: boolean) {
+  const templatesQuery = useQuery<CheckTemplate[]>(
+    templatePickerQueryOptions(async () => (await checkTemplatesApi.list()).data, isOpen),
+  );
   const foldersQuery = useQuery<CheckTemplateFolder[]>({
     queryKey: ['check-template-folders'],
     queryFn: async () => (await checkTemplatesApi.folders.list()).data,
@@ -111,6 +112,7 @@ function useTemplatesData() {
     isLoading: templatesQuery.isLoading || foldersQuery.isLoading,
     isError: templatesQuery.isError || foldersQuery.isError,
     isFetching: templatesQuery.isFetching || foldersQuery.isFetching,
+    isPaused: templatesQuery.isPaused || foldersQuery.isPaused,
     refetch: () => {
       templatesQuery.refetch();
       foldersQuery.refetch();
@@ -140,7 +142,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
 
-  const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData();
+  const { templates, folders, isLoading, isError, isFetching, isPaused, refetch } = useTemplatesData(isOpen);
 
   const [mode, setMode] = useState<'pick' | 'manage'>('pick');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -149,6 +151,12 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const [newFolderName, setNewFolderName] = useState('');
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [folderDraft, setFolderDraft] = useState('');
+  const [viewTemplateId, setViewTemplateId] = useState<string | null>(null);
+  const viewTemplate = templates.find((template) => template.id === viewTemplateId);
+  const setViewTemplate = (template: CheckTemplate | null) => {
+    setViewTemplateId(template?.id ?? null);
+    if (template) void refetch();
+  };
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateDraft, setTemplateDraft] = useState('');
   // Подтверждения удаления — ConfirmDialog вместо window.confirm.
@@ -276,10 +284,13 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
 
   // ── Рендер: выбор шаблона ─────────────────────────────────────────────
   const renderPickTemplateRow = (t: CheckTemplate, depth: number) => (
-    <li key={t.id}>
+    <li key={t.id} className="flex items-center">
       <button
         type="button"
-        onClick={() => onApply(t)}
+        disabled={isFetching || isError || isPaused}
+        onClick={() => {
+          if (canApplyTemplateSnapshot({ isFetching, isError, isPaused })) onApply(t);
+        }}
         className={cn(rowBtn, 'group', focusRing)}
         style={{ paddingLeft: 12 + depth * 18 }}
       >
@@ -293,6 +304,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
         </span>
         <ChevronRight className="h-4 w-4 flex-shrink-0 text-ink-4 group-hover:text-accent" aria-hidden="true" />
       </button>
+      <IconButton icon={Eye} label={`Посмотреть шаблон: ${t.name}`} onClick={() => setViewTemplate(t)} />
     </li>
   );
 
@@ -505,6 +517,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               </div>
               <p className="text-xs text-ink-3">{templateSummary(t)}</p>
             </div>
+            <IconButton icon={Eye} label={`Посмотреть шаблон: ${t.name}`} onClick={() => setViewTemplate(t)} />
             {canEdit && (
               <Select
                 size="sm"
@@ -599,9 +612,13 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               Повторить
             </Button>
           </div>
-        ) : isLoading ? (
+        ) : isPaused && mode === 'pick' ? (
+          <p className="py-8 text-center text-sm text-ink-2" role="alert">
+            Нет соединения. Для применения шаблона нужно обновить цены.
+          </p>
+        ) : isLoading || (mode === 'pick' && isFetching) ? (
           <p className="py-8 text-center text-sm text-ink-3" role="status">
-            Загружаем шаблоны…
+            Обновляем цены шаблонов…
           </p>
         ) : mode === 'pick' ? (
           isEmpty ? (
@@ -693,6 +710,74 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
         )}
       </Modal>
 
+      <Modal isOpen={!!viewTemplate} onClose={() => setViewTemplate(null)} title={viewTemplate?.name ?? 'Шаблон'}>
+        <p className="mb-4 text-sm text-ink-3">Актуальные цены каталога</p>
+        {isFetching && (
+          <p role="status" className="py-4 text-sm text-ink-3">
+            Обновляем цены…
+          </p>
+        )}
+        {isError && (
+          <p role="alert" className="py-4 text-sm text-ink-2">
+            Не удалось обновить цены.{' '}
+            <Button variant="secondary" onClick={refetch}>
+              Повторить
+            </Button>
+          </p>
+        )}
+        <ul className="divide-y divide-line">
+          {!isFetching &&
+            !isError &&
+            viewTemplate?.services.map((line, index) => (
+              <li key={`s${index}`} className="py-3">
+                <div className="flex justify-between gap-3">
+                  <span>{line.name}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {line.priceType === 'range' ? `${line.minPrice}–${line.maxPrice}` : line.price} ₽
+                    {line.quantity > 1 ? ` × ${line.quantity}` : ''}
+                  </span>
+                </div>
+                {line.catalogStatus === 'unavailable' && (
+                  <p className="text-xs text-ink-3">Нет в каталоге · цена не подтверждена</p>
+                )}
+              </li>
+            ))}
+          {!isFetching &&
+            !isError &&
+            viewTemplate?.products.map((line, index) => (
+              <li key={`p${index}`} className="py-3">
+                <div className="flex justify-between gap-3">
+                  <span>{line.name}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {line.sellPrice} ₽ × {line.quantity}
+                  </span>
+                </div>
+                {line.catalogStatus === 'unavailable' && (
+                  <p className="text-xs text-ink-3">Нет в каталоге · цена не подтверждена</p>
+                )}
+                {viewTemplate.costStatus && (
+                  <p className="mt-1 text-sm text-ink-2">
+                    {line.catalogStatus === 'manual' ? 'Себестоимость указана вручную:' : 'Себестоимость:'}{' '}
+                    {templateProductCost(line) !== undefined
+                      ? `${line.costPrice} ₽ × ${line.quantity} = ${templateProductCost(line)?.toLocaleString('ru-RU')} ₽`
+                      : 'Нет данных'}
+                  </p>
+                )}
+              </li>
+            ))}
+        </ul>
+        {!isFetching && !isError && viewTemplate?.costStatus && (
+          <div className="mt-4 flex justify-between gap-3 rounded-xl bg-surface-2 p-4 font-semibold">
+            <span>Себестоимость шаблона</span>
+            <span>
+              {viewTemplate.costStatus === 'known'
+                ? `${viewTemplate.productCostTotal?.toLocaleString('ru-RU')} ₽`
+                : 'Нет данных'}
+            </span>
+          </div>
+        )}
+      </Modal>
+
       <ConfirmDialog
         isOpen={!!deleteFolderTarget}
         onClose={() => setDeleteFolderTarget(null)}
@@ -732,7 +817,7 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
 
-  const { folders } = useTemplatesData();
+  const { folders } = useTemplatesData(isOpen);
   const flatFolders = useMemo(() => flattenTree(buildFolderTree(folders.filter((f) => !!f.isShared))), [folders]);
   const flatPersonalFolders = useMemo(
     () => flattenTree(buildFolderTree(folders.filter((f) => !f.isShared))),

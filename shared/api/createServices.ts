@@ -40,6 +40,8 @@ import type {
   ProductPriceHistoryEntry,
   Service,
   ServicePriceHistoryEntry,
+  ServiceFolder,
+  ServiceExecutionHistoryEntry,
   Check,
   TrashedCheck,
   ChecksBoard,
@@ -918,6 +920,15 @@ export function createServicesApi(api: HttpClient) {
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
     priceHistory: (id: string) => api.get<ServicePriceHistoryEntry[]>(`/services/${id}/price-history`),
+    executionHistory: (id: string, params?: PaginationParams) =>
+      api.get<PaginatedResponse<ServiceExecutionHistoryEntry>>(`/services/${id}/execution-history`, { params }),
+    folders: {
+      list: () => api.get<ServiceFolder[]>('/services/folders'),
+      create: (path: string) => api.post<ServiceFolder>('/services/folders', { path }),
+      rename: (path: string, name: string, parentPath?: string | null) =>
+        api.patch<ServiceFolder>('/services/folders', { path, name, parentPath }),
+      remove: (path: string) => api.delete('/services/folders', { params: { path } }),
+    },
     exportCatalog: () => api.get<Service[]>('/services/export'),
     previewImport: (rows: ServiceImportRow[]) =>
       api.post<ServiceImportPreview>('/services/import/preview', { rows }, { timeout: 60_000 }),
@@ -940,6 +951,9 @@ export function createChecksApi(api: HttpClient) {
     // closed checks, absent → unfiltered (legacy behaviour).
     getAll: (params?: ChecksParams & { isDeferred?: boolean }) =>
       api.get<PaginatedResponse<Check>>('/checks', { params }),
+    clientHistory: (clientId: string, params?: { limit?: number; page?: number; cursor?: string; carId?: string }) =>
+      api.get<PaginatedResponse<Check>>(`/checks/client-history/${clientId}`, { params }),
+    clientHistoryCheck: (clientId: string, id: string) => api.get<Check>(`/checks/client-history/${clientId}/${id}`),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
     /**
      * v3.0.1 ФИЧА 3 — отложенные чеки для карточки-напоминания на главной.
@@ -1985,7 +1999,8 @@ export function createCheckPhotosApi(api: HttpClient) {
 
 export function createCheckTemplatesApi(api: HttpClient) {
   return {
-    list: () => api.get<CheckTemplate[]>('/check-templates'),
+    // Both clients preserve server product sources through apply/save/offline.
+    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1' } }),
     /**
      * `folderId` — put the new template into a folder in the matching scope.
      * `shared: true` — publish as a tenant-wide template; requires the explicit

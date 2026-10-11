@@ -1,5 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Modal as RNModal, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingView, KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
@@ -49,42 +50,47 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
   const insets = useSafeAreaInsets();
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardProvider>
-        <ModalBlurBackdrop onPress={onClose} />
-        {/* pointerEvents="box-none": сам overlay (flex:1, поверх бэкдропа) НЕ
+      <BottomTabBarHeightContext.Provider value={0}>
+        <KeyboardProvider>
+          <ModalBlurBackdrop onPress={onClose} />
+          {/* pointerEvents="box-none": сам overlay (flex:1, поверх бэкдропа) НЕ
             перехватывает тапы — тап МИМО карточки проваливается на
             ModalBlurBackdrop под ним → закрытие по фону (Round 11 #15,
             регресс от keyboard-обёртки). Тап по карточке и полям работает
             как обычно (карточка — дочерний touch-target). */}
-        <KeyboardAvoidingView behavior="padding" style={styles.keyboardHost} pointerEvents="box-none">
-          <View
-            style={[styles.overlay, { paddingTop: insets.top + spacing[3], paddingBottom: insets.bottom + spacing[3] }]}
-            pointerEvents="box-none"
-          >
-            <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
-              <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
-              <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-                <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
-                <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
-                  <Ionicons name="close" size={20} color={palette.text.tertiary} />
-                </TouchableOpacity>
+          <KeyboardAvoidingView behavior="padding" style={styles.keyboardHost} pointerEvents="box-none">
+            <View
+              style={[
+                styles.overlay,
+                { paddingTop: insets.top + spacing[3], paddingBottom: insets.bottom + spacing[3] },
+              ]}
+              pointerEvents="box-none"
+            >
+              <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
+                <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
+                <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+                  <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
+                  <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
+                    <Ionicons name="close" size={20} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                </View>
+                <KeyboardAwareScrollView
+                  style={styles.body}
+                  contentContainerStyle={styles.bodyContent}
+                  // Активное поле остаётся видимым над клавиатурой с небольшим
+                  // запасом (авто-скролл к фокусу, не «поднять весь блок»).
+                  bottomOffset={spacing[6]}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {children}
+                </KeyboardAwareScrollView>
               </View>
-              <KeyboardAwareScrollView
-                style={styles.body}
-                contentContainerStyle={styles.bodyContent}
-                // Активное поле остаётся видимым над клавиатурой с небольшим
-                // запасом (авто-скролл к фокусу, не «поднять весь блок»).
-                bottomOffset={spacing[6]}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="interactive"
-                showsVerticalScrollIndicator={false}
-              >
-                {children}
-              </KeyboardAwareScrollView>
             </View>
-          </View>
-        </KeyboardAvoidingView>
-      </KeyboardProvider>
+          </KeyboardAvoidingView>
+        </KeyboardProvider>
+      </BottomTabBarHeightContext.Provider>
     </RNModal>
   );
 }

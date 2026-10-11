@@ -41,6 +41,7 @@ import {
 } from '../common/timezone';
 import { ComparePeriod, previousComparableWindow } from '../common/period-compare';
 import { hydrateOmittedCheckLines, mapServiceLinePrice, saveCheckServiceLines } from './check-service-prices';
+import { resolveTemplateProductSources } from '../check-templates/template-product-source';
 
 /** Actor context for visibility decisions (checks_view_all). */
 interface ChecksActor {
@@ -1105,7 +1106,48 @@ export class ChecksService {
     };
   }
 
-  async getAll(tenantID: string, query: any, actor?: ChecksActor) {
+  async getClientHistory(clientId: string, tenantID: string, query: Record<string, string>, actor: ChecksActor) {
+    await this.clients.getById(clientId, tenantID, actorPointId(actor));
+    if (query.carId && (typeof query.carId !== 'string' || !UUID_RE.test(query.carId)))
+      throw new BadRequestException({ message: 'Некорректный автомобиль' });
+    if (query.page !== undefined && (!Number.isSafeInteger(Number(query.page)) || Number(query.page) < 1)) {
+      throw new BadRequestException({ message: 'Некорректная страница истории' });
+    }
+    // Only pagination and an optional car filter are accepted. The URL owns the client, and
+    // callers cannot turn this read scope into a journal/board query.
+    return this.getAll(
+      tenantID,
+      {
+        clientId,
+        ...(query.carId ? { carId: query.carId } : {}),
+        limit: query.limit,
+        page: query.page,
+        ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+      },
+      actor,
+      true,
+    );
+  }
+
+  async getClientHistoryCheck(id: string, clientId: string, tenantID: string, actor: ChecksActor) {
+    await this.clients.getById(clientId, tenantID, actorPointId(actor));
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM checks WHERE id=$1 AND tenant_id=$2 AND client_id=$3 AND deleted_at IS NULL',
+      [id, tenantID, clientId],
+    );
+    if (!rows.length) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    const check = await this.getById(id, tenantID, actor);
+    if (!this.canSeeProfit(actor) && !userHasPermission(actor, 'warehouse_manage')) {
+      check.products = check.products.map((line: { costPrice: number; totalCost: number }) => ({
+        ...line,
+        costPrice: 0,
+        totalCost: 0,
+      }));
+    }
+    return check;
+  }
+
+  async getAll(tenantID: string, query: any, actor?: ChecksActor, clientHistory = false) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -1149,7 +1191,7 @@ export class ChecksService {
     // condition IS «не owner-class И нет checks_view_all». Layered ON TOP of
     // the tenant scope above — never widens beyond the tenant. Flows into
     // COUNT + page query (offset/keyset).
-    if (actor && !userHasPermission(actor, 'checks_view_all')) {
+    if (!clientHistory && actor && !userHasPermission(actor, 'checks_view_all')) {
       where += ` AND (ch.master_id = $${idx} OR EXISTS (
         SELECT 1 FROM check_service_lines sl
          WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
@@ -2810,7 +2852,7 @@ export class ChecksService {
     }
 
     const services = dto.services || [];
-    const products = dto.products || [];
+    let products = dto.products || [];
 
     // ── POS shift-mode role-gate (092) ───────────────────────────────────
     // When the tenant's shift-mode is ON, a NON-cashier actor (a master without
@@ -2918,6 +2960,13 @@ export class ChecksService {
       await client.query('BEGIN');
 
       // ── Cross-tenant integrity guard ─────────────────────────────────
+      products = await resolveTemplateProductSources(
+        client,
+        tenantID,
+        actor?.userID ?? userID,
+        products,
+        actorPointId(actor),
+      );
       // Every referenced ID (master, client, car, services, products) MUST
       // belong to the caller's tenant. Without this, a director from
       // tenant A who knows a UUID from tenant B could persist a check
@@ -3488,7 +3537,8 @@ export class ChecksService {
           this.logger.error(`Check create idempotent-recovery error: ${recoveryErr}`);
         }
       }
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
       // Log the full reason server-side (pino + Sentry) for diagnosis; return a
       // generic message to the client so raw SQL/internals are never exposed.
       this.logger.error(`Check create error: ${err}`);
@@ -4370,7 +4420,14 @@ export class ChecksService {
       const preserve = { services: dto.services === undefined, products: dto.products === undefined };
       dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
       const services = dto.services || [];
-      const products = dto.products || [];
+      dto.products = await resolveTemplateProductSources(
+        client,
+        tenantID,
+        actor?.userID ?? actorUserId,
+        dto.products || [],
+        actorPointId(actor),
+      );
+      const products = dto.products;
 
       // ── Cross-tenant integrity guard (same as create()) ───────────────
       // fullUpdate persists client-supplied master/client/car/service/product
@@ -5296,6 +5353,14 @@ export class ChecksService {
       // client-supplied reference must belong to this tenant.
       const preserve = { services: dto.services === undefined, products: dto.products === undefined };
       dto = { ...dto, ...(await hydrateOmittedCheckLines(client, tenantID, id, preserve)) };
+      if (dto.products)
+        dto.products = await resolveTemplateProductSources(
+          client,
+          tenantID,
+          actor?.userID ?? actorUserId,
+          dto.products,
+          actorPointId(actor),
+        );
       const services = dto.services || [];
       const products = dto.products || [];
       if (dto.masterId) await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');

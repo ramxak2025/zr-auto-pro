@@ -9,9 +9,8 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
-  ScrollView,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Swipeable } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -34,6 +33,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Supplier } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // Top-level segment: the «Поставщики» section now hosts BOTH the supplier
 // list and «Заказы поставщикам» (purchase orders) under one segmented control,
@@ -711,7 +711,7 @@ export default function SuppliersScreen() {
             <Text style={[styles.pickerEmptyText, { color: palette.text.tertiary }]}>Контрагенты не найдены</Text>
           </View>
         ) : (
-          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
             {defectPickerSuppliers.map((s) => {
               const hasDebt = s.currentDebt > 0;
               return (

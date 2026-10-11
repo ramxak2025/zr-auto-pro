@@ -24,7 +24,6 @@ import { captureDataSession } from '../contexts/dataSession';
 import React from 'react';
 import {
   View,
-  ScrollView,
   StyleSheet,
   Switch,
   ActivityIndicator,
@@ -57,6 +56,7 @@ import type {
   PushDiagnostics,
   PushTokenInfo,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const QK_PREFS = ['notification-preferences'] as const;
 const QK_SETTINGS = ['notification-settings'] as const;

@@ -16,7 +16,7 @@
  * needs and it keeps the screen fast and predictable.
  */
 import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -43,6 +43,7 @@ import type {
   KnowledgeBlock,
   KnowledgeCategory,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = { KnowledgeEditor: { id?: string; categoryId?: string; type?: KnowledgeArticleType } };
 

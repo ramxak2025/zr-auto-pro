@@ -25,8 +25,7 @@ test(
   async (t) => {
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.equal(url.port, '55438');
-    assert.equal(url.pathname, '/autexa_oct8_test');
+    assert.ok((url.port === '55438' && url.pathname === '/autexa_oct8_test') || (url.port === '55440' && url.pathname === '/autexa_oct12_core'), 'disposable QA database only');
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';
     appUrl.password = process.env.OCT10_PRICING_APP_PASSWORD;

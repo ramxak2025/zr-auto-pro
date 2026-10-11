@@ -22,8 +22,8 @@
  * server-side). Android-compatible — expo-camera + RN primitives only.
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { FlashList, type FlashListRef } from '@shopify/flash-list';
+import { View, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { type FlashListRef } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -45,6 +45,7 @@ import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '.
 import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
 import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
 import type { Product, PaginatedResponse, Warehouse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // Тот же лимит, что у «Склада»: пересчёт по неполной номенклатуре «сходился»
 // на хвосте каталога, которого просто не было в выдаче, — и недостача с

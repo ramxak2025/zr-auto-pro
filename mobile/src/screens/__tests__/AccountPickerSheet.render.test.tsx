@@ -44,13 +44,20 @@ jest.mock('react-native', () => ({
   KeyboardAvoidingView: 'KeyboardAvoidingView',
   Modal: 'Modal',
   Platform: { OS: 'ios' },
+  useWindowDimensions: () => ({ width: 390, height: 844 }),
   Pressable: 'Pressable',
   ScrollView: 'ScrollView',
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
   TextInput: 'TextInput',
   View: 'View',
 }));
-jest.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'SafeAreaView' }));
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: 'SafeAreaView',
+  useSafeAreaInsets: () => ({ top: 48, bottom: 34, left: 0, right: 0 }),
+}));
+jest.mock('expo-image', () => ({ Image: 'Image' }));
+jest.mock('../../api/axios', () => ({ getImageUrl: (path: string) => path }));
+jest.mock('../../hooks/useTabBarHeight', () => ({ useTabBarHeight: () => 108 }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../platform/Typography', () => ({ Text: 'Text' }));
 jest.mock('../../contexts/AuthContext', () => ({

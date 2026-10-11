@@ -23,7 +23,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * Только presentation + config: контракт (`planningApi`, типы) уже существует.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Switch, Platform, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, StyleSheet, Switch, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -50,6 +50,7 @@ import type {
   User,
 } from '../../../shared/types';
 import { formatMoney, roleLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ── Метаданные категорий постоянных расходов ────────────────────────────────
 

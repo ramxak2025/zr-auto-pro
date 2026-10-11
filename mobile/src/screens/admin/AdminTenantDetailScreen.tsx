@@ -18,17 +18,7 @@
  */
 import React from 'react';
 import { AdminSheet } from './adminSheet';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  Alert,
-  ActivityIndicator,
-  TextInput,
-  Switch,
-  Share,
-} from 'react-native';
+import { View, StyleSheet, Pressable, Alert, ActivityIndicator, TextInput, Switch, Share } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -71,6 +61,7 @@ import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [

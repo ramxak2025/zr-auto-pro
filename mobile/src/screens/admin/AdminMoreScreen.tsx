@@ -12,7 +12,7 @@
  * to re-wire it.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
+import { View, StyleSheet, Pressable, RefreshControl } from 'react-native';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
@@ -29,6 +29,7 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { ManagerSummary, RegistrationRequest } from '../../../../shared/types';
 import { balanceCaption, balanceColor, useAdminMode } from './adminShared';
 import AccountPickerSheet from '../AccountPickerSheet';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 export default function AdminMoreScreen() {
   const navigation = useNavigation<any>();

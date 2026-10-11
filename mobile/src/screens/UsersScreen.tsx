@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -37,6 +36,7 @@ import { haptic } from '../platform/haptics';
 import type { User, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'purple',
@@ -694,7 +694,7 @@ export default function UsersScreen() {
         onClose={() => setDirectionsModalOpen(false)}
         title="Направления сотрудников"
       >
-        <ScrollView contentContainerStyle={styles.formContent}>
+        <ScrollView contentContainerStyle={styles.formContent} reserveBottomNavigation={false}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
             Одно направление на сотрудника. Удаление сбросит назначения.
           </Text>
@@ -774,7 +774,11 @@ export default function UsersScreen() {
 
       {/* Create/Edit Modal */}
       <Modal visible={modalOpen} onClose={closeModal} title={editingUser ? 'Редактировать' : 'Новый сотрудник'}>
-        <ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.formContent}
+          showsVerticalScrollIndicator={false}
+          reserveBottomNavigation={false}
+        >
           <View style={styles.formField}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>ФИО</Text>
             <TextInput
@@ -1256,6 +1260,7 @@ export default function UsersScreen() {
         <ScrollView
           contentContainerStyle={{ gap: spacing[4], paddingBottom: spacing[4] }}
           showsVerticalScrollIndicator={false}
+          reserveBottomNavigation={false}
         >
           {/* Global product percent */}
           <View style={styles.commGlobalCard}>
@@ -1398,7 +1403,7 @@ export default function UsersScreen() {
             placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
-          <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
             {filteredProducts.map((p) => (
               <TouchableOpacity
                 key={p.id}

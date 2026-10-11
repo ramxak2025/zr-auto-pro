@@ -20,7 +20,7 @@
  * Android-совместимо: только кросс-платформенные примитивы.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
@@ -39,6 +39,7 @@ import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { Check, ChecksBoard } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 

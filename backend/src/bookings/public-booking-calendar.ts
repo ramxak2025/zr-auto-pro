@@ -31,6 +31,7 @@ export interface BookingPageRow {
   point_id: string | null;
   slug: string;
   public_code: string;
+  short_code?: string;
   published: boolean;
   revision: number;
   settings: BookingPageSettings;
@@ -40,6 +41,8 @@ export interface BookingResource {
   id: string;
   resource_key: string;
   full_name: string;
+  avatar?: string | null;
+  profession?: string | null;
   days_off: number[];
 }
 interface PlannedDay {
@@ -161,8 +164,9 @@ export async function pageResources(
   page: BookingPageRow,
 ): Promise<BookingResource[]> {
   const { rows } = await client.query<BookingResource>(
-    `SELECT u.id,r.resource_key,u.full_name,COALESCE(u.days_off,'[]'::jsonb) AS days_off
+    `SELECT u.id,r.resource_key,u.full_name,u.avatar,d.name AS profession,COALESCE(u.days_off,'[]'::jsonb) AS days_off
     FROM public_booking_resources r JOIN users u ON u.id=r.user_id AND u.tenant_id=r.tenant_id
+    LEFT JOIN employee_directions d ON d.id=u.direction_id AND d.tenant_id=u.tenant_id
     WHERE r.page_id=$1 AND r.tenant_id=$2 AND u.is_active AND u.dismissed_at IS NULL AND u.purged_at IS NULL
     AND u.role NOT IN ('manager','superadmin') AND ($3::uuid IS NULL OR autexa_point_is_allowed(u.tenant_id,u.id,$3::uuid)) ORDER BY u.id`,
     [page.id, page.tenant_id, page.point_id],

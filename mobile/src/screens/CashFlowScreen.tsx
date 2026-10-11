@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
@@ -32,6 +31,7 @@ import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { User } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ── Android LayoutAnimation enable ──────────────────────────────────────
 // Required for collapsible day cards to animate height changes on Android.
@@ -1488,7 +1488,7 @@ export default function CashFlowScreen() {
                 Modal'е иногда схлопывает контейнер до 0), чем пользы.
                 Обычный ScrollView гарантирует, что строки видны и пресс
                 по любой из них срабатывает. */}
-            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
               {pickerEmployees.map((item) => (
                 <EmployeePickerRow
                   key={item.id}

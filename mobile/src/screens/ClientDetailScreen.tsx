@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -65,6 +64,7 @@ import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
 import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // Incremental history rendering (RNPERF-6): the ScrollView is not
 // virtualized, so building 200 CheckRow trees on mount is pure waste —
@@ -314,7 +314,7 @@ export default function ClientDetailScreen() {
     queryFn: async () => {
       const res = isRetail
         ? await checksApi.getAll({ retail: 'true', limit: EAGER_LIMIT })
-        : await checksApi.getAll({ clientId: id, limit: EAGER_LIMIT });
+        : await checksApi.clientHistory(id, { limit: EAGER_LIMIT });
       const raw = res.data as { data?: Check[] } | Check[];
       return Array.isArray(raw) ? raw : raw.data || [];
     },
@@ -326,7 +326,7 @@ export default function ClientDetailScreen() {
     queryFn: async () => {
       const res = isRetail
         ? await checksApi.getAll({ retail: 'true', limit: FULL_LIMIT })
-        : await checksApi.getAll({ clientId: id, limit: FULL_LIMIT });
+        : await checksApi.clientHistory(id, { limit: FULL_LIMIT });
       const raw = res.data as { data?: Check[] } | Check[];
       return Array.isArray(raw) ? raw : raw.data || [];
     },
@@ -900,10 +900,14 @@ export default function ClientDetailScreen() {
     (checkId: string) => {
       navigation.navigate('Main', {
         screen: 'Checks',
-        params: { screen: 'CheckDetail', initial: false, params: { id: checkId } },
+        params: {
+          screen: 'CheckDetail',
+          initial: false,
+          params: { id: checkId, ...(!isRetail ? { clientId: id } : {}) },
+        },
       });
     },
-    [navigation],
+    [navigation, id, isRetail],
   );
 
   // «История» quick action — expand the full history and smooth-scroll the

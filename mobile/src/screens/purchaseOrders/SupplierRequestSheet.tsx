@@ -18,13 +18,14 @@
  * Android-safe: только Share + Linking из react-native, без iOS-only API.
  */
 import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Share, Linking, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Share, Linking, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet } from '../../components/BottomSheet';
 import { useColors } from '../../contexts/ThemeContext';
 import { haptic } from '../../platform/haptics';
 import { colors, borderRadius, spacing } from '../../theme';
 import { buildSupplierRequestText, buildWhatsappLink, type SupplierRequestLine } from './purchaseOrderHelpers';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 
 interface SupplierRequestSheetProps {
   visible: boolean;
@@ -83,6 +84,7 @@ export default function SupplierRequestSheet({
       <ScrollView
         style={[styles.preview, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
         contentContainerStyle={styles.previewContent}
+        reserveBottomNavigation={false}
       >
         <Text style={[styles.previewText, { color: palette.text.primary }]} selectable>
           {text}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { useIosSurface } from '../../platform/iosSurface';
 import { spacing } from '../../theme';
 import { formatDateTime, useAdminMode } from './adminShared';
 import { actionIcon, actionLabel } from './auditActions';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 const PAGE_SIZE = 50;
 

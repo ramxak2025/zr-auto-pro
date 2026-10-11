@@ -13,7 +13,7 @@ import {
   Modal as RNModal,
   Platform,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -57,6 +57,7 @@ import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, parseQtyInput, unitLabel } from 
 import { parseMoneyInput, readNumericField } from '../utils/numberInput';
 import { extractApiErrorMessage } from '../utils/apiError';
 import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -3491,6 +3492,7 @@ export default function ProductsScreen() {
                 </View>
               ) : null
             }
+            reserveBottomNavigation={false}
           />
         </SafeAreaView>
       </RNModal>

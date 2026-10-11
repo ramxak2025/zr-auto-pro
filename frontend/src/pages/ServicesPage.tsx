@@ -1,15 +1,16 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
+  Folder,
+  FolderPlus,
+  ChevronRight,
   Wrench,
   Pencil,
   Trash2,
   Eye,
   EyeOff,
   ShieldCheck,
-  History,
-  FileSpreadsheet,
   Download,
   Upload,
 } from 'lucide-react';
@@ -17,11 +18,9 @@ import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Badge,
   Button,
   Checkbox,
   ConfirmDialog,
-  DataTable,
   Field,
   IconButton,
   Input,
@@ -31,10 +30,15 @@ import {
   SearchInput,
   Toolbar,
 } from '../ui';
-import type { DataTableColumn } from '../ui';
-import type { Service, PaginatedResponse, ServiceVisibilityConfig, ServicePriceHistoryEntry } from '../types';
+import type {
+  Service,
+  ServiceVisibilityConfig,
+  ServicePriceHistoryEntry,
+  ServiceFolder,
+  ServiceExecutionHistoryEntry,
+} from '../types';
 import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
-import { countLabel, formatPercent, parseNumberInput } from '../components/warehouse/format';
+import { countLabel, parseNumberInput } from '../components/warehouse/format';
 import { useUrlParams } from '../components/warehouse/useUrlParams';
 import type { ServiceImportPreview } from '../../../shared/api/types';
 import {
@@ -43,6 +47,8 @@ import {
   parseServiceImportMatrix,
   serviceExportMatrix,
 } from '../../../shared/utils/serviceSpreadsheet';
+import { loadAllPages } from '../../../shared/utils/loadAllPages';
+import { serviceBrowserLevel } from '../../../shared/utils/serviceBrowser';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 
 const FORM_ID = 'service-form';
@@ -92,13 +98,54 @@ export default function ServicesPage() {
   const [importRequestId, setImportRequestId] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [historyTarget, setHistoryTarget] = useState<Service | null>(null);
+  const [historyTab, setHistoryTab] = useState<'work' | 'prices'>('work');
+  const [historyPage, setHistoryPage] = useState(1);
+  useEffect(() => {
+    setHistoryPage(1);
+    setHistoryTab('work');
+  }, [historyTarget?.id]);
+  const executionQuery = useQuery({
+    queryKey: ['service-executions', historyTarget?.id, historyPage],
+    queryFn: async () =>
+      historyTarget
+        ? (await servicesApi.executionHistory(historyTarget.id, { page: historyPage, limit: 20 })).data
+        : null,
+    enabled: !!historyTarget && historyTab === 'work',
+  });
+  const folderQuery = useQuery<ServiceFolder[]>({
+    queryKey: ['service-folders'],
+    queryFn: async () => (await servicesApi.folders.list()).data,
+  });
+  const [folderEditor, setFolderEditor] = useState<{ path: string | null; name: string; parentPath: string } | null>(
+    null,
+  );
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [deleteFolder, setDeleteFolder] = useState<string | null>(null);
+  const saveFolder = async () => {
+    if (!folderEditor || !folderEditor.name.trim() || folderBusy) return;
+    setFolderBusy(true);
+    try {
+      if (folderEditor.path)
+        await servicesApi.folders.rename(folderEditor.path, folderEditor.name.trim(), folderEditor.parentPath);
+      else await servicesApi.folders.create([...activePath, folderEditor.name.trim()].join('/'));
+      setActivePath([]);
+      setFolderEditor(null);
+      invalidateServiceLists();
+      void queryClient.invalidateQueries({ queryKey: ['service-folders'] });
+    } catch {
+      toast.error('Не удалось сохранить папку. Проверьте название и повторите.');
+    } finally {
+      setFolderBusy(false);
+    }
+  };
+
   const historyQuery = useQuery<ServicePriceHistoryEntry[]>({
     queryKey: ['service-price-history', historyTarget?.id],
     queryFn: async () => {
       if (!historyTarget) return [];
       return (await servicesApi.priceHistory(historyTarget.id)).data;
     },
-    enabled: !!historyTarget,
+    enabled: !!historyTarget && historyTab === 'prices',
   });
   const [visibilityTarget, setVisibilityTarget] = useState<
     { kind: 'service'; id: string; label: string } | { kind: 'category'; path: string } | null
@@ -107,12 +154,10 @@ export default function ServicesPage() {
   const [visibilityRuleActive, setVisibilityRuleActive] = useState(false);
   const [folderListOpen, setFolderListOpen] = useState(false);
 
-  const { data, isLoading, isError, isFetching, refetch } = useQuery<PaginatedResponse<Service>>({
-    queryKey: ['services', { search, preferredOnly, limit: 10000 }],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ search, page: 1, limit: 10000, preferredOnly });
-      return res.data;
-    },
+  const { data, isLoading, isError, refetch } = useQuery<Service[]>({
+    queryKey: ['services', { preferredOnly }],
+    queryFn: () =>
+      loadAllPages(async (page, limit) => (await servicesApi.getAll({ page, limit, preferredOnly })).data, 500),
   });
 
   const visibilityConfigQuery = useQuery<ServiceVisibilityConfig>({
@@ -271,7 +316,7 @@ export default function ServicesPage() {
   const openCreate = () => {
     setEditingService(null);
     setName('');
-    setCategory('');
+    setCategory(activePath.join('/'));
     setDefaultPrice('');
     setPriceType('fixed');
     setMinPrice('');
@@ -335,143 +380,14 @@ export default function ServicesPage() {
     else createMutation.mutate(payload);
   };
 
-  const services = data?.data ?? [];
-  const total = data?.total ?? 0;
+  const services = useMemo(() => data ?? [], [data]);
+  const total = services.length;
   const [activePath, setActivePath] = useState<string[]>([]);
-  const { folders, visibleServices } = useMemo(() => {
-    const folderNames = new Set<string>();
-    const visible: Service[] = [];
-    for (const service of services) {
-      const parts = (service.category || '')
-        .split('/')
-        .map((part) => part.trim())
-        .filter(Boolean);
-      if (activePath.some((part, index) => parts[index] !== part)) continue;
-      if (!search && parts.length > activePath.length) folderNames.add(parts[activePath.length]);
-      else if (search || parts.length === activePath.length) visible.push(service);
-    }
-    return {
-      folders: [...folderNames].sort((a, b) => a.localeCompare(b, 'ru')),
-      visibleServices: visible,
-    };
-  }, [services, activePath, search]);
+  const { folders, currentServices: visibleServices } = useMemo(
+    () => serviceBrowserLevel(services, folderQuery.data ?? [], activePath, search),
+    [services, folderQuery.data, activePath, search],
+  );
   const saving = createMutation.isPending || updateMutation.isPending;
-
-  const columns: DataTableColumn<Service>[] = [
-    {
-      key: 'name',
-      header: 'Название',
-      sortable: true,
-      render: (s) => (
-        <span className="flex min-w-0 items-center gap-2.5">
-          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
-            <Wrench className="h-4 w-4" aria-hidden="true" />
-          </span>
-          <span className="truncate font-medium text-ink">{s.name}</span>
-        </span>
-      ),
-    },
-    {
-      key: 'category',
-      header: 'Категория',
-      hideBelow: 'sm',
-      render: (s) =>
-        s.category ? (
-          <span className="inline-flex max-w-full items-center gap-1.5">
-            <Badge outline>{s.category}</Badge>
-            {canManage && (
-              <IconButton
-                label={`Настроить видимость папки ${s.category}`}
-                icon={ShieldCheck}
-                size="sm"
-                disabled={!visibilityConfigQuery.isSuccess}
-                onClick={() => openVisibilityEditor({ kind: 'category', path: s.category! })}
-              />
-            )}
-          </span>
-        ) : (
-          <span className="text-ink-3">—</span>
-        ),
-    },
-    {
-      key: 'defaultPrice',
-      header: 'Цена по умолчанию',
-      numeric: true,
-      sortable: true,
-      render: (s) =>
-        s.priceType === 'range' ? (
-          <span className="font-medium text-ink">
-            <Money value={s.minPrice ?? s.defaultPrice} /> – <Money value={s.maxPrice ?? s.defaultPrice} />
-          </span>
-        ) : (
-          <Money value={s.defaultPrice} className="font-medium text-ink" />
-        ),
-    },
-    ...(canManage
-      ? ([
-          {
-            key: 'masterPercent',
-            header: '% мастера',
-            numeric: true,
-            hideBelow: 'md',
-            render: (s) =>
-              s.masterPercent != null ? (
-                <span className="font-medium text-ink-2">{formatPercent(s.masterPercent)}</span>
-              ) : (
-                <span className="text-ink-3">стандарт</span>
-              ),
-          },
-        ] as DataTableColumn<Service>[])
-      : []),
-    {
-      key: 'warrantyDays',
-      header: 'Гарантия',
-      numeric: true,
-      hideBelow: 'md',
-      render: (s) =>
-        s.warrantyDays != null && s.warrantyDays > 0 ? (
-          <span className="text-ink-2">{s.warrantyDays} дн.</span>
-        ) : (
-          <span className="text-ink-3">—</span>
-        ),
-    },
-    ...(canManage
-      ? ([
-          {
-            key: 'actions',
-            header: <span className="sr-only">Действия</span>,
-            interactive: true,
-            align: 'right',
-            width: 184,
-            render: (s) => (
-              <span className="inline-flex items-center justify-end gap-1">
-                <IconButton
-                  label={`Настроить видимость: ${s.name}`}
-                  icon={ShieldCheck}
-                  size="sm"
-                  disabled={!visibilityConfigQuery.isSuccess}
-                  onClick={() => openVisibilityEditor({ kind: 'service', id: s.id, label: s.name })}
-                />
-                <IconButton
-                  label={`История цены: ${s.name}`}
-                  icon={History}
-                  size="sm"
-                  onClick={() => setHistoryTarget(s)}
-                />
-                <IconButton label={`Изменить: ${s.name}`} icon={Pencil} size="sm" onClick={() => openEdit(s)} />
-                <IconButton
-                  label={`Удалить: ${s.name}`}
-                  icon={Trash2}
-                  size="sm"
-                  variant="danger"
-                  onClick={() => setDeleteTarget(s)}
-                />
-              </span>
-            ),
-          },
-        ] as DataTableColumn<Service>[])
-      : []),
-  ];
 
   return (
     <div className="space-y-5">
@@ -510,15 +426,16 @@ export default function ServicesPage() {
       />
 
       <Toolbar>
-        <SearchInput
-          value={search}
-          onChange={(value) => {
-            setActivePath([]);
-            setParam({ q: value, page: null }, { replace: true });
-          }}
-          placeholder="Название или категория…"
-          className="w-full sm:w-72"
-        />
+        <div className="w-full sm:w-auto">
+          <SearchInput
+            value={search}
+            onChange={(value) => {
+              setParam({ q: value, page: null }, { replace: true });
+            }}
+            placeholder="Поиск во всех папках"
+            className="w-full sm:w-72"
+          />
+        </div>
         {canManage && (
           <Button
             variant="secondary"
@@ -526,7 +443,7 @@ export default function ServicesPage() {
             disabled={!visibilityConfigQuery.isSuccess}
             onClick={() => setFolderListOpen(true)}
           >
-            Папки
+            Видимость по ролям
           </Button>
         )}
         {!isOwner && (
@@ -564,22 +481,139 @@ export default function ServicesPage() {
         </nav>
       )}
 
-      {!search && folders.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {folders.map((folder) => (
-            <button
-              key={folder}
-              type="button"
-              onClick={() => setActivePath((path) => [...path, folder])}
-              className="flex items-center gap-3 rounded-xl border border-line bg-surface-1 px-4 py-3 text-left hover:bg-surface-2"
-            >
-              <Wrench className="h-4 w-4 text-accent" aria-hidden="true" />
-              <span className="font-medium text-ink">{folder}</span>
-              <span className="ml-auto text-xs text-ink-3">Папка</span>
-            </button>
-          ))}
+      <section className="overflow-hidden rounded-2xl border border-line bg-surface-1">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
+          <div>
+            <h2 className="font-semibold text-ink">
+              {search ? 'Результаты поиска' : (activePath[activePath.length - 1] ?? 'Каталог услуг')}
+            </h2>
+            <p className="mt-1 text-xs text-ink-3">
+              {search
+                ? `${visibleServices.length} найдено во всём каталоге`
+                : `${folders.length} папок · ${visibleServices.length} услуг`}
+            </p>
+          </div>
+          {canManage && !search && (
+            <div className="flex gap-1">
+              {activePath.length > 0 && (
+                <>
+                  <IconButton
+                    icon={Pencil}
+                    label="Переименовать папку"
+                    onClick={() =>
+                      setFolderEditor({
+                        path: activePath.join('/'),
+                        name: activePath[activePath.length - 1] ?? '',
+                        parentPath: activePath.slice(0, -1).join('/'),
+                      })
+                    }
+                  />
+                  <IconButton
+                    icon={Trash2}
+                    label="Удалить папку"
+                    variant="danger"
+                    onClick={() => setDeleteFolder(activePath.join('/'))}
+                  />
+                </>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={FolderPlus}
+                onClick={() => setFolderEditor({ path: null, name: '', parentPath: activePath.join('/') })}
+              >
+                Новая папка
+              </Button>
+            </div>
+          )}
         </div>
-      )}
+        {folderQuery.isError && (
+          <div role="alert" className="p-4 text-sm text-ink-2">
+            Не удалось загрузить папки.{' '}
+            <Button variant="ghost" onClick={() => void folderQuery.refetch()}>
+              Повторить
+            </Button>
+          </div>
+        )}
+        {isLoading ? (
+          <div role="status" className="animate-pulse space-y-3 p-5">
+            {[1, 2, 3, 4].map((n) => (
+              <div key={n} className="h-12 rounded-lg bg-surface-3" />
+            ))}
+          </div>
+        ) : isError ? (
+          <div role="alert" className="p-5">
+            Не удалось загрузить каталог.{' '}
+            <Button variant="secondary" onClick={() => void refetch()}>
+              Повторить
+            </Button>
+          </div>
+        ) : (
+          <div className="divide-y divide-line">
+            {!search &&
+              folders.map(([folder, count]) => (
+                <button
+                  key={folder}
+                  type="button"
+                  onClick={() => setActivePath((path) => [...path, folder])}
+                  className="flex min-h-16 w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <Folder className="h-6 w-6 shrink-0 text-accent" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block break-words font-medium text-ink">{folder}</span>
+                    <span className="text-xs text-ink-3">
+                      {count ? countLabel(count, ['услуга', 'услуги', 'услуг']) : 'Пустая папка'}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 text-ink-3" />
+                </button>
+              ))}
+            {visibleServices.map((service) => (
+              <div key={service.id} className="flex items-center gap-2 px-3 py-2 sm:px-5">
+                <button
+                  type="button"
+                  onClick={() => setHistoryTarget(service)}
+                  className="flex min-h-14 min-w-0 flex-1 flex-col items-start gap-2 rounded-lg p-2 sm:flex-row sm:items-center sm:gap-3 text-left hover:bg-surface-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <Wrench className="hidden h-5 w-5 shrink-0 text-ink-3 sm:block" />
+                  <span className="min-w-0 w-full flex-1 sm:w-auto">
+                    <span className="block break-words font-medium text-ink">{service.name}</span>
+                    {search && <span className="block text-xs text-ink-3">{service.category || 'Без папки'}</span>}
+                  </span>
+                  <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-ink">
+                    {service.priceType === 'range' ? (
+                      <>
+                        <Money value={service.minPrice ?? service.defaultPrice} /> –{' '}
+                        <Money value={service.maxPrice ?? service.defaultPrice} />
+                      </>
+                    ) : (
+                      <Money value={service.defaultPrice} />
+                    )}
+                  </span>
+                  <ChevronRight className="hidden h-4 w-4 shrink-0 text-ink-3 sm:block" />
+                </button>
+              </div>
+            ))}
+            {folders.length === 0 && visibleServices.length === 0 && (
+              <div className="px-5 py-12 text-center">
+                <p className="font-medium text-ink">{search ? 'Ничего не найдено' : 'Папка пока пуста'}</p>
+                <p className="mt-2 text-sm text-ink-3">
+                  {search
+                    ? 'Попробуйте другое название услуги или папки.'
+                    : canManage
+                      ? 'Добавьте услугу или создайте подпапку.'
+                      : 'В этой папке пока нет услуг.'}
+                </p>
+                {canManage && !search && (
+                  <Button className="mt-4" icon={Plus} onClick={openCreate}>
+                    Добавить услугу
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {canManage && visibilityConfigQuery.isError && (
         <div
@@ -593,37 +627,57 @@ export default function ServicesPage() {
         </div>
       )}
 
-      <DataTable
-        rows={visibleServices}
-        rowKey={(s) => s.id}
-        columns={columns}
-        caption="Прайс-лист услуг"
-        isLoading={isLoading}
-        isError={isError}
-        onRetry={() => refetch()}
-        isFetching={isFetching}
-        emptyState={{
-          icon: Wrench,
-          title: search
-            ? 'Ничего не найдено'
-            : preferredOnly
-              ? 'Для вашей роли пока нет предпочтительных услуг'
-              : 'Услуг пока нет',
-          description: search
-            ? `По запросу «${search}» услуг нет — попробуйте другое название`
-            : preferredOnly
-              ? 'Покажите полный каталог или попросите владельца настроить видимость.'
-              : 'Добавьте первую услугу, чтобы выбирать её в чеке',
-          action:
-            !search && preferredOnly
-              ? { label: 'Показать все услуги', onClick: () => setShowAllServices(true) }
-              : canManage && !search
-                ? { label: 'Добавить услугу', onClick: openCreate }
-                : undefined,
+      <Modal
+        isOpen={!!folderEditor}
+        onClose={() => setFolderEditor(null)}
+        title={folderEditor?.path ? 'Переименовать папку' : 'Новая папка'}
+        footer={
+          <Button onClick={() => void saveFolder()} loading={folderBusy} disabled={!folderEditor?.name.trim()}>
+            Сохранить
+          </Button>
+        }
+      >
+        <Field label="Название">
+          <Input
+            autoFocus
+            value={folderEditor?.name ?? ''}
+            onChange={(event) =>
+              setFolderEditor((current) => (current ? { ...current, name: event.target.value } : current))
+            }
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void saveFolder();
+            }}
+          />
+        </Field>
+        {folderEditor?.path && (
+          <Field label="Родительская папка" hint="Пустое поле — корень каталога">
+            <Input
+              value={folderEditor.parentPath}
+              onChange={(event) =>
+                setFolderEditor((current) => (current ? { ...current, parentPath: event.target.value } : current))
+              }
+            />
+          </Field>
+        )}
+      </Modal>
+      <ConfirmDialog
+        isOpen={!!deleteFolder}
+        onClose={() => setDeleteFolder(null)}
+        title="Удалить папку?"
+        message="Услуги из этой папки и подпапок будут перемещены в родительскую папку. История и цены сохранятся."
+        onConfirm={async () => {
+          if (!deleteFolder) return;
+          try {
+            await servicesApi.folders.remove(deleteFolder);
+            setDeleteFolder(null);
+            setActivePath([]);
+            invalidateServiceLists();
+            void queryClient.invalidateQueries({ queryKey: ['service-folders'] });
+          } catch {
+            toast.error('Не удалось удалить папку');
+          }
         }}
       />
-
-      {!search && total > 10000 && <p className="text-sm text-ink-3">Показаны первые 10 000 услуг.</p>}
 
       <Modal
         isOpen={folderListOpen}
@@ -861,40 +915,157 @@ export default function ServicesPage() {
       <Modal
         isOpen={!!historyTarget}
         onClose={() => setHistoryTarget(null)}
-        title="История цены"
-        description={historyTarget?.name}
+        title={historyTarget?.name ?? 'Услуга'}
+        description={historyTarget?.category || 'Без папки'}
       >
-        {historyQuery.isLoading ? <p className="py-4 text-sm text-ink-3">Загружаем историю…</p> : null}
-        {historyQuery.isError ? (
-          <p role="alert" className="py-4 text-sm text-danger">
-            Не удалось загрузить историю цены.
-          </p>
-        ) : null}
-        {historyQuery.isSuccess && historyQuery.data.length === 0 ? (
-          <p className="py-4 text-sm text-ink-3">Записей пока нет.</p>
-        ) : null}
-        <ol className="max-h-[55vh] space-y-3 overflow-y-auto">
-          {historyQuery.data?.map((entry) => (
-            <li key={entry.id} className="rounded-lg border border-line p-3">
-              <div className="flex items-start justify-between gap-3">
-                <span className="font-medium text-ink">
-                  {entry.priceType === 'range'
-                    ? `Диапазон ${entry.minPrice}–${entry.maxPrice} ₽`
-                    : `Фиксированная ${entry.defaultPrice} ₽`}
-                </span>
-                <span className="text-xs text-ink-3">v{entry.version}</span>
-              </div>
-              <p className="mt-1 text-xs text-ink-3">
-                {new Date(entry.changedAt).toLocaleString('ru-RU')} · {entry.changedByName || 'Система'} ·{' '}
-                {entry.source === 'baseline'
-                  ? 'Снимок при включении контроля цен'
-                  : entry.source === 'create'
-                    ? 'Создание услуги'
-                    : 'Изменение цены'}
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="text-xl font-semibold tabular-nums text-ink">
+            {historyTarget?.priceType === 'range'
+              ? `${historyTarget.minPrice}–${historyTarget.maxPrice} ₽`
+              : `${historyTarget?.defaultPrice} ₽`}
+          </div>
+          {canManage && historyTarget && (
+            <div className="flex gap-1">
+              <IconButton
+                icon={ShieldCheck}
+                label="Видимость услуги"
+                onClick={() =>
+                  openVisibilityEditor({ kind: 'service', id: historyTarget.id, label: historyTarget.name })
+                }
+              />
+              <IconButton
+                icon={Pencil}
+                label="Изменить услугу"
+                onClick={() => {
+                  openEdit(historyTarget);
+                  setHistoryTarget(null);
+                }}
+              />
+              <IconButton
+                icon={Trash2}
+                label="Удалить услугу"
+                variant="danger"
+                onClick={() => {
+                  setDeleteTarget(historyTarget);
+                  setHistoryTarget(null);
+                }}
+              />
+            </div>
+          )}
+        </div>
+        {historyTarget?.warrantyDays && (
+          <p className="mb-3 text-sm text-ink-2">Гарантия: {historyTarget.warrantyDays} дн.</p>
+        )}
+        {canManage && historyTarget?.masterPercent != null && (
+          <p className="mb-3 text-sm text-ink-2">Процент мастера: {historyTarget.masterPercent}%</p>
+        )}
+        <div className="mb-4 flex gap-2" role="tablist" aria-label="История услуги">
+          <Button
+            role="tab"
+            aria-selected={historyTab === 'work'}
+            variant={historyTab === 'work' ? 'primary' : 'secondary'}
+            onClick={() => setHistoryTab('work')}
+          >
+            Выполнение
+          </Button>
+          <Button
+            role="tab"
+            aria-selected={historyTab === 'prices'}
+            variant={historyTab === 'prices' ? 'primary' : 'secondary'}
+            onClick={() => setHistoryTab('prices')}
+          >
+            Изменения прайса
+          </Button>
+        </div>
+        {historyTab === 'work' && (
+          <div>
+            {executionQuery.isLoading && (
+              <p role="status" className="py-4 text-sm text-ink-3">
+                Загружаем выполненные работы…
               </p>
-            </li>
-          ))}
-        </ol>
+            )}
+            {executionQuery.isError && (
+              <p role="alert">
+                Не удалось загрузить работы.{' '}
+                <Button variant="ghost" onClick={() => void executionQuery.refetch()}>
+                  Повторить
+                </Button>
+              </p>
+            )}
+            {executionQuery.isSuccess && executionQuery.data?.data.length === 0 && (
+              <p className="py-6 text-sm text-ink-3">В доступных чеках эта услуга ещё не выполнялась.</p>
+            )}
+            <ol className="divide-y divide-line">
+              {executionQuery.data?.data.map((entry: ServiceExecutionHistoryEntry) => (
+                <li key={entry.id} className="py-3">
+                  <a
+                    className="flex justify-between gap-3 text-sm font-medium text-accent hover:underline focus-visible:outline"
+                    href={`/checks/${entry.checkId}${entry.clientId ? `?clientId=${entry.clientId}` : ''}`}
+                  >
+                    <span>Чек №{entry.checkNumber}</span>
+                    <Money value={entry.price} />
+                  </a>
+                  <p className="mt-1 text-xs text-ink-3">
+                    {new Date(entry.date).toLocaleString('ru-RU')} · {entry.executorName || 'Исполнитель не указан'}
+                  </p>
+                </li>
+              ))}
+            </ol>
+            {(executionQuery.data?.total ?? 0) > 20 && (
+              <div className="mt-4 flex justify-between">
+                <Button
+                  variant="secondary"
+                  disabled={historyPage === 1}
+                  onClick={() => setHistoryPage((page) => page - 1)}
+                >
+                  Назад
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={historyPage * 20 >= (executionQuery.data?.total ?? 0)}
+                  onClick={() => setHistoryPage((page) => page + 1)}
+                >
+                  Далее
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+        {historyTab === 'prices' && (
+          <>
+            {historyQuery.isLoading ? <p className="py-4 text-sm text-ink-3">Загружаем историю…</p> : null}
+            {historyQuery.isError ? (
+              <p role="alert" className="py-4 text-sm text-danger">
+                Не удалось загрузить историю цены.
+              </p>
+            ) : null}
+            {historyQuery.isSuccess && historyQuery.data.length === 0 ? (
+              <p className="py-4 text-sm text-ink-3">Записей пока нет.</p>
+            ) : null}
+            <ol className="max-h-[55vh] space-y-3 overflow-y-auto">
+              {historyQuery.data?.map((entry) => (
+                <li key={entry.id} className="rounded-lg border border-line p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="font-medium text-ink">
+                      {entry.priceType === 'range'
+                        ? `Диапазон ${entry.minPrice}–${entry.maxPrice} ₽`
+                        : `Фиксированная ${entry.defaultPrice} ₽`}
+                    </span>
+                    <span className="text-xs text-ink-3">v{entry.version}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-3">
+                    {new Date(entry.changedAt).toLocaleString('ru-RU')} · {entry.changedByName || 'Система'} ·{' '}
+                    {entry.source === 'baseline'
+                      ? 'Снимок при включении контроля цен'
+                      : entry.source === 'create'
+                        ? 'Создание услуги'
+                        : 'Изменение цены'}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
       </Modal>
 
       <Modal

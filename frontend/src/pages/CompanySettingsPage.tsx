@@ -1,3 +1,5 @@
+import CompanyModeFlow from '../components/CompanyModeFlow';
+import { attendanceModePresentation, companyModeFlows } from '../../../shared/utils/companyModePresentation';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -260,6 +262,7 @@ function ShiftModeSection() {
               </p>
             </div>
 
+            <CompanyModeFlow steps={enabled ? companyModeFlows.posCashier : companyModeFlows.posDirect} />
             {/* 155 — «Кто принимает оплату»: режим «по ролям» либо явный список */}
             <div className="space-y-3 border-t border-line pt-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -292,6 +295,7 @@ function ShiftModeSection() {
                 )}
               </div>
 
+              <CompanyModeFlow steps={manualMode ? companyModeFlows.paymentList : companyModeFlows.paymentRoles} />
               {acceptorsLoading ? (
                 <p className="py-2 text-xs text-ink-3" role="status">
                   Загружаем сотрудников…
@@ -816,6 +820,9 @@ function CompanyDetailsTab() {
                 checked={form.pointsSharedClients}
                 onChange={(v) => update({ pointsSharedClients: v })}
               />
+              <CompanyModeFlow
+                steps={form.pointsSharedClients ? companyModeFlows.clientsShared : companyModeFlows.clientsSeparate}
+              />
             </CardBody>
           </Card>
         )}
@@ -823,8 +830,11 @@ function CompanyDetailsTab() {
         <Card padding="none">
           <CardHeader icon={Building2} title="Учёт рабочего времени" subtitle="Способ отметки прихода и ухода" />
           <CardBody className="space-y-3">
-            {ATTENDANCE_MODE_OPTIONS.map(({ value, label, description }) => (
-              <label key={value} className="flex cursor-pointer items-start gap-3 rounded-xl border border-line p-3">
+            {ATTENDANCE_MODE_OPTIONS.map(({ value, label }) => (
+              <label
+                key={value}
+                className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition-colors ${form.attendanceMode === value ? 'border-accent bg-accent/5' : 'border-line'}`}
+              >
                 <input
                   type="radio"
                   name="attendanceMode"
@@ -834,8 +844,11 @@ function CompanyDetailsTab() {
                   className="mt-1"
                 />
                 <span>
-                  <span className="block text-sm font-medium text-ink">{label}</span>
-                  <span className="mt-1 block text-sm text-ink-3">{description}</span>
+                  <span className="block text-sm font-semibold text-ink">
+                    {attendanceModePresentation[value].title}
+                  </span>
+                  <span className="mt-1 block text-sm text-ink-3">{attendanceModePresentation[value].description}</span>
+                  {form.attendanceMode === value && <CompanyModeFlow steps={attendanceModePresentation[value].steps} />}
                 </span>
               </label>
             ))}

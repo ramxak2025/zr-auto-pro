@@ -17,7 +17,7 @@
  * staleTime; pull-to-refresh revives every block's data at once.
  */
 import React from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,6 +29,7 @@ import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { KnowledgeArticle, KnowledgeCategory, KnowledgeCourse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const STALE = 60_000;
 

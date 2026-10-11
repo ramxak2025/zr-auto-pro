@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, ScrollView } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
+
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,6 +19,7 @@ import { carVin } from '../utils/vinUi';
 import { normalizePlateQuery, plateMatches, looksLikePlateQuery } from '../utils/plateNormalize';
 import { haptic } from '../platform/haptics';
 import type { Car, Check } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 function formatDateShort(d?: string | null): string {
   if (!d) return '—';

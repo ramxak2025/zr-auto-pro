@@ -51,7 +51,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { Switch } from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -77,6 +77,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { User } from '../../../shared/types';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Local types

@@ -29,7 +29,7 @@
  * (director / admin / superadmin) — the same access the old menu rows had.
  */
 import React from 'react';
-import { View, ScrollView, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
@@ -42,6 +42,7 @@ import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { UserPermissions } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 interface Direction {
   key: string;

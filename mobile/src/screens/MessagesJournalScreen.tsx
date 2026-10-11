@@ -16,15 +16,7 @@
  * не клиенту.
  */
 import React, { useMemo, useState } from 'react';
-import {
-  View,
-  FlatList,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-} from 'react-native';
+import { View, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -36,6 +28,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { SentMessage, SentMessagesResponse, SentMessageType } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
 
 // ─── Метаданные типов сообщений (продуктовые русские имена) ───────────
 const TYPE_META: Record<SentMessageType, { label: string; icon: keyof typeof Ionicons.glyphMap; tint: string }> = {

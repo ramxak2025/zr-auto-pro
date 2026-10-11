@@ -70,6 +70,43 @@ export class ServicesController {
   }
 
   @RequirePermission('services_view')
+  @Get('folders')
+  getFolders(@CurrentUser() user: JwtPayload) {
+    return this.servicesService.getFolders(user.tenantID);
+  }
+
+  @RequirePermission('services_manage')
+  @Post('folders')
+  createFolder(@CurrentUser() user: JwtPayload, @Body() body: { path?: unknown }) {
+    return this.servicesService.createFolder(user.tenantID, body.path);
+  }
+
+  @RequirePermission('services_manage')
+  @Patch('folders')
+  renameFolder(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { path?: unknown; name?: unknown; parentPath?: unknown },
+  ) {
+    return this.servicesService.renameFolder(user.tenantID, body.path, body.name, body.parentPath);
+  }
+
+  @RequirePermission('services_manage')
+  @Delete('folders')
+  removeFolder(@CurrentUser() user: JwtPayload, @Query('path') path: string) {
+    return this.servicesService.removeFolder(user.tenantID, path);
+  }
+
+  @RequirePermission('services_view')
+  @Get(':id/execution-history')
+  getExecutionHistory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+    @Query() query: { page?: string; limit?: string },
+  ) {
+    return this.servicesService.getExecutionHistory(id, user.tenantID, user, query);
+  }
+
+  @RequirePermission('services_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.servicesService.getAll(user.tenantID, query, user);

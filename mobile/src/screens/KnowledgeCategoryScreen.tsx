@@ -19,7 +19,7 @@
  * area's article type, and — in the Статьи area — also surfaces folder matches.
  */
 import React from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -49,6 +49,7 @@ import type {
   KnowledgeCategory,
   KnowledgeSearchResults,
 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ParamList = {
   KnowledgeCategory: { categoryId?: string; type?: KnowledgeArticleType; name?: string; articlesRoot?: boolean };

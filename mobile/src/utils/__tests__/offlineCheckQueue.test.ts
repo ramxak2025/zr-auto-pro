@@ -211,6 +211,36 @@ describe('сериализация очереди', () => {
 // ── Ядро: enqueue / flush / retry / remove ─────────────────────────────────
 
 describe('ядро очереди', () => {
+  it('сохраняет разные источники стоимости шаблонов после сериализации и перезапуска', async () => {
+    const { storage } = createMemoryStorage();
+    const products = [
+      {
+        name: 'A',
+        quantity: 2,
+        sellPrice: 100,
+        costPrice: 0,
+        sourceTemplateProduct: { templateId: ID_B, productIndex: 0, version: '120' },
+      },
+      {
+        name: 'B',
+        quantity: 1.5,
+        sellPrice: 150,
+        costPrice: 0,
+        sourceTemplateProduct: { templateId: ID_C, productIndex: 3, version: '121' },
+      },
+    ];
+    const first = createOfflineCheckQueueCore({ storage });
+    await first.enqueue(payloadOf(ID_A, { products }));
+    const restored = createOfflineCheckQueueCore({ storage });
+    await restored.ensureLoaded();
+    expect(restored.getSnapshot()[0].payload.products).toEqual(products);
+    const sender = jest.fn(async () => ({}));
+    restored.setSender(sender);
+    await restored.flush();
+    expect(sender).toHaveBeenCalledWith(expect.objectContaining({ products }));
+    expect(restored.getSnapshot()).toHaveLength(0);
+  });
+
   it('enqueue пишет версионированную запись в storage и в снапшот', async () => {
     const { storage, map } = createMemoryStorage();
     const core = createOfflineCheckQueueCore({ storage, now: () => 1000 });

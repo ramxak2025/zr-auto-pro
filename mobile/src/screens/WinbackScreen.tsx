@@ -27,16 +27,7 @@
  * platform helpers.
  */
 import React, { useMemo, useState } from 'react';
-import {
-  View,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  RefreshControl,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { View, TouchableOpacity, TextInput, StyleSheet, RefreshControl, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -50,6 +41,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { WinbackClient } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const DAY_PRESETS = [30, 60, 90, 180] as const;
 const DEFAULT_DAYS = 90;

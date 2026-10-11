@@ -18,7 +18,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   View,
-  ScrollView,
   StyleSheet,
   TouchableOpacity,
   Switch,
@@ -39,6 +38,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentReminderSettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type Mode = InstallmentReminderSettings['mode'];
 

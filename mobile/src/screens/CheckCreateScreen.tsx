@@ -1,3 +1,4 @@
+import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { captureCheckSaveSession } from './checkCreate/saveSession';
 import { updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
 import { captureDataSession } from '../contexts/dataSession';
@@ -6,7 +7,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -123,6 +123,7 @@ import VoiceCommentSheet from '../components/VoiceCommentSheet';
 import PointIndicator from '../components/PointIndicator';
 import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -1124,11 +1125,15 @@ export default function CheckCreateScreen() {
   }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────
-  const { data: templates = [] } = useQuery<CheckTemplate[]>({
-    queryKey: ['check-templates'],
-    queryFn: async () => (await checkTemplatesApi.list()).data,
-    staleTime: 60_000,
-  });
+  const {
+    data: templates = [],
+    isFetching: templatesRefreshing,
+    isPaused: templatesPaused,
+    isError: templatesRefreshFailed,
+    refetch: refreshTemplates,
+  } = useQuery<CheckTemplate[]>(
+    templatePickerQueryOptions(async () => (await checkTemplatesApi.list()).data, showTemplatesPicker),
+  );
   // Личные папки шаблонов (round 8 #3) — ключ общий с TemplatesScreen и web,
   // поэтому мутации в разделе «Ещё → Шаблоны» мгновенно видны здесь.
   const { data: templateFolders = [] } = useQuery<CheckTemplateFolder[]>({
@@ -1194,6 +1199,14 @@ export default function CheckCreateScreen() {
   };
 
   const applyTemplate = (template: CheckTemplate) => {
+    if (
+      !canApplyTemplateSnapshot({
+        isFetching: templatesRefreshing,
+        isError: templatesRefreshFailed,
+        isPaused: templatesPaused,
+      })
+    )
+      return;
     // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
     // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
     // развернуть нельзя («×150», «×2.5»), остаётся legacy-строкой и считается serviceLineTotal.
@@ -1222,10 +1235,11 @@ export default function CheckCreateScreen() {
           productId: p.productId,
           name: p.name,
           sellPrice: p.sellPrice,
-          costPrice: p.costPrice,
+          costPrice: p.costPrice ?? 0,
+          sourceTemplateProduct: p.sourceTemplateProduct,
           quantity: p.quantity,
           totalSell: p.sellPrice * p.quantity,
-          totalCost: p.costPrice * p.quantity,
+          totalCost: (p.costPrice ?? 0) * p.quantity,
           unit: catalogProduct?.unit,
         };
       }),
@@ -1258,9 +1272,10 @@ export default function CheckCreateScreen() {
           .filter((l) => !!l.serviceId)
           .map((l) => toCheckTemplateServiceInput({ serviceId: l.serviceId!, name: l.name, price: l.price })),
         products: productLines
-          .filter((l) => !!l.productId)
+          .filter((l) => !!l.productId || !!l.sourceTemplateProduct)
           .map((l) => ({
-            productId: l.productId!,
+            productId: l.productId,
+            sourceTemplateProduct: l.sourceTemplateProduct,
             name: l.name,
             sellPrice: l.sellPrice,
             costPrice: l.costPrice,
@@ -2767,6 +2782,7 @@ export default function CheckCreateScreen() {
           ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
         products: productLines.map((l) => ({
+          sourceTemplateProduct: l.sourceTemplateProduct,
           productId: l.productId,
           name: l.name,
           sellPrice: l.sellPrice,
@@ -4691,7 +4707,11 @@ export default function CheckCreateScreen() {
         onClose={() => setShowMasterPicker(null)}
         title={showMasterPicker === CHECK_MASTER_PICKER_INDEX ? 'Мастер заказ-наряда' : 'Выберите мастера'}
       >
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {masters.map((m) => {
             const isSelected =
               showMasterPicker === CHECK_MASTER_PICKER_INDEX
@@ -4765,7 +4785,11 @@ export default function CheckCreateScreen() {
         <Text style={[styles.assignSheetHint, { color: palette.text.tertiary }]}>
           Заказ появится на доске у каждого выбранного. Зарплата считается по строкам услуг, как раньше.
         </Text>
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {masters.map((m) => {
             const isSelected = assigneeIds.includes(m.id);
             return (
@@ -4819,7 +4843,11 @@ export default function CheckCreateScreen() {
 
       {/* ── Шит «Место» (Round 14) — справочник + создание нового ─────────── */}
       <Modal visible={showLocationSheet} onClose={() => setShowLocationSheet(false)} title="Место">
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           <TouchableOpacity
             style={[styles.pickerItem, { borderBottomColor: palette.border.subtle }]}
             onPress={() => {
@@ -4960,7 +4988,11 @@ export default function CheckCreateScreen() {
           placeholderTextColor={palette.text.tertiary}
           autoFocus
         />
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {filteredServices.map((service) => (
             <TouchableOpacity
               key={service.id}
@@ -5029,6 +5061,29 @@ export default function CheckCreateScreen() {
           (applyTemplate без изменений); «Управлять» уводит в раздел
           «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
       <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+        {templatesPaused && (
+          <Text accessibilityRole="alert" style={{ color: palette.text.secondary, paddingVertical: 12 }}>
+            Нет соединения. Для применения шаблона нужно обновить цены.
+          </Text>
+        )}
+        {templatesRefreshing && (
+          <View style={{ flexDirection: 'row', gap: 10, paddingVertical: 12 }}>
+            <ActivityIndicator size="small" color={colors.primary[600]} />
+            <Text style={{ color: palette.text.secondary }}>Обновляем цены…</Text>
+          </View>
+        )}
+        {templatesRefreshFailed && (
+          <View style={{ paddingVertical: 12 }}>
+            <Text style={{ color: palette.text.secondary }}>Не удалось обновить цены шаблонов.</Text>
+            <TouchableOpacity
+              onPress={() => void refreshTemplates()}
+              accessibilityRole="button"
+              style={{ paddingVertical: 12 }}
+            >
+              <Text style={{ color: colors.primary[600] }}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         {/* Верхняя строка: назад-по-папке слева, «Управлять» справа */}
         <View style={styles.tplPickerTopRow}>
           {templatesPickerFolderId ? (
@@ -5065,7 +5120,11 @@ export default function CheckCreateScreen() {
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}
+          keyboardShouldPersistTaps="handled"
+          reserveBottomNavigation={false}
+        >
           {/* Папки текущего уровня */}
           {pickerFolders.map((folder) => {
             const count = pickerFolderTplCount.get(folder.id) ?? 0;
@@ -5137,6 +5196,7 @@ export default function CheckCreateScreen() {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <TouchableOpacity
+                  disabled={templatesRefreshing || templatesRefreshFailed || templatesPaused}
                   onPress={() => applyTemplate(tpl)}
                   style={{
                     backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
@@ -5234,6 +5294,7 @@ export default function CheckCreateScreen() {
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                     <TouchableOpacity
+                      disabled={templatesRefreshing || templatesRefreshFailed || templatesPaused}
                       onPress={() => applyTemplate(tpl)}
                       style={{
                         backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],

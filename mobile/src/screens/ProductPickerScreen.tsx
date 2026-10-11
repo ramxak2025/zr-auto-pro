@@ -40,7 +40,7 @@ import { loadProductCatalog } from '../../../shared/api/productCatalog';
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, RefreshControl } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -65,6 +65,7 @@ import {
 import { formatQty, unitLabel } from '../utils/units';
 import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
 import type { Product } from '../../../shared/types';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 /** Окно дребезга: повторный тап по ТОЙ ЖЕ строке в этом окне игнорируется
  *  (случайный двойной тап добавляет один раз). Осознанный повтор — после окна

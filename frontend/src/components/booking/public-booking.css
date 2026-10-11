@@ -6,7 +6,7 @@
   --pb-soft: #edf3ff;
   --pb-rule: #e5e9f0;
   min-height: 100vh;
-  background: #f6f7f9;
+  background: radial-gradient(ellipse at top left, #eaf1fb, transparent 55%), #f5f7fa;
   color: var(--pb-ink);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
@@ -51,7 +51,7 @@
   text-underline-offset: 3px;
 }
 .pb-container {
-  max-width: 480px;
+  max-width: 560px;
   margin: 0 auto;
   background: #fff;
   border-radius: 20px;
@@ -59,10 +59,13 @@
   box-shadow: 0 8px 40px #1b345b0a;
 }
 .pb-business {
-  padding: 24px 24px 17px;
+  padding: 30px 28px 22px;
+  background: linear-gradient(135deg, #ffffffc9, #edf3fbc9);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
 }
 .pb-business h1 {
-  font-size: 23px;
+  font-size: 27px;
   line-height: 1.25;
   font-weight: 650;
   letter-spacing: -0.5px;
@@ -255,7 +258,7 @@
 .pb-service-name {
   flex: 1;
   min-width: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 550;
   line-height: 1.5;
   overflow-wrap: break-word;
@@ -313,8 +316,8 @@
   margin: 24px 0 11px !important;
 }
 .pb-resources {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
 }
 .pb-resources button {
@@ -697,4 +700,150 @@
   .pb-times button {
     min-height: 44px;
   }
+}
+
+.pb-business-mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 20px;
+  border-radius: 16px;
+  background: #fff;
+  color: var(--pb-accent);
+  box-shadow: 0 5px 18px #29476d0c;
+}
+.pb-business-compact .pb-business-mark {
+  display: none;
+}
+.pb-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin: 18px 0;
+  border-radius: 12px;
+  background: #eef2f7;
+}
+.pb-paths button {
+  min-height: 46px;
+  padding: 8px 5px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--pb-muted);
+  font-weight: 550;
+}
+.pb-paths button[aria-pressed='true'] {
+  background: #fff;
+  color: var(--pb-ink);
+  box-shadow: 0 2px 6px #1632530d;
+}
+.pb-resources .pb-master {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  text-align: left;
+  min-height: 80px;
+}
+.pb-master-info {
+  flex: 1;
+  min-width: 0;
+}
+.pb-master-info strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.pb-master-info > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--pb-muted);
+  font-size: 12px;
+}
+.pb-avatar {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 50%;
+  background: #edf2f9;
+  color: #395372;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+}
+.pb-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pb-resources .pb-any-master {
+  min-height: 46px;
+  text-align: left;
+}
+.pb-consent {
+  margin: 4px 0 18px;
+}
+.pb-primary,
+.pb-paths button,
+.pb-resources button,
+.pb-times button {
+  transition:
+    background-color 180ms ease-out,
+    box-shadow 180ms ease-out,
+    color 180ms ease-out;
+}
+.pb-primary:not(:disabled):active {
+  background: #154eae;
+}
+@media (hover: hover) {
+  .pb-primary:not(:disabled):hover {
+    background: #154eae;
+  }
+  .pb-master:hover {
+    background: #f4f7fc;
+  }
+}
+@media (min-width: 768px) {
+  .public-booking {
+    padding: 48px 24px;
+  }
+  .pb-business {
+    padding: 34px 36px 26px;
+  }
+  .pb-content {
+    padding: 30px 36px;
+  }
+  .pb-steps {
+    padding: 14px 36px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .public-booking *,
+  .public-booking *::before,
+  .public-booking *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.pb-receipt {
+  padding: 8px 0 14px;
+}
+.pb-receipt h2 {
+  margin-top: 6px;
+}
+.pb-receipt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.pb-receipt-actions button {
+  min-height: 46px;
 }

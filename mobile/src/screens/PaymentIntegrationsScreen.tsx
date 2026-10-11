@@ -28,7 +28,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -51,6 +50,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { PaymentProviderName, FiscalSno, FiscalVat, WalletSettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ── Option catalogues ─────────────────────────────────────────────────
 

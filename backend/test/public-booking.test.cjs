@@ -257,6 +257,32 @@ test('shared public parser rejects queued/malformed/wrong-UUID responses and ret
   assert.deepEqual(sent[1][1], { headers: { 'x-booking-recovery': identity.recoveryToken } });
 });
 
+test('compact codes never collide with fixed app routes, preserve case, and keep 96 bits of random input', () => {
+  const { generatePublicBookingCode, isPublicBookingCode } = require('../dist/bookings/public-booking-code');
+  for (const reserved of ['company-settings', 'COMPANY-SETTINGS']) assert.equal(isPublicBookingCode(reserved), false);
+  assert.equal(isPublicBookingCode('AbCDef0123456789'), true);
+  assert.equal(isPublicBookingCode('a'.repeat(32)), true);
+  assert.equal(isPublicBookingCode('invalid'), false);
+  const crypto = require('node:crypto');
+  const originalRandom = crypto.randomBytes;
+  const calls = [];
+  crypto.randomBytes = (size) => {
+    calls.push(size);
+    return {
+      toString: (encoding) => {
+        assert.equal(encoding, 'base64url');
+        return calls.length === 1 ? 'COMPANY-SETTINGS' : 'AbCDef0123456789';
+      },
+    };
+  };
+  try {
+    assert.equal(generatePublicBookingCode(), 'AbCDef0123456789');
+    assert.deepEqual(calls, [12, 12]);
+  } finally {
+    crypto.randomBytes = originalRandom;
+  }
+});
+
 const live = process.env.PUBLIC_BOOKING_LIVE_DB;
 test(
   'PostgreSQL16 public booking: real RLS, calendars, transactions and concurrent reservations',
@@ -264,7 +290,9 @@ test(
   async (t) => {
     const url = new URL(live);
     assert.ok(
-      ['127.0.0.1', 'localhost'].includes(url.hostname) && url.port === '55438' && url.pathname === '/autexa_oct8_test',
+      ['127.0.0.1', 'localhost'].includes(url.hostname) &&
+        ((url.port === '55438' && url.pathname === '/autexa_oct8_test') ||
+          (url.port === '55440' && url.pathname === '/autexa_oct12_booking')),
       'Disposable fixture only',
     );
     const admin = new Pool({ connectionString: live, max: 20, statement_timeout: 10000 });
@@ -450,7 +478,7 @@ test(
         async () =>
           (
             await one(
-              "SELECT count(*)::int n FROM pg_stat_activity WHERE datname='autexa_oct8_test' AND wait_event_type='Lock' AND query LIKE $1",
+              "SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1",
               [pattern],
             )
           ).n > 0,
@@ -497,9 +525,28 @@ test(
           assert.equal(JSON.stringify(landing).includes('1234.56'), false);
           assert.equal('price' in landing.services[0], false);
           assert.equal(JSON.stringify(landing).includes(f.owner), false);
-          assert.equal(f.page.publicCode.length, 32);
+          assert.match(f.page.publicCode, /^[A-Za-z0-9_-]{16}$/);
           assert.equal(f.page.publicUrl, `https://autexa.pw/${f.page.publicCode}`);
           assert.deepEqual(await service.landingByCode(f.page.publicCode), { slug: f.slug });
+          const legacy = await one('SELECT public_code FROM public_booking_pages WHERE id=$1', [f.page.id]);
+          assert.deepEqual(await service.landingByCode(legacy.public_code), { slug: f.slug });
+          await assert.rejects(
+            q('UPDATE public_booking_pages SET short_code=$1 WHERE id=$2', ['a'.repeat(16), f.page.id]),
+            /immutable/,
+          );
+          const directionId = uuid();
+          await q("INSERT INTO employee_directions(id,tenant_id,name) VALUES($1,$2,'Автоэлектрик')", [
+            directionId,
+            f.tenant,
+          ]);
+          await q('UPDATE users SET direction_id=$1,avatar=$2 WHERE id=$3', [
+            directionId,
+            '/uploads/fixture-avatar.jpg',
+            f.owner,
+          ]);
+          const masterProfile = (await service.landing(f.slug)).resources[0];
+          assert.equal(masterProfile.profession, 'Автоэлектрик');
+          assert.equal(masterProfile.avatar, '/uploads/fixture-avatar.jpg');
           await assert.rejects(service.landingByCode(f.slug), failure(404, 'BOOKING_DISABLED'));
           await assert.rejects(
             q('UPDATE public_booking_pages SET public_code=$1 WHERE id=$2', ['a'.repeat(32), f.page.id]),
@@ -522,7 +569,7 @@ test(
           );
           assert.deepEqual(
             landing.resources?.map((resource) => Object.keys(resource).sort()),
-            [['name', 'resourceKey']],
+            [['avatar', 'name', 'profession', 'resourceKey']],
           );
           const resourceKey = landing.resources?.[0]?.resourceKey;
           assert.match(resourceKey ?? '', /^[a-f0-9]{32}$/);
@@ -637,7 +684,7 @@ test(
           f.page = saved;
           f.slug = saved.slug;
           assert.match(saved.slug, /^booking-[a-f0-9]{16}$/);
-          assert.match(saved.publicCode, /^[a-f0-9]{32}$/);
+          assert.match(saved.publicCode, /^[A-Za-z0-9_-]{16}$/);
           assert.equal(saved.publicUrl, `https://autexa.pw/${saved.publicCode}`);
           assert.match(saved.policyText, /Версия 1/);
           assert.match(saved.consentText, /Отдельное согласие/);

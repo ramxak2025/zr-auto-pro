@@ -19,16 +19,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * Android-safe: пикер кроссплатформенный, никаких iOS-only API.
  */
 import React, { useCallback, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -48,6 +39,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Booking } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { statusChip, formatBookingDateTime, masterLabel, isActiveBooking } from './bookings/bookingHelpers';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function BookingDetailScreen() {
   const navigation = useNavigation<any>();

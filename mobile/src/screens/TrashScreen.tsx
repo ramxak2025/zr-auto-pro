@@ -5,7 +5,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -19,6 +19,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product } from '../../../shared/types';
 import { apiErrorMessage } from '@shared/utils/apiError';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const formatMoney = (v: number): string =>
   Math.round(v)

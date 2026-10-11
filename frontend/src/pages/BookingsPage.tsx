@@ -1,3 +1,4 @@
+import '../components/booking/booking-settings.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -228,7 +229,10 @@ export default function BookingsPage() {
       )}
       {canManage && activeTab === 'settings' && (
         <Card>
-          <CardHeader title="Настройки страницы" subtitle="Ссылка для записи останется постоянной." />
+          <CardHeader
+            title="Запись к вам"
+            subtitle={settings?.published ? 'Страница опубликована' : 'Страница пока скрыта'}
+          />
           <CardBody>
             {pageQuery.isLoading ? (
               <p>Загружаем настройки…</p>
@@ -241,74 +245,100 @@ export default function BookingsPage() {
               </div>
             ) : (
               <>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Название сервиса">
-                    <Input
-                      value={draft?.displayName ?? settings?.displayName ?? user?.tenant?.name ?? ''}
-                      onChange={(event) => putDraft({ displayName: event.target.value })}
-                      maxLength={160}
-                    />
-                  </Field>
-                  <Field label="Публичная ссылка">
-                    <Input value={settings?.publicUrl ?? 'Ссылка появится после первого сохранения'} readOnly />
-                  </Field>
-                  <Field label="Адрес">
-                    <Input
-                      value={draft?.address ?? settings?.address ?? user?.tenant?.address ?? ''}
-                      onChange={(event) => putDraft({ address: event.target.value })}
-                      maxLength={300}
-                    />
-                  </Field>
-                  <Field label="Телефон для связи">
-                    <Input
-                      type="tel"
-                      value={draft?.links?.phone ?? settings?.links?.phone ?? user?.tenant?.phone ?? ''}
-                      onChange={(event) => setPublicLink('phone', event.target.value)}
-                      maxLength={32}
-                    />
-                  </Field>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {(
-                      [
-                        ['instagram', 'Instagram', 'https://instagram.com/...'],
-                        ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
-                        ['vk', 'ВКонтакте', 'https://vk.com/...'],
-                        ['telegram', 'Telegram', 'https://t.me/...'],
-                      ] as const
-                    ).map(([key, label, placeholder]) => (
-                      <Field key={key} label={label}>
-                        <Input
-                          type="url"
-                          value={draft?.links?.[key] ?? settings?.links?.[key] ?? ''}
-                          onChange={(event) => setPublicLink(key, event.target.value)}
-                          placeholder={placeholder}
-                          maxLength={500}
-                        />
-                      </Field>
-                    ))}
+                <details open className="booking-settings-section">
+                  <summary>
+                    Автосервис <span>Название, ссылка и адрес</span>
+                  </summary>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Название сервиса">
+                      <Input
+                        value={draft?.displayName ?? settings?.displayName ?? user?.tenant?.name ?? ''}
+                        onChange={(event) => putDraft({ displayName: event.target.value })}
+                        maxLength={160}
+                      />
+                    </Field>
+                    <Field label="Публичная ссылка">
+                      <Input value={settings?.publicUrl ?? 'Ссылка появится после первого сохранения'} readOnly />
+                    </Field>
+                    <Field label="Адрес">
+                      <Input
+                        value={draft?.address ?? settings?.address ?? user?.tenant?.address ?? ''}
+                        onChange={(event) => putDraft({ address: event.target.value })}
+                        maxLength={300}
+                      />
+                    </Field>
                   </div>
-                  <Field label="Подтверждение заявок">
-                    <Select
-                      value={draft?.mode ?? settings?.mode ?? 'approval'}
-                      onChange={(event) => putDraft({ mode: event.target.value as 'instant' | 'approval' })}
-                    >
-                      <option value="approval">Сотрудник подтверждает</option>
-                      <option value="instant">Подтверждать автоматически</option>
-                    </Select>
-                  </Field>
-                  <Field label="Шаг времени (минуты)">
-                    <Input
-                      type="number"
-                      min={5}
-                      max={120}
-                      value={draft?.slotStepMinutes ?? settings?.slotStepMinutes ?? 15}
-                      onChange={(event) => putDraft({ slotStepMinutes: Number(event.target.value) })}
+                </details>
+                <details className="booking-settings-section">
+                  <summary>
+                    Контакты и соцсети <span>Как с вами связаться</span>
+                  </summary>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Телефон для связи">
+                      <Input
+                        type="tel"
+                        value={draft?.links?.phone ?? settings?.links?.phone ?? user?.tenant?.phone ?? ''}
+                        onChange={(event) => setPublicLink('phone', event.target.value)}
+                        maxLength={32}
+                      />
+                    </Field>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {(
+                        [
+                          ['instagram', 'Instagram', 'https://instagram.com/...'],
+                          ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
+                          ['vk', 'ВКонтакте', 'https://vk.com/...'],
+                          ['telegram', 'Telegram', 'https://t.me/...'],
+                        ] as const
+                      ).map(([key, label, placeholder]) => (
+                        <Field key={key} label={label}>
+                          <Input
+                            type="url"
+                            value={draft?.links?.[key] ?? settings?.links?.[key] ?? ''}
+                            onChange={(event) => setPublicLink(key, event.target.value)}
+                            placeholder={placeholder}
+                            maxLength={500}
+                          />
+                        </Field>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+                <details className="booking-settings-section">
+                  <summary>
+                    Как проходит запись{' '}
+                    <span>
+                      {(draft?.mode ?? settings?.mode) === 'instant'
+                        ? 'Сразу в расписание'
+                        : 'После вашего подтверждения'}
+                    </span>
+                  </summary>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Подтверждение заявок">
+                      <Select
+                        value={draft?.mode ?? settings?.mode ?? 'approval'}
+                        onChange={(event) => putDraft({ mode: event.target.value as 'instant' | 'approval' })}
+                      >
+                        <option value="approval">Сотрудник подтверждает</option>
+                        <option value="instant">Подтверждать автоматически</option>
+                      </Select>
+                    </Field>
+                  </div>
+                  <label className="mt-4 flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={draft?.showPrices ?? settings?.showPrices ?? false}
+                      onChange={(event) => putDraft({ showPrices: event.target.checked })}
                     />
-                  </Field>
-                </div>
+                    Показывать цены услуг
+                  </label>
+                </details>
                 <div className="mt-5 grid gap-5 md:grid-cols-2">
-                  <fieldset>
-                    <legend className="mb-2 font-semibold">Услуги и длительность</legend>
+                  <details className="booking-settings-section">
+                    <summary>
+                      Услуги <span>Выбрано: {(draft?.services ?? settings?.services ?? []).length}</span>
+                    </summary>
+                    <p className="mb-3 text-sm text-slate-600">Включите услуги и укажите длительность в минутах.</p>
                     {servicesQuery.isLoading ? (
                       <p className="text-sm text-slate-500">Загружаем каталог услуг…</p>
                     ) : servicesQuery.isError ? (
@@ -358,9 +388,12 @@ export default function BookingsPage() {
                         );
                       })
                     )}
-                  </fieldset>
-                  <fieldset>
-                    <legend className="mb-2 font-semibold">Сотрудники, принимающие записи</legend>
+                  </details>
+                  <details className="booking-settings-section">
+                    <summary>
+                      Мастера{' '}
+                      <span>Принимают записи: {(draft?.resourceIds ?? settings?.resourceIds ?? []).length}</span>
+                    </summary>
                     {resourcesQuery.isLoading ? (
                       <p className="text-sm text-slate-500">Загружаем сотрудников…</p>
                     ) : resourcesQuery.isError ? (
@@ -382,10 +415,22 @@ export default function BookingsPage() {
                         </label>
                       ))
                     )}
-                  </fieldset>
+                  </details>
                 </div>
-                <fieldset className="mt-6">
-                  <legend className="mb-2 font-semibold">Рабочие часы</legend>
+                <details className="booking-settings-section">
+                  <summary>
+                    Расписание <span>Рабочие дни и свободное время</span>
+                  </summary>
+                  <Field label="Шаг времени (минуты)">
+                    <Input
+                      type="number"
+                      min={5}
+                      max={120}
+                      value={draft?.slotStepMinutes ?? settings?.slotStepMinutes ?? 15}
+                      onChange={(event) => putDraft({ slotStepMinutes: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <h3 className="mb-3 mt-4 font-semibold">Рабочие часы</h3>
                   <div className="grid max-w-3xl gap-2 sm:grid-cols-2">
                     {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((label, index) => {
                       const day = String((index + 1) % 7);
@@ -428,17 +473,11 @@ export default function BookingsPage() {
                       );
                     })}
                   </div>
-                </fieldset>
-                <label className="mt-5 flex items-center gap-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={draft?.showPrices ?? settings?.showPrices ?? false}
-                    onChange={(event) => putDraft({ showPrices: event.target.checked })}
-                  />
-                  Показывать цены услуг
-                </label>
-                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
-                  <p className="font-semibold">Политика и отдельное согласие</p>
+                </details>
+                <details className="booking-settings-section">
+                  <summary>
+                    Документы для клиента <span>Политика и отдельное согласие</span>
+                  </summary>
                   <p className="mt-1 text-slate-600">
                     Autexa формирует оба текста из реквизитов компании и настроенных контактов. Клиент отдельно отмечает
                     согласие перед отправкой заявки.
@@ -454,7 +493,7 @@ export default function BookingsPage() {
                   ) : (
                     <p className="mt-3 text-slate-600">Тексты появятся после первого сохранения страницы.</p>
                   )}
-                </div>
+                </details>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Button
                     disabled={!draft || !settingsDraft || save.isPending || !canManage}

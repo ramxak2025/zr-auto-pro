@@ -10,8 +10,11 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import EmployeeAvatar from '../components/EmployeeAvatar';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { useAuth } from '../contexts/AuthContext';
@@ -38,6 +41,9 @@ interface Props {
 export default function AccountPickerSheet({ visible, onClose }: Props) {
   const auth = useAuth();
   const palette = useColors();
+  const tabBarHeight = useTabBarHeight();
+  const insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
   const [form, setForm] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
   const [phone, setPhone] = useState('');
@@ -246,9 +252,135 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
       });
   };
 
+  if (!form && !pending) {
+    return (
+      <Modal key="account-menu" visible={visible} transparent animationType="fade" onRequestClose={close}>
+        <View style={styles.menuOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={close}
+            disabled={!!busy}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть список аккаунтов"
+          />
+          <View
+            accessibilityViewIsModal
+            style={[
+              styles.menu,
+              {
+                backgroundColor: palette.bg.card,
+                width: Math.min(336, window.width - 28),
+                maxHeight: Math.max(150, window.height - tabBarHeight - insets.top - 32),
+                bottom: tabBarHeight + 8,
+              },
+            ]}
+          >
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.menuContent}>
+              <Pressable
+                disabled={!!busy || auth.savedAccounts.length >= MAX_ACCOUNTS}
+                onPress={() => openForm(null)}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !!busy || auth.savedAccounts.length >= MAX_ACCOUNTS }}
+                style={[styles.menuAdd, { opacity: auth.savedAccounts.length >= MAX_ACCOUNTS ? 0.45 : 1 }]}
+              >
+                <Ionicons name="add" size={25} color={palette.accent.primaryText} />
+                <Text style={[styles.menuAddText, { color: palette.accent.primaryText }]}>Добавить аккаунт</Text>
+                <Text style={[styles.menuCount, { color: palette.text.tertiary }]}>{auth.savedAccounts.length}/3</Text>
+              </Pressable>
+              {auth.savedAccounts.map((account) => {
+                const isBusy =
+                  busy === `switch:${account.id}` ||
+                  busy === `remove:${account.id}` ||
+                  busy === `inspect:${account.id}`;
+                return (
+                  <View key={account.id} style={[styles.menuRow, { borderTopColor: palette.border.subtle }]}>
+                    <Pressable
+                      disabled={!!busy || (account.active && !account.needsReauth)}
+                      onPress={() => void selectAccount(account.id)}
+                      style={styles.menuAccount}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: account.active, busy: isBusy }}
+                      accessibilityLabel={`${account.displayName}${account.active ? ', текущий аккаунт' : ''}${account.needsReauth ? ', войти снова' : ''}`}
+                    >
+                      <EmployeeAvatar
+                        avatar={account.avatar}
+                        userId={account.identity.userId}
+                        style={[styles.avatar, { backgroundColor: palette.accent.primarySoft }]}
+                        imageStyle={styles.avatarImage}
+                      >
+                        <Text style={[styles.avatarText, { color: palette.accent.primaryText }]}>
+                          {account.displayName.trim().charAt(0).toUpperCase() || '?'}
+                        </Text>
+                      </EmployeeAvatar>
+                      <View style={styles.rowCopy}>
+                        <Text style={[styles.menuName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {account.displayName || 'Аккаунт'}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.menuMeta,
+                            { color: account.needsReauth ? palette.text.secondary : palette.text.tertiary },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {account.needsReauth
+                            ? 'Войти снова'
+                            : account.role
+                              ? (roleNames[account.role] ?? account.role)
+                              : 'Аккаунт'}
+                        </Text>
+                      </View>
+                      {isBusy ? (
+                        <ActivityIndicator size="small" color={palette.accent.primaryText} />
+                      ) : account.active ? (
+                        <Ionicons name="checkmark" size={19} color={palette.accent.primaryText} />
+                      ) : null}
+                    </Pressable>
+                    <Pressable
+                      disabled={!!busy}
+                      style={styles.menuMore}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Действия аккаунта ${account.displayName}`}
+                      onPress={() =>
+                        Alert.alert(account.displayName || 'Аккаунт', undefined, [
+                          ...(account.needsReauth
+                            ? [{ text: 'Войти снова', onPress: () => openForm(account.id) }]
+                            : []),
+                          {
+                            text: 'Удалить с устройства',
+                            style: 'destructive',
+                            onPress: () => removeAccount(account.id),
+                          },
+                          { text: 'Отмена', style: 'cancel' },
+                        ])
+                      }
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={20} color={palette.text.tertiary} />
+                    </Pressable>
+                  </View>
+                );
+              })}
+              {error ? (
+                <Text accessibilityRole="alert" style={[styles.menuError, { color: colors.red[600] }]}>
+                  {error}
+                </Text>
+              ) : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
   const title = pending ? 'Выберите филиал' : form ? (reauthId ? 'Войти в аккаунт' : 'Добавить аккаунт') : 'Аккаунты';
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={close}>
+    <Modal
+      key="account-login"
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={close}
+    >
       <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
@@ -359,103 +491,7 @@ export default function AccountPickerSheet({ visible, onClose }: Props) {
                   <Text style={[styles.secondaryText, { color: palette.accent.primaryText }]}>К списку аккаунтов</Text>
                 </Pressable>
               </>
-            ) : (
-              <>
-                <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
-                  Переключайтесь между сохранёнными аккаунтами. Данные и незавершённая работа остаются раздельными.
-                </Text>
-                {auth.savedAccounts.map((account) => {
-                  const isBusy =
-                    busy === `switch:${account.id}` ||
-                    busy === `remove:${account.id}` ||
-                    busy === `inspect:${account.id}`;
-                  const role = account.role ? (roleNames[account.role] ?? account.role) : 'Роль не указана';
-                  return (
-                    <View
-                      key={account.id}
-                      style={[
-                        styles.accountCard,
-                        {
-                          backgroundColor: palette.bg.card,
-                          borderColor: account.active ? palette.accent.primaryText : palette.border.subtle,
-                        },
-                      ]}
-                    >
-                      <Pressable
-                        disabled={!!busy || (account.active && !account.needsReauth)}
-                        onPress={() => void selectAccount(account.id)}
-                        style={styles.accountMain}
-                        accessibilityRole="button"
-                      >
-                        <View
-                          style={[
-                            styles.avatar,
-                            { backgroundColor: account.needsReauth ? colors.amber[100] : palette.accent.primarySoft },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.avatarText,
-                              { color: account.needsReauth ? colors.amber[800] : palette.accent.primaryText },
-                            ]}
-                          >
-                            {account.displayName.trim().charAt(0).toUpperCase() || '?'}
-                          </Text>
-                        </View>
-                        <View style={styles.rowCopy}>
-                          <Text style={[styles.accountName, { color: palette.text.primary }]} numberOfLines={1}>
-                            {account.displayName || account.identity.userId}
-                          </Text>
-                          <Text style={[styles.meta, { color: palette.text.secondary }]}>
-                            {role}
-                            {account.active ? ' · Активен' : ''}
-                          </Text>
-                          {account.needsReauth ? (
-                            <Text style={[styles.warning, { color: colors.amber[800] }]}>Нужен повторный вход</Text>
-                          ) : null}
-                        </View>
-                        {isBusy ? (
-                          <ActivityIndicator color={palette.accent.primaryText} />
-                        ) : account.active && !account.needsReauth ? (
-                          <Ionicons name="checkmark-circle" size={22} color={palette.accent.primaryText} />
-                        ) : (
-                          <Ionicons name="chevron-forward" size={20} color={palette.text.tertiary} />
-                        )}
-                      </Pressable>
-                      <View style={[styles.accountActions, { borderTopColor: palette.border.subtle }]}>
-                        {account.needsReauth ? (
-                          <Pressable disabled={!!busy} onPress={() => openForm(account.id)} style={styles.action}>
-                            <Text style={[styles.actionText, { color: palette.accent.primaryText }]}>Войти снова</Text>
-                          </Pressable>
-                        ) : null}
-                        <Pressable disabled={!!busy} onPress={() => removeAccount(account.id)} style={styles.action}>
-                          <Text style={[styles.actionText, { color: colors.red[600] }]}>Удалить с устройства</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  );
-                })}
-                <Pressable
-                  disabled={!!busy || auth.savedAccounts.length >= MAX_ACCOUNTS}
-                  onPress={() => openForm(null)}
-                  style={[
-                    styles.addButton,
-                    {
-                      borderColor: palette.border.subtle,
-                      opacity: auth.savedAccounts.length >= MAX_ACCOUNTS ? 0.5 : 1,
-                    },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: auth.savedAccounts.length >= MAX_ACCOUNTS }}
-                >
-                  <Ionicons name="add-circle-outline" size={22} color={palette.accent.primaryText} />
-                  <Text style={[styles.actionText, { color: palette.accent.primaryText }]}>Добавить аккаунт</Text>
-                  <Text style={[styles.meta, { color: palette.text.tertiary }]}>
-                    {auth.savedAccounts.length}/{MAX_ACCOUNTS}
-                  </Text>
-                </Pressable>
-              </>
-            )}
+            ) : null}
             {error ? (
               <Text accessibilityRole="alert" style={[styles.error, { color: colors.red[600] }]}>
                 {error}
@@ -478,6 +514,37 @@ function errorMessage(error: unknown): string {
 }
 
 const styles = StyleSheet.create({
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.12)' },
+  menu: {
+    position: 'absolute',
+    right: 14,
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  menuContent: { paddingHorizontal: 8, paddingVertical: 6 },
+  menuAdd: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12 },
+  menuAddText: { flex: 1, fontSize: 15, fontWeight: '500' },
+  menuCount: { fontSize: 12, fontVariant: ['tabular-nums'] },
+  menuRow: { flexDirection: 'row', alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth },
+  menuAccount: {
+    flex: 1,
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingLeft: 10,
+    paddingVertical: 10,
+  },
+  menuName: { fontSize: 15, fontWeight: '600' },
+  menuMeta: { fontSize: 12, lineHeight: 16 },
+  menuMore: { width: 44, minHeight: 54, alignItems: 'center', justifyContent: 'center' },
+  menuError: { fontSize: 13, lineHeight: 18, padding: 12 },
+  avatarImage: { width: 42, height: 42, borderRadius: 21 },
   safe: { flex: 1 },
   flex: { flex: 1 },
   header: {

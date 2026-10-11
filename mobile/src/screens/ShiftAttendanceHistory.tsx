@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { formatDayKey, timezoneLabel, timezoneOption } from '../../../shared/utils/formatters';
@@ -22,6 +22,7 @@ import {
   formatShiftTime,
   shiftAttendanceStatus,
 } from './shiftAttendanceHelpers';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 interface Props {
   currentMonth: Date;

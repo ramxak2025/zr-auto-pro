@@ -26,7 +26,6 @@ import {
   Modal as RNModal,
   Platform,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -65,6 +64,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import type { FinancialReport, DashboardV2 } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 

@@ -20,7 +20,7 @@
  * собственный набор цветов.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
@@ -29,6 +29,7 @@ import { buildIosSurface } from '../platform/iosSurface';
 import { getPalette } from '../theme/palette';
 import { spacing, borderRadius, fontSize, fontWeight } from '../theme';
 import type { LoginPointOption } from '../../../shared/api/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export interface LoginPointSelectProps {
   /** Доступные сотруднику живые филиалы; порядок сервера (основной сервис первым). */

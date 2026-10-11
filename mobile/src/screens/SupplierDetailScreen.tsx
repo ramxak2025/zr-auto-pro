@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -50,6 +49,7 @@ import { addMonths, formatMonthKey, monthLabelFull } from '../components/salary/
 import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 import { parseReturnQuantity } from '../../../shared/utils/procurementInput';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (
@@ -1811,7 +1811,7 @@ export default function SupplierDetailScreen() {
         <Text style={[styles.orderPickerHint, { color: palette.text.secondary }]}>
           Поставка принимается по заказу — выберите, который пришёл.
         </Text>
-        <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
           {receivableOrders.map((po) => (
             <TouchableOpacity
               key={po.id}
@@ -2041,7 +2041,7 @@ export default function SupplierDetailScreen() {
       <Modal visible={!!editTarget} onClose={() => setEditTarget(null)} title="Изменить поставку">
         {editTarget && (
           <>
-            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
               {editLines.length === 0 ? (
                 <Text style={[styles.editEmptyText, { color: palette.text.tertiary }]}>
                   Все строки удалены. Если поставка ошибочна целиком — закройте окно и нажмите «Удалить».
@@ -2214,7 +2214,7 @@ export default function SupplierDetailScreen() {
         onClose={() => setUsedPurchaseModalOpen(false)}
         title="Покупка б/у запчасти"
       >
-        <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
           {/* Informational chip — honest bookkeeping contract (matches web
               SupplierDetailPage). Backend `usedPurchase` does NOT write an
               expense; it adds the item to the Б/У warehouse and grows supplier
@@ -2298,6 +2298,7 @@ export default function SupplierDetailScreen() {
                 style={{ marginTop: spacing[2] }}
                 contentContainerStyle={{ gap: spacing[2] }}
                 keyboardShouldPersistTaps="handled"
+                reserveBottomNavigation={false}
               >
                 {usedCategories.slice(0, 16).map((cat) => (
                   <TouchableOpacity
@@ -2638,7 +2639,7 @@ function DefectProductPickerModal({
           <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>На складе брака ничего нет</Text>
         </View>
       ) : (
-        <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled" reserveBottomNavigation={false}>
           {filtered.map((p) => (
             <TouchableOpacity
               key={p.id}

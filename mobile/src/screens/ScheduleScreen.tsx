@@ -4,7 +4,6 @@ import {
   Animated as RNAnimated,
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   Pressable,
   TextInput,
@@ -68,6 +67,7 @@ import { manualSchedulePayload, SCHEDULE_WEEKDAYS, type QuickAttendanceChoice } 
 import WorkModeEditor from './WorkModeEditor';
 import ScheduleDayHoursForm from './ScheduleDayHoursForm';
 import { getCellDot, getTodayStatusInfo, gridAttendanceCounts } from './scheduleAttendance';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
@@ -1472,7 +1472,7 @@ function GridTab() {
         title={reorderUser ? `Позиция: ${reorderUser.name?.split(' ')[0] || ''}` : ''}
       >
         {reorderUser && (
-          <ScrollView style={{ maxHeight: 400 }}>
+          <ScrollView style={{ maxHeight: 400 }} reserveBottomNavigation={false}>
             {activeUsers
               .filter((employee) => {
                 const target = activeUsers.find((u) => u.id === reorderUser.userId);
@@ -2934,7 +2934,7 @@ function SettingsTab() {
       <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title="Применить режим">
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сотрудник</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} reserveBottomNavigation={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
               <TouchableOpacity
                 style={[

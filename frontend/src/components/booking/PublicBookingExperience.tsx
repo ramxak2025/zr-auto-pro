@@ -96,6 +96,8 @@ function safeLink(value: string | undefined) {
 export default function PublicBookingExperience(props: Props) {
   const { landing, selected, date, selectedSlot, resourceKey, busy } = props;
   const [step, setStep] = useState(0);
+  const [path, setPath] = useState<'service' | 'master'>('service');
+  const [choosingMaster, setChoosingMaster] = useState(false);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
   const [contactsOpen, setContactsOpen] = useState(false);
@@ -160,6 +162,9 @@ export default function PublicBookingExperience(props: Props) {
     <main className="public-booking" data-public-booking>
       <div className="pb-container">
         <header className={`pb-business${step > 0 && showForm ? ' pb-business-compact' : ''}`}>
+          <div className="pb-business-mark" aria-hidden="true">
+            <MapPin size={26} />
+          </div>
           <h1>{landing.displayName}</h1>
           <p className="pb-address">
             <MapPin size={14} aria-hidden="true" />
@@ -212,98 +217,129 @@ export default function PublicBookingExperience(props: Props) {
               {step === 0 && (
                 <section aria-labelledby="pb-heading">
                   <h2 id="pb-heading" ref={heading} tabIndex={-1}>
-                    Выберите услуги
+                    {choosingMaster ? 'Выберите мастера' : 'Выберите услуги'}
                   </h2>
-                  <p className="pb-description">Можно выбрать одну или несколько.</p>
-                  <label className="pb-search">
-                    <Search size={17} aria-hidden="true" />
-                    <input
-                      type="search"
-                      aria-label="Поиск по всем услугам"
-                      placeholder="Название услуги"
-                      value={query}
-                      onChange={(event) => {
-                        setQuery(event.target.value);
-                        setCategory('');
+                  <div className="pb-paths" role="group" aria-label="С чего начать запись">
+                    <button
+                      type="button"
+                      aria-pressed={path === 'service'}
+                      onClick={() => {
+                        setPath('service');
+                        setChoosingMaster(false);
+                        props.onResource('');
                       }}
-                    />
-                    {query && (
-                      <button type="button" aria-label="Очистить поиск" onClick={() => setQuery('')}>
-                        <X size={16} aria-hidden="true" />
-                      </button>
-                    )}
-                  </label>
-                  {!!categories.length && (
-                    <div className="pb-categories" aria-label="Категории услуг">
-                      <button type="button" aria-pressed={!category} onClick={() => setCategory('')}>
-                        Все
-                      </button>
-                      {categories.map((value) => (
-                        <button
-                          type="button"
-                          key={value}
-                          aria-pressed={category === value}
-                          onClick={() => setCategory(value)}
-                        >
-                          {value}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="pb-services">
-                    {visibleServices.map((service) => (
-                      <label
-                        key={service.id}
-                        className={`pb-service${selected.includes(service.id) ? ' is-selected' : ''}`}
-                      >
-                        <span className="pb-service-top">
-                          <span className="pb-service-name">{service.name}</span>
-                          <input
-                            type="checkbox"
-                            checked={selected.includes(service.id)}
-                            onChange={(event) =>
-                              props.onSelected(
-                                event.target.checked
-                                  ? [...selected, service.id]
-                                  : selected.filter((id) => id !== service.id),
-                              )
-                            }
-                          />
-                        </span>
-                        <span className="pb-service-bottom">
-                          {landing.showPrices ? (
-                            <span className="pb-service-price">{servicePrice(service)}</span>
-                          ) : (
-                            <span className="pb-muted">{service.category}</span>
-                          )}
-                          <span className="pb-duration">
-                            <Clock size={12} aria-hidden="true" />
-                            {service.durationMinutes} мин
-                          </span>
-                        </span>
-                      </label>
-                    ))}
+                    >
+                      Выбрать услугу
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={path === 'master'}
+                      onClick={() => {
+                        setPath('master');
+                        setChoosingMaster(true);
+                      }}
+                    >
+                      Выбрать мастера
+                    </button>
                   </div>
-                  {!visibleServices.length && (
-                    <div className="pb-empty">
-                      <h3>Услуг не найдено</h3>
-                      <p>Попробуйте другое название.</p>
-                      <button
-                        type="button"
-                        className="pb-link"
-                        onClick={() => {
-                          setQuery('');
-                          setCategory('');
-                        }}
-                      >
-                        Показать все услуги
+                  {choosingMaster ? (
+                    <MasterChoices landing={landing} resourceKey={resourceKey} onResource={props.onResource} />
+                  ) : (
+                    <>
+                      {path === 'master' && selectedMaster && (
+                        <p className="pb-description">Мастер: {selectedMaster.name}</p>
+                      )}
+                      <label className="pb-search">
+                        <Search size={17} aria-hidden="true" />
+                        <input
+                          type="search"
+                          aria-label="Поиск по всем услугам"
+                          placeholder="Название услуги"
+                          value={query}
+                          onChange={(event) => {
+                            setQuery(event.target.value);
+                            setCategory('');
+                          }}
+                        />
+                        {query && (
+                          <button type="button" aria-label="Очистить поиск" onClick={() => setQuery('')}>
+                            <X size={16} aria-hidden="true" />
+                          </button>
+                        )}
+                      </label>
+                      {!!categories.length && (
+                        <div className="pb-categories" aria-label="Категории услуг">
+                          <button type="button" aria-pressed={!category} onClick={() => setCategory('')}>
+                            Все
+                          </button>
+                          {categories.map((value) => (
+                            <button
+                              type="button"
+                              key={value}
+                              aria-pressed={category === value}
+                              onClick={() => setCategory(value)}
+                            >
+                              {value}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="pb-services">
+                        {visibleServices.map((service) => (
+                          <label
+                            key={service.id}
+                            className={`pb-service${selected.includes(service.id) ? ' is-selected' : ''}`}
+                          >
+                            <span className="pb-service-top">
+                              <span className="pb-service-name">{service.name}</span>
+                              <input
+                                type="checkbox"
+                                checked={selected.includes(service.id)}
+                                onChange={(event) =>
+                                  props.onSelected(
+                                    event.target.checked
+                                      ? [...selected, service.id]
+                                      : selected.filter((id) => id !== service.id),
+                                  )
+                                }
+                              />
+                            </span>
+                            <span className="pb-service-bottom">
+                              {landing.showPrices ? (
+                                <span className="pb-service-price">{servicePrice(service)}</span>
+                              ) : (
+                                <span className="pb-muted">{service.category}</span>
+                              )}
+                              <span className="pb-duration">
+                                <Clock size={12} aria-hidden="true" />
+                                {service.durationMinutes} мин
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {!visibleServices.length && (
+                        <div className="pb-empty">
+                          <h3>Услуг не найдено</h3>
+                          <p>Попробуйте другое название.</p>
+                          <button
+                            type="button"
+                            className="pb-link"
+                            onClick={() => {
+                              setQuery('');
+                              setCategory('');
+                            }}
+                          >
+                            Показать все услуги
+                          </button>
+                        </div>
+                      )}
+                      <button type="button" className="pb-help" onClick={openContacts}>
+                        <HelpCircle size={15} aria-hidden="true" />
+                        Помогите выбрать услугу
                       </button>
-                    </div>
+                    </>
                   )}
-                  <button type="button" className="pb-help" onClick={openContacts}>
-                    <HelpCircle size={15} aria-hidden="true" />
-                    Помогите выбрать услугу
-                  </button>
                 </section>
               )}
               {step === 1 && (
@@ -317,21 +353,12 @@ export default function PublicBookingExperience(props: Props) {
                   {!!landing.resources?.length && (
                     <>
                       <h3 className="pb-section-title">Мастер</h3>
-                      <div className="pb-resources" role="group" aria-label="Выбор мастера">
-                        <button type="button" aria-pressed={!resourceKey} onClick={() => props.onResource('')}>
-                          Любой свободный
-                        </button>
-                        {landing.resources.map((resource) => (
-                          <button
-                            key={resource.resourceKey}
-                            type="button"
-                            aria-pressed={resourceKey === resource.resourceKey}
-                            onClick={() => props.onResource(resource.resourceKey)}
-                          >
-                            {resource.name}
-                          </button>
-                        ))}
-                      </div>
+                      <MasterChoices
+                        landing={landing}
+                        resourceKey={resourceKey}
+                        onResource={props.onResource}
+                        allowAny
+                      />
                     </>
                   )}
                   <div className="pb-week-title">
@@ -472,17 +499,6 @@ export default function PublicBookingExperience(props: Props) {
                       />
                     </label>
                   </div>
-                  <label className="pb-consent">
-                    <input
-                      type="checkbox"
-                      checked={props.consented}
-                      onChange={(event) => props.onConsent(event.target.checked)}
-                    />
-                    <span>
-                      Даю согласие на обработку персональных данных для оформления записи.{' '}
-                      <a href="#pb-consent-document">Текст согласия</a>.
-                    </span>
-                  </label>
                   <details id="pb-consent-document" className="pb-legal">
                     <summary>Согласие на обработку данных</summary>
                     <p>{landing.consentText}</p>
@@ -520,28 +536,51 @@ export default function PublicBookingExperience(props: Props) {
                   <button
                     type="button"
                     className="pb-primary"
-                    disabled={step === 0 ? !selected.length : !selectedSlot || busy}
-                    onClick={() => setStep(step + 1)}
+                    disabled={step === 0 ? (choosingMaster ? !resourceKey : !selected.length) : !selectedSlot || busy}
+                    onClick={() => (choosingMaster ? setChoosingMaster(false) : setStep(step + 1))}
                   >
-                    {step === 0 ? 'Выбрать время' : 'Указать контакты'}
+                    {step === 0 ? (choosingMaster ? 'Выбрать услуги' : 'Выбрать время') : 'Указать контакты'}
                     <ArrowRight size={16} aria-hidden="true" />
                   </button>
                 ) : (
-                  <button
-                    type="submit"
-                    className="pb-primary"
-                    disabled={
-                      busy ||
-                      props.blocked ||
-                      !selectedSlot ||
-                      !props.consented ||
-                      !props.name.trim() ||
-                      !props.phone.trim()
-                    }
-                  >
-                    {busy ? 'Отправляем…' : landing.mode === 'approval' ? 'Отправить заявку' : 'Подтвердить запись'}
-                    <ArrowRight size={16} aria-hidden="true" />
-                  </button>
+                  <>
+                    <label className="pb-consent">
+                      <input
+                        required
+                        type="checkbox"
+                        checked={props.consented}
+                        onChange={(event) => props.onConsent(event.target.checked)}
+                      />
+                      <span>
+                        Даю согласие на обработку персональных данных.{' '}
+                        <a
+                          href="#pb-consent-document"
+                          onClick={() => {
+                            const document = globalThis.document.getElementById('pb-consent-document');
+                            if (document instanceof HTMLDetailsElement) document.open = true;
+                          }}
+                        >
+                          Текст согласия
+                        </a>
+                        .
+                      </span>
+                    </label>
+                    <button
+                      type="submit"
+                      className="pb-primary"
+                      disabled={
+                        busy ||
+                        props.blocked ||
+                        !selectedSlot ||
+                        !props.consented ||
+                        !props.name.trim() ||
+                        !props.phone.trim()
+                      }
+                    >
+                      {busy ? 'Отправляем…' : landing.mode === 'approval' ? 'Отправить заявку' : 'Подтвердить запись'}
+                      <ArrowRight size={16} aria-hidden="true" />
+                    </button>
+                  </>
                 )}
                 {step > 0 && (
                   <button type="button" className="pb-back" disabled={busy} onClick={() => setStep(step - 1)}>
@@ -578,5 +617,64 @@ export default function PublicBookingExperience(props: Props) {
         </footer>
       </div>
     </main>
+  );
+}
+
+function MasterChoices({
+  landing,
+  resourceKey,
+  onResource,
+  allowAny = false,
+}: {
+  landing: PublicBookingLanding;
+  resourceKey: string;
+  onResource: (value: string) => void;
+  allowAny?: boolean;
+}) {
+  return (
+    <div className="pb-resources" role="group" aria-label="Выбор мастера">
+      {allowAny && (
+        <button type="button" aria-pressed={!resourceKey} onClick={() => onResource('')} className="pb-any-master">
+          Любой свободный мастер
+        </button>
+      )}
+      {landing.resources?.map((resource) => (
+        <button
+          key={resource.resourceKey}
+          type="button"
+          aria-pressed={resourceKey === resource.resourceKey}
+          onClick={() => onResource(resource.resourceKey)}
+          className="pb-master"
+        >
+          <MasterAvatar name={resource.name} avatar={resource.avatar} />
+          <span className="pb-master-info">
+            <strong>{resource.name}</strong>
+            <span>{resource.profession || 'Мастер'}</span>
+          </span>
+          {resourceKey === resource.resourceKey && <Check size={18} aria-hidden="true" />}
+        </button>
+      ))}
+      {!landing.resources?.length && <p className="pb-status">Нет доступных мастеров. Свяжитесь с сервисом.</p>}
+    </div>
+  );
+}
+function MasterAvatar({ name, avatar }: { name: string; avatar?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const safeAvatar =
+    avatar &&
+    (/^https?:\/\//.test(avatar) || /^\/(?!\/)/.test(avatar) || /^data:image\/(png|jpeg|webp);base64,/.test(avatar));
+  return (
+    <span className="pb-avatar" aria-hidden="true">
+      {safeAvatar && !failed ? (
+        <img src={avatar} alt="" onError={() => setFailed(true)} />
+      ) : (
+        name
+          .trim()
+          .split(/\s+/)
+          .slice(0, 2)
+          .map((part) => part[0])
+          .join('')
+      )}
+    </span>
   );
 }

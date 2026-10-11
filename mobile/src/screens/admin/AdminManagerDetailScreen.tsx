@@ -9,7 +9,7 @@
  * Данные — ключи ['admin-managers', …], в persistent cache не попадают (деньги не кешируем на диск).
  */
 import React from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -49,6 +49,7 @@ import {
 import ManagerFormSheet from './ManagerFormSheet';
 import SettlementSheet from './SettlementSheet';
 import TransferManagerSheet from './TransferManagerSheet';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 type DetailRow =
   | { kind: 'label'; key: string; title: string }

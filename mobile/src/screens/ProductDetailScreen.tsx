@@ -34,7 +34,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
-  ScrollView,
   StyleSheet,
   RefreshControl,
   TouchableOpacity,
@@ -83,6 +82,7 @@ import type { Product, StockMovement, ProductPriceHistoryEntry, StorageCell } fr
 // Round 12 #6/#8: `barcode` now lives on the shared contract types — the old
 // local ProductEditPayload superset-hack is gone.
 import type { UpdateProductRequest } from '../../../shared/api/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const RECENT_COUNT = 4;

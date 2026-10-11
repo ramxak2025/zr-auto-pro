@@ -14,15 +14,16 @@
  * paddingBottom / contentInset on both platforms.
  */
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { floatingTabBarHeight, TAB_BAR_ROW_HEIGHT, TAB_BAR_TOP_GAP, TAB_BAR_BOTTOM_GAP } from '../utils/tabBarGeometry';
 
-export const ADMIN_BAR_HEIGHT = 60;
+export const ADMIN_BAR_HEIGHT = TAB_BAR_ROW_HEIGHT;
 export const ADMIN_BAR_HORIZONTAL_MARGIN = 14;
-export const ADMIN_BAR_TOP_LIFT = 6;
-export const ADMIN_BAR_BOTTOM_LIFT = 8;
+export const ADMIN_BAR_TOP_LIFT = TAB_BAR_TOP_GAP;
+export const ADMIN_BAR_BOTTOM_LIFT = TAB_BAR_BOTTOM_GAP;
 
 export function useAdminTabBarHeight(): number {
   const insets = useSafeAreaInsets();
-  return ADMIN_BAR_HEIGHT + ADMIN_BAR_TOP_LIFT + ADMIN_BAR_BOTTOM_LIFT + Math.max(insets.bottom, 8);
+  return floatingTabBarHeight(insets.bottom);
 }
 
 /**

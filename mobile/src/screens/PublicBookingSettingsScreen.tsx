@@ -1,15 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Share, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
 import { useNavigation } from '@react-navigation/native';
@@ -28,6 +18,7 @@ import type {
 } from '../../../shared/types';
 import type { PutPublicBookingSettingsRequest } from '../../../shared/api/types';
 import { showMutationErrorToast } from '../components/Toast';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const WEEK_DAYS = [
   { key: '1', short: 'Пн', label: 'Понедельник' },
@@ -198,244 +189,286 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
           onRetry={() => void settingsQuery.refetch()}
         />
       ) : (
-        <ScrollView contentContainerStyle={styles.content}>
-          <Text style={[styles.label, { color: palette.text.secondary }]}>Название сервиса</Text>
-          <TextInput
-            value={value.displayName}
-            onChangeText={(text) => setText('displayName', text)}
-            style={[
-              styles.input,
-              { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
-            maxLength={160}
-          />
-          <Text style={[styles.label, { color: palette.text.secondary }]}>Адрес</Text>
-          <TextInput
-            value={value.address}
-            onChangeText={(text) => setText('address', text)}
-            style={[
-              styles.input,
-              { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
-            maxLength={300}
-          />
-          <Text style={[styles.label, { color: palette.text.secondary }]}>Контакты сервиса</Text>
-          <TextInput
-            value={value.contacts}
-            onChangeText={(text) => setText('contacts', text)}
-            style={[
-              styles.input,
-              { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
-            maxLength={300}
-          />
-          <Text style={[styles.label, { color: palette.text.secondary }]}>Телефон для связи</Text>
-          <TextInput
-            accessibilityLabel="Телефон для связи"
-            keyboardType="phone-pad"
-            value={value.links.phone ?? ''}
-            onChangeText={(text) => setPublicLink('phone', text)}
-            style={[
-              styles.input,
-              { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
-            maxLength={32}
-          />
-          {(
-            [
-              ['instagram', 'Instagram', 'https://instagram.com/...'],
-              ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
-              ['vk', 'ВКонтакте', 'https://vk.com/...'],
-              ['telegram', 'Telegram', 'https://t.me/...'],
-            ] as const
-          ).map(([key, label, placeholder]) => (
-            <View key={key}>
-              <Text style={[styles.label, { color: palette.text.secondary }]}>{label}</Text>
-              <TextInput
-                accessibilityLabel={label}
-                value={value.links[key] ?? ''}
-                onChangeText={(text) => setPublicLink(key, text)}
-                placeholder={placeholder}
-                autoCapitalize="none"
-                keyboardType="url"
-                style={[
-                  styles.input,
-                  { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                ]}
-                maxLength={500}
-              />
-            </View>
-          ))}
-          <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <Text style={[styles.rowTitle, { color: palette.text.primary }]}>Подтверждать автоматически</Text>
-            <Switch
-              value={value.mode === 'instant'}
-              onValueChange={(enabled) =>
-                setDraft((current) => ({ ...current, mode: enabled ? 'instant' : 'approval' }))
-              }
-            />
-          </View>
-          <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <Text style={[styles.rowTitle, { color: palette.text.primary }]}>Показывать цены</Text>
-            <Switch
-              value={value.showPrices}
-              onValueChange={(enabled) => setDraft((current) => ({ ...current, showPrices: enabled }))}
-            />
-          </View>
-          <Text style={[styles.section, { color: palette.text.primary }]}>Шаг времени (минуты)</Text>
-          <TextInput
-            keyboardType="number-pad"
-            value={String(draft.slotStepMinutes ?? settings?.slotStepMinutes ?? 15)}
-            onChangeText={(text) => setDraft((current) => ({ ...current, slotStepMinutes: Number(text) }))}
-            style={[
-              styles.input,
-              { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
-          />
-          <Text style={[styles.section, { color: palette.text.primary }]}>Рабочие часы</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.daysTabs}>
-            {WEEK_DAYS.map(({ key, short, label }) => (
-              <TouchableOpacity
-                key={key}
-                accessibilityRole="tab"
-                accessibilityLabel={label}
-                accessibilityState={{ selected: activeDay === key }}
-                onPress={() => setActiveDay(key)}
-                style={[styles.dayTab, activeDay === key && styles.dayTabActive]}
-              >
-                <Text style={[styles.dayTabText, activeDay === key && styles.dayTabTextActive]}>{short}</Text>
-                <View style={[styles.dayDot, value.openingHours[key] && styles.dayDotOpen]} />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          {(() => {
-            const day = WEEK_DAYS.find((item) => item.key === activeDay) ?? WEEK_DAYS[0];
-            const hours = value.openingHours[day.key] ?? null;
-            return (
-              <View style={[styles.hoursRow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-                <Switch
-                  value={!!hours}
-                  onValueChange={(enabled) => setDayHours(day.key, enabled ? { start: '09:00', end: '18:00' } : null)}
-                />
-                <Text style={[styles.hoursLabel, { color: palette.text.primary }]}>{day.label}</Text>
-                {hours && (
-                  <View style={styles.hoursTimeGroup}>
-                    <TextInput
-                      accessibilityLabel={`${day.label}: начало`}
-                      value={hours.start}
-                      onChangeText={(start) => setDayHours(day.key, { ...hours, start })}
-                      style={[styles.timeInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
-                    />
-                    <Text style={{ color: palette.text.secondary }}>—</Text>
-                    <TextInput
-                      accessibilityLabel={`${day.label}: окончание`}
-                      value={hours.end}
-                      onChangeText={(end) => setDayHours(day.key, { ...hours, end })}
-                      style={[styles.timeInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
-                    />
-                  </View>
-                )}
-              </View>
-            );
-          })()}
-          <View style={[styles.legalCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <Text style={[styles.section, { color: palette.text.primary }]}>Политика и отдельное согласие</Text>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <View style={styles.intro}>
+            <Text style={[styles.introTitle, { color: palette.text.primary }]}>Запись к вам</Text>
             <Text style={[styles.note, { color: palette.text.secondary }]}>
-              Тексты готовит Autexa из реквизитов компании и выбранных контактов. Согласие клиента всегда отдельное и не
-              отмечается автоматически.
+              {settings?.published ? 'Страница опубликована' : 'Страница пока скрыта'}
             </Text>
-            {settings ? (
-              <>
-                <Text style={[styles.note, { color: palette.text.primary }]}>
-                  Политика · версия {settings.consentVersion}
-                </Text>
-                <Text selectable style={[styles.legalText, { color: palette.text.secondary }]}>
-                  {settings.policyText}
-                </Text>
-                <Text style={[styles.note, { color: palette.text.primary }]}>Отдельное согласие</Text>
-                <Text selectable style={[styles.legalText, { color: palette.text.secondary }]}>
-                  {settings.consentText}
-                </Text>
-              </>
-            ) : (
-              <Text style={[styles.note, { color: palette.text.secondary }]}>
-                Тексты появятся после первого сохранения.
+            {publicUrl && (
+              <Text selectable style={[styles.link, { color: colors.primary[700] }]}>
+                {publicUrl}
               </Text>
             )}
           </View>
-          <Text style={[styles.section, { color: palette.text.primary }]}>Услуги</Text>
-          {servicesQuery.isLoading ? (
-            <Text style={[styles.note, { color: palette.text.secondary }]}>Загружаем каталог услуг…</Text>
-          ) : servicesQuery.isError ? (
-            <View>
-              <Text style={styles.error}>Не удалось загрузить каталог услуг.</Text>
-              <TouchableOpacity accessibilityRole="button" onPress={() => void servicesQuery.refetch()}>
-                <Text style={styles.retryText}>Повторить загрузку услуг</Text>
-              </TouchableOpacity>
-            </View>
-          ) : services.length === 0 ? (
-            <Text style={[styles.note, { color: palette.text.secondary }]}>В каталоге пока нет услуг.</Text>
-          ) : (
-            services.map((service) => {
-              const chosen = value.serviceRows.find((item) => item.serviceId === service.id);
-              return (
-                <View
-                  key={service.id}
-                  style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.rowTitle, { color: palette.text.primary }]}>{service.name}</Text>
-                    {!!service.category && (
-                      <Text style={[styles.note, { color: palette.text.tertiary }]}>{service.category}</Text>
-                    )}
-                  </View>
-                  {chosen && (
-                    <TextInput
-                      accessibilityLabel={`Длительность услуги ${service.name}`}
-                      keyboardType="number-pad"
-                      value={String(chosen.durationMinutes)}
-                      onChangeText={(text) =>
-                        setDraft((current) => ({
-                          ...current,
-                          services: (current.services ?? settings?.services ?? []).map((item) =>
-                            item.serviceId === service.id ? { ...item, durationMinutes: Number(text) } : item,
-                          ),
-                        }))
-                      }
-                      style={[styles.duration, { color: palette.text.primary, borderColor: palette.border.subtle }]}
-                    />
-                  )}
-                  <Switch value={!!chosen} onValueChange={(enabled) => toggleService(service.id, enabled)} />
-                </View>
-              );
-            })
-          )}
-          <Text style={[styles.section, { color: palette.text.primary }]}>Сотрудники</Text>
-          {resourcesQuery.isLoading ? (
-            <Text style={[styles.note, { color: palette.text.secondary }]}>Загружаем сотрудников…</Text>
-          ) : resourcesQuery.isError ? (
-            <View>
-              <Text style={styles.error}>Не удалось загрузить сотрудников.</Text>
-              <TouchableOpacity accessibilityRole="button" onPress={() => void resourcesQuery.refetch()}>
-                <Text style={styles.retryText}>Повторить загрузку сотрудников</Text>
-              </TouchableOpacity>
-            </View>
-          ) : resources.length === 0 ? (
-            <Text style={[styles.note, { color: palette.text.secondary }]}>Нет сотрудников для выбора мастеров.</Text>
-          ) : (
-            resources.map((resource) => (
-              <View
-                key={resource.id}
-                style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <Text style={[styles.rowTitle, { color: palette.text.primary }]}>{resource.name}</Text>
-                <Switch
-                  value={value.resourceIds.includes(resource.id)}
-                  onValueChange={(enabled) => toggleResource(resource.id, enabled)}
+          <SettingsSection title="Автосервис" summary={value.displayName || 'Название и адрес'} initialOpen>
+            <Text style={[styles.label, { color: palette.text.secondary }]}>Название сервиса</Text>
+            <TextInput
+              value={value.displayName}
+              onChangeText={(text) => setText('displayName', text)}
+              style={[
+                styles.input,
+                { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              ]}
+              maxLength={160}
+            />
+            <Text style={[styles.label, { color: palette.text.secondary }]}>Адрес</Text>
+            <TextInput
+              value={value.address}
+              onChangeText={(text) => setText('address', text)}
+              style={[
+                styles.input,
+                { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              ]}
+              maxLength={300}
+            />
+          </SettingsSection>
+          <SettingsSection title="Контакты и соцсети" summary={value.links.phone || 'Как с вами связаться'}>
+            <Text style={[styles.label, { color: palette.text.secondary }]}>Контакты сервиса</Text>
+            <TextInput
+              value={value.contacts}
+              onChangeText={(text) => setText('contacts', text)}
+              style={[
+                styles.input,
+                { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              ]}
+              maxLength={300}
+            />
+            <Text style={[styles.label, { color: palette.text.secondary }]}>Телефон для связи</Text>
+            <TextInput
+              accessibilityLabel="Телефон для связи"
+              keyboardType="phone-pad"
+              value={value.links.phone ?? ''}
+              onChangeText={(text) => setPublicLink('phone', text)}
+              style={[
+                styles.input,
+                { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              ]}
+              maxLength={32}
+            />
+            {(
+              [
+                ['instagram', 'Instagram', 'https://instagram.com/...'],
+                ['whatsapp', 'WhatsApp', 'https://wa.me/...'],
+                ['vk', 'ВКонтакте', 'https://vk.com/...'],
+                ['telegram', 'Telegram', 'https://t.me/...'],
+              ] as const
+            ).map(([key, label, placeholder]) => (
+              <View key={key}>
+                <Text style={[styles.label, { color: palette.text.secondary }]}>{label}</Text>
+                <TextInput
+                  accessibilityLabel={label}
+                  value={value.links[key] ?? ''}
+                  onChangeText={(text) => setPublicLink(key, text)}
+                  placeholder={placeholder}
+                  autoCapitalize="none"
+                  keyboardType="url"
+                  style={[
+                    styles.input,
+                    {
+                      color: palette.text.primary,
+                      backgroundColor: palette.bg.card,
+                      borderColor: palette.border.subtle,
+                    },
+                  ]}
+                  maxLength={500}
                 />
               </View>
-            ))
-          )}
+            ))}
+          </SettingsSection>
+          <SettingsSection
+            title="Как проходит запись"
+            summary={value.mode === 'instant' ? 'Сразу в расписание' : 'После вашего подтверждения'}
+          >
+            <Text style={[styles.note, { color: palette.text.secondary }]}>
+              {value.mode === 'instant'
+                ? 'Клиент выбирает свободное время — запись появляется в расписании.'
+                : 'Клиент оставляет заявку — вы проверяете и подтверждаете время.'}
+            </Text>
+            <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <Text style={[styles.rowTitle, { color: palette.text.primary }]}>Подтверждать автоматически</Text>
+              <Switch
+                value={value.mode === 'instant'}
+                onValueChange={(enabled) =>
+                  setDraft((current) => ({ ...current, mode: enabled ? 'instant' : 'approval' }))
+                }
+              />
+            </View>
+            <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <Text style={[styles.rowTitle, { color: palette.text.primary }]}>Показывать цены</Text>
+              <Switch
+                value={value.showPrices}
+                onValueChange={(enabled) => setDraft((current) => ({ ...current, showPrices: enabled }))}
+              />
+            </View>
+          </SettingsSection>
+          <SettingsSection title="Расписание" summary="Рабочие дни и свободное время">
+            <Text style={[styles.label, { color: palette.text.secondary }]}>Шаг времени (минуты)</Text>
+            <TextInput
+              keyboardType="number-pad"
+              value={String(draft.slotStepMinutes ?? settings?.slotStepMinutes ?? 15)}
+              onChangeText={(text) => setDraft((current) => ({ ...current, slotStepMinutes: Number(text) }))}
+              style={[
+                styles.input,
+                { color: palette.text.primary, backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              ]}
+            />
+            <Text style={[styles.section, { color: palette.text.primary }]}>Рабочие часы</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.daysTabs}>
+              {WEEK_DAYS.map(({ key, short, label }) => (
+                <TouchableOpacity
+                  key={key}
+                  accessibilityRole="tab"
+                  accessibilityLabel={label}
+                  accessibilityState={{ selected: activeDay === key }}
+                  onPress={() => setActiveDay(key)}
+                  style={[styles.dayTab, activeDay === key && styles.dayTabActive]}
+                >
+                  <Text style={[styles.dayTabText, activeDay === key && styles.dayTabTextActive]}>{short}</Text>
+                  <View style={[styles.dayDot, value.openingHours[key] && styles.dayDotOpen]} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {(() => {
+              const day = WEEK_DAYS.find((item) => item.key === activeDay) ?? WEEK_DAYS[0];
+              const hours = value.openingHours[day.key] ?? null;
+              return (
+                <View
+                  style={[styles.hoursRow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <Switch
+                    value={!!hours}
+                    onValueChange={(enabled) => setDayHours(day.key, enabled ? { start: '09:00', end: '18:00' } : null)}
+                  />
+                  <Text style={[styles.hoursLabel, { color: palette.text.primary }]}>{day.label}</Text>
+                  {hours && (
+                    <View style={styles.hoursTimeGroup}>
+                      <TextInput
+                        accessibilityLabel={`${day.label}: начало`}
+                        value={hours.start}
+                        onChangeText={(start) => setDayHours(day.key, { ...hours, start })}
+                        style={[styles.timeInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
+                      />
+                      <Text style={{ color: palette.text.secondary }}>—</Text>
+                      <TextInput
+                        accessibilityLabel={`${day.label}: окончание`}
+                        value={hours.end}
+                        onChangeText={(end) => setDayHours(day.key, { ...hours, end })}
+                        style={[styles.timeInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
+                      />
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
+          </SettingsSection>
+          <SettingsSection title="Документы для клиента" summary="Политика и отдельное согласие">
+            <View>
+              <Text style={[styles.section, { color: palette.text.primary }]}>Политика и отдельное согласие</Text>
+              <Text style={[styles.note, { color: palette.text.secondary }]}>
+                Autexa готовит тексты из реквизитов компании. Клиент отмечает согласие вручную.
+              </Text>
+              {settings ? (
+                <>
+                  <Text style={[styles.note, { color: palette.text.primary }]}>
+                    Политика · версия {settings.consentVersion}
+                  </Text>
+                  <Text selectable style={[styles.legalText, { color: palette.text.secondary }]}>
+                    {settings.policyText}
+                  </Text>
+                  <Text style={[styles.note, { color: palette.text.primary }]}>Отдельное согласие</Text>
+                  <Text selectable style={[styles.legalText, { color: palette.text.secondary }]}>
+                    {settings.consentText}
+                  </Text>
+                </>
+              ) : (
+                <Text style={[styles.note, { color: palette.text.secondary }]}>
+                  Тексты появятся после первого сохранения.
+                </Text>
+              )}
+            </View>
+          </SettingsSection>
+          <SettingsSection title="Услуги" summary={`Выбрано: ${value.serviceRows.length}`}>
+            <Text style={[styles.note, { color: palette.text.secondary }]}>
+              Включите услуги и укажите длительность в минутах.
+            </Text>
+            {servicesQuery.isLoading ? (
+              <Text style={[styles.note, { color: palette.text.secondary }]}>Загружаем каталог услуг…</Text>
+            ) : servicesQuery.isError ? (
+              <View>
+                <Text style={styles.error}>Не удалось загрузить каталог услуг.</Text>
+                <TouchableOpacity accessibilityRole="button" onPress={() => void servicesQuery.refetch()}>
+                  <Text style={styles.retryText}>Повторить загрузку услуг</Text>
+                </TouchableOpacity>
+              </View>
+            ) : services.length === 0 ? (
+              <Text style={[styles.note, { color: palette.text.secondary }]}>В каталоге пока нет услуг.</Text>
+            ) : (
+              services.map((service) => {
+                const chosen = value.serviceRows.find((item) => item.serviceId === service.id);
+                return (
+                  <View
+                    key={service.id}
+                    style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.rowTitle, { color: palette.text.primary }]}>{service.name}</Text>
+                      {!!service.category && (
+                        <Text style={[styles.note, { color: palette.text.tertiary }]}>{service.category}</Text>
+                      )}
+                    </View>
+                    {chosen && (
+                      <TextInput
+                        accessibilityLabel={`Длительность услуги ${service.name}`}
+                        keyboardType="number-pad"
+                        value={String(chosen.durationMinutes)}
+                        onChangeText={(text) =>
+                          setDraft((current) => ({
+                            ...current,
+                            services: (current.services ?? settings?.services ?? []).map((item) =>
+                              item.serviceId === service.id ? { ...item, durationMinutes: Number(text) } : item,
+                            ),
+                          }))
+                        }
+                        style={[styles.duration, { color: palette.text.primary, borderColor: palette.border.subtle }]}
+                      />
+                    )}
+                    <Switch value={!!chosen} onValueChange={(enabled) => toggleService(service.id, enabled)} />
+                  </View>
+                );
+              })
+            )}
+          </SettingsSection>
+          <SettingsSection title="Мастера" summary={`Принимают записи: ${value.resourceIds.length}`}>
+            <Text style={[styles.note, { color: palette.text.secondary }]}>
+              Только выбранные сотрудники появятся на странице.
+            </Text>
+            {resourcesQuery.isLoading ? (
+              <Text style={[styles.note, { color: palette.text.secondary }]}>Загружаем сотрудников…</Text>
+            ) : resourcesQuery.isError ? (
+              <View>
+                <Text style={styles.error}>Не удалось загрузить сотрудников.</Text>
+                <TouchableOpacity accessibilityRole="button" onPress={() => void resourcesQuery.refetch()}>
+                  <Text style={styles.retryText}>Повторить загрузку сотрудников</Text>
+                </TouchableOpacity>
+              </View>
+            ) : resources.length === 0 ? (
+              <Text style={[styles.note, { color: palette.text.secondary }]}>Нет сотрудников для выбора мастеров.</Text>
+            ) : (
+              resources.map((resource) => (
+                <View
+                  key={resource.id}
+                  style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.rowTitle, { color: palette.text.primary }]}>{resource.name}</Text>
+                  <Switch
+                    value={value.resourceIds.includes(resource.id)}
+                    onValueChange={(enabled) => toggleResource(resource.id, enabled)}
+                  />
+                </View>
+              ))
+            )}
+          </SettingsSection>
           <TouchableOpacity
             accessibilityRole="button"
             disabled={save.isPending}
@@ -480,7 +513,47 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
   );
 }
 
+function SettingsSection({
+  title,
+  summary,
+  children,
+  initialOpen = false,
+}: {
+  title: string;
+  summary: string;
+  children: ReactNode;
+  initialOpen?: boolean;
+}) {
+  const palette = useColors();
+  const [open, setOpen] = useState(initialOpen);
+  return (
+    <View style={[styles.panel, { backgroundColor: palette.bg.card }]}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((current) => !current)}
+        style={styles.panelHeading}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.panelTitle, { color: palette.text.primary }]}>{title}</Text>
+          <Text style={[styles.note, { color: palette.text.secondary }]}>{summary}</Text>
+        </View>
+        <Text style={[styles.expand, { color: palette.text.secondary }]}>{open ? 'Скрыть' : 'Изменить'}</Text>
+      </TouchableOpacity>
+      {open && <View style={styles.panelBody}>{children}</View>}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  intro: { paddingVertical: spacing[3], marginBottom: spacing[3] },
+  introTitle: { fontSize: 27, fontWeight: '700', letterSpacing: -0.5 },
+  link: { fontSize: 14, marginTop: spacing[2] },
+  panel: { borderRadius: 16, marginBottom: spacing[3] },
+  panelHeading: { minHeight: 78, padding: spacing[4], flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  panelTitle: { fontSize: 16, fontWeight: '600' },
+  expand: { fontSize: 12 },
+  panelBody: { paddingHorizontal: spacing[4], paddingBottom: spacing[4] },
   safe: { flex: 1 },
   embedded: { flex: 1 },
   loader: { marginTop: 48 },
