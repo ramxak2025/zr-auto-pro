@@ -1091,7 +1091,7 @@ export default function CheckCreatePage() {
           productId: p.productId || '',
           name: p.name,
           sellPrice: p.sellPrice,
-          costPrice: p.costPrice,
+          costPrice: p.costPrice ?? 0,
           quantity: p.quantity,
           unit: catalogProduct?.unit || DEFAULT_UNIT,
         };

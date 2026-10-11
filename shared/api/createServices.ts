@@ -40,6 +40,8 @@ import type {
   ProductPriceHistoryEntry,
   Service,
   ServicePriceHistoryEntry,
+  ServiceFolder,
+  ServiceExecutionHistoryEntry,
   Check,
   TrashedCheck,
   ChecksBoard,
@@ -918,6 +920,15 @@ export function createServicesApi(api: HttpClient) {
       api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
     priceHistory: (id: string) => api.get<ServicePriceHistoryEntry[]>(`/services/${id}/price-history`),
+    executionHistory: (id: string, params?: PaginationParams) =>
+      api.get<PaginatedResponse<ServiceExecutionHistoryEntry>>(`/services/${id}/execution-history`, { params }),
+    folders: {
+      list: () => api.get<ServiceFolder[]>('/services/folders'),
+      create: (path: string) => api.post<ServiceFolder>('/services/folders', { path }),
+      rename: (path: string, name: string, parentPath?: string | null) =>
+        api.patch<ServiceFolder>('/services/folders', { path, name, parentPath }),
+      remove: (path: string) => api.delete('/services/folders', { params: { path } }),
+    },
     exportCatalog: () => api.get<Service[]>('/services/export'),
     previewImport: (rows: ServiceImportRow[]) =>
       api.post<ServiceImportPreview>('/services/import/preview', { rows }, { timeout: 60_000 }),

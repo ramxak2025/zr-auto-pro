@@ -17,18 +17,112 @@ const FOLDER_COLS = 'id, name, parent_id, sort, created_at, user_id';
 export class CheckTemplatesService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
-  private mapRow(r: any) {
-    return {
-      id: r.id,
-      name: r.name,
-      services: r.services || [],
-      products: r.products || [],
-      userId: r.user_id ?? null,
-      folderId: r.folder_id ?? null,
-      isShared: r.user_id == null,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    };
+  /** Read projection only: saved checks and template JSON remain unchanged. */
+  private async projectRows(
+    rows: Record<string, unknown>[],
+    tenantId: string,
+    actor: TemplateActor,
+    db: Pool | PoolClient = this.pool,
+  ) {
+    const records = (value: unknown): Record<string, unknown>[] =>
+      Array.isArray(value)
+        ? value.filter((line): line is Record<string, unknown> => line !== null && typeof line === 'object')
+        : [];
+    const ids = (field: 'services' | 'products', key: string) => [
+      ...new Set(
+        rows.flatMap((row) =>
+          records(row[field])
+            .map((line) => line[key])
+            .filter(
+              (id): id is string =>
+                typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id),
+            ),
+        ),
+      ),
+    ];
+    const serviceIds = ids('services', 'serviceId');
+    const productIds = ids('products', 'productId');
+    const canSeeCost = userHasPermission(actor, 'warehouse_manage');
+    const services = serviceIds.length
+      ? (
+          await db.query(
+            'SELECT id, default_price, price_type, min_price, max_price FROM services WHERE tenant_id=$1 AND id=ANY($2::uuid[])',
+            [tenantId, serviceIds],
+          )
+        ).rows
+      : [];
+    const products = productIds.length
+      ? (
+          await db.query(
+            `SELECT id, sell_price${canSeeCost ? ', cost_price' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL`,
+            [tenantId, productIds],
+          )
+        ).rows
+      : [];
+    const serviceMap = new Map(services.map((row) => [row.id, row]));
+    const productMap = new Map(products.map((row) => [row.id, row]));
+    return rows.map((row) => {
+      const productLines = records(row.products).map((line) => {
+        const current = productMap.get(line.productId);
+        const cost = current?.cost_price == null ? null : Number(current.cost_price);
+        const knownCost = cost !== null && Number.isFinite(cost) && cost >= 0;
+        return {
+          ...(typeof line.productId === 'string' ? { productId: line.productId } : {}),
+          name: line.name,
+          quantity: line.quantity,
+          sellPrice: current ? Number(current.sell_price) : line.sellPrice,
+          catalogStatus: current ? 'current' : line.productId ? 'unavailable' : 'manual',
+          ...(canSeeCost
+            ? { costStatus: knownCost ? 'known' : 'unknown', ...(knownCost ? { costPrice: cost } : {}) }
+            : {}),
+        };
+      });
+      const costKnown = productLines.every(
+        (line) =>
+          line.costStatus === 'known' &&
+          line.quantity != null &&
+          Number.isFinite(Number(line.quantity)) &&
+          Number(line.quantity) >= 0,
+      );
+      return {
+        id: row.id,
+        name: row.name,
+        userId: row.user_id ?? null,
+        folderId: row.folder_id ?? null,
+        isShared: row.user_id == null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        services: records(row.services).map((line) => {
+          const current = serviceMap.get(line.serviceId);
+          return {
+            ...line,
+            ...(current
+              ? {
+                  price: Number(current.default_price),
+                  priceType: current.price_type ?? 'fixed',
+                  minPrice: Number(current.min_price ?? current.default_price),
+                  maxPrice: Number(current.max_price ?? current.default_price),
+                }
+              : {}),
+            catalogStatus: current ? 'current' : line.serviceId ? 'unavailable' : 'manual',
+          };
+        }),
+        products: productLines,
+        ...(canSeeCost
+          ? {
+              costStatus: costKnown ? 'known' : 'unknown',
+              ...(costKnown
+                ? {
+                    productCostTotal: productLines.reduce(
+                      (sum, line) => sum + Number(line.costPrice) * Number(line.quantity),
+                      0,
+                    ),
+                  }
+                : {}),
+            }
+          : {}),
+      };
+    });
   }
 
   private mapFolder(r: any) {
@@ -174,15 +268,15 @@ export class CheckTemplatesService {
 
   // ── Templates ────────────────────────────────────────────────────────────
 
-  async getAll(tenantId: string, userId: string) {
+  async getAll(tenantId: string, actor: TemplateActor) {
     const { rows } = await this.pool.query(
       `SELECT ${TEMPLATE_COLS}
        FROM check_templates
        WHERE tenant_id=$1 AND (user_id IS NULL OR user_id=$2)
        ORDER BY name ASC`,
-      [tenantId, userId],
+      [tenantId, actor.userID],
     );
-    return rows.map(this.mapRow);
+    return this.projectRows(rows, tenantId, actor);
   }
 
   async create(tenantId: string, actor: TemplateActor, dto: CreateCheckTemplateDto) {
@@ -208,7 +302,7 @@ export class CheckTemplatesService {
           folderId,
         ],
       );
-      return this.mapRow(rows[0]);
+      return (await this.projectRows(rows, tenantId, actor, client))[0];
     });
   }
 
@@ -262,7 +356,7 @@ export class CheckTemplatesService {
         sets.push(`folder_id=$${idx++}`);
         vals.push(folderId);
       }
-      if (sets.length === 0) return this.mapRow(current);
+      if (sets.length === 0) return (await this.projectRows([current], tenantId, actor, client))[0];
       sets.push('updated_at=now()');
       vals.push(id, tenantId);
       const { rows } = await client.query(
@@ -270,7 +364,7 @@ export class CheckTemplatesService {
         vals,
       );
       if (!rows[0]) throw new NotFoundException({ message: 'Шаблон не найден' });
-      return this.mapRow(rows[0]);
+      return (await this.projectRows(rows, tenantId, actor, client))[0];
     });
   }
 

@@ -4,6 +4,9 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { ClientsService } from '../clients/clients.service';
+import { actorPointId } from '../common/point-scope';
+import { userHasPermission } from '../common/guards/permissions.guard';
 import { PutServiceVisibilityRuleDto } from './dto/put-service-visibility-rule.dto';
 import { normalizeServicePrice, ServicePriceInput } from './service-price-policy';
 import type {
@@ -38,7 +41,10 @@ interface ServiceImportOperation extends ServiceImportRow {
 
 @Injectable()
 export class ServicesService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private clients: ClientsService,
+  ) {}
 
   /** Serialize tenant catalog writes and import confirmations under one namespaced xact lock. */
   private async lockCatalogWrites(client: PoolClient, tenantID: string) {
@@ -162,6 +168,206 @@ export class ServicesService {
     );
 
     return { data: rows.map(this.mapService), total, page, limit };
+  }
+
+  /** Includes explicit empty folders and every ancestor of existing slash categories. */
+  async getFolders(tenantID: string, db: Pool | PoolClient = this.pool) {
+    const { rows } = await db.query<{ path: string }>(
+      `SELECT path FROM service_folders WHERE tenant_id=$1
+       UNION SELECT category AS path FROM services WHERE tenant_id=$1 AND category IS NOT NULL`,
+      [tenantID],
+    );
+    const paths = new Set<string>();
+    for (const row of rows) {
+      const parts = row.path
+        .trim()
+        .split('/')
+        .map((part) => part.trim())
+        .filter(Boolean);
+      for (let n = 1; n <= parts.length; n++) paths.add(parts.slice(0, n).join('/'));
+    }
+    return [...paths]
+      .sort((a, b) => a.localeCompare(b, 'ru'))
+      .map((path) => ({
+        path,
+        name: path.split('/').pop() ?? path,
+        parentPath: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : null,
+      }));
+  }
+
+  async createFolder(tenantID: string, rawPath: unknown) {
+    if (typeof rawPath !== 'string') throw new BadRequestException({ message: 'Укажите название папки' });
+    const path = this.normalizeCategoryPath(rawPath);
+    const parts = path.split('/');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      const existing = await client.query('SELECT 1 FROM service_folders WHERE tenant_id=$1 AND path=$2', [
+        tenantID,
+        path,
+      ]);
+      const folders = await this.getFolders(tenantID, client);
+      if (existing.rows.length || folders.some((folder) => folder.path === path))
+        throw new ConflictException({ message: 'Папка уже существует' });
+      for (let n = 1; n <= parts.length; n++)
+        await client.query('INSERT INTO service_folders (tenant_id, path) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
+          tenantID,
+          parts.slice(0, n).join('/'),
+        ]);
+      await client.query('COMMIT');
+      return {
+        path,
+        name: parts[parts.length - 1] ?? path,
+        parentPath: parts.length > 1 ? parts.slice(0, -1).join('/') : null,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Rename keeps all service IDs/prices and moves role preferences with the subtree. */
+  async renameFolder(tenantID: string, rawPath: unknown, rawName: unknown, rawParent?: unknown) {
+    if (typeof rawPath !== 'string' || typeof rawName !== 'string' || rawName.includes('/'))
+      throw new BadRequestException({ message: 'Укажите название папки без /' });
+    const path = this.normalizeCategoryPath(rawPath);
+    const name = this.normalizeCategoryPath(rawName);
+    const parent =
+      rawParent === undefined
+        ? path.includes('/')
+          ? path.slice(0, path.lastIndexOf('/'))
+          : ''
+        : rawParent === '' || rawParent === null
+          ? ''
+          : this.normalizeCategoryPath(rawParent);
+    const target = this.normalizeCategoryPath(parent ? `${parent}/${name}` : name);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      const folders = await this.getFolders(tenantID, client);
+      if (!folders.some((folder) => folder.path === path)) throw new NotFoundException({ message: 'Папка не найдена' });
+      if (parent === path || parent.startsWith(path + '/'))
+        throw new BadRequestException({ message: 'Нельзя переместить папку внутрь её подпапки' });
+      if (parent && !folders.some((folder) => folder.path === parent))
+        throw new NotFoundException({ message: 'Родительская папка не найдена' });
+      if (target !== path && folders.some((folder) => folder.path === target))
+        throw new ConflictException({ message: 'Папка уже существует' });
+      if (target !== path) {
+        for (const folder of folders.filter((folder) => folder.path === path || folder.path.startsWith(path + '/'))) {
+          await client.query('INSERT INTO service_folders (tenant_id,path) VALUES ($1,$2) ON CONFLICT DO NOTHING', [
+            tenantID,
+            target + folder.path.slice(path.length),
+          ]);
+        }
+        for (const [table, field] of [
+          ['services', 'category'],
+          ['service_visibility_rules', 'category_path'],
+        ] as const) {
+          const canonical = `regexp_replace(regexp_replace(regexp_replace(btrim(${field}), '\\s*/\\s*', '/', 'g'), '/+', '/', 'g'), '^/|/$', '', 'g')`;
+          await client.query(
+            `UPDATE ${table} SET ${field}=$3 || substring(${canonical} from length($2)+1)
+            WHERE tenant_id=$1 AND (${canonical}=$2 OR left(${canonical},length($2)+1)=$2 || '/')`,
+            [tenantID, path, target],
+          );
+        }
+        await client.query(
+          "DELETE FROM service_folders WHERE tenant_id=$1 AND (path=$2 OR left(path,length($2)+1)=$2 || '/')",
+          [tenantID, path],
+        );
+      }
+      await client.query('COMMIT');
+      return { path: target, name, parentPath: parent || null };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Removing a folder moves its services to the parent; never deletes work/prices. */
+  async removeFolder(tenantID: string, rawPath: unknown) {
+    if (typeof rawPath !== 'string') throw new BadRequestException({ message: 'Укажите папку' });
+    const path = this.normalizeCategoryPath(rawPath);
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : null;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockCatalogWrites(client, tenantID);
+      const folders = await this.getFolders(tenantID, client);
+      if (!folders.some((folder) => folder.path === path)) throw new NotFoundException({ message: 'Папка не найдена' });
+      const canonical = `regexp_replace(regexp_replace(regexp_replace(btrim(category), '\\s*/\\s*', '/', 'g'), '/+', '/', 'g'), '^/|/$', '', 'g')`;
+      await client.query(
+        `UPDATE services SET category=$3 WHERE tenant_id=$1 AND (${canonical}=$2 OR left(${canonical},length($2)+1)=$2 || '/')`,
+        [tenantID, path, parent],
+      );
+      await client.query(
+        "DELETE FROM service_visibility_rules WHERE tenant_id=$1 AND (category_path=$2 OR left(category_path,length($2)+1)=$2 || '/')",
+        [tenantID, path],
+      );
+      await client.query(
+        "DELETE FROM service_folders WHERE tenant_id=$1 AND (path=$2 OR left(path,length($2)+1)=$2 || '/')",
+        [tenantID, path],
+      );
+      await client.query('COMMIT');
+      return { message: 'Услуги перемещены в родительскую папку' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getExecutionHistory(id: string, tenantID: string, actor: JwtPayload, query: ServiceListQuery) {
+    await this.getById(id, tenantID);
+    const page = Math.max(1, Number.parseInt(String(query.page ?? 1), 10) || 1);
+    const limit = capLimit(query.limit, 30, 100);
+    const params: unknown[] = [tenantID, id];
+    let journal = 'FALSE';
+    if (userHasPermission(actor, 'checks_view')) {
+      if (userHasPermission(actor, 'checks_view_all')) journal = 'TRUE';
+      else {
+        params.push(actor.userID);
+        const userParam = `$${params.length}`;
+        journal = `(ch.master_id=${userParam} OR EXISTS(SELECT 1 FROM check_service_lines ownline WHERE ownline.check_id=ch.id AND ownline.master_id=${userParam})
+          OR EXISTS(SELECT 1 FROM check_assignees assigned WHERE assigned.check_id=ch.id AND assigned.user_id=${userParam}))`;
+      }
+    }
+    let clientHistory = 'FALSE';
+    if (userHasPermission(actor, 'clients_view')) {
+      const viewerPoint = await this.clients.separatePointFor(tenantID, actorPointId(actor));
+      const clientWhere = this.clients.separatePointWhere('c', viewerPoint, params);
+      clientHistory = `EXISTS(SELECT 1 FROM clients c WHERE c.id=ch.client_id AND c.tenant_id=$1${clientWhere})`;
+    }
+    const from = `FROM check_service_lines line JOIN checks ch ON ch.id=line.check_id AND ch.tenant_id=$1
+      LEFT JOIN users executor ON executor.id=line.master_id AND executor.tenant_id=$1
+      WHERE line.service_id=$2 AND ch.deleted_at IS NULL AND ch.is_deferred=false AND (${journal} OR ${clientHistory})`;
+    const count = await this.pool.query(`SELECT COUNT(*) AS total ${from}`, params);
+    const values = [...params, limit, (page - 1) * limit];
+    const { rows } = await this.pool.query(
+      `SELECT line.id,ch.id AS check_id,ch.number,CASE WHEN ${clientHistory} THEN ch.client_id ELSE NULL END AS client_id,ch.date,line.price,executor.full_name AS executor_name
+      ${from} ORDER BY ch.date DESC,ch.id DESC,line.id LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        checkId: row.check_id,
+        checkNumber: Number(row.number),
+        clientId: row.client_id,
+        date: row.date,
+        price: Number(row.price),
+        executorName: row.executor_name ?? null,
+      })),
+      total: Number(count.rows[0].total),
+      page,
+      limit,
+    };
   }
 
   async getById(id: string, tenantID: string) {
@@ -652,7 +858,7 @@ export class ServicesService {
         [tenantID],
       ),
       this.pool.query<{ category: string | null }>(
-        `SELECT DISTINCT category FROM services WHERE tenant_id=$1 AND category IS NOT NULL AND btrim(category)<>''`,
+        `SELECT path AS category FROM service_folders WHERE tenant_id=$1 UNION SELECT DISTINCT category FROM services WHERE tenant_id=$1 AND category IS NOT NULL AND btrim(category)<>''`,
         [tenantID],
       ),
       this.pool.query<{

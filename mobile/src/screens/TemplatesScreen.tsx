@@ -238,7 +238,8 @@ export default function TemplatesScreen() {
   const { data: templates = [], isLoading: templatesLoading } = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
   const { data: folders = [], isLoading: foldersLoading } = useQuery<CheckTemplateFolder[]>({
     queryKey: ['check-template-folders'],

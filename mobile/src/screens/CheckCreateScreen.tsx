@@ -1222,10 +1222,10 @@ export default function CheckCreateScreen() {
           productId: p.productId,
           name: p.name,
           sellPrice: p.sellPrice,
-          costPrice: p.costPrice,
+          costPrice: p.costPrice ?? 0,
           quantity: p.quantity,
           totalSell: p.sellPrice * p.quantity,
-          totalCost: p.costPrice * p.quantity,
+          totalCost: (p.costPrice ?? 0) * p.quantity,
           unit: catalogProduct?.unit,
         };
       }),

@@ -40,7 +40,7 @@ export class CheckTemplatesController {
 
   @Get()
   getAll(@CurrentUser() user: JwtPayload) {
-    return this.checkTemplatesService.getAll(user.tenantID, user.userID);
+    return this.checkTemplatesService.getAll(user.tenantID, user);
   }
 
   /**
