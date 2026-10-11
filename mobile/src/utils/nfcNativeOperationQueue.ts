@@ -1,19 +1,22 @@
-export function createNfcNativeOperationQueue(cancelNative: () => Promise<unknown>) {
+export type NfcNativeCompletion = { status: 'success' | 'cancelled' } | { status: 'error'; error: unknown };
+
+export function createNfcNativeOperationQueue(finishNative: (outcome: NfcNativeCompletion) => Promise<unknown>) {
   let queue: Promise<void> = Promise.resolve();
   let activeOperationId: number | null = null;
-  let activeCancellation: { operationId: number; promise: Promise<void> } | null = null;
+  let activeCancellation: Promise<void> | null = null;
 
-  const cancel = async (operationId: number): Promise<void> => {
+  const finish = async (operationId: number, outcome: NfcNativeCompletion): Promise<void> => {
     if (activeOperationId !== operationId) return;
-    if (activeCancellation?.operationId === operationId) return activeCancellation.promise;
-    const promise = cancelNative()
-      .catch(() => undefined)
-      .then(() => {
-        if (activeCancellation?.operationId === operationId) activeCancellation = null;
-      });
-    activeCancellation = { operationId, promise };
-    await promise;
+    // Retain even a settled cancellation until this operation leaves the queue:
+    // its finally must not invalidate a session twice or overtake the next scan.
+    activeCancellation ??= finishNative(outcome).then(
+      () => undefined,
+      () => undefined, // The OS may already have invalidated a cancelled/lost session.
+    );
+    await activeCancellation;
   };
+
+  const cancel = (operationId: number) => finish(operationId, { status: 'cancelled' });
 
   const run = async <T>(operationId: number, isCurrent: () => boolean, task: () => Promise<T>): Promise<T> => {
     const previous = queue;
@@ -21,15 +24,23 @@ export function createNfcNativeOperationQueue(cancelNative: () => Promise<unknow
     queue = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let outcome: NfcNativeCompletion = { status: 'cancelled' };
     try {
       await previous;
       if (!isCurrent()) throw new Error('NFC operation is no longer current');
       activeOperationId = operationId;
-      return await task();
+      activeCancellation = null;
+      const result = await task();
+      outcome = { status: isCurrent() ? 'success' : 'cancelled' };
+      return result;
+    } catch (error) {
+      outcome = isCurrent() ? { status: 'error', error } : { status: 'cancelled' };
+      throw error;
     } finally {
       if (activeOperationId === operationId) {
-        await cancel(operationId);
+        await finish(operationId, outcome);
         activeOperationId = null;
+        activeCancellation = null;
       }
       release();
     }

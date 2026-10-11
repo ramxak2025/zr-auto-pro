@@ -9,6 +9,8 @@ import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { nativePendingNfc } from '../utils/nativePendingNfc';
 import {
   readAttendanceNfcUri,
+  AttendanceNfcDeviceError,
+  describeAttendanceNfcDeviceError,
   checkAttendanceNfcHardware,
   cancelAttendanceNfcOperation,
   createAttendanceNfcOperation,
@@ -19,12 +21,14 @@ import { ownsNfcOutcome } from '../../../shared/utils/pendingNfc';
 import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
 import { refreshNfcStatusForCurrentSession } from '../utils/nfcStatusRefresh';
 import type { AttendanceNfcScanResult } from '../../../shared/types';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 type ScreenState = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error';
 
 export default function NfcAttendanceScreen() {
   const palette = useColors();
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation();
+  const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
   const focused = useIsFocused();
   const { api, session, token, sessionScope } = useAttendanceNfcSession();
@@ -208,6 +212,7 @@ export default function NfcAttendanceScreen() {
     setWorking(true);
     setState('loading');
     setResult(null);
+    setMessage(fromLink ? 'Подтверждаем отметку в Autexa…' : 'Поднесите метку и дождитесь подтверждения в Autexa.');
     let helperDispatched = false;
     try {
       let rawUri: string;
@@ -220,6 +225,7 @@ export default function NfcAttendanceScreen() {
       if (!isCurrent()) return;
       const parsed = parseAttendanceNfcUri(rawUri);
       if (!parsed) throw new Error('Эта метка не является рабочей NFC-меткой Autexa.');
+      setMessage('Метка прочитана. Подтверждаем отметку в Autexa…');
       const currentSession = ownedSession;
       helperDispatched = true;
       const outcome = await nativePendingNfc.scan({
@@ -266,17 +272,13 @@ export default function NfcAttendanceScreen() {
         if (pending) setHasPending(true);
       }
       setState('error');
-      const code = (error as { code?: string })?.code;
-      if (code === 'cancelled') setMessage('Сканирование отменено. Смены не изменились.');
-      else if (code === 'disabled') setMessage('Включите NFC в настройках телефона и попробуйте снова.');
-      else if (code === 'unsupported')
-        setMessage('Это устройство не поддерживает NFC. Обратитесь к руководителю для отметки другим способом.');
-      else
-        setMessage(
-          error instanceof Error
+      setMessage(
+        error instanceof AttendanceNfcDeviceError
+          ? describeAttendanceNfcDeviceError(error)
+          : error instanceof Error
             ? error.message
             : 'Не удалось выполнить сканирование. Проверьте связь и восстановите результат перед повтором.',
-        );
+      );
     } finally {
       if (nativeOperationRef.current === nativeOperation) nativeOperationRef.current = null;
       if (isCurrent()) setWorking(false);
@@ -308,7 +310,7 @@ export default function NfcAttendanceScreen() {
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Рабочая смена" onBack={() => navigation.goBack()} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[6] }]}>
         <View style={[styles.panel, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Text style={[styles.title, { color: palette.text.primary }]}>Отметка присутствия</Text>
           <Text style={[styles.body, { color: palette.text.secondary }]}>{message}</Text>
@@ -347,7 +349,7 @@ export default function NfcAttendanceScreen() {
               </Text>
             </View>
           )}
-          {(state === 'pending' || hasPending) && (
+          {(state === 'pending' || hasPending) && !canRetouchPending && (
             <ActionButton
               label={working ? 'Проверяем…' : 'Восстановить результат'}
               disabled={working}
@@ -361,11 +363,13 @@ export default function NfcAttendanceScreen() {
               onPress={() => void scan(false)}
             />
           )}
-          <ActionButton
-            label={working ? 'Поднесите метку…' : linkToken ? 'Подтвердить ссылку и отметить' : 'Сканировать NFC-метку'}
-            disabled={working || !canScan || hardware === 'disabled' || hardware === 'unsupported' || hasPending}
-            onPress={() => void scan(!!linkToken)}
-          />
+          {!hasPending && !(state === 'confirmed' && currentRefreshFailed) && (
+            <ActionButton
+              label={working ? 'Подтверждаем…' : linkToken ? 'Подтвердить ссылку и отметить' : 'Сканировать NFC-метку'}
+              disabled={working || !canScan || hardware === 'disabled' || hardware === 'unsupported' || hasPending}
+              onPress={() => void scan(!!linkToken)}
+            />
+          )}
           {state === 'confirmed' && currentRefreshFailed && (
             <ActionButton label="Обновить статус" disabled={working} onPress={() => void refreshStatus()} />
           )}
