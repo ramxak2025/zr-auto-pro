@@ -1,3 +1,4 @@
+import { TAB_BAR_ROW_HEIGHT, TAB_BAR_TOP_GAP, TAB_BAR_BOTTOM_GAP } from '../utils/tabBarGeometry';
 /**
  * TabBar — Android variant. Floating frosted-glass island with native
  * scrub gesture, iOS-style outline icons, and a squircle Касса CTA.
@@ -40,10 +41,10 @@ import { KassaButton } from './KassaButton';
 import { getTabDefinitions, type TabDefinition } from './TabBarShared';
 import { createMoreTabPressHandlers, openAccountPicker } from './accountPickerNavigation';
 
-const BAR_HEIGHT = 60;
+const BAR_HEIGHT = TAB_BAR_ROW_HEIGHT;
 const HORIZONTAL_MARGIN = 14;
-const TOP_LIFT = 6;
-const BOTTOM_LIFT = 8;
+const TOP_LIFT = TAB_BAR_TOP_GAP;
+const BOTTOM_LIFT = TAB_BAR_BOTTOM_GAP;
 const CORNER_RADIUS = BAR_HEIGHT / 2;
 
 const CAPSULE_RADIUS = 14;

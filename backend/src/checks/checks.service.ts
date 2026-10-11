@@ -1105,7 +1105,37 @@ export class ChecksService {
     };
   }
 
-  async getAll(tenantID: string, query: any, actor?: ChecksActor) {
+  async getClientHistory(clientId: string, tenantID: string, query: Record<string, string>, actor: ChecksActor) {
+    await this.clients.getById(clientId, tenantID, actorPointId(actor));
+    if (query.carId && !UUID_RE.test(query.carId))
+      throw new BadRequestException({ message: 'Некорректный автомобиль' });
+    // Only pagination and an optional car filter are accepted. The URL owns the client, and
+    // callers cannot turn this read scope into a journal/board query.
+    return this.getAll(
+      tenantID,
+      {
+        clientId,
+        ...(query.carId ? { carId: query.carId } : {}),
+        limit: query.limit,
+        page: query.page,
+        ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+      },
+      actor,
+      true,
+    );
+  }
+
+  async getClientHistoryCheck(id: string, clientId: string, tenantID: string, actor: ChecksActor) {
+    await this.clients.getById(clientId, tenantID, actorPointId(actor));
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM checks WHERE id=$1 AND tenant_id=$2 AND client_id=$3 AND deleted_at IS NULL',
+      [id, tenantID, clientId],
+    );
+    if (!rows.length) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    return this.getById(id, tenantID, actor);
+  }
+
+  async getAll(tenantID: string, query: any, actor?: ChecksActor, clientHistory = false) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -1149,7 +1179,7 @@ export class ChecksService {
     // condition IS «не owner-class И нет checks_view_all». Layered ON TOP of
     // the tenant scope above — never widens beyond the tenant. Flows into
     // COUNT + page query (offset/keyset).
-    if (actor && !userHasPermission(actor, 'checks_view_all')) {
+    if (!clientHistory && actor && !userHasPermission(actor, 'checks_view_all')) {
       where += ` AND (ch.master_id = $${idx} OR EXISTS (
         SELECT 1 FROM check_service_lines sl
          WHERE sl.check_id = ch.id AND sl.master_id = $${idx}

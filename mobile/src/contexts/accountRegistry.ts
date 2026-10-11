@@ -18,6 +18,7 @@ export interface AccountProfile {
   fullName?: string;
   role?: string;
   currentPointId?: string | null;
+  avatar?: string | null;
 }
 export interface AccountDataScope extends AccountIdentity {
   pointId: string | null;
@@ -31,6 +32,7 @@ export interface SavedAccount<U> {
   id: string;
   identity: AccountIdentity;
   displayName: string;
+  avatar?: string | null;
   role: string | null;
   needsReauth: boolean;
   session: AccountSession<U> | null;
@@ -305,6 +307,7 @@ export function createAccountRegistry<U extends AccountProfile>(
         identity,
         displayName: original ? 'Исходный аккаунт' : (old.session.user?.fullName ?? 'Аккаунт'),
         role: original ? null : (old.session.user?.role ?? null),
+        avatar: original ? null : (old.session.user?.avatar ?? null),
         needsReauth: false,
         session: old.session,
         scopes: [],
@@ -377,6 +380,7 @@ export function createAccountRegistry<U extends AccountProfile>(
               id,
               identity: effective,
               displayName: session.user?.fullName ?? 'Аккаунт',
+              avatar: session.user?.avatar ?? null,
               role: session.user?.role ?? null,
               needsReauth: false,
               session,
@@ -390,6 +394,7 @@ export function createAccountRegistry<U extends AccountProfile>(
           if (!session.impersonating) {
             slot.displayName = session.user?.fullName ?? slot.displayName;
             slot.role = session.user?.role ?? slot.role;
+            slot.avatar = session.user?.avatar ?? null;
           }
           next.activeId = id;
           next.generation += 1;
@@ -433,6 +438,11 @@ export function createAccountRegistry<U extends AccountProfile>(
           )
             throw changed();
           slot.session = clone(session);
+          if (!session.impersonating) {
+            slot.displayName = session.user?.fullName ?? slot.displayName;
+            slot.role = session.user?.role ?? slot.role;
+            slot.avatar = session.user?.avatar ?? null;
+          }
           rememberScope(slot, session.user);
         },
         isCurrent,
@@ -497,8 +507,16 @@ export function activeAccount<U>(registry: AccountRegistry<U> | null): SavedAcco
 }
 export function accountSummaries<U>(registry: AccountRegistry<U> | null): SavedAccountSummary[] {
   return (
-    registry?.accounts.map(({ session: _session, scopes: _scopes, ...account }) => ({
+    registry?.accounts.map(({ session, scopes: _scopes, ...account }) => ({
       ...account,
+      avatar:
+        account.avatar ??
+        (session?.user &&
+        typeof session.user === 'object' &&
+        'avatar' in session.user &&
+        typeof session.user.avatar === 'string'
+          ? session.user.avatar
+          : null),
       active: account.id === registry.activeId,
     })) ?? []
   );

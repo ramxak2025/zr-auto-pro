@@ -229,7 +229,7 @@ export type RootStackParamList = {
    * params дают non-serializable warning и ломают state-restoration.
    */
   ProductPicker: { folderPath?: string[] } | undefined;
-  CheckDetail: { id: string };
+  CheckDetail: { id: string; clientId?: string };
   /**
    * `focusCarId` — set when the caller (typically the Clients screen
    * "Авто" tab) wants the detail screen to auto-expand a specific car

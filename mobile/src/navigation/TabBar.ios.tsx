@@ -1,3 +1,4 @@
+import { TAB_BAR_ROW_HEIGHT, TAB_BAR_TOP_GAP, TAB_BAR_BOTTOM_GAP } from '../utils/tabBarGeometry';
 /**
  * TabBar — iOS variant. Premium native Liquid Glass tab bar rendered as
  * a Telegram-style FLOATING ISLAND over the screen content. The visible
@@ -45,15 +46,15 @@ import { createMoreTabPressHandlers, openAccountPicker } from './accountPickerNa
 // Floating island geometry — owner explicitly wants the bar to read as
 // a small island floating ABOVE the screen content with content
 // passing under the glass, NOT a slab pinned to the bottom edge.
-const BAR_HEIGHT = 60;
+const BAR_HEIGHT = TAB_BAR_ROW_HEIGHT;
 const HORIZONTAL_MARGIN = 14;
 // Breathing room ABOVE the bar (between scroll-end and the island's
 // top edge).
-const TOP_LIFT = 6;
+const TOP_LIFT = TAB_BAR_TOP_GAP;
 // Breathing room BELOW the bar (between island's bottom edge and the
 // home-indicator safe area). Small but non-zero so the island reads as
 // floating rather than touching the safe area.
-const BOTTOM_LIFT = 8;
+const BOTTOM_LIFT = TAB_BAR_BOTTOM_GAP;
 const CORNER_RADIUS = BAR_HEIGHT / 2;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {

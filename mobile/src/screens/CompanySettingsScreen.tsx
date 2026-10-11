@@ -18,6 +18,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { myCompanyApi, loyaltyApi, checksApi, pointsApi, vinApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
+import CompanyModeFlow from '../components/CompanyModeFlow';
+import { attendanceModePresentation, companyModeFlows } from '../../../shared/utils/companyModePresentation';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareView } from '../components/KeyboardAware';
 import VinInput from '../components/VinInput';
@@ -393,47 +395,67 @@ export default function CompanySettingsScreen() {
                 <Text style={[styles.hint, { color: palette.text.secondary }]}>
                   Как сотрудники отмечают рабочее время
                 </Text>
-                {(
-                  [
-                    ['admin', 'Отметки ставит администратор'],
-                    ['manual', 'Сотрудники открывают и закрывают смену сами'],
-                    ['nfc', 'Сотрудники отмечаются NFC-меткой'],
-                  ] as const
-                ).map(([mode, label]) => (
+                {(Object.keys(attendanceModePresentation) as Array<CompanyForm['attendanceMode']>).map((mode) => {
+                  const choice = attendanceModePresentation[mode];
+                  const selected = form.attendanceMode === mode;
+                  return (
+                    <TouchableOpacity
+                      key={mode}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected }}
+                      onPress={() => update({ attendanceMode: mode })}
+                      style={[
+                        styles.modeOption,
+                        {
+                          backgroundColor: selected ? palette.accent.primarySoft : palette.bg.card,
+                          borderColor: selected ? palette.accent.primary : palette.border.subtle,
+                        },
+                      ]}
+                    >
+                      <View style={styles.modeTitleRow}>
+                        <Ionicons
+                          name={
+                            mode === 'admin'
+                              ? 'calendar-outline'
+                              : mode === 'manual'
+                                ? 'hand-left-outline'
+                                : 'radio-outline'
+                          }
+                          size={21}
+                          color={selected ? palette.accent.primaryText : palette.text.secondary}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>{choice.title}</Text>
+                          <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+                            {choice.description}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={22}
+                          color={selected ? palette.accent.primary : palette.text.tertiary}
+                        />
+                      </View>
+                      {selected && <CompanyModeFlow steps={choice.steps} />}
+                    </TouchableOpacity>
+                  );
+                })}
+                {form.attendanceMode === 'nfc' && (
                   <TouchableOpacity
-                    key={mode}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: form.attendanceMode === mode }}
-                    onPress={() => update({ attendanceMode: mode })}
-                    style={[styles.toggleRow, { borderColor: palette.border.subtle }]}
+                    accessibilityRole="button"
+                    onPress={() => navigation.navigate('NfcTags')}
+                    style={[styles.nfcTagsLink, { borderColor: palette.border.subtle }]}
                   >
+                    <Ionicons name="radio-outline" size={18} color={palette.accent.primary} />
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>{label}</Text>
-                      <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
-                        {mode === 'admin'
-                          ? 'Администратор ставит приход и уход в графике.'
-                          : mode === 'manual'
-                            ? 'На главном экране сотрудников будет кнопка смены.'
-                            : 'Сотрудники сканируют NFC-метку Autexa; самостоятельное открытие смены отключено.'}
+                      <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>NFC-метки</Text>
+                      <Text style={[styles.hint, { color: palette.text.secondary }]}>
+                        Добавить метку и управлять доступом
                       </Text>
                     </View>
-                    <View style={[styles.radio, form.attendanceMode === mode && styles.radioSelected]} />
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </TouchableOpacity>
-                ))}
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  onPress={() => navigation.navigate('NfcTags')}
-                  style={[styles.nfcTagsLink, { borderColor: palette.border.subtle }]}
-                >
-                  <Ionicons name="radio-outline" size={18} color={palette.accent.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>NFC-метки</Text>
-                    <Text style={[styles.hint, { color: palette.text.secondary }]}>
-                      Создать, записать и отозвать метку присутствия
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-                </TouchableOpacity>
+                )}
               </View>
             </AnimatedCard>
           )}
@@ -466,6 +488,9 @@ export default function CompanySettingsScreen() {
                     ios_backgroundColor={palette.border.subtle}
                   />
                 </View>
+                <CompanyModeFlow
+                  steps={form.pointsSharedClients ? companyModeFlows.clientsShared : companyModeFlows.clientsSeparate}
+                />
               </View>
             </AnimatedCard>
           )}
@@ -644,6 +669,7 @@ function PosShiftModeSection({ index }: { index: number }) {
             ios_backgroundColor={palette.border.subtle}
           />
         </View>
+        <CompanyModeFlow steps={enabled ? companyModeFlows.posCashier : companyModeFlows.posDirect} />
       </View>
 
       {/* ── 409: незакрытые заказы конвейера (Round 14) ──────────────── */}
@@ -794,6 +820,7 @@ function PaymentAcceptorsSection({ index }: { index: number }) {
           <Text style={cardTitleStyle}>Кто принимает оплату</Text>
         </View>
 
+        <CompanyModeFlow steps={isManual ? companyModeFlows.paymentList : companyModeFlows.paymentRoles} />
         {!isManual ? (
           <>
             {/* Режим «по ролям» — прежнее поведение. */}
@@ -1555,6 +1582,8 @@ const loyaltyStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
+  modeOption: { borderWidth: 1, borderRadius: 16, padding: 14, marginTop: 10 },
+  modeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
   card: {

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ChecksService } from './checks.service';
 import { CreateCheckDto } from './dto/create-check.dto';
 import { UpdateCheckDto } from './dto/update-check.dto';
@@ -25,6 +25,28 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 @Controller('checks')
 export class ChecksController {
   constructor(private checksService: ChecksService) {}
+
+  // Client history has a separate read scope from the employee's journal.
+  // The service verifies client visibility and check membership in this tenant.
+  @RequirePermission('clients_view')
+  @Get('client-history/:clientId')
+  getClientHistory(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query() query: Record<string, string>,
+  ) {
+    return this.checksService.getClientHistory(clientId, user.tenantID, query, user);
+  }
+
+  @RequirePermission('clients_view')
+  @Get('client-history/:clientId/:id')
+  getClientHistoryCheck(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.checksService.getClientHistoryCheck(id, clientId, user.tenantID, user);
+  }
 
   @RequirePermission('checks_view')
   @Get()

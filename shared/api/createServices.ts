@@ -940,6 +940,9 @@ export function createChecksApi(api: HttpClient) {
     // closed checks, absent → unfiltered (legacy behaviour).
     getAll: (params?: ChecksParams & { isDeferred?: boolean }) =>
       api.get<PaginatedResponse<Check>>('/checks', { params }),
+    clientHistory: (clientId: string, params?: { limit?: number; page?: number; cursor?: string; carId?: string }) =>
+      api.get<PaginatedResponse<Check>>(`/checks/client-history/${clientId}`, { params }),
+    clientHistoryCheck: (clientId: string, id: string) => api.get<Check>(`/checks/client-history/${clientId}/${id}`),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
     /**
      * v3.0.1 ФИЧА 3 — отложенные чеки для карточки-напоминания на главной.

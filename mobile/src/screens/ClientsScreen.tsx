@@ -762,7 +762,7 @@ export default function ClientsScreen() {
       queryClient.prefetchQuery({
         queryKey: ['client-checks', clientId],
         queryFn: async (): Promise<Check[]> => {
-          const res = await checksApi.getAll({ clientId, limit: 10 });
+          const res = await checksApi.clientHistory(clientId, { limit: 10 });
           const raw = res.data as { data?: Check[] } | Check[];
           return Array.isArray(raw) ? raw : raw.data || [];
         },

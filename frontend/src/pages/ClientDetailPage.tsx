@@ -75,7 +75,7 @@ function PaymentBadge({ method }: { method: string }) {
 }
 
 // ---- Чеки по одному автомобилю (раскрывающаяся панель) ----
-function CarChecksPanel({ carId }: { carId: string }) {
+function CarChecksPanel({ carId, clientId }: { carId: string; clientId: string }) {
   const timeZone = useTenantTimezone();
   const {
     data: checksData,
@@ -86,7 +86,7 @@ function CarChecksPanel({ carId }: { carId: string }) {
   } = useQuery<{ data: Check[] }>({
     queryKey: ['checks', { carId }],
     queryFn: async () => {
-      const res = await checksApi.getAll({ carId });
+      const res = await checksApi.clientHistory(clientId, { carId });
       return res.data;
     },
     enabled: !!carId,
@@ -147,7 +147,7 @@ function CarChecksPanel({ carId }: { carId: string }) {
       columns={columns}
       rows={checks}
       rowKey={(c) => c.id}
-      rowHref={(c) => `/checks/${c.id}`}
+      rowHref={(c) => `/checks/${c.id}?clientId=${encodeURIComponent(clientId)}`}
       rowLabel={(c) => `Открыть чек №${c.number}`}
       isLoading={isLoading}
       isError={isError}
@@ -697,7 +697,7 @@ export default function ClientDetailPage() {
   } = useQuery<{ data: Check[] }>({
     queryKey: ['checks', { clientId: id, limit: 5 }],
     queryFn: async () => {
-      const res = await checksApi.getAll({ clientId: id, limit: 5 });
+      const res = await checksApi.clientHistory(id!, { limit: 5 });
       return res.data;
     },
     enabled: !!id,
@@ -1183,7 +1183,7 @@ export default function ClientDetailPage() {
 
                       {expanded && (
                         <div id={panelId} className="border-t border-line bg-surface-2/60">
-                          <CarChecksPanel carId={car.id} />
+                          <CarChecksPanel carId={car.id} clientId={id!} />
                         </div>
                       )}
                     </li>
@@ -1207,7 +1207,7 @@ export default function ClientDetailPage() {
                 columns={recentColumns}
                 rows={recentChecks}
                 rowKey={(c) => c.id}
-                rowHref={(c) => `/checks/${c.id}`}
+                rowHref={(c) => `/checks/${c.id}?clientId=${encodeURIComponent(id!)}`}
                 rowLabel={(c) => `Открыть чек №${c.number}`}
                 isLoading={checksLoading}
                 isError={checksError}

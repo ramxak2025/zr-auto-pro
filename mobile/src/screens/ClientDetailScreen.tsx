@@ -314,7 +314,7 @@ export default function ClientDetailScreen() {
     queryFn: async () => {
       const res = isRetail
         ? await checksApi.getAll({ retail: 'true', limit: EAGER_LIMIT })
-        : await checksApi.getAll({ clientId: id, limit: EAGER_LIMIT });
+        : await checksApi.clientHistory(id, { limit: EAGER_LIMIT });
       const raw = res.data as { data?: Check[] } | Check[];
       return Array.isArray(raw) ? raw : raw.data || [];
     },
@@ -326,7 +326,7 @@ export default function ClientDetailScreen() {
     queryFn: async () => {
       const res = isRetail
         ? await checksApi.getAll({ retail: 'true', limit: FULL_LIMIT })
-        : await checksApi.getAll({ clientId: id, limit: FULL_LIMIT });
+        : await checksApi.clientHistory(id, { limit: FULL_LIMIT });
       const raw = res.data as { data?: Check[] } | Check[];
       return Array.isArray(raw) ? raw : raw.data || [];
     },
@@ -900,10 +900,14 @@ export default function ClientDetailScreen() {
     (checkId: string) => {
       navigation.navigate('Main', {
         screen: 'Checks',
-        params: { screen: 'CheckDetail', initial: false, params: { id: checkId } },
+        params: {
+          screen: 'CheckDetail',
+          initial: false,
+          params: { id: checkId, ...(!isRetail ? { clientId: id } : {}) },
+        },
       });
     },
-    [navigation],
+    [navigation, id, isRetail],
   );
 
   // «История» quick action — expand the full history and smooth-scroll the
