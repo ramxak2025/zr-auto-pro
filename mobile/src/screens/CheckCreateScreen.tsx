@@ -1124,10 +1124,17 @@ export default function CheckCreateScreen() {
   }, [selectableServices, serviceSearch]);
 
   // ── Check Templates ────────────────────────────────────────────────────────
-  const { data: templates = [] } = useQuery<CheckTemplate[]>({
+  const {
+    data: templates = [],
+    isFetching: templatesRefreshing,
+    isError: templatesRefreshFailed,
+    refetch: refreshTemplates,
+  } = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
-    staleTime: 60_000,
+    enabled: showTemplatesPicker,
+    staleTime: 0,
+    refetchInterval: showTemplatesPicker ? 15_000 : false,
   });
   // Личные папки шаблонов (round 8 #3) — ключ общий с TemplatesScreen и web,
   // поэтому мутации в разделе «Ещё → Шаблоны» мгновенно видны здесь.
@@ -1194,6 +1201,7 @@ export default function CheckCreateScreen() {
   };
 
   const applyTemplate = (template: CheckTemplate) => {
+    if (templatesRefreshing || templatesRefreshFailed) return;
     // Старый шаблон с «Мойка ×2» разворачиваем в две строки: количества у услуг больше нет,
     // одна строка = одна услуга (иначе статистика считает «×2» за одну работу). Что
     // развернуть нельзя («×150», «×2.5»), остаётся legacy-строкой и считается serviceLineTotal.
@@ -5045,6 +5053,24 @@ export default function CheckCreateScreen() {
           (applyTemplate без изменений); «Управлять» уводит в раздел
           «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
       <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+        {templatesRefreshing && (
+          <View style={{ flexDirection: 'row', gap: 10, paddingVertical: 12 }}>
+            <ActivityIndicator size="small" color={colors.primary[600]} />
+            <Text style={{ color: palette.text.secondary }}>Обновляем цены…</Text>
+          </View>
+        )}
+        {templatesRefreshFailed && (
+          <View style={{ paddingVertical: 12 }}>
+            <Text style={{ color: palette.text.secondary }}>Не удалось обновить цены шаблонов.</Text>
+            <TouchableOpacity
+              onPress={() => void refreshTemplates()}
+              accessibilityRole="button"
+              style={{ paddingVertical: 12 }}
+            >
+              <Text style={{ color: colors.primary[600] }}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         {/* Верхняя строка: назад-по-папке слева, «Управлять» справа */}
         <View style={styles.tplPickerTopRow}>
           {templatesPickerFolderId ? (
@@ -5157,6 +5183,7 @@ export default function CheckCreateScreen() {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <TouchableOpacity
+                  disabled={templatesRefreshing || templatesRefreshFailed}
                   onPress={() => applyTemplate(tpl)}
                   style={{
                     backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
@@ -5254,6 +5281,7 @@ export default function CheckCreateScreen() {
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                     <TouchableOpacity
+                      disabled={templatesRefreshing || templatesRefreshFailed}
                       onPress={() => applyTemplate(tpl)}
                       style={{
                         backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],

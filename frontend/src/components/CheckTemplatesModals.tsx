@@ -95,10 +95,12 @@ function templateSummary(t: CheckTemplate): string {
 
 // Общие данные. Оба модала переиспользуют одни query-ключи — React Query
 // дедуплицирует; staleTime 60с как у остальных справочников кассы.
-function useTemplatesData() {
+function useTemplatesData(isOpen: boolean) {
   const templatesQuery = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
+    enabled: isOpen,
+    refetchInterval: isOpen ? 15_000 : false,
     staleTime: 0,
     refetchOnMount: 'always',
   });
@@ -142,7 +144,7 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
 
-  const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData();
+  const { templates, folders, isLoading, isError, isFetching, refetch } = useTemplatesData(isOpen);
 
   const [mode, setMode] = useState<'pick' | 'manage'>('pick');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -287,7 +289,10 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
     <li key={t.id} className="flex items-center">
       <button
         type="button"
-        onClick={() => onApply(t)}
+        disabled={isFetching || isError}
+        onClick={() => {
+          if (!isFetching && !isError) onApply(t);
+        }}
         className={cn(rowBtn, 'group', focusRing)}
         style={{ paddingLeft: 12 + depth * 18 }}
       >
@@ -609,9 +614,9 @@ export function TemplatePickerModal({ isOpen, onClose, onApply }: TemplatePicker
               Повторить
             </Button>
           </div>
-        ) : isLoading ? (
+        ) : isLoading || (mode === 'pick' && isFetching) ? (
           <p className="py-8 text-center text-sm text-ink-3" role="status">
-            Загружаем шаблоны…
+            Обновляем цены шаблонов…
           </p>
         ) : mode === 'pick' ? (
           isEmpty ? (
@@ -810,7 +815,7 @@ export function SaveTemplateModal({ isOpen, onClose, services, products }: SaveT
   const { hasPermission } = useAuth();
   const canManageShared = hasPermission('templates_shared_manage');
 
-  const { folders } = useTemplatesData();
+  const { folders } = useTemplatesData(isOpen);
   const flatFolders = useMemo(() => flattenTree(buildFolderTree(folders.filter((f) => !!f.isShared))), [folders]);
   const flatPersonalFolders = useMemo(
     () => flattenTree(buildFolderTree(folders.filter((f) => !f.isShared))),

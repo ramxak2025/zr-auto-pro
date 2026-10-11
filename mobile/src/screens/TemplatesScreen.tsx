@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
@@ -215,6 +215,7 @@ type FolderModalState = { mode: 'create'; isShared: boolean } | { mode: 'rename'
 
 export default function TemplatesScreen() {
   const navigation = useNavigation<any>();
+  const focused = useIsFocused();
   const queryClient = useQueryClient();
   const palette = useColors();
   const isDark = palette.mode === 'dark';
@@ -235,10 +236,15 @@ export default function TemplatesScreen() {
   const [folderActionTarget, setFolderActionTarget] = useState<CheckTemplateFolder | null>(null);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
 
-  const { data: templates = [], isLoading: templatesLoading } = useQuery<CheckTemplate[]>({
+  const {
+    data: templates = [],
+    isLoading: templatesLoading,
+    refetch: refreshTemplates,
+  } = useQuery<CheckTemplate[]>({
     queryKey: ['check-templates'],
     queryFn: async () => (await checkTemplatesApi.list()).data,
     staleTime: 0,
+    refetchInterval: focused ? 15_000 : false,
     refetchOnMount: 'always',
   });
   const { data: folders = [], isLoading: foldersLoading } = useQuery<CheckTemplateFolder[]>({
@@ -308,6 +314,12 @@ export default function TemplatesScreen() {
     haptic('tap');
     setFolderStack((s) => s.slice(0, -1));
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshTemplates();
+    }, [refreshTemplates]),
+  );
 
   // Android hardware back: внутри папки — уровень выше, на корне — штатный pop.
   useFocusEffect(

@@ -314,26 +314,26 @@ function makeTemplatePool(stored = {}) {
     ...over,
   });
   const query = async (sql, params) => {
-      calls.push({ sql, params });
-      if (/^\s*(?:BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
-      if (/^\s*INSERT INTO check_templates/.test(sql)) {
-        return {
-          rows: [
-            row({
-              name: params[1],
-              services: JSON.parse(params[2]),
-              products: JSON.parse(params[3]),
-              user_id: params[4],
-              folder_id: params[5],
-            }),
-          ],
-        };
-      }
-      if (/^\s*UPDATE check_templates/.test(sql)) return { rows: [row()] };
-      // Папка нужного scope найдена.
-      if (/FROM check_template_folders/.test(sql)) return { rows: [{ id: params[0] }] };
-      if (/FROM check_templates/.test(sql)) return { rows: [row(stored)] };
-      throw new Error(`unexpected SQL: ${sql.slice(0, 120)}`);
+    calls.push({ sql, params });
+    if (/^\s*(?:BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
+    if (/^\s*INSERT INTO check_templates/.test(sql)) {
+      return {
+        rows: [
+          row({
+            name: params[1],
+            services: JSON.parse(params[2]),
+            products: JSON.parse(params[3]),
+            user_id: params[4],
+            folder_id: params[5],
+          }),
+        ],
+      };
+    }
+    if (/^\s*UPDATE check_templates/.test(sql)) return { rows: [row()] };
+    // Папка нужного scope найдена.
+    if (/FROM check_template_folders/.test(sql)) return { rows: [{ id: params[0] }] };
+    if (/FROM check_templates/.test(sql)) return { rows: [row(stored)] };
+    throw new Error(`unexpected SQL: ${sql.slice(0, 120)}`);
   };
   return {
     calls,
@@ -347,7 +347,10 @@ const MASTER = { userID: 'user-1', role: 'master' };
 test('create: услуга quantity 3 сохраняется как 1, количество товара сохраняется', async () => {
   const pool = makeTemplatePool();
   const service = new CheckTemplatesService(pool);
-  const dto = await makePipe().transform({ ...structuredClone(OLD_CLIENT_BODY), shared: false }, bodyOf(CreateCheckTemplateDto));
+  const dto = await makePipe().transform(
+    { ...structuredClone(OLD_CLIENT_BODY), shared: false },
+    bodyOf(CreateCheckTemplateDto),
+  );
 
   const created = await service.create('tenant-1', MASTER, dto);
 
@@ -376,7 +379,10 @@ test('create shared template requires the explicit role permission; director rem
   const insert = sharedPool.calls.find((c) => /INSERT INTO check_templates/.test(c.sql));
   assert.equal(insert.params[4], null, 'permission holder publishes into shared scope');
   assert.equal(result.isShared, true);
-  assert.ok(sharedPool.calls.some((call) => /pg_advisory_xact_lock/.test(call.sql)), 'mutation takes tenant tree lock');
+  assert.ok(
+    sharedPool.calls.some((call) => /pg_advisory_xact_lock/.test(call.sql)),
+    'mutation takes tenant tree lock',
+  );
 });
 
 test('create через контроллер: тело → ValidationPipe → сервис → INSERT с quantity 1', async () => {
@@ -430,7 +436,11 @@ test('update: услуги нормализуются в 1, товары — к�
 test('getAll: старый шаблон с quantity 3 отдаётся как есть — историю не переписываем', async () => {
   const legacy = { services: [{ serviceId: 'svc-1', name: 'Мойка', price: 500, quantity: 3 }] };
   const pool = makeTemplatePool(legacy);
-  const list = await new CheckTemplatesService(pool).getAll('tenant-1', 'user-1');
+  const list = await new CheckTemplatesService(pool).getAll('tenant-1', {
+    userID: 'user-1',
+    role: 'master',
+    permissions: {},
+  });
   assert.equal(list[0].services[0].quantity, 3, 'клиенты разворачивают такую строку сами');
   assert.equal(pool.calls.filter((c) => /UPDATE|INSERT/.test(c.sql)).length, 0, 'чтение не пишет в БД');
 });

@@ -1132,7 +1132,15 @@ export class ChecksService {
       [id, tenantID, clientId],
     );
     if (!rows.length) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
-    return this.getById(id, tenantID, actor);
+    const check = await this.getById(id, tenantID, actor);
+    if (!this.canSeeProfit(actor) && !userHasPermission(actor, 'warehouse_manage')) {
+      check.products = check.products.map((line: { costPrice: number; totalCost: number }) => ({
+        ...line,
+        costPrice: 0,
+        totalCost: 0,
+      }));
+    }
+    return check;
   }
 
   async getAll(tenantID: string, query: any, actor?: ChecksActor, clientHistory = false) {

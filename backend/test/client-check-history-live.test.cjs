@@ -74,7 +74,12 @@ test(
       ]) {
         await admin.query(
           "INSERT INTO clients(id,tenant_id,full_name,phone,point_id) VALUES($1,$2,'History client',$4,$3)",
-          [client, tenant, point, client === ids.client ? '79991112233' : client === ids.otherClient ? '79991112234' : '79991112235'],
+          [
+            client,
+            tenant,
+            point,
+            client === ids.client ? '79991112233' : client === ids.otherClient ? '79991112234' : '79991112235',
+          ],
         );
       }
       for (const [check, tenant, client, master, number] of [
@@ -87,12 +92,29 @@ test(
           [check, tenant, client, master, number],
         );
       }
+      await admin.query(
+        "INSERT INTO check_product_lines(check_id,name,sell_price,cost_price,quantity,total_sell,total_cost) VALUES($1,'QA goods',100,37.5,2,200,75)",
+        [ids.check],
+      );
       await t.test('history sees and opens colleague work; ordinary own journal/detail remain restricted', async () => {
         const history = await run(() => checks.getClientHistory(ids.client, ids.tenant, {}, actor));
         assert.deepEqual(new Set(history.data.map((x) => x.id)), new Set([ids.check, ids.ownCheck]));
         const detail = await run(() => checks.getClientHistoryCheck(ids.check, ids.client, ids.tenant, actor));
         assert.equal(detail.id, ids.check);
         assert.equal(detail.profit, 0);
+        assert.equal(detail.products.length, 1);
+        assert.equal(detail.products[0].costPrice, 0);
+        assert.equal(detail.products[0].totalCost, 0);
+        const ownerDetail = await run(() =>
+          checks.getClientHistoryCheck(ids.check, ids.client, ids.tenant, {
+            ...actor,
+            userID: ids.owner,
+            role: 'director',
+          }),
+        );
+        assert.equal(ownerDetail.products[0].costPrice, 37.5);
+        assert.equal(ownerDetail.products[0].totalCost, 75);
+
         const journal = await run(() => checks.getAll(ids.tenant, {}, actor));
         assert.ok(!journal.data.some((x) => x.id === ids.check));
         await assert.rejects(

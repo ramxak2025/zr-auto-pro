@@ -418,7 +418,7 @@ export default function CompanySettingsScreen() {
                             mode === 'admin'
                               ? 'calendar-outline'
                               : mode === 'manual'
-                                ? 'hand-left-outline'
+                                ? 'person-outline'
                                 : 'radio-outline'
                           }
                           size={21}
