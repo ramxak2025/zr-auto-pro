@@ -1999,7 +1999,8 @@ export function createCheckPhotosApi(api: HttpClient) {
 
 export function createCheckTemplatesApi(api: HttpClient) {
   return {
-    list: () => api.get<CheckTemplate[]>('/check-templates'),
+    // Both clients preserve server product sources through apply/save/offline.
+    list: () => api.get<CheckTemplate[]>('/check-templates', { params: { sourceAware: '1' } }),
     /**
      * `folderId` — put the new template into a folder in the matching scope.
      * `shared: true` — publish as a tenant-wide template; requires the explicit

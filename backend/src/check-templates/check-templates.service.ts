@@ -2,6 +2,7 @@ import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenEx
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { actorPointId } from '../common/point-scope';
 import { CreateCheckTemplateDto, UpdateCheckTemplateDto, normalizeTemplateServices } from './dto/check-template.dto';
 import {
   isManualTemplateProduct,
@@ -13,6 +14,7 @@ export interface TemplateActor {
   userID: string;
   role: string;
   permissions?: Record<string, boolean>;
+  currentPointId?: string | null;
 }
 
 const TEMPLATE_COLS =
@@ -30,6 +32,7 @@ export class CheckTemplatesService {
     tenantId: string,
     actor: TemplateActor,
     db: Pool | PoolClient = this.pool,
+    sourceAware = true,
   ) {
     const records = (value: unknown): Record<string, unknown>[] =>
       Array.isArray(value)
@@ -61,14 +64,15 @@ export class CheckTemplatesService {
     const products = productIds.length
       ? (
           await db.query(
-            `SELECT id, sell_price${canSeeCost ? ', cost_price' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL`,
-            [tenantId, productIds],
+            `SELECT id, sell_price${canSeeCost ? ', cost_price' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL
+             ${sourceAware ? '' : 'AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses w WHERE w.id=products.warehouse_id AND w.point_id=$3::uuid))'}`,
+            sourceAware ? [tenantId, productIds] : [tenantId, productIds, actorPointId(actor)],
           )
         ).rows
       : [];
     const serviceMap = new Map(services.map((row) => [row.id, row]));
     const productMap = new Map(products.map((row) => [row.id, row]));
-    return rows.map((row) => {
+    const projected = rows.map((row) => {
       const productLines = (Array.isArray(row.products) ? row.products : []).flatMap(
         (value: unknown, productIndex: number) => {
           if (value === null || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -144,6 +148,17 @@ export class CheckTemplatesService {
           : {}),
       };
     });
+    // Old clients discard provenance and send hidden/missing cost as zero.
+    // Keep complete safe templates available; never send a partial recipe.
+    return sourceAware
+      ? projected
+      : projected.filter((template) =>
+          template.products.every((line) =>
+            line.catalogStatus === 'current'
+              ? !canSeeCost || line.costStatus === 'known'
+              : line.catalogStatus === 'manual' && canSeeCost && line.costStatus === 'known',
+          ),
+        );
   }
 
   private mapFolder(r: any) {
@@ -289,7 +304,7 @@ export class CheckTemplatesService {
 
   // ── Templates ────────────────────────────────────────────────────────────
 
-  async getAll(tenantId: string, actor: TemplateActor) {
+  async getAll(tenantId: string, actor: TemplateActor, options: { sourceAware?: boolean } = {}) {
     const { rows } = await this.pool.query(
       `SELECT ${TEMPLATE_COLS}
        FROM check_templates
@@ -297,7 +312,7 @@ export class CheckTemplatesService {
        ORDER BY name ASC`,
       [tenantId, actor.userID],
     );
-    return this.projectRows(rows, tenantId, actor);
+    return this.projectRows(rows, tenantId, actor, this.pool, options.sourceAware !== false);
   }
 
   async create(tenantId: string, actor: TemplateActor, dto: CreateCheckTemplateDto) {

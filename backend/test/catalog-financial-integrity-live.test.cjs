@@ -1,14 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, randomBytes } = require('node:crypto');
 const { Pool } = require('pg');
 const { Logger } = require('@nestjs/common');
-const { ValidationPipe } = require('@nestjs/common');
+const { Module, ValidationPipe } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
+const { JwtService } = require('@nestjs/jwt');
 const { TenantAwarePool } = require('../dist/common/tenant-pool');
 const { runWithTenant } = require('../dist/common/tenant-context');
 const { ServicesService } = require('../dist/services/services.service');
 const { ChecksService } = require('../dist/checks/checks.service');
 const { CheckTemplatesService } = require('../dist/check-templates/check-templates.service');
+const { CheckTemplatesController } = require('../dist/check-templates/check-templates.controller');
+const { JwtStrategy } = require('../dist/auth/jwt.strategy');
+const { TenantContextInterceptor } = require('../dist/common/interceptors/tenant-context.interceptor');
 const { ClientsService } = require('../dist/clients/clients.service');
 const { WarrantyService } = require('../dist/warranty/warranty.service');
 const { CreateCheckDto } = require('../dist/checks/dto/create-check.dto');
@@ -236,6 +241,136 @@ const deferred = () => {
   });
   return { promise, resolve };
 };
+test(
+  'real HTTP + PG: legacy owner/manual and staff/catalog remain safe; source-aware staff sees complete templates without cost',
+  { skip: !live, timeout: 30000 },
+  async () =>
+    fixture(async ({ tenant, owner, staff, pool, q, run, templates, checks }) => {
+      const manual = { name: 'Расходник', costPrice: 40, sellPrice: 100, quantity: 2 };
+      const saved = await run(() =>
+        templates.create(tenant, owner, { name: 'Manual', shared: true, products: [manual] }),
+      );
+      await run(() =>
+        templates.create(tenant, owner, { name: 'Zero', shared: true, products: [{ ...manual, costPrice: 0 }] }),
+      );
+      await run(() =>
+        templates.create(tenant, owner, {
+          name: 'Unknown',
+          shared: true,
+          products: [{ name: 'Unknown', sellPrice: 100, quantity: 2 }],
+        }),
+      );
+      await run(() =>
+        templates.create(tenant, owner, {
+          name: 'Missing',
+          shared: true,
+          products: [{ ...manual, productId: randomUUID() }],
+        }),
+      );
+      const warehouse = (
+        await q(
+          "INSERT INTO warehouses(tenant_id,point_id,name,kind) VALUES($1,$2,'Legacy stock','main') RETURNING id",
+          [tenant, owner.currentPointId],
+        )
+      )[0].id;
+      const productId = (
+        await q(
+          "INSERT INTO products(tenant_id,warehouse_id,name,cost_price,sell_price,stock) VALUES($1,$2,'Catalog',40,100,100) RETURNING id",
+          [tenant, warehouse],
+        )
+      )[0].id;
+      await run(() =>
+        templates.create(tenant, owner, {
+          name: 'Catalog',
+          shared: true,
+          products: [{ ...manual, name: 'Catalog', productId }],
+        }),
+      );
+      const priorSecret = process.env.JWT_SECRET;
+      process.env.JWT_SECRET = randomBytes(32).toString('hex');
+      let app;
+      try {
+        class FixtureModule {}
+        Module({
+          controllers: [CheckTemplatesController],
+          providers: [
+            { provide: CheckTemplatesService, useValue: templates },
+            { provide: JwtStrategy, useValue: new JwtStrategy(pool) },
+          ],
+        })(FixtureModule);
+        app = await NestFactory.create(FixtureModule, { logger: false });
+        app.useGlobalInterceptors(new TenantContextInterceptor());
+        await app.listen(0, '127.0.0.1');
+        const base = await app.getUrl();
+        const jwt = new JwtService({ secret: process.env.JWT_SECRET });
+        const tokens = new Map(
+          [owner, staff].map((actor) => [
+            actor.userID,
+            jwt.sign({ sub: actor.userID, jti: randomUUID(), pointId: actor.currentPointId }, { expiresIn: '5m' }),
+          ]),
+        );
+        const read = async (actor, suffix = '') => {
+          const response = await fetch(`${base}/check-templates${suffix}`, {
+            headers: { Authorization: `Bearer ${tokens.get(actor.userID)}` },
+          });
+          const body = await response.json();
+          assert.equal(response.status, 200, JSON.stringify(body));
+          return body;
+        };
+        const legacyStaff = await read(staff);
+        assert.deepEqual(
+          legacyStaff.map((row) => row.name),
+          ['Catalog'],
+        );
+        const legacyOwner = await read(owner);
+        assert.deepEqual(
+          legacyOwner.map((row) => row.name),
+          ['Catalog', 'Manual', 'Zero'],
+        );
+        assert.equal(legacyOwner.find((row) => row.id === saved.id).products[0].costPrice, 40);
+        const currentStaff = await read(staff, '?sourceAware=1');
+        assert.equal(currentStaff.length, 5);
+        assert.equal(/costPrice|costStatus|productCostTotal/.test(JSON.stringify(currentStaff)), false);
+        assert.ok(currentStaff.find((row) => row.id === saved.id).products[0].sourceTemplateProduct);
+        assert.deepEqual(
+          (await read(staff, '?sourceAware=true')).map((row) => row.name),
+          ['Catalog'],
+        );
+        for (const [actor, template] of [
+          [owner, legacyOwner.find((row) => row.id === saved.id)],
+          [staff, legacyStaff[0]],
+        ]) {
+          // Old clients intentionally discard unknown response fields.
+          const products = template.products.map((line) => ({
+            productId: line.productId,
+            name: line.name,
+            costPrice: line.costPrice ?? 0,
+            sellPrice: line.sellPrice,
+            quantity: line.quantity,
+          }));
+          const created = await run(() =>
+            checks.create(
+              tenant,
+              actor.userID,
+              actor.role,
+              { masterId: actor.userID, paymentMethod: 'cash', products },
+              actor,
+            ),
+          );
+          assert.equal(
+            (await q('SELECT product_cost_total::float AS cost FROM checks WHERE id=$1', [created.id]))[0].cost,
+            80,
+          );
+        }
+        await q('UPDATE products SET warehouse_id=NULL WHERE id=$1', [productId]);
+        assert.equal((await read(staff)).length, 0, 'legacy catalog template outside the current warehouse is unsafe');
+      } finally {
+        if (app) await app.close();
+        if (priorSecret === undefined) delete process.env.JWT_SECRET;
+        else process.env.JWT_SECRET = priorSecret;
+      }
+    }),
+);
 test(
   'real PG: source template revision remains pinned until the check commits',
   { skip: !live, timeout: 30000 },

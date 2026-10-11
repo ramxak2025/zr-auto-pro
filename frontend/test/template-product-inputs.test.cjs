@@ -12,6 +12,7 @@ require.extensions['.ts'] = (module, filename) =>
   );
 const { templateProductCost, templateProductsCost } = require('../../shared/utils/templateProducts');
 const { expandServiceQuantities, toCheckTemplateServiceInput } = require('../../shared/utils/checkLines');
+const { createCheckTemplatesApi } = require('../../shared/api/createServices');
 const file = path.join(__dirname, '../src/pages/CheckCreatePage.tsx');
 const source = ts.createSourceFile(
   file,
@@ -95,4 +96,16 @@ test('template cost uses exact check line rounding and distinguishes unknown fro
   assert.equal(templateProductsCost(lines), 30.04);
   assert.equal(templateProductsCost([{ quantity: 2 }]), undefined);
   assert.equal(templateProductsCost([{ costPrice: 0, quantity: 2 }]), 0);
+});
+
+test('the shared mobile/web template API always advertises source support', async () => {
+  let requested;
+  const api = createCheckTemplatesApi({
+    get: async (url, options) => {
+      requested = { url, options };
+      return { data: [] };
+    },
+  });
+  await api.list();
+  assert.deepEqual(requested, { url: '/check-templates', options: { params: { sourceAware: '1' } } });
 });

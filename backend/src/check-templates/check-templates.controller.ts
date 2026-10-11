@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { CheckTemplatesService } from './check-templates.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -39,8 +39,8 @@ export class CheckTemplatesController {
   // ── Templates ────────────────────────────────────────────────────────────
 
   @Get()
-  getAll(@CurrentUser() user: JwtPayload) {
-    return this.checkTemplatesService.getAll(user.tenantID, user);
+  getAll(@CurrentUser() user: JwtPayload, @Query('sourceAware') sourceAware?: string) {
+    return this.checkTemplatesService.getAll(user.tenantID, user, { sourceAware: sourceAware === '1' });
   }
 
   /**

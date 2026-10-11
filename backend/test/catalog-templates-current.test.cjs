@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { CheckTemplatesService } = require('../dist/check-templates/check-templates.service');
+const { CheckTemplatesController } = require('../dist/check-templates/check-templates.controller');
 const { ServicesService } = require('../dist/services/services.service');
 const owner = { userID: 'owner', role: 'director' };
 const staff = { userID: 'staff', role: 'master', permissions: { warehouse_manage: false } };
@@ -152,4 +153,35 @@ test('template cost rounds each fractional product line before summing', async (
   assert.equal((await new CheckTemplatesService(pool).getAll('tenant', owner))[0].productCostTotal, undefined);
   pool.rows[0].products[0].costPrice = 0;
   assert.equal((await new CheckTemplatesService(pool).getAll('tenant', owner))[0].productCostTotal, 0);
+});
+
+test('legacy clients get complete safe templates; the source-aware flag never grants cost access', async () => {
+  const pool = fixture();
+  const catalog = pool.rows[0];
+  pool.rows.push(
+    { ...catalog, id: 'manual', products: [{ name: 'Manual', costPrice: 40, sellPrice: 100, quantity: 2 }] },
+    { ...catalog, id: 'zero', products: [{ name: 'Free', costPrice: 0, sellPrice: 100, quantity: 2 }] },
+    { ...catalog, id: 'unknown', products: [{ name: 'Unknown', sellPrice: 100, quantity: 2 }] },
+    { ...catalog, id: 'deleted', products: [{ productId: missingId, name: 'Deleted', costPrice: 90, quantity: 2 }] },
+  );
+  const controller = new CheckTemplatesController(new CheckTemplatesService(pool));
+  const legacyStaff = await controller.getAll({ ...staff, tenantID: 'tenant', currentPointId: 'point' });
+  assert.deepEqual(
+    legacyStaff.map((row) => row.id),
+    [catalog.id],
+  );
+  assert.equal(/costPrice|costStatus|productCostTotal/.test(JSON.stringify(legacyStaff)), false);
+  const productRead = pool.calls.find((call) => call.sql.includes('FROM products'));
+  assert.deepEqual(productRead.values, ['tenant', [productId, missingId], 'point']);
+  const legacyOwner = await controller.getAll({ ...owner, tenantID: 'tenant' });
+  assert.deepEqual(
+    legacyOwner.map((row) => row.id),
+    [catalog.id, 'manual', 'zero'],
+  );
+  assert.equal(legacyOwner[1].products[0].costPrice, 40);
+  const currentStaff = await controller.getAll({ ...staff, tenantID: 'tenant' }, '1');
+  assert.equal(currentStaff.length, 5);
+  assert.ok(currentStaff[1].products[0].sourceTemplateProduct);
+  assert.equal(/costPrice|costStatus|productCostTotal/.test(JSON.stringify(currentStaff)), false);
+  assert.equal((await controller.getAll({ ...staff, tenantID: 'tenant' }, 'true')).length, 1);
 });
