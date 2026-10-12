@@ -1,3 +1,5 @@
+import { checkDateParts, selectedCheckDate } from '../../../shared/utils/checkDateTime';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
 import { captureCheckSaveSession } from './checkCreate/saveSession';
 import { updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
@@ -508,6 +510,8 @@ export default function CheckCreateScreen() {
   const [loadedCheckDate, setLoadedCheckDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [pickerBaseDate, setPickerBaseDate] = useState<Date | null>(null);
+  const checkTimeZone = useTenantTimezone();
 
   // Client/Car selection
   const [clientId, setClientId] = useState('');
@@ -2720,7 +2724,9 @@ export default function CheckCreateScreen() {
         // Дата уходит ТОЛЬКО когда пользователь выбрал её руками (см.
         // manualDate). Иначе поля нет вовсе и сервер ставит время ПРОБИТИЯ:
         // create → now(), активация черновика → момент активации.
-        ...(manualDate && canEditCheckDate ? { date: manualDate.toISOString() } : {}),
+        ...(selectedCheckDate(manualDate, canEditCheckDate)
+          ? { date: selectedCheckDate(manualDate, canEditCheckDate) }
+          : {}),
         mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
         comment: comment || undefined,
         // Метки (Round 12 #9). Create: поле уходит только при непустом выборе
@@ -2969,8 +2975,22 @@ export default function CheckCreateScreen() {
   // ПОДСКАЗКА. Последняя нигде не сохраняется и в payload не уходит, поэтому
   // висящий часами экран кассы ничего не «залипает».
   const displayDate = manualDate ?? loadedCheckDate ?? new Date();
-  const dateStr = `${displayDate.getDate().toString().padStart(2, '0')}.${String(displayDate.getMonth() + 1).padStart(2, '0')}.${displayDate.getFullYear()}`;
-  const timeStr = `${String(displayDate.getHours()).padStart(2, '0')}:${String(displayDate.getMinutes()).padStart(2, '0')}`;
+  const displayParts = checkDateParts(displayDate, checkTimeZone);
+  const pickerValue = pickerBaseDate ?? displayDate;
+  const openCheckPicker = (mode: 'date' | 'time') => {
+    setPickerBaseDate(manualDate ?? loadedCheckDate ?? new Date());
+    if (mode === 'date') setShowDatePicker(true);
+    else setShowTimePicker(true);
+  };
+  const confirmCheckPicker = (picked: Date, mode: 'date' | 'time') => {
+    const next = new Date(picked);
+    if (mode === 'time') next.setUTCSeconds(0, 0);
+    setManualDate(next);
+    if (mode === 'date') setShowDatePicker(false);
+    else setShowTimePicker(false);
+  };
+  const dateStr = `${String(displayParts.day).padStart(2, '0')}.${String(displayParts.month).padStart(2, '0')}.${displayParts.year}`;
+  const timeStr = `${String(displayParts.hour).padStart(2, '0')}:${String(displayParts.minute).padStart(2, '0')}`;
 
   const getMasterName = (id?: string) => {
     if (!id) return 'Мастер...';
@@ -3096,6 +3116,51 @@ export default function CheckCreateScreen() {
             чтобы она не уезжала под кнопку. */}
         <PointIndicator variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
 
+        {!editId && canEditCheckDate && (
+          <View
+            style={{
+              alignSelf: 'flex-end',
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: palette.bg.card,
+              borderColor: palette.border.subtle,
+              borderWidth: 1,
+              borderRadius: 14,
+              marginBottom: spacing[3],
+            }}
+          >
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Выбрать дату заказ-наряда"
+              onPress={() => openCheckPicker('date')}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, minHeight: 44 }}
+            >
+              <Ionicons name="calendar-outline" size={16} color={palette.accent.primary} />
+              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? dateStr : 'Дата'}</Text>
+            </TouchableOpacity>
+            <View style={{ width: 1, height: 18, backgroundColor: palette.border.subtle }} />
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Выбрать время заказ-наряда"
+              onPress={() => openCheckPicker('time')}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, minHeight: 44 }}
+            >
+              <Ionicons name="time-outline" size={16} color={palette.accent.primary} />
+              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? timeStr : 'Время'}</Text>
+            </TouchableOpacity>
+            {manualDate && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Использовать время создания чека"
+                onPress={() => setManualDate(null)}
+                style={{ paddingHorizontal: 10, minHeight: 44, justifyContent: 'center' }}
+              >
+                <Ionicons name="close" size={16} color={palette.text.secondary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
         <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.sectionHeader}>
@@ -3146,11 +3211,9 @@ export default function CheckCreateScreen() {
             </View>
           )}
 
-          {/* Date/Time — only when editing an existing check. For NEW checks
-                the timestamp is stamped by the SERVER at the moment «Пробить»
-                (the payload carries no `date` field at all), so we hide the
-                noisy picker pair and keep the form focused on what really
-                matters: the client, the car, the line items, the payment.
+          {/* Existing checks retain their date card; new checks have compact
+                controls at the top right. Until explicitly selected, the
+                server stamps the submission instant.
                 Без права checks_change_datetime (тот же ключ проверяет сервер)
                 карточка остаётся, но только как read-only витрина даты чека —
                 тапы не открывают пикер, как и карандаш на вебе. */}
@@ -3158,7 +3221,7 @@ export default function CheckCreateScreen() {
             <View style={styles.dateTimeCard}>
               <TouchableOpacity
                 style={[styles.dateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                onPress={() => setShowDatePicker(true)}
+                onPress={() => openCheckPicker('date')}
                 disabled={!canEditCheckDate}
               >
                 <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
@@ -3166,7 +3229,7 @@ export default function CheckCreateScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.timeBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                onPress={() => setShowTimePicker(true)}
+                onPress={() => openCheckPicker('time')}
                 disabled={!canEditCheckDate}
               >
                 <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
@@ -3175,32 +3238,22 @@ export default function CheckCreateScreen() {
             </View>
           )}
 
-          {editId && canEditCheckDate && (
+          {canEditCheckDate && (
             <>
               <DateTimePickerModal
                 visible={showDatePicker}
-                value={displayDate}
+                value={pickerValue}
+                timeZone={checkTimeZone}
                 mode="date"
-                onConfirm={(d) => {
-                  setShowDatePicker(false);
-                  // Любое подтверждение пикера = дата стала РУЧНОЙ и поедет
-                  // в payload (даже если пользователь выбрал тот же день).
-                  const u = new Date(displayDate);
-                  u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
-                  setManualDate(u);
-                }}
+                onConfirm={(date) => confirmCheckPicker(date, 'date')}
                 onCancel={() => setShowDatePicker(false)}
               />
               <DateTimePickerModal
                 visible={showTimePicker}
-                value={displayDate}
+                value={pickerValue}
+                timeZone={checkTimeZone}
                 mode="time"
-                onConfirm={(d) => {
-                  setShowTimePicker(false);
-                  const u = new Date(displayDate);
-                  u.setHours(d.getHours(), d.getMinutes());
-                  setManualDate(u);
-                }}
+                onConfirm={(date) => confirmCheckPicker(date, 'time')}
                 onCancel={() => setShowTimePicker(false)}
               />
             </>

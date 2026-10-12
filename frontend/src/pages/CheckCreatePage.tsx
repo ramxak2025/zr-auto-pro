@@ -1,3 +1,4 @@
+import { checkDateParts, checkDateInstant } from '../../../shared/utils/checkDateTime';
 import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
@@ -72,7 +73,7 @@ import type {
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
-import { formatMoney } from '../../../shared/utils/formatters';
+import { formatMoney, formatDayKey, formatTimeShort } from '../../../shared/utils/formatters';
 import { applyServicePriceInput, isServicePriceSelectionValid } from '../../../shared/utils/servicePrices';
 import {
   expandServiceQuantities,
@@ -328,7 +329,7 @@ export default function CheckCreatePage() {
 
   // «Сегодня» — по календарю АВТОСЕРВИСА (157), а не браузера: дату чека в
   // шапке кассир сверяет глазами, а ставит её сервер своими сутками.
-  const { today: tenantToday } = useTenantCalendar();
+  const { today: tenantToday, timeZone: checkTimeZone } = useTenantCalendar();
   // Тот же день, но через ref: эффект гидратации формы правки не имеет права
   // перезапускаться в полночь — он затёр бы уже набранный заказ-наряд.
   const tenantTodayRef = useRef(tenantToday);
@@ -341,6 +342,7 @@ export default function CheckCreatePage() {
   // (полный timestamp, а не yyyy-MM-dd → 00:00), edit не переписывает
   // оригинальный timestamp чека.
   const [dateTouched, setDateTouched] = useState(false);
+  const [manualTime, setManualTime] = useState<string | null>(null);
   const [mileage, setMileage] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<string>('cash');
   const [comment, setComment] = useState('');
@@ -629,7 +631,7 @@ export default function CheckCreatePage() {
       if (car) setPlateSearch(car.plateNumber || existingCheck.client.fullName);
       else setPlateSearch(existingCheck.client.fullName);
     }
-    setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : tenantTodayRef.current);
+    setDate(existingCheck.date ? formatDayKey(existingCheck.date, checkTimeZone) : tenantTodayRef.current);
     setMileage(existingCheck.mileage ? String(existingCheck.mileage) : '');
     setPaymentMethod(existingCheck.paymentMethod || 'cash');
     // «Сплит»: восстановить РЕАЛЬНУЮ разбивку нал/карта. Авто-sync эффект
@@ -1196,17 +1198,24 @@ export default function CheckCreatePage() {
 
     // Дата: шлём ТОЛЬКО когда пользователь её менял (dateTouched) и имеет право.
     let dateIso: string | undefined;
-    if (dateTouched && canEditDate && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (dateTouched && canEditDate && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      toast.error('Выберите дату заказ-наряда');
+      return;
+    }
+    if (dateTouched && canEditDate) {
       const [y, m, d] = date.split('-').map(Number);
       const timeSource = isEditMode && existingCheck?.date ? new Date(existingCheck.date) : new Date();
-      dateIso = new Date(
-        y,
-        m - 1,
-        d,
-        timeSource.getHours(),
-        timeSource.getMinutes(),
-        timeSource.getSeconds(),
-      ).toISOString();
+      const parts = { ...checkDateParts(timeSource, checkTimeZone), year: y, month: m, day: d };
+      if (manualTime && /^\d{2}:\d{2}$/.test(manualTime)) {
+        const [hour, minute] = manualTime.split(':').map(Number);
+        Object.assign(parts, { hour, minute, second: 0, millisecond: 0 });
+      }
+      try {
+        dateIso = checkDateInstant(parts, checkTimeZone).toISOString();
+      } catch {
+        toast.error('Это время недоступно в часовом поясе автосервиса. Выберите другое.');
+        return;
+      }
     }
 
     const payload = {
@@ -1280,6 +1289,8 @@ export default function CheckCreatePage() {
   // «сегодня» на момент рендера, а не значение, зафиксированное при
   // монтировании формы.
   const displayDate = dateTouched || isEditMode ? date : tenantToday;
+  const displayTime =
+    manualTime ?? formatTimeShort(isEditMode && existingCheck?.date ? existingCheck.date : new Date(), checkTimeZone);
 
   const requestLeave = () => {
     if (hasLines) setLeaveConfirmOpen(true);
@@ -1347,7 +1358,7 @@ export default function CheckCreatePage() {
         title={pageTitle}
         icon={Receipt}
         backTo={requestLeave}
-        subtitle={`Заказ-наряд от ${format(new Date(displayDate + 'T00:00:00'), 'd MMMM yyyy', { locale: ruLocale })}${
+        subtitle={`Заказ-наряд от ${format(new Date((displayDate || tenantToday) + 'T00:00:00'), 'd MMMM yyyy', { locale: ruLocale })}${
           isDeferred && !cashierLocked ? ' · черновик' : ''
         }`}
         actions={
@@ -2120,7 +2131,7 @@ export default function CheckCreatePage() {
 
         {/* ═══════════ Правая колонка: параметры, итог, оплата, пробить ═══════════ */}
         <div className="min-w-0 space-y-5 xl:sticky xl:top-0 xl:max-h-[calc(100dvh-3rem)] xl:overflow-y-auto xl:pb-1 xl:pr-0.5">
-          {/* ── Дата и пробег ── */}
+          {/* ── Дата, время и пробег ── */}
           <Card padding="sm">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Дата чека" htmlFor="check-date">
@@ -2141,7 +2152,27 @@ export default function CheckCreatePage() {
                   </p>
                 )}
               </Field>
-              <Field label="Пробег" htmlFor="check-mileage">
+              <Field label="Время" htmlFor="check-time">
+                {canEditDate ? (
+                  <Input
+                    id="check-time"
+                    type="time"
+                    step={60}
+                    value={isEditMode || manualTime ? displayTime : ''}
+                    title="Часовой пояс автосервиса"
+                    onChange={(event) => {
+                      if (!date || (!dateTouched && !isEditMode)) setDate(tenantTodayRef.current);
+                      setManualTime(event.target.value || null);
+                      setDateTouched(true);
+                    }}
+                  />
+                ) : (
+                  <p id="check-time" className="flex h-9 items-center text-sm tabular-nums text-ink">
+                    {displayTime}
+                  </p>
+                )}
+              </Field>
+              <Field label="Пробег" htmlFor="check-mileage" className="col-span-2">
                 <MoneyInput
                   id="check-mileage"
                   integer
