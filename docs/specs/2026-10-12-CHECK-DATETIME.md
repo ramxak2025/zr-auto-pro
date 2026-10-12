@@ -10,6 +10,8 @@
 
 Для iOS применяется уже существующий native `timeZoneName` из установленного datetimepicker; для Android календарь, стрелки и быстрые варианты работают с настенными полями автосервиса. Вызовы общего пикера без timezone сохраняют прежнее поведение. Native-зависимости, lock-файлы, app.config/app.json и runtime не изменены. OTA совместим с runtime 3.15.0, каналы preview и production.
 
-Проверки: mobile100 suites/1295 PASS, datetime/dirty guard19 PASS с TZ America/New_York, реальные JS-обработчики Android presets/arrows/legacy3 PASS, типы обоих клиентов и web build PASS, targeted lint0errors. Исходный DST-дефект воспроизведён (+1h). Negative control старого preset после уточнения существующего шага минут:1FAIL/2PASS; исправленная версия3PASS. Chromium1440/375 с транспортными фикстурами: поля, восстановление даты, отсутствие ошибок/overflow; после одной коррекции полные дата/время видны. Native GUI нового контрола не проверен.
+Проверки: mobile100 suites/1295 PASS, datetime/dirty guard19 PASS с TZ America/New_York, реальные JS-обработчики Android presets/arrows/legacy/exact-minute4 PASS, типы обоих клиентов и web build PASS, targeted lint0errors. Исходный DST-дефект воспроизведён (+1h). Negative control старого preset после уточнения существующего шага минут:1FAIL/2PASS; исправленная версия3PASS. Chromium1440/375 с транспортными фикстурами: поля, восстановление даты, отсутствие ошибок/overflow; после одной коррекции полные дата/время видны. Native GUI нового контрола не проверен.
 
 Независимая целевая QA Sol6.1 High: DONE, замечания исправлены. Окончательный CI и публикация OTA — отдельный проверяемый этап. Никаких новых платных сборок.
+
+Для нового выбора времени задан шаг 1 минута, чтобы на Android можно было выставить любую минуту (например09:01), а не только варианты с шагом5. Старые вызовы пикера сохраняют свой шаг.

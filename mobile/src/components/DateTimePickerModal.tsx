@@ -32,6 +32,7 @@ interface Props {
   mode: 'date' | 'time';
   /** Optional service timezone; existing callers retain device-local behavior. */
   timeZone?: string;
+  minuteStep?: 1 | 5;
   onConfirm: (date: Date) => void;
   onCancel: () => void;
 }
@@ -249,11 +250,13 @@ function TimePicker({
   onChange,
   p,
   timeZone,
+  minuteStep = 5,
 }: {
   value: Date;
   onChange: (d: Date) => void;
   p: SemanticPalette;
   timeZone?: string;
+  minuteStep?: 1 | 5;
 }) {
   const selected = pickerParts(value, timeZone);
   const hours = selected.hour;
@@ -298,7 +301,7 @@ function TimePicker({
         <View style={ts.controls}>
           <TouchableOpacity
             style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
-            onPress={() => setMinutes((minutes + 5) % 60)}
+            onPress={() => setMinutes((minutes + minuteStep) % 60)}
           >
             <Ionicons name="chevron-up" size={22} color={p.text.secondary} />
           </TouchableOpacity>
@@ -307,7 +310,7 @@ function TimePicker({
           </View>
           <TouchableOpacity
             style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
-            onPress={() => setMinutes((minutes + 55) % 60)}
+            onPress={() => setMinutes((minutes + 60 - minuteStep) % 60)}
           >
             <Ionicons name="chevron-down" size={22} color={p.text.secondary} />
           </TouchableOpacity>
@@ -386,7 +389,15 @@ const ts = StyleSheet.create({
 });
 
 // ── Main Modal ──
-export default function DateTimePickerModal({ visible, value, mode, timeZone, onConfirm, onCancel }: Props) {
+export default function DateTimePickerModal({
+  visible,
+  value,
+  mode,
+  timeZone,
+  minuteStep,
+  onConfirm,
+  onCancel,
+}: Props) {
   const p = useColors();
   const insets = useSafeAreaInsets();
   const [tempDate, setTempDate] = useState(value);
@@ -430,6 +441,7 @@ export default function DateTimePickerModal({ visible, value, mode, timeZone, on
                 value={tempDate}
                 mode={mode}
                 timeZoneName={timeZone}
+                minuteInterval={mode === 'time' ? minuteStep : undefined}
                 display={mode === 'date' ? 'inline' : 'spinner'}
                 onChange={handleNativeChange}
                 themeVariant={p.mode}
@@ -445,7 +457,7 @@ export default function DateTimePickerModal({ visible, value, mode, timeZone, on
               {mode === 'date' ? (
                 <CalendarPicker value={tempDate} onChange={setTempDate} p={p} timeZone={timeZone} />
               ) : (
-                <TimePicker value={tempDate} onChange={setTempDate} p={p} timeZone={timeZone} />
+                <TimePicker value={tempDate} onChange={setTempDate} p={p} timeZone={timeZone} minuteStep={minuteStep} />
               )}
             </View>
           )}
