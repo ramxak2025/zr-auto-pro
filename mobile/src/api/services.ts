@@ -1,3 +1,4 @@
+import { createStarterCatalogsApi } from '../../../shared/api/starterCatalogs';
 import api, { loginAcrossHosts, postPublicAcrossHosts } from './axios';
 import {
   createAuthApi,
@@ -264,3 +265,5 @@ export const uploadsApi = {
     );
   },
 };
+
+export const starterCatalogsApi = createStarterCatalogsApi(api);

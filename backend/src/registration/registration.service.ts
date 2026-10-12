@@ -1,3 +1,4 @@
+import { validateStarterDirections } from '../starter-catalogs/starter-catalogs.service';
 import {
   BadRequestException,
   Inject,
@@ -22,6 +23,7 @@ type RegistrationStatus = 'pending' | 'approved' | 'rejected';
 
 /** Public-facing registration request row (NEVER carries password_hash). */
 export interface RegistrationRequestView {
+  starterDirections?: string[];
   id: string;
   companyName: string;
   ownerName: string;
@@ -53,6 +55,7 @@ export class RegistrationService {
       ownerName: row.owner_name,
       phone: row.phone,
       comment: row.comment ?? null,
+      starterDirections: row.starter_directions ?? [],
       status: row.status,
       rejectReason: row.reject_reason ?? null,
       reviewedBy: row.reviewed_by ?? null,
@@ -100,9 +103,16 @@ export class RegistrationService {
 
     try {
       await this.pool.query(
-        `INSERT INTO registration_requests (company_name, owner_name, phone, password_hash, comment)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [dto.companyName.trim(), dto.ownerName.trim(), phone, passwordHash, dto.comment?.trim() || null],
+        `INSERT INTO registration_requests (company_name, owner_name, phone, password_hash, comment, starter_directions)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          dto.companyName.trim(),
+          dto.ownerName.trim(),
+          phone,
+          passwordHash,
+          dto.comment?.trim() || null,
+          JSON.stringify(validateStarterDirections(dto.starterDirections)),
+        ],
       );
     } catch (err: any) {
       // Race: a concurrent submit created the pending row between our check and
@@ -127,7 +137,7 @@ export class RegistrationService {
   async list(status?: string): Promise<RegistrationRequestView[]> {
     const validStatus = status === 'pending' || status === 'approved' || status === 'rejected' ? status : undefined;
     const { rows } = await this.pool.query(
-      `SELECT id, company_name, owner_name, phone, comment, status, reject_reason,
+      `SELECT id, company_name, owner_name, phone, comment, starter_directions, status, reject_reason,
               reviewed_by, reviewed_at, created_tenant_id, created_at
          FROM registration_requests
         ${validStatus ? 'WHERE status = $1' : ''}
@@ -165,7 +175,7 @@ export class RegistrationService {
       // Lock the request row: serialises concurrent approves and lets us guard
       // the status transition atomically.
       const { rows } = await client.query(
-        `SELECT id, company_name, owner_name, phone, password_hash, status
+        `SELECT id, company_name, owner_name, phone, password_hash, starter_directions, status
            FROM registration_requests
           WHERE id = $1
           FOR UPDATE`,
@@ -195,6 +205,7 @@ export class RegistrationService {
 
       const { tenant } = await this.tenantsService.createWithOwnerAndTrialTx(client, {
         companyName: req.company_name,
+        starterDirections: req.starter_directions ?? [],
         ownerName: req.owner_name,
         ownerPhone: req.phone, // stored already-normalized at submit time
         ownerPasswordHash: req.password_hash, // reuse verbatim — do NOT re-hash
@@ -254,7 +265,7 @@ export class RegistrationService {
               reviewed_by = $3,
               reviewed_at = now()
         WHERE id = $1 AND status = 'pending'
-        RETURNING id, company_name, owner_name, phone, comment, status, reject_reason,
+        RETURNING id, company_name, owner_name, phone, comment, starter_directions, status, reject_reason,
                   reviewed_by, reviewed_at, created_tenant_id, created_at`,
       [id, reason, actor.userId],
     );

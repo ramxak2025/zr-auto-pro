@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from '../../components/StarterDirectionsPicker';
 /**
  * ManagerCreateTenantSheet — менеджер заводит автосервис ЗА СЕБЯ: название, контакты, тариф,
  * владелец-директор (имя, телефон-логин, пароль) и пробный доступ (7/14/30 дней, не больше
@@ -43,6 +44,7 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
   const palette = useColors();
   const queryClient = useQueryClient();
   const [name, setName] = React.useState('');
+  const [starterDirections, setStarterDirections] = React.useState<string[]>([]);
   const [phone, setPhone] = React.useState('');
   const [address, setAddress] = React.useState('');
   const [planId, setPlanId] = React.useState('');
@@ -56,6 +58,7 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
   React.useEffect(() => {
     if (visible && !wasVisible.current) {
       setName('');
+      setStarterDirections([]);
       setPhone('');
       setAddress('');
       setPlanId('');
@@ -158,6 +161,7 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
       ...(phone.trim() ? { phone: normalizePhone(phone) } : {}),
       ...(address.trim() ? { address: address.trim() } : {}),
       planId: effectivePlanId,
+      starterDirections,
       director: { name: ownerName.trim(), phone: normalizePhone(ownerPhone), password: ownerPassword },
       trialDays: effectiveTrial,
       ...(note.trim() ? { note: note.trim() } : {}),
@@ -184,6 +188,11 @@ export default function ManagerCreateTenantSheet({ visible, onClose, onOpenTenan
       />
       <SheetInput label="Адрес" value={address} onChangeText={setAddress} placeholder="Необязательно" />
 
+      <StarterDirectionsPicker
+        value={starterDirections}
+        onChange={setStarterDirections}
+        disabled={mutation.isPending}
+      />
       <SheetLabel>Тариф</SheetLabel>
       {(!summary || activePlans.length === 0) && (
         <SheetHint icon="information-circle-outline">

@@ -357,7 +357,10 @@ const ProductRow = React.memo(function ProductRow({
             ) : (
               // Цена — обычным текстом, не синим: синий в приложении означает
               // «на это можно нажать», а цена в строке не нажимается.
-              <Text style={[styles.productSellPrice, { color: textPrimary }]}>{formatMoney(item.sellPrice)}</Text>
+              <Text style={[styles.productSellPrice, { color: textPrimary }]}>
+                {formatMoney(item.sellPrice)}
+                {item.sellPriceIsPlaceholder ? ' · заготовка' : ''}
+              </Text>
             )}
             {/* Адрес хранения (2026-09-30): без ячейки компонент ничего не рисует, строка
                 прежняя. Чип стоит перед вторым слотом и сжимается первым (flexShrink
@@ -370,7 +373,7 @@ const ProductRow = React.memo(function ProductRow({
             {hideCategory ? (
               canSeeCostPrice ? (
                 <Text style={[styles.productCostPrice, { color: textTertiary }]} numberOfLines={1}>
-                  с/с {formatMoney(item.costPrice)}
+                  с/с {item.costPriceIsPlaceholder ? 'не подтверждена' : formatMoney(item.costPrice)}
                 </Text>
               ) : null
             ) : item.category ? (
@@ -464,6 +467,7 @@ export default function ProductsScreen() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [costPrice, setCostPrice] = useState('');
+  const [confirmStarterPrices, setConfirmStarterPrices] = useState(false);
   const [sellPrice, setSellPrice] = useState('');
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
@@ -1504,6 +1508,7 @@ export default function ProductsScreen() {
   // re-renders. Setters from useState are already stable so the deps
   // array is intentionally empty.
   const openEdit = useCallback((p: Product) => {
+    setConfirmStarterPrices(false);
     setEditingProduct(p);
     setName(p.name);
     setCategory(p.category || '');
@@ -1651,8 +1656,13 @@ export default function ProductsScreen() {
       // UpdateProductDto.stock объявлен @Min(0) — ValidationPipe отклонял ВЕСЬ
       // PATCH с «stock must not be less than 0», и новая цена не доезжала.
       // Заодно не плодим лишние записи в price_history / stock_movements.
-      if (canSeeCostPrice && parsedCost !== editingProduct.costPrice) payload.costPrice = parsedCost;
-      if (parsedSell !== editingProduct.sellPrice) payload.sellPrice = parsedSell;
+      if (
+        canSeeCostPrice &&
+        (parsedCost !== editingProduct.costPrice || (confirmStarterPrices && editingProduct?.costPriceIsPlaceholder))
+      )
+        payload.costPrice = parsedCost;
+      if (parsedSell !== editingProduct.sellPrice || (confirmStarterPrices && editingProduct?.sellPriceIsPlaceholder))
+        payload.sellPrice = parsedSell;
       if (parsedStock !== editingProduct.stock) payload.stock = parsedStock;
       if (parsedMinStock !== editingProduct.minStock) payload.minStock = parsedMinStock;
       // Ячейка хранения: PATCH принимает uuid / null (снять адрес) / отсутствие поля.
@@ -2715,6 +2725,21 @@ export default function ProductsScreen() {
             }
           </Text>
         </View>
+        {editingProduct && (editingProduct.costPriceIsPlaceholder || editingProduct.sellPriceIsPlaceholder) && (
+          <TouchableOpacity
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: confirmStarterPrices }}
+            onPress={() => setConfirmStarterPrices((v) => !v)}
+            style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+          >
+            <Ionicons
+              name={confirmStarterPrices ? 'checkbox' : 'square-outline'}
+              size={24}
+              color={palette.accent.primary}
+            />
+            <Text style={{ flex: 1, color: palette.text.primary }}>Подтвердить стартовые цены, включая 1 ₽</Text>
+          </TouchableOpacity>
+        )}
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>

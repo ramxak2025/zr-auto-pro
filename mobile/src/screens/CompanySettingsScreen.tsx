@@ -1,3 +1,4 @@
+import StarterCatalogsSection from '../components/StarterCatalogsSection';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useEffect } from 'react';
 import {
@@ -211,6 +212,7 @@ export default function CompanySettingsScreen() {
       <KeyboardAwareView style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
           {/* Basic info */}
+          <StarterCatalogsSection />
           <AnimatedCard index={0}>
             <View style={cardStyle}>
               <View style={styles.cardHeader}>

@@ -60,6 +60,7 @@ export class ServicesService {
       name: row.name,
       category: row.category,
       defaultPrice: parseFloat(row.default_price) || 0,
+      priceIsPlaceholder: row.price_is_placeholder === true,
       priceType: (row.price_type ?? 'fixed') as 'fixed' | 'range',
       minPrice: Number(row.min_price ?? row.default_price) || 0,
       maxPrice: Number(row.max_price ?? row.default_price) || 0,
@@ -440,6 +441,7 @@ export class ServicesService {
         set('default_price', price.defaultPrice);
         set('min_price', price.minPrice);
         set('max_price', price.maxPrice);
+        set('price_is_placeholder', false);
       }
       if (dto.masterPayMode !== undefined || dto.masterFixedAmount !== undefined) {
         const pay = normalizeServicePay(dto, prior);
@@ -477,6 +479,7 @@ export class ServicesService {
     return rows.map((row) => ({
       id: row.id,
       version: row.version,
+      priceIsPlaceholder: row.price_is_placeholder === true,
       priceType: row.price_type,
       defaultPrice: Number(row.default_price),
       minPrice: Number(row.min_price),
@@ -793,7 +796,7 @@ export class ServicesService {
           const masterPercent = op.masterPercent == null ? null : this.normalizeMasterPercent(op.masterPercent);
           const warrantyDays = this.normalizeWarrantyDays(op.warrantyDays);
           const result = await client.query(
-            `UPDATE services SET name=$1, category=$2, default_price=$3,
+            `UPDATE services SET name=$1, category=$2, default_price=$3, price_is_placeholder=false,
                master_percent=CASE WHEN $4::boolean THEN $5 ELSE master_percent END,
                warranty_days=CASE WHEN $6::boolean THEN $7 ELSE warranty_days END,
                price_type=$8, min_price=$9, max_price=$10, master_pay_mode=$13, master_fixed_amount=$14 WHERE id=$11 AND tenant_id=$12 RETURNING *`,

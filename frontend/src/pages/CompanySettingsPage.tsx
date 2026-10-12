@@ -1,3 +1,4 @@
+import StarterCatalogsCard from '../components/company/StarterCatalogsCard';
 import CompanyModeFlow from '../components/CompanyModeFlow';
 import { attendanceModePresentation, companyModeFlows } from '../../../shared/utils/companyModePresentation';
 import { useEffect, useId, useMemo, useState } from 'react';
@@ -931,7 +932,10 @@ export default function CompanySettingsPage() {
 
           <div className="max-w-3xl">
             <TabPanel idPrefix="company-settings" tabKey="company" active={tab === 'company'}>
-              <CompanyDetailsTab />
+              <div className="space-y-5">
+                <CompanyDetailsTab />
+                <StarterCatalogsCard />
+              </div>
             </TabPanel>
             <TabPanel idPrefix="company-settings" tabKey="cars" active={tab === 'cars'}>
               <VinSettingsCard />

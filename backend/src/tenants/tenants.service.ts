@@ -1,3 +1,4 @@
+import { StarterCatalogsService, validateStarterDirections } from '../starter-catalogs/starter-catalogs.service';
 import {
   Injectable,
   Inject,
@@ -113,6 +114,7 @@ export class TenantsService {
     @Inject(PG_POOL) private pool: Pool,
     private jwtService: JwtService,
     private audit: AuditService,
+    private starterCatalogs: StarterCatalogsService,
   ) {}
 
   /**
@@ -1071,6 +1073,7 @@ export class TenantsService {
   }
 
   async create(dto: any, actor?: AuditActor) {
+    const starterDirections = validateStarterDirections(dto.starterDirections);
     // 173 — сразу за менеджером (только суперадмин, POST /tenants { managerId }).
     // Проверяем ДО транзакции: catch ниже превращает любую ошибку в 500, а
     // «менеджер не найден» — это 400, ошибка запроса, а не сбой сервера.
@@ -1154,6 +1157,8 @@ export class TenantsService {
         );
       }
 
+      if (starterDirections.length)
+        await this.starterCatalogs.installOnCreationTx(client, tenant.id, starterDirections);
       await client.query('COMMIT');
 
       // 173: создание тенанта теперь в журнале действий (раньше не писалось вовсе).
@@ -1205,6 +1210,7 @@ export class TenantsService {
     client: PoolClient,
     opts: {
       companyName: string;
+      starterDirections?: string[];
       ownerName: string;
       ownerPhone: string; // already normalized by the caller
       ownerPasswordHash: string; // already bcrypt-hashed — inserted verbatim, NEVER re-hashed
@@ -1319,6 +1325,8 @@ export class TenantsService {
       ],
     );
 
+    if (opts.starterDirections?.length)
+      await this.starterCatalogs.installOnCreationTx(client, tenant.id, opts.starterDirections);
     return { tenant, ownerUserId: ownerRows[0].id };
   }
 

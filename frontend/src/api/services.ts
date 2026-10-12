@@ -1,3 +1,4 @@
+import { createStarterCatalogsApi } from '../../../shared/api/starterCatalogs';
 import api from './axios';
 import {
   createAuthApi,
@@ -233,3 +234,5 @@ export const uploadsApi = {
     );
   },
 };
+
+export const starterCatalogsApi = createStarterCatalogsApi(api);

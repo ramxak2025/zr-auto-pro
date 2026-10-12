@@ -160,6 +160,7 @@ export interface SwitchSessionPointResponse {
 }
 
 export interface RegisterRequest {
+  starterDirections?: string[];
   phone: string;
   password: string;
   fullName: string;
@@ -175,6 +176,7 @@ export interface RegisterRequest {
  * create the owner account on approval. The endpoint returns only `{ ok: true }`.
  */
 export interface RegisterRequestPayload {
+  starterDirections?: string[];
   companyName: string;
   ownerName: string;
   phone: string;
@@ -412,6 +414,9 @@ export interface TransferCarOwnerRequest {
 }
 
 export interface CreateProductRequest {
+  brand?: string;
+  article?: string;
+  packaging?: string;
   name: string;
   category?: string;
   /** Photo URL. Send `null` or `''` to store no photo. */
@@ -438,6 +443,9 @@ export interface CreateProductRequest {
 }
 
 export interface UpdateProductRequest {
+  brand?: string;
+  article?: string;
+  packaging?: string;
   name?: string;
   category?: string;
   /**
@@ -950,6 +958,7 @@ export interface UpdateWorkModeRequest {
 }
 
 export interface CreateTenantRequest {
+  starterDirections?: string[];
   name: string;
   phone?: string;
   address?: string;
@@ -1103,6 +1112,7 @@ export interface CreateSettlementRequest {
  * `min(14, maxFreeDays)` дней.
  */
 export interface CreateManagerTenantRequest {
+  starterDirections?: string[];
   name: string;
   phone?: string;
   address?: string;

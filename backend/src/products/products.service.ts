@@ -64,6 +64,12 @@ export class ProductsService {
     const p: any = {
       id: row.id,
       name: row.name,
+      brand: row.brand ?? '',
+      article: row.article ?? '',
+      packaging: row.packaging ?? '',
+      sourceUrl: row.source_url ?? '',
+      sellPriceIsPlaceholder: row.sell_price_is_placeholder === true,
+      costPriceIsPlaceholder: canSeeCost ? row.cost_price_is_placeholder === true : undefined,
       category: row.category,
       photo: row.photo,
       // Себестоимость скрывается у тех, кто не управляет складом (см. canSeeCost).
@@ -378,8 +384,8 @@ export class ProductsService {
     // 172 — адрес обязан быть ячейкой ТОГО ЖЕ склада (до любой записи).
     const cell = dto.storageCellId ? await this.loadCellOfWarehouse(tenantID, dto.storageCellId, warehouseId) : null;
     const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode, storage_cell_id, brand, article, packaging)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
       [
         dto.name,
         dto.category,
@@ -397,6 +403,9 @@ export class ProductsService {
         warrantyDays,
         dto.barcode ?? null,
         cell?.id ?? null,
+        dto.brand?.trim() ?? '',
+        dto.article?.trim() ?? '',
+        dto.packaging?.trim() ?? '',
       ],
     );
     return this.mapProduct({
@@ -510,6 +519,12 @@ export class ProductsService {
     const vals: any[] = [];
     let idx = 1;
 
+    for (const field of ['brand', 'article', 'packaging'] as const) {
+      if (dto[field] !== undefined) {
+        sets.push(`${field}=$${idx++}`);
+        vals.push(String(dto[field]).trim());
+      }
+    }
     if (dto.name !== undefined) {
       sets.push(`name=$${idx++}`);
       vals.push(dto.name);
@@ -528,10 +543,12 @@ export class ProductsService {
     if (dto.costPrice !== undefined) {
       sets.push(`cost_price=$${idx++}`);
       vals.push(dto.costPrice);
+      sets.push('cost_price_is_placeholder=false');
     }
     if (dto.sellPrice !== undefined) {
       sets.push(`sell_price=$${idx++}`);
       vals.push(dto.sellPrice);
+      sets.push('sell_price_is_placeholder=false');
     }
     if (dto.minStock !== undefined) {
       sets.push(`min_stock=$${idx++}`);
@@ -726,7 +743,7 @@ export class ProductsService {
     const oldSell = parseFloat(current[0].sell_price) || 0;
 
     const { rows } = await this.pool.query(
-      `WITH upd AS (UPDATE products SET sell_price=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *)
+      `WITH upd AS (UPDATE products SET sell_price=$1, sell_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3 RETURNING *)
        SELECT upd.*, sc.code AS storage_cell_code, sc.name AS storage_cell_name
          FROM upd LEFT JOIN storage_cells sc ON sc.id = upd.storage_cell_id`,
       [numeric, id, tenantID],
@@ -1397,6 +1414,8 @@ export class ProductsService {
           unit: string;
           costPrice: number;
           sellPrice: number;
+          hasCostPrice: boolean;
+          hasSellPrice: boolean;
           stock: number;
           minStock: number;
           // 172 — адрес из колонки «Ячейка»: '' = адрес не трогаем. Код длиннее лимита не
@@ -1418,6 +1437,16 @@ export class ProductsService {
           name,
           category: toStr(it.category).slice(0, 500) || null,
           unit: toStr(it.unit).slice(0, 50) || 'шт',
+          hasCostPrice:
+            it.costPrice != null &&
+            String(it.costPrice).trim() !== '' &&
+            Number.isFinite(Number(String(it.costPrice).replace(',', '.'))) &&
+            Number(String(it.costPrice).replace(',', '.')) >= 0,
+          hasSellPrice:
+            it.sellPrice != null &&
+            String(it.sellPrice).trim() !== '' &&
+            Number.isFinite(Number(String(it.sellPrice).replace(',', '.'))) &&
+            Number(String(it.sellPrice).replace(',', '.')) >= 0,
           costPrice: clampPrice(toNum(it.costPrice)),
           sellPrice: clampPrice(toNum(it.sellPrice)),
           stock: clampStock(toNum(it.stock)),
@@ -1545,7 +1574,9 @@ export class ProductsService {
           try {
             // 172 — пустая колонка «Ячейка» адрес не меняет (COALESCE держит прежний).
             await client.query(
-              `UPDATE products SET category=$3, cost_price=$4, sell_price=$5, stock=$6, min_stock=$7, unit=$8,
+              `UPDATE products SET category=$3, cost_price=CASE WHEN $10 THEN $4 ELSE cost_price END, sell_price=CASE WHEN $11 THEN $5 ELSE sell_price END,
+                      cost_price_is_placeholder=CASE WHEN $10 THEN false ELSE cost_price_is_placeholder END,
+                      sell_price_is_placeholder=CASE WHEN $11 THEN false ELSE sell_price_is_placeholder END, stock=$6, min_stock=$7, unit=$8,
                       storage_cell_id=COALESCE($9::uuid, storage_cell_id)
                 WHERE id=$1 AND tenant_id=$2`,
               [
@@ -1558,6 +1589,8 @@ export class ProductsService {
                 it.minStock,
                 it.unit,
                 cellIdByCode.get(it.storageCell) ?? null,
+                it.hasCostPrice,
+                it.hasSellPrice,
               ],
             );
             updated++;
@@ -1630,7 +1663,7 @@ export class ProductsService {
 
       // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
-        `SELECT stock, warehouse_id, cost_price, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
+        `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
            AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses wpt
                   WHERE wpt.id = products.warehouse_id AND wpt.point_id = $3::uuid))
          FOR UPDATE`,
@@ -1651,6 +1684,12 @@ export class ProductsService {
           (integrationGuard.requireSufficientStock && ['expense', 'writeoff'].includes(type) && qty > stockBefore))
       )
         throw new ConflictException('Остаток или склад изменился; нужна сверка складского движения');
+      if (type === 'writeoff' && recordAsExpense && rows[0].cost_price_is_placeholder === true)
+        throw new ConflictException({
+          code: 'PRODUCT_COST_CONFIRMATION_REQUIRED',
+          message:
+            'Подтвердите закупочную цену товара в карточке или проведите фактическую закупку перед списанием в расходы.',
+        });
       const purchasePrice = parseFloat(rows[0].cost_price) || 0;
       let stockAfter: number;
 

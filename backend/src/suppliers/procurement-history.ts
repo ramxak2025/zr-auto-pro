@@ -15,6 +15,8 @@ export interface ReceiptProduct {
   stock: string;
   warehouse_id: string | null;
   cost_price: string;
+  cost_price_is_placeholder?: boolean;
+  sell_price_is_placeholder?: boolean;
   sell_price: string;
 }
 
@@ -26,7 +28,7 @@ export async function lockReceiptProducts(
 ): Promise<ReceiptProduct[]> {
   const unique = [...new Set(ids)];
   const { rows } = await client.query<ReceiptProduct>(
-    `SELECT p.id, p.name, p.stock, p.warehouse_id, p.cost_price, p.sell_price FROM products p
+    `SELECT p.id, p.name, p.stock, p.warehouse_id, p.cost_price, p.sell_price, p.cost_price_is_placeholder, p.sell_price_is_placeholder FROM products p
      WHERE p.id = ANY($1::uuid[]) AND p.tenant_id=$2 AND p.deleted_at IS NULL
        AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses w WHERE w.id=p.warehouse_id AND w.tenant_id=$2 AND w.point_id=$3))
      ORDER BY p.id FOR UPDATE OF p`,
@@ -79,24 +81,37 @@ export async function updateReceiptPrices(
   const oldCost = cents(product.cost_price ?? 0);
   const oldSell = cents(product.sell_price ?? 0);
   const purchase = purchasePrice === undefined ? 0n : cents(purchasePrice);
-  const nextCost = purchase > 0n && (!backdated || oldCost === 0n) ? purchase : oldCost;
+  const nextCost =
+    (purchase > 0n || (purchasePrice !== undefined && product.cost_price_is_placeholder === true)) &&
+    (!backdated || oldCost === 0n || product.cost_price_is_placeholder === true)
+      ? purchase
+      : oldCost;
   const nextSell = sellPrice === undefined || sellPrice === null ? oldSell : cents(sellPrice);
-  if (nextCost === oldCost && nextSell === oldSell) return;
+  const confirmCost =
+    (purchase > 0n || (purchasePrice !== undefined && product.cost_price_is_placeholder === true)) &&
+    (!backdated || oldCost === 0n || product.cost_price_is_placeholder === true);
+  const confirmSell = sellPrice !== undefined && sellPrice !== null;
+  if (
+    nextCost === oldCost &&
+    nextSell === oldSell &&
+    !(confirmCost && product.cost_price_is_placeholder) &&
+    !(confirmSell && product.sell_price_is_placeholder)
+  )
+    return;
   // Cost guard is also in SQL, preserving its existing backdated contract.
-  if (nextCost !== oldCost) {
+  if (nextCost !== oldCost || (confirmCost && product.cost_price_is_placeholder)) {
     await client.query(
       backdated
-        ? 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3 AND COALESCE(cost_price,0)=0'
-        : 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3',
+        ? 'UPDATE products SET cost_price=$1, cost_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3 AND (COALESCE(cost_price,0)=0 OR cost_price_is_placeholder=true)'
+        : 'UPDATE products SET cost_price=$1, cost_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3',
       [decimal(nextCost, 2), product.id, tenantID],
     );
   }
-  if (nextSell !== oldSell)
-    await client.query('UPDATE products SET sell_price=$1 WHERE id=$2 AND tenant_id=$3', [
-      decimal(nextSell, 2),
-      product.id,
-      tenantID,
-    ]);
+  if (nextSell !== oldSell || (confirmSell && product.sell_price_is_placeholder))
+    await client.query(
+      'UPDATE products SET sell_price=$1, sell_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3',
+      [decimal(nextSell, 2), product.id, tenantID],
+    );
   await client.query(
     `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
     VALUES ($1,$2,$3,$4,$5,$6,$7)`,

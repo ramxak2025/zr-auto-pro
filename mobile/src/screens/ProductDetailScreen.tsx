@@ -186,6 +186,7 @@ export default function ProductDetailScreen() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [costPrice, setCostPrice] = useState('');
+  const [confirmStarterPrices, setConfirmStarterPrices] = useState(false);
   const [sellPrice, setSellPrice] = useState('');
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
@@ -261,6 +262,7 @@ export default function ProductDetailScreen() {
 
   // Seed the edit fields from a product snapshot.
   const seedFromProduct = useCallback((p: Product) => {
+    setConfirmStarterPrices(false);
     setName(p.name);
     setCategory(p.category || '');
     setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
@@ -452,8 +454,13 @@ export default function ProductDetailScreen() {
     // PATCH с «stock must not be less than 0», и новая цена не доезжала.
     // Заодно не плодим лишние записи в price_history / stock_movements.
     // Masters never see cost — don't let a hidden field zero it out.
-    if (canSeeCostPrice && parsedCost !== product?.costPrice) payload.costPrice = parsedCost;
-    if (parsedSell !== product?.sellPrice) payload.sellPrice = parsedSell;
+    if (
+      canSeeCostPrice &&
+      (parsedCost !== product?.costPrice || (confirmStarterPrices && product?.costPriceIsPlaceholder))
+    )
+      payload.costPrice = parsedCost;
+    if (parsedSell !== product?.sellPrice || (confirmStarterPrices && product?.sellPriceIsPlaceholder))
+      payload.sellPrice = parsedSell;
     if (parsedStock !== product?.stock) payload.stock = parsedStock;
     if (parsedMinStock !== product?.minStock) payload.minStock = parsedMinStock;
     // Адрес хранения (2026-09-30) — тоже только если поменяли: uuid ячейки либо null («снять»).
@@ -474,6 +481,7 @@ export default function ProductDetailScreen() {
     warranty,
     barcode,
     costPrice,
+    confirmStarterPrices,
     canSeeCostPrice,
     photoUri,
     editCell,
@@ -516,7 +524,9 @@ export default function ProductDetailScreen() {
   const displayPhotoUri = product ? getImageUrl(product.photo) : undefined;
   const lowStock = !!product && product.stock <= product.minStock && product.minStock > 0;
   const margin =
-    product && product.costPrice > 0 ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100 : null;
+    product && !product.costPriceIsPlaceholder && !product.sellPriceIsPlaceholder && product.costPrice > 0
+      ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100
+      : null;
   const categoryLabel = product?.category ? product.category.split('/').pop() : undefined;
 
   // Build the price walk: oldest "before" point, then every "after". Reverse
@@ -698,6 +708,23 @@ export default function ProductDetailScreen() {
               </TouchableOpacity>
             </EditField>
 
+            {product && (product.costPriceIsPlaceholder || product.sellPriceIsPlaceholder) && (
+              <TouchableOpacity
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: confirmStarterPrices }}
+                onPress={() => setConfirmStarterPrices((v) => !v)}
+                style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+              >
+                <Ionicons
+                  name={confirmStarterPrices ? 'checkbox' : 'square-outline'}
+                  size={24}
+                  color={palette.accent.primary}
+                />
+                <Text variant="body" color={palette.text.primary} style={{ flex: 1 }}>
+                  Подтвердить стартовые цены, включая 1 ₽
+                </Text>
+              </TouchableOpacity>
+            )}
             {/* Prices */}
             <View style={styles.fieldRow}>
               {canSeeCostPrice ? (
@@ -951,7 +978,11 @@ export default function ProductDetailScreen() {
             <StatTile
               icon="pricetag-outline"
               label="Цена продажи"
-              value={formatMoney(product.sellPrice)}
+              value={
+                product.sellPriceIsPlaceholder
+                  ? 'Заготовка · ' + formatMoney(product.sellPrice)
+                  : formatMoney(product.sellPrice)
+              }
               accent={colors.green[600]}
               palette={palette}
             />
@@ -968,7 +999,11 @@ export default function ProductDetailScreen() {
                 <StatTile
                   icon="wallet-outline"
                   label="Себестоимость"
-                  value={formatMoney(product.costPrice)}
+                  value={
+                    product.costPriceIsPlaceholder
+                      ? 'Заготовка · ' + formatMoney(product.costPrice)
+                      : formatMoney(product.costPrice)
+                  }
                   accent={colors.orange[500]}
                   palette={palette}
                 />

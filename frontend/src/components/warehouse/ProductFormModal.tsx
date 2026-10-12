@@ -17,11 +17,14 @@ import { toNumberOrZero } from './format';
 import StorageCellSelect from './StorageCellSelect';
 
 export interface ProductFormData {
+  brand?: string;
+  article?: string;
+  packaging?: string;
   name: string;
   category: string;
   photo?: string;
-  costPrice: number;
-  sellPrice: number;
+  costPrice?: number;
+  sellPrice?: number;
   stock: number;
   minStock: number;
   unit: string;
@@ -73,6 +76,10 @@ export default function ProductFormModal({
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || defaultCategory || '');
   const [photo, setPhoto] = useState(product?.photo || '');
+  const [confirmPrices, setConfirmPrices] = useState(false);
+  const [brand, setBrand] = useState(product?.brand ?? '');
+  const [article, setArticle] = useState(product?.article ?? '');
+  const [packaging, setPackaging] = useState(product?.packaging ?? '');
   const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
@@ -136,10 +143,23 @@ export default function ProductFormModal({
     const trimmedWd = warrantyDays.trim();
     onSubmit({
       name: name.trim(),
+      brand: brand.trim(),
+      article: article.trim(),
+      packaging: packaging.trim(),
       category: category.trim(),
       photo: photo || undefined,
-      costPrice: toNumberOrZero(costPrice),
-      sellPrice: toNumberOrZero(sellPrice),
+      ...(!product ||
+      !product.costPriceIsPlaceholder ||
+      confirmPrices ||
+      toNumberOrZero(costPrice) !== product.costPrice
+        ? { costPrice: toNumberOrZero(costPrice) }
+        : {}),
+      ...(!product ||
+      !product.sellPriceIsPlaceholder ||
+      confirmPrices ||
+      toNumberOrZero(sellPrice) !== product.sellPrice
+        ? { sellPrice: toNumberOrZero(sellPrice) }
+        : {}),
       stock: toNumberOrZero(stock),
       minStock: toNumberOrZero(minStock),
       unit,
@@ -225,6 +245,17 @@ export default function ProductFormModal({
           />
         </Field>
 
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Бренд" htmlFor="product-brand">
+            <Input id="product-brand" value={brand} onChange={(e) => setBrand(e.target.value)} />
+          </Field>
+          <Field label="Артикул" htmlFor="product-article">
+            <Input id="product-article" value={article} onChange={(e) => setArticle(e.target.value)} />
+          </Field>
+          <Field label="Исполнение / фасовка" htmlFor="product-packaging">
+            <Input id="product-packaging" value={packaging} onChange={(e) => setPackaging(e.target.value)} />
+          </Field>
+        </div>
         <div className={cn('grid gap-4', canManage ? 'grid-cols-2' : 'grid-cols-1')}>
           {/* Закуп. цена — cost-price is manage-only. Hidden defensively for
               non-managers (they can't reach this modal anyway). */}
@@ -250,6 +281,12 @@ export default function ProductFormModal({
           </Field>
         </div>
 
+        {product && (product.costPriceIsPlaceholder || product.sellPriceIsPlaceholder) && (
+          <label className="flex min-h-11 items-center gap-3 text-sm text-ink">
+            <input type="checkbox" checked={confirmPrices} onChange={(e) => setConfirmPrices(e.target.checked)} />
+            Подтвердить стартовые цены как реальные, включая 1 ₽
+          </label>
+        )}
         <div className="grid grid-cols-2 gap-4">
           {/* Без ограничения снизу: товар, проданный «в минус» (оверселл разрешён
               продуктово), хранит отрицательный остаток, и валидация блокировала

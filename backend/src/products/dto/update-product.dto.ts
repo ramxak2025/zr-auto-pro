@@ -1,6 +1,9 @@
 import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
 
 export class UpdateProductDto {
+  @IsOptional() @IsString() brand?: string;
+  @IsOptional() @IsString() article?: string;
+  @IsOptional() @IsString() packaging?: string;
   @IsString()
   @IsOptional()
   name?: string;

@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from '../../components/company/StarterDirectionsPicker';
 import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -138,6 +139,7 @@ export default function ManagerTenantsPage() {
   const isFiltered = search.trim() !== '' || statusFilter !== 'all';
 
   const [form, setForm] = useState<CreateForm>(() => emptyForm());
+  const [starterDirections, setStarterDirections] = useState<string[]>([]);
   const [showErrors, setShowErrors] = useState(false);
   // Ответ 409 PHONE_TAKEN: показываем у поля телефона владельца, пока его не поправят.
   const [phoneTaken, setPhoneTaken] = useState<string | null>(null);
@@ -178,6 +180,7 @@ export default function ManagerTenantsPage() {
   const createMutation = useMutation({
     mutationFn: (payload: CreateManagerTenantRequest) => managerApi.createTenant(payload),
     onSuccess: (res) => {
+      setStarterDirections([]);
       queryClient.invalidateQueries({ queryKey: managerKeys.tenantsAll });
       queryClient.invalidateQueries({ queryKey: managerKeys.summary });
       toast.success(`Автосервис «${res.data.name}» создан`);
@@ -203,6 +206,7 @@ export default function ManagerTenantsPage() {
     const payload: CreateManagerTenantRequest = {
       name: form.name.trim(),
       planId: form.planId,
+      starterDirections,
       director: {
         name: form.directorName.trim(),
         phone: normalizePhone(form.directorPhone),
@@ -416,6 +420,7 @@ export default function ManagerTenantsPage() {
             </div>
           )}
 
+          <StarterDirectionsPicker value={starterDirections} onChange={setStarterDirections} disabled={isSaving} />
           <Field
             label="Пробный доступ, дней"
             htmlFor={`${uid}-trial`}

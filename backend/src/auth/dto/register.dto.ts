@@ -1,6 +1,13 @@
+import { IsArray, ArrayMaxSize } from 'class-validator';
 import { IsString, IsNotEmpty, MinLength, IsOptional } from 'class-validator';
 
 export class RegisterDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  starterDirections?: string[];
+
   @IsString()
   @IsNotEmpty()
   phone!: string;

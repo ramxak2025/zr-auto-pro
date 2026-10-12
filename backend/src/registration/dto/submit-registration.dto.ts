@@ -1,3 +1,4 @@
+import { IsArray, ArrayMaxSize } from 'class-validator';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
@@ -16,6 +17,12 @@ import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
  * service normalizes it to the canonical +7XXXXXXXXXX form.
  */
 export class SubmitRegistrationDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  starterDirections?: string[];
+
   @IsString()
   @MinLength(1)
   @MaxLength(200)

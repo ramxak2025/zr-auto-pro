@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from '../../components/StarterDirectionsPicker';
 /**
  * AdminTenantsScreen — searchable tenant directory for the superadmin, and «Автосервисы»
  * (only the manager's own clients) for a platform manager.
@@ -161,6 +162,7 @@ export default function AdminTenantsScreen() {
   const [picker, setPicker] = React.useState<'plan' | 'manager' | null>(null);
   const [managerCreateOpen, setManagerCreateOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [starterDirections, setStarterDirections] = React.useState<string[]>([]);
 
   const {
     data: tenants = [],
@@ -271,7 +273,7 @@ export default function AdminTenantsScreen() {
           ...(draft.directorPhone.trim() ? { directorPhone: normalizePhone(draft.directorPhone) } : {}),
           ...(draft.directorPassword ? { directorPassword: draft.directorPassword } : {}),
         };
-        await tenantsApi.create(payload);
+        await tenantsApi.create({ ...payload, starterDirections });
       }
     },
     onSuccess: () => {
@@ -403,7 +405,10 @@ export default function AdminTenantsScreen() {
             onPress={() => {
               haptic('tap');
               if (isManager) setManagerCreateOpen(true);
-              else setEditing(toDraft());
+              else {
+                setStarterDirections([]);
+                setEditing(toDraft());
+              }
             }}
             style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
             hitSlop={6}
@@ -534,6 +539,9 @@ export default function AdminTenantsScreen() {
       >
         {editing && (
           <>
+            {!editing.id && (
+              <StarterDirectionsPicker value={starterDirections} onChange={setStarterDirections} disabled={saving} />
+            )}
             {/* ── Компания ── */}
             <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Компания</Text>
             <Field label="Название" palette={palette} surface={surface}>

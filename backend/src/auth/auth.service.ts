@@ -1,3 +1,4 @@
+import { StarterCatalogsService, validateStarterDirections } from '../starter-catalogs/starter-catalogs.service';
 import {
   Injectable,
   Inject,
@@ -161,6 +162,7 @@ export class AuthService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private jwtService: JwtService,
+    private starterCatalogs: StarterCatalogsService,
   ) {}
 
   /**
@@ -877,6 +879,7 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    const starterDirections = validateStarterDirections(dto.starterDirections);
     if (!dto.phone || !dto.password || !dto.fullName) {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
@@ -944,6 +947,7 @@ export class AuthService {
         [tenantID],
       );
 
+      if (starterDirections.length) await this.starterCatalogs.installOnCreationTx(client, tenantID, starterDirections);
       await client.query('COMMIT');
 
       // Тенант только что создан — филиалов у него нет по построению, поэтому

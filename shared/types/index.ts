@@ -770,6 +770,7 @@ export interface AuditLogEntry {
  * account — it is never exposed in any API response.
  */
 export interface RegistrationRequest {
+  starterDirections?: string[];
   id: string;
   companyName: string;
   ownerName: string;
@@ -1801,6 +1802,12 @@ export interface BundleItem {
 }
 
 export interface Product {
+  brand?: string;
+  article?: string;
+  packaging?: string;
+  sourceUrl?: string;
+  sellPriceIsPlaceholder?: boolean;
+  costPriceIsPlaceholder?: boolean;
   id: string;
   name: string;
   category?: string;
@@ -6043,3 +6050,5 @@ export interface ReportCatalogResponse {
 export type AttendanceNfcRequestResult =
   | { status: 'completed'; result: AttendanceNfcScanResult }
   | { status: 'unknown' };
+
+export type * from './starterCatalogs';

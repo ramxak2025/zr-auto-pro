@@ -1,3 +1,4 @@
+import { StarterCatalogsModule } from '../starter-catalogs/starter-catalogs.module';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -34,6 +35,7 @@ function loadJwtSecret(): string {
 
 @Module({
   imports: [
+    StarterCatalogsModule,
     PassportModule,
     JwtModule.register({
       secret: loadJwtSecret(),

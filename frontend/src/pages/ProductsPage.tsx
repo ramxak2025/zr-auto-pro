@@ -646,7 +646,8 @@ export default function ProductsPage() {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data: ProductFormData) => productsApi.create(data),
+    mutationFn: (data: ProductFormData) =>
+      productsApi.create({ ...data, costPrice: data.costPrice ?? 0, sellPrice: data.sellPrice ?? 0 }),
     onSuccess: (_res, data) => {
       toast.success('Товар создан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -909,8 +910,12 @@ export default function ProductsPage() {
         return {
           name: col(row, colMap.name),
           category: col(row, colMap.category),
-          costPrice: colMap.costPrice >= 0 ? toNumberOrZero(col(row, colMap.costPrice)) : 0,
-          sellPrice: colMap.sellPrice >= 0 ? toNumberOrZero(col(row, colMap.sellPrice)) : 0,
+          ...(colMap.costPrice >= 0 && col(row, colMap.costPrice) !== ''
+            ? { costPrice: toNumberOrZero(col(row, colMap.costPrice)) }
+            : {}),
+          ...(colMap.sellPrice >= 0 && col(row, colMap.sellPrice) !== ''
+            ? { sellPrice: toNumberOrZero(col(row, colMap.sellPrice)) }
+            : {}),
           stock: colMap.stock >= 0 ? toNumberOrZero(col(row, colMap.stock)) : 0,
           minStock: colMap.minStock >= 0 ? toNumberOrZero(col(row, colMap.minStock)) : 0,
           unit: col(row, colMap.unit) || DEFAULT_UNIT,

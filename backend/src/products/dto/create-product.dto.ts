@@ -1,6 +1,9 @@
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsArray, IsInt, IsUUID, Min } from 'class-validator';
 
 export class CreateProductDto {
+  @IsOptional() @IsString() brand?: string;
+  @IsOptional() @IsString() article?: string;
+  @IsOptional() @IsString() packaging?: string;
   @IsString()
   @IsNotEmpty()
   name!: string;
