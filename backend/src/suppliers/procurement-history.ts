@@ -106,12 +106,15 @@ export async function updateReceiptPrices(
         : 'UPDATE products SET cost_price=$1, cost_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3',
       [decimal(nextCost, 2), product.id, tenantID],
     );
+    product.cost_price_is_placeholder = false;
   }
-  if (nextSell !== oldSell || (confirmSell && product.sell_price_is_placeholder))
+  if (nextSell !== oldSell || (confirmSell && product.sell_price_is_placeholder)) {
     await client.query(
       'UPDATE products SET sell_price=$1, sell_price_is_placeholder=false WHERE id=$2 AND tenant_id=$3',
       [decimal(nextSell, 2), product.id, tenantID],
     );
+    product.sell_price_is_placeholder = false;
+  }
   await client.query(
     `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
     VALUES ($1,$2,$3,$4,$5,$6,$7)`,

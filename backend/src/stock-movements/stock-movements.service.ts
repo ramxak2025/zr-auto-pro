@@ -493,7 +493,7 @@ export class StockMovementsService {
     const recordAsExpense = !!dto.recordAsExpense;
 
     const { rows } = await client.query(
-      'SELECT stock, cost_price_is_placeholder FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+      'SELECT stock, cost_price, cost_price_is_placeholder FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
       [dto.productId, tenantID],
     );
     if (recordAsExpense && rows[0]?.cost_price_is_placeholder === true)
@@ -502,6 +502,9 @@ export class StockMovementsService {
         message:
           'Подтвердите закупочную цену товара в карточке или проведите фактическую закупку перед списанием в расходы.',
       });
+    // The fallback must come from the same locked row as its confirmation flag.
+    // A concurrent price confirmation can invalidate create()'s earlier read.
+    const writeoffCost = dto.purchasePrice != null ? purchasePrice : parseFloat(String(rows[0].cost_price)) || 0;
     const stockBefore = parseFloat(rows[0].stock) || 0;
     const stockAfter = Math.max(stockBefore - qty, 0);
 
@@ -514,7 +517,7 @@ export class StockMovementsService {
     let linkedExpenseId: string | null = null;
     if (recordAsExpense) {
       const categoryId = await this.getOrInsertExpenseCategory(client, tenantID, 'Списание со склада');
-      const amount = qty * purchasePrice;
+      const amount = qty * writeoffCost;
       const { rows: expRows } = await client.query(
         `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
          VALUES ($1,$2,$3,now(),$4,$5,$6) RETURNING id`,

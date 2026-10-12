@@ -196,18 +196,10 @@ export class StarterCatalogsService {
           revision: row?.revision,
         };
       }
-      const live = rows
-        .filter(
-          (r) =>
-            !r.deleted_at &&
-            (entry.kind !== 'templates' ||
-              !Array.isArray(r.products) ||
-              r.products.every(
-                (p: { productId?: string }) =>
-                  !p.productId || products.rows.some((g) => g.id === p.productId && !g.deleted_at),
-              )),
-        )
-        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      // A same-name recipe remains a collision even when its linked goods are
+      // unavailable. The owner must choose reuse/separate/skip; hiding it here
+      // could silently add a second recipe after a dependency restore.
+      const live = rows.filter((row) => !row.deleted_at).sort((a, b) => String(a.id).localeCompare(String(b.id)));
       if (entry.kind === 'products' && entry.brand && entry.article && entry.packaging) {
         // Articles are strings; no numeric coercion or loss of significant zeroes.
         const exact = live.filter(
@@ -249,10 +241,33 @@ export class StarterCatalogsService {
           'template-folder-' + item.directions[0],
         ];
         item.dependencies = deps.map((key) => plan.find((e) => e.key === key)?.name ?? key);
-        if (deps.some((key) => ['blocked', 'deleted'].includes(plan.find((e) => e.key === key)?.status ?? 'blocked'))) {
-          item.status = 'blocked';
-          item.note =
-            'Для шаблона нужны указанные услуги и товары. Включите недостающую часть набора или явно восстановите удалённые позиции.';
+        const missingCatalogDependency = deps.some((key) =>
+          ['blocked', 'deleted'].includes(plan.find((e) => e.key === key)?.status ?? 'blocked'),
+        );
+        const saved = templates.rows.find((row) => row.id === item.resourceId);
+        const missingSavedDependency =
+          (Array.isArray(saved?.services) ? saved.services : []).some(
+            (line: Record<string, unknown>) =>
+              line &&
+              typeof line.serviceId === 'string' &&
+              line.serviceId !== '' &&
+              !services.rows.some((row) => row.id === line.serviceId),
+          ) ||
+          (Array.isArray(saved?.products) ? saved.products : []).some(
+            (line: Record<string, unknown>) =>
+              line &&
+              typeof line.productId === 'string' &&
+              line.productId !== '' &&
+              !products.rows.some((row) => row.id === line.productId && !row.deleted_at),
+          );
+        if (missingCatalogDependency || missingSavedDependency) {
+          // Missing dependencies never change whether the template itself exists.
+          // Only a new recipe can become blocked; an owner's live/deleted recipe
+          // retains its lifecycle and requires its own explicit restore decision.
+          if (item.status === 'add') item.status = 'blocked';
+          item.note = saved
+            ? 'Установленный шаблон сохранится без изменений. Есть недоступные позиции: проверьте его связи и замените удалённые услуги вручную после восстановления.'
+            : 'Для шаблона нужны указанные услуги и товары. Включите недостающую часть набора или явно восстановите удалённые позиции. Удалённый шаблон восстанавливается только отдельным выбором.';
         }
       }
     }
@@ -383,7 +398,8 @@ export class StarterCatalogsService {
         if (!candidate) throw new BadRequestException({ message: 'Совпадающая позиция недоступна' });
         resourceId = candidate.id;
         result.reused++;
-      } else if (item.status === 'reuse') result.reused++;
+      } else if (item.status === 'reuse' || (item.kind === 'templates' && item.resourceId && item.revision))
+        result.reused++;
       else {
         if (
           item.kind === 'templates' &&

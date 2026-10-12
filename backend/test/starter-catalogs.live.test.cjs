@@ -12,6 +12,14 @@ const { runWithTenant } = require('../dist/common/tenant-context');
 const { resolveTemplateProductSources } = require('../dist/check-templates/template-product-source');
 const { STARTER_ENTRIES, STARTER_DIRECTIONS } = require('../dist/starter-catalogs/starter-manifest');
 const live = Boolean(process.env.AUTEXA_OCT13_LIVE_DB);
+// Keep focused --test-name-pattern runs on the same disposable database.
+if (live) {
+  const fixtureUrl = new URL(process.env.DATABASE_URL);
+  assert.equal(fixtureUrl.hostname, '127.0.0.1');
+  assert.equal(fixtureUrl.port, '55443');
+  assert.equal(fixtureUrl.pathname, '/autexa_oct13_starter');
+}
+
 test(
   'starter catalogs real PostgreSQL: transactions, exact identity, tombstones, placeholders and preview conflicts',
   { skip: !live },
@@ -537,6 +545,418 @@ test(
       if (cleanup.length) await pool.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])', [cleanup]);
       if (planId) await pool.query('DELETE FROM plans WHERE id=$1', [planId]);
       if (actorId) await pool.query('DELETE FROM users WHERE id=$1', [actorId]);
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'starter template lifecycle survives dependency restores without duplicate or implicit resurrection',
+  { skip: !live },
+  async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const tenantId = randomUUID();
+    try {
+      await pool.query("INSERT INTO tenants(id,name) VALUES($1,'Template lifecycle QA')", [tenantId]);
+      const owner = (
+        await pool.query(
+          "INSERT INTO users(phone,password,full_name,role,tenant_id) VALUES($1,'unused','Owner QA','director',$2) RETURNING id",
+          ['qa-' + randomUUID(), tenantId],
+        )
+      ).rows[0].id;
+      const warehouse = (
+        await pool.query("INSERT INTO warehouses(tenant_id,name,kind) VALUES($1,'Main','main') RETURNING id", [
+          tenantId,
+        ])
+      ).rows[0].id;
+      const actor = { userID: owner, tenantID: tenantId, role: 'director', permissions: {} };
+      const catalog = new StarterCatalogsService(pool);
+      const selection = { directionIds: ['lpg'], parts: ['services', 'products', 'templates'], warehouseId: warehouse };
+      const install = async (resolutions = {}) => {
+        const preview = await catalog.preview(tenantId, actor, selection);
+        await catalog.install(tenantId, actor, { previewId: preview.id, resolutions });
+        return preview;
+      };
+      await install();
+      const membership = async (key) =>
+        (
+          await pool.query('SELECT * FROM starter_catalog_memberships WHERE tenant_id=$1 AND item_key=$2', [
+            tenantId,
+            key,
+          ])
+        ).rows[0];
+      const templateKey = 'template-lovato604701312';
+      const goodsKey = 'product-lovato604701312';
+      const templateId = (await membership(templateKey)).resource_id;
+      const goodsId = (await membership(goodsKey)).resource_id;
+      const original = (await pool.query('SELECT services,products FROM check_templates WHERE id=$1', [templateId]))
+        .rows[0];
+      const customizedProducts = [
+        ...original.products.map((p) => ({ ...p, quantity: 2 })),
+        { productId: '', name: 'Owner manual consumable', quantity: 1, sellPrice: 0, costPrice: 0 },
+      ];
+      await pool.query("UPDATE check_templates SET name='Owner custom LPG recipe',products=$2 WHERE id=$1", [
+        templateId,
+        JSON.stringify(customizedProducts),
+      ]);
+      const expected = (
+        await pool.query('SELECT name,services,products,folder_id FROM check_templates WHERE id=$1', [templateId])
+      ).rows[0];
+      const templateCount = async () =>
+        Number((await pool.query('SELECT count(*) FROM check_templates WHERE tenant_id=$1', [tenantId])).rows[0].count);
+      const countBefore = await templateCount();
+      await pool.query('UPDATE products SET deleted_at=now() WHERE id=$1', [goodsId]);
+      await install({ [goodsKey]: { action: 'restore' } });
+      assert.equal(await templateCount(), countBefore, 'Restoring only goods must not duplicate an existing template');
+      assert.equal((await membership(templateKey)).resource_id, templateId);
+      assert.deepEqual(
+        (await pool.query('SELECT name,services,products,folder_id FROM check_templates WHERE id=$1', [templateId]))
+          .rows[0],
+        expected,
+        'Owner template content must remain unchanged',
+      );
+      assert.equal(
+        (await pool.query('SELECT deleted_at FROM products WHERE id=$1', [goodsId])).rows[0].deleted_at,
+        null,
+      );
+      const serviceId = original.services[0].serviceId;
+      const serviceKey = (
+        await pool.query(
+          "SELECT item_key FROM starter_catalog_memberships WHERE tenant_id=$1 AND kind='services' AND resource_id=$2",
+          [tenantId, serviceId],
+        )
+      ).rows[0].item_key;
+      await pool.query('DELETE FROM services WHERE id=$1', [serviceId]);
+      const missingServicePreview = await install({ [serviceKey]: { action: 'restore' } });
+      const existingTemplatePreview = missingServicePreview.items.find((i) => i.key === templateKey);
+      assert.equal(existingTemplatePreview.status, 'reuse');
+      assert.ok(existingTemplatePreview.note);
+      assert.equal(await templateCount(), countBefore);
+      assert.equal((await membership(templateKey)).resource_id, templateId);
+      assert.deepEqual(
+        (await pool.query('SELECT name,services,products,folder_id FROM check_templates WHERE id=$1', [templateId]))
+          .rows[0],
+        expected,
+        'Hard-deleted service restore must not rewrite owner recipe bindings',
+      );
+      const stillMissing = await catalog.preview(tenantId, actor, selection);
+      assert.ok(
+        stillMissing.items.find((i) => i.key === templateKey).note,
+        'Preview must keep a visible warning for the old missing service binding',
+      );
+      await pool.query('DELETE FROM check_templates WHERE id=$1', [templateId]);
+      const restoredServiceId = (await membership(serviceKey)).resource_id;
+      await pool.query('DELETE FROM services WHERE id=$1', [restoredServiceId]);
+      const countAfterDelete = await templateCount();
+      const deletedPreview = await install({ [serviceKey]: { action: 'restore' } });
+      assert.equal(deletedPreview.items.find((i) => i.key === templateKey).status, 'deleted');
+      assert.equal(
+        await templateCount(),
+        countAfterDelete,
+        'Restoring only service must not resurrect a deleted template',
+      );
+      assert.equal((await membership(templateKey)).resource_id, templateId);
+      await install({ [templateKey]: { action: 'restore' } });
+      const explicitlyRestoredId = (await membership(templateKey)).resource_id;
+      assert.notEqual(explicitlyRestoredId, templateId);
+      assert.equal(await templateCount(), countBefore);
+    } finally {
+      await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'financial writeoff reads confirmed fallback cost from the locked row after concurrent confirmation',
+  { skip: !live },
+  async () => {
+    const { StockMovementsService } = require('../dist/stock-movements/stock-movements.service');
+    const { WarehousesService } = require('../dist/warehouses/warehouses.service');
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const tenantId = randomUUID();
+    let releaseRead;
+    try {
+      await pool.query("INSERT INTO tenants(id,name) VALUES($1,'Writeoff race QA')", [tenantId]);
+      const owner = (
+        await pool.query(
+          "INSERT INTO users(phone,password,full_name,role,tenant_id) VALUES($1,'unused','Owner QA','director',$2) RETURNING id",
+          ['qa-' + randomUUID(), tenantId],
+        )
+      ).rows[0].id;
+      const warehouse = (
+        await pool.query("INSERT INTO warehouses(tenant_id,name,kind) VALUES($1,'Main','main') RETURNING id", [
+          tenantId,
+        ])
+      ).rows[0].id;
+      const catalog = new StarterCatalogsService(pool);
+      const actor = { userID: owner, tenantID: tenantId, role: 'director', permissions: {} };
+      const preview = await catalog.preview(tenantId, actor, {
+        directionIds: ['detailing'],
+        parts: ['products'],
+        warehouseId: warehouse,
+      });
+      await catalog.install(tenantId, actor, { previewId: preview.id });
+      const product = (await pool.query('SELECT id FROM products WHERE tenant_id=$1 LIMIT 1', [tenantId])).rows[0].id;
+      const products = new ProductsService(pool, {});
+      await products.updateStock(product, tenantId, { type: 'inventory', quantity: 2 }, owner);
+      let readSeen;
+      const seen = new Promise((resolve) => {
+        readSeen = resolve;
+      });
+      const resume = new Promise((resolve) => {
+        releaseRead = resolve;
+      });
+      // Barrier instruments the real pg client; all queries and transaction effects remain real.
+      const barrierPool = {
+        query: pool.query.bind(pool),
+        connect: async () => {
+          const client = await pool.connect();
+          return {
+            release: client.release.bind(client),
+            query: async (sql, ...args) => {
+              const result = await client.query(sql, ...args);
+              if (
+                typeof sql === 'string' &&
+                sql.includes('SELECT p.id, p.tenant_id, p.warehouse_id, p.cost_price FROM products')
+              ) {
+                readSeen();
+                await resume;
+              }
+              return result;
+            },
+          };
+        },
+      };
+      const movements = new StockMovementsService(barrierPool, new WarehousesService(pool));
+      const pending = movements.create(tenantId, owner, {
+        type: 'writeoff',
+        productId: product,
+        quantity: 1,
+        recordAsExpense: true,
+      });
+      await seen;
+      await products.update(product, tenantId, { costPrice: 100 }, owner);
+      releaseRead();
+      await pending;
+      const expense = (await pool.query('SELECT amount FROM expenses WHERE tenant_id=$1', [tenantId])).rows[0];
+      assert.equal(
+        expense.amount,
+        '100.00',
+        'Fallback expense must use newly confirmed locked cost, never the provisional ₽1 read before lock',
+      );
+      await new StockMovementsService(pool, new WarehousesService(pool)).create(tenantId, owner, {
+        type: 'writeoff',
+        productId: product,
+        quantity: 1,
+        recordAsExpense: true,
+        purchasePrice: 75,
+      });
+      assert.deepEqual(
+        (await pool.query('SELECT amount FROM expenses WHERE tenant_id=$1 ORDER BY amount', [tenantId])).rows.map(
+          (row) => row.amount,
+        ),
+        ['75.00', '100.00'],
+        'Explicit writeoff price remains respected for confirmed catalog costs',
+      );
+    } finally {
+      releaseRead?.();
+      await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'ambiguous owner template requires an explicit decision when restoring only a missing product dependency',
+  { skip: !live },
+  async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const tenantId = randomUUID();
+    try {
+      await pool.query("INSERT INTO tenants(id,name) VALUES($1,'Ambiguous template QA')", [tenantId]);
+      const owner = (
+        await pool.query(
+          "INSERT INTO users(phone,password,full_name,role,tenant_id) VALUES($1,'unused','Owner QA','director',$2) RETURNING id",
+          ['qa-' + randomUUID(), tenantId],
+        )
+      ).rows[0].id;
+      const warehouse = (
+        await pool.query("INSERT INTO warehouses(tenant_id,name,kind) VALUES($1,'Main','main') RETURNING id", [
+          tenantId,
+        ])
+      ).rows[0].id;
+      const actor = { userID: owner, tenantID: tenantId, role: 'director', permissions: {} };
+      const catalog = new StarterCatalogsService(pool);
+      const selection = { directionIds: ['lpg'], parts: ['services', 'products', 'templates'], warehouseId: warehouse };
+      const initial = await catalog.preview(tenantId, actor, { ...selection, parts: ['services', 'products'] });
+      await catalog.install(tenantId, actor, { previewId: initial.id });
+      const template = STARTER_ENTRIES.find((e) => e.key === 'template-lovato604701312');
+      const productKey = template.productKeys[0].key;
+      const goods = (
+        await pool.query('SELECT resource_id FROM starter_catalog_memberships WHERE tenant_id=$1 AND item_key=$2', [
+          tenantId,
+          productKey,
+        ])
+      ).rows[0].resource_id;
+      const service = (
+        await pool.query('SELECT resource_id FROM starter_catalog_memberships WHERE tenant_id=$1 AND item_key=$2', [
+          tenantId,
+          template.serviceKeys[0],
+        ])
+      ).rows[0].resource_id;
+      const ownedProducts = [{ productId: goods, name: 'Owner kit label', quantity: 3, sellPrice: 120 }];
+      const ownedServices = [{ serviceId: service, name: 'Owner installation label', quantity: 2, price: 800 }];
+      const ownedId = (
+        await pool.query(
+          'INSERT INTO check_templates(tenant_id,name,user_id,services,products) VALUES($1,$2,NULL,$3,$4) RETURNING id',
+          [tenantId, template.name, JSON.stringify(ownedServices), JSON.stringify(ownedProducts)],
+        )
+      ).rows[0].id;
+      await pool.query('UPDATE products SET deleted_at=now() WHERE id=$1', [goods]);
+      const preview = await catalog.preview(tenantId, actor, selection);
+      assert.equal(preview.items.find((i) => i.key === template.key).status, 'ambiguous');
+      await assert.rejects(
+        catalog.install(tenantId, actor, {
+          previewId: preview.id,
+          resolutions: { [productKey]: { action: 'restore' } },
+        }),
+        (e) => e.getStatus() === 400,
+      );
+      assert.equal(
+        Number((await pool.query('SELECT count(*) FROM check_templates WHERE tenant_id=$1', [tenantId])).rows[0].count),
+        1,
+      );
+      assert.ok(
+        (await pool.query('SELECT deleted_at FROM products WHERE id=$1', [goods])).rows[0].deleted_at,
+        'Failed unresolved template installation must roll back dependency restore',
+      );
+      await catalog.install(tenantId, actor, {
+        previewId: preview.id,
+        resolutions: { [productKey]: { action: 'restore' }, [template.key]: { action: 'reuse', resourceId: ownedId } },
+      });
+      const saved = (await pool.query('SELECT services,products FROM check_templates WHERE id=$1', [ownedId])).rows[0];
+      assert.deepEqual(saved, { services: ownedServices, products: ownedProducts });
+      assert.equal(
+        (
+          await pool.query('SELECT resource_id FROM starter_catalog_memberships WHERE tenant_id=$1 AND item_key=$2', [
+            tenantId,
+            template.key,
+          ])
+        ).rows[0].resource_id,
+        ownedId,
+      );
+    } finally {
+      await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+      await pool.end();
+    }
+  },
+);
+
+test(
+  'duplicate supplier receipt rows synchronize confirmed price provenance and preserve backdated history',
+  { skip: !live },
+  async () => {
+    const { SuppliersService } = require('../dist/suppliers/suppliers.service');
+    const { StockMovementsService } = require('../dist/stock-movements/stock-movements.service');
+    const { WarehousesService } = require('../dist/warehouses/warehouses.service');
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const tenantId = randomUUID();
+    try {
+      await pool.query("INSERT INTO tenants(id,name) VALUES($1,'Duplicate receipt QA')", [tenantId]);
+      const owner = (
+        await pool.query(
+          "INSERT INTO users(phone,password,full_name,role,tenant_id) VALUES($1,'unused','Owner QA','director',$2) RETURNING id",
+          ['qa-' + randomUUID(), tenantId],
+        )
+      ).rows[0].id;
+      const warehouse = (
+        await pool.query("INSERT INTO warehouses(tenant_id,name,kind) VALUES($1,'Main','main') RETURNING id", [
+          tenantId,
+        ])
+      ).rows[0].id;
+      const supplier = (
+        await pool.query("INSERT INTO suppliers(tenant_id,name) VALUES($1,'Actual receipt QA supplier') RETURNING id", [
+          tenantId,
+        ])
+      ).rows[0].id;
+      const actor = { userID: owner, tenantID: tenantId, role: 'director', permissions: {} };
+      const catalog = new StarterCatalogsService(pool);
+      const preview = await catalog.preview(tenantId, actor, {
+        directionIds: ['detailing'],
+        parts: ['products'],
+        warehouseId: warehouse,
+      });
+      await catalog.install(tenantId, actor, { previewId: preview.id });
+      const products = (await pool.query('SELECT id FROM products WHERE tenant_id=$1 ORDER BY id LIMIT 2', [tenantId]))
+        .rows;
+      const warehouses = new WarehousesService(pool);
+      const receipts = new SuppliersService(pool, new StockMovementsService(pool, warehouses), warehouses);
+      await receipts.createDelivery(
+        tenantId,
+        {
+          supplierId: supplier,
+          items: [
+            { productId: products[0].id, quantity: 1, price: 100, sellPrice: 20 },
+            { productId: products[0].id, quantity: 1, price: 0, sellPrice: 20 },
+          ],
+        },
+        null,
+        owner,
+      );
+      const current = (
+        await pool.query(
+          'SELECT cost_price,sell_price,cost_price_is_placeholder,sell_price_is_placeholder,stock FROM products WHERE id=$1',
+          [products[0].id],
+        )
+      ).rows[0];
+      assert.deepEqual(
+        current,
+        {
+          cost_price: '100.00',
+          sell_price: '20.00',
+          cost_price_is_placeholder: false,
+          sell_price_is_placeholder: false,
+          stock: '2.000',
+        },
+        'A later explicit free line cannot erase the confirmed current cost',
+      );
+      const history = await pool.query(
+        'SELECT cost_price_before,cost_price_after FROM price_history WHERE product_id=$1',
+        [products[0].id],
+      );
+      assert.deepEqual(history.rows, [{ cost_price_before: '1.00', cost_price_after: '100.00' }]);
+      const olderDate = new Date(Date.now() - 2 * 86400000).toISOString();
+      await receipts.createDelivery(
+        tenantId,
+        {
+          supplierId: supplier,
+          date: olderDate,
+          items: [
+            { productId: products[1].id, quantity: 1, price: 100, sellPrice: 20 },
+            { productId: products[1].id, quantity: 1, price: 200, sellPrice: 20 },
+          ],
+        },
+        null,
+        owner,
+      );
+      const older = (
+        await pool.query('SELECT cost_price,cost_price_is_placeholder,stock FROM products WHERE id=$1', [
+          products[1].id,
+        ])
+      ).rows[0];
+      assert.deepEqual(older, { cost_price: '100.00', cost_price_is_placeholder: false, stock: '2.000' });
+      assert.deepEqual(
+        (
+          await pool.query('SELECT cost_price_before,cost_price_after FROM price_history WHERE product_id=$1', [
+            products[1].id,
+          ])
+        ).rows,
+        [{ cost_price_before: '1.00', cost_price_after: '100.00' }],
+        'Backdated duplicate row must not invent a history update rejected by the SQL guard',
+      );
+    } finally {
+      await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
       await pool.end();
     }
   },
