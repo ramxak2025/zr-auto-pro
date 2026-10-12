@@ -49,7 +49,7 @@ import {
 } from '../../../shared/utils/serviceSpreadsheet';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { serviceBrowserLevel } from '../../../shared/utils/serviceBrowser';
-import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
+import { servicePriceFormValue, preservePlaceholderServicePrice } from '../../../shared/utils/servicePrices';
 
 const FORM_ID = 'service-form';
 
@@ -61,6 +61,8 @@ interface ServicePayload {
   minPrice?: number;
   maxPrice?: number;
   masterPercent?: number | null;
+  masterPayMode: 'percent' | 'fixed';
+  masterFixedAmount: number | null;
   warrantyDays?: number | null;
 }
 
@@ -90,6 +92,9 @@ export default function ServicesPage() {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [masterPercent, setMasterPercent] = useState('');
+  const [masterPayMode, setMasterPayMode] = useState<'percent' | 'fixed'>('percent');
+  const [masterFixedAmount, setMasterFixedAmount] = useState('');
+  const [confirmPrice, setConfirmPrice] = useState(false);
   const [warrantyDays, setWarrantyDays] = useState('');
 
   const [deleteTarget, setDeleteTarget] = useState<Service | null>(null);
@@ -235,7 +240,7 @@ export default function ServicesPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: ServicePayload }) => servicesApi.update(id, payload),
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<ServicePayload> }) => servicesApi.update(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга обновлена');
@@ -315,6 +320,7 @@ export default function ServicesPage() {
 
   const openCreate = () => {
     setEditingService(null);
+    setConfirmPrice(false);
     setName('');
     setCategory(activePath.join('/'));
     setDefaultPrice('');
@@ -322,12 +328,15 @@ export default function ServicesPage() {
     setMinPrice('');
     setMaxPrice('');
     setMasterPercent('');
+    setMasterPayMode('percent');
+    setMasterFixedAmount('');
     setWarrantyDays('');
     setModalOpen(true);
   };
 
   const openEdit = (service: Service) => {
     setEditingService(service);
+    setConfirmPrice(false);
     setName(service.name);
     setCategory(service.category || '');
     setDefaultPrice(String(service.defaultPrice));
@@ -335,6 +344,8 @@ export default function ServicesPage() {
     setMinPrice(String(service.minPrice ?? service.defaultPrice));
     setMaxPrice(String(service.maxPrice ?? service.defaultPrice));
     setMasterPercent(service.masterPercent != null ? String(service.masterPercent) : '');
+    setMasterPayMode(service.masterPayMode ?? 'percent');
+    setMasterFixedAmount(service.masterFixedAmount != null ? String(service.masterFixedAmount) : '');
     setWarrantyDays(service.warrantyDays != null ? String(service.warrantyDays) : '');
     setModalOpen(true);
   };
@@ -359,8 +370,13 @@ export default function ServicesPage() {
     }
     const pctRaw = masterPercent.trim();
     const pct = pctRaw === '' ? null : parseNumberInput(pctRaw);
-    if (pctRaw !== '' && (pct === null || pct < 0 || pct > 100)) {
+    if (masterPayMode === 'percent' && pctRaw !== '' && (pct === null || pct < 0 || pct > 100)) {
       toast.error('Процент мастера — число от 0 до 100');
+      return;
+    }
+    const fixedAmount = parseNumberInput(masterFixedAmount.trim());
+    if (masterPayMode === 'fixed' && (fixedAmount === null || fixedAmount < 0 || fixedAmount > 9999999999.99)) {
+      toast.error('Укажите фикс мастеру в рублях. Для нуля введите 0.');
       return;
     }
     const wdRaw = warrantyDays.trim();
@@ -374,10 +390,22 @@ export default function ServicesPage() {
       category: category.trim() || undefined,
       ...pricePolicy,
       masterPercent: pct,
+      masterPayMode,
+      masterFixedAmount: masterPayMode === 'fixed' ? fixedAmount : null,
       warrantyDays: wdParsed === null ? null : Math.max(0, Math.floor(wdParsed)),
     };
-    if (editingService) updateMutation.mutate({ id: editingService.id, payload });
-    else createMutation.mutate(payload);
+    if (editingService) {
+      const updatePayload = {
+        name: payload.name,
+        category: payload.category,
+        masterPercent: payload.masterPercent,
+        masterPayMode: payload.masterPayMode,
+        masterFixedAmount: payload.masterFixedAmount,
+        warrantyDays: payload.warrantyDays,
+        ...(preservePlaceholderServicePrice(editingService, pricePolicy, confirmPrice) ? {} : pricePolicy),
+      };
+      updateMutation.mutate({ id: editingService.id, payload: updatePayload });
+    } else createMutation.mutate(payload);
   };
 
   const services = useMemo(() => data ?? [], [data]);
@@ -869,21 +897,61 @@ export default function ServicesPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field
-              label="Особый % мастера"
-              htmlFor="service-percent"
-              hint="Если заполнено — используется вместо стандартного процента мастера"
-            >
-              <Input
-                id="service-percent"
-                inputMode="decimal"
-                value={masterPercent}
-                onChange={(e) => setMasterPercent(e.target.value)}
-                placeholder="Стандартный"
-                className="tabular-nums"
+          {editingService?.priceIsPlaceholder && (
+            <label className="flex min-h-11 items-center gap-3 text-sm text-ink-2">
+              <input
+                type="checkbox"
+                checked={confirmPrice}
+                onChange={(e) => setConfirmPrice(e.target.checked)}
+                className="h-5 w-5"
               />
-            </Field>
+              Подтвердить текущую цену — сейчас она предварительная
+            </label>
+          )}
+          <Field label="Начисление мастеру" htmlFor="service-pay-mode">
+            <select
+              id="service-pay-mode"
+              value={masterPayMode}
+              onChange={(e) => setMasterPayMode(e.target.value as 'percent' | 'fixed')}
+              className="w-full rounded-lg border border-line bg-surface-1 px-3 py-2 text-ink"
+            >
+              <option value="percent">Процент</option>
+              <option value="fixed">Фикс в рублях</option>
+            </select>
+          </Field>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {masterPayMode === 'fixed' ? (
+              <Field
+                label="Фикс мастеру, ₽"
+                htmlFor="service-fixed-pay"
+                required
+                hint="За каждое выполнение, независимо от цены и скидки"
+              >
+                <Input
+                  id="service-fixed-pay"
+                  inputMode="decimal"
+                  value={masterFixedAmount}
+                  onChange={(e) => setMasterFixedAmount(e.target.value)}
+                  placeholder="Например, 300"
+                  className="tabular-nums"
+                />
+              </Field>
+            ) : (
+              <Field
+                label="Особый % мастера"
+                htmlFor="service-percent"
+                hint="Если заполнено — используется вместо стандартного процента мастера"
+              >
+                <Input
+                  id="service-percent"
+                  inputMode="decimal"
+                  value={masterPercent}
+                  onChange={(e) => setMasterPercent(e.target.value)}
+                  placeholder="Стандартный"
+                  className="tabular-nums"
+                />
+              </Field>
+            )}
             <Field
               label="Гарантия, дней"
               htmlFor="service-warranty"
@@ -956,7 +1024,12 @@ export default function ServicesPage() {
         {historyTarget?.warrantyDays && (
           <p className="mb-3 text-sm text-ink-2">Гарантия: {historyTarget.warrantyDays} дн.</p>
         )}
-        {canManage && historyTarget?.masterPercent != null && (
+        {canManage && historyTarget?.masterPayMode === 'fixed' && (
+          <p className="mb-3 text-sm text-ink-2">
+            Мастеру: {historyTarget.masterFixedAmount?.toLocaleString('ru-RU')} ₽ за выполнение
+          </p>
+        )}
+        {canManage && historyTarget?.masterPayMode !== 'fixed' && historyTarget?.masterPercent != null && (
           <p className="mb-3 text-sm text-ink-2">Процент мастера: {historyTarget.masterPercent}%</p>
         )}
         <div className="mb-4 flex gap-2" role="tablist" aria-label="История услуги">

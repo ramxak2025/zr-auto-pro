@@ -657,6 +657,8 @@ export interface CreateServiceRequest {
   category?: string;
   defaultPrice: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 
@@ -668,6 +670,8 @@ export interface UpdateServiceRequest {
   category?: string;
   defaultPrice?: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 
@@ -682,6 +686,8 @@ export interface ServiceImportRow {
   minPrice?: number;
   maxPrice?: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 

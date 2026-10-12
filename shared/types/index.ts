@@ -1885,6 +1885,7 @@ export interface ServiceExecutionHistoryEntry {
 }
 
 export interface Service {
+  priceIsPlaceholder?: boolean;
   id: string;
   name: string;
   category?: string;
@@ -1896,6 +1897,8 @@ export interface Service {
   priceVersion?: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
   warrantyDays: number | null;
   createdAt: string;
@@ -2012,6 +2015,9 @@ export interface CheckServicePriceSnapshot {
 }
 
 export interface CheckServiceLine extends CheckServicePriceSnapshot {
+  /** Financial read fields, omitted without the existing profit visibility permission. */
+  salaryMode?: 'percent' | 'fixed';
+  salaryFixedAmount?: number | null;
   id?: string;
   serviceId?: string;
   masterId?: string;

@@ -111,7 +111,7 @@ export class MastersBuilder implements ReportBuilder {
         key: 'salaryAccrued',
         title: 'Начислено ЗП',
         type: 'money',
-        hint: 'Процент с работ (исполнителю строки) и с товаров (мастеру чека)',
+        hint: 'Начисление за работы (исполнителю строки) и с товаров (мастеру чека)',
       },
     ];
 

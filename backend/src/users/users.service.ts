@@ -1129,6 +1129,7 @@ export class UsersService {
             AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4
             AND COALESCE(sl.master_id, c.master_id) = $2
+            AND sl.salary_mode = 'percent'
             AND NOT EXISTS (
               SELECT 1 FROM services s
                WHERE s.id = sl.service_id AND s.tenant_id = $1 AND s.master_percent IS NOT NULL

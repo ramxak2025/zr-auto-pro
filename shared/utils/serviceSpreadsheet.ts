@@ -61,6 +61,8 @@ export function parseServiceImportMatrix(matrix: unknown[][]): ServiceImportRow[
     min: find('от', 'минимум', 'минимальнаяцена', 'minprice'),
     max: find('до', 'максимум', 'максимальнаяцена', 'maxprice'),
     masterPercent: find('%мастера', 'процентмастера', 'masterpercent'),
+    payMode: find('начислениемастеру', 'masterpaymode'),
+    fixedAmount: find('фиксмастеру', 'фиксмастеру,₽', 'masterfixedamount'),
     warrantyDays: find('гарантиядней', 'гарантия,дней', 'срокгарантии', 'warrantydays'),
   };
   if (columns.name < 0 || columns.type < 0 || (columns.price < 0 && (columns.min < 0 || columns.max < 0))) {
@@ -85,6 +87,12 @@ export function parseServiceImportMatrix(matrix: unknown[][]): ServiceImportRow[
     }
     const masterPercent = columns.masterPercent >= 0 ? parseOptionalNumber(cells[columns.masterPercent], '% мастера', index + 1) : undefined;
     const warrantyDays = columns.warrantyDays >= 0 ? parseOptionalNumber(cells[columns.warrantyDays], 'гарантия, дней', index + 1) : undefined;
+    const rawPayMode = columns.payMode >= 0 ? headerKey(cells[columns.payMode]) : '';
+    if (rawPayMode && !['percent', 'процент', 'fixed', 'фикс'].includes(rawPayMode)) {
+      throw new Error(`Неизвестное начисление мастеру в строке ${index + 1}`);
+    }
+    const masterPayMode = rawPayMode ? (['fixed', 'фикс'].includes(rawPayMode) ? 'fixed' : 'percent') : undefined;
+    const masterFixedAmount = columns.fixedAmount >= 0 ? parseOptionalNumber(cells[columns.fixedAmount], 'фикс мастеру', index + 1) : undefined;
     rows.push({
       sourceRow: index + 1,
       ...(columns.id >= 0 && cellText(cells[columns.id]) ? { id: cellText(cells[columns.id]) } : {}),
@@ -95,6 +103,8 @@ export function parseServiceImportMatrix(matrix: unknown[][]): ServiceImportRow[
         ? { defaultPrice: price }
         : { defaultPrice: minPrice, minPrice, maxPrice }),
       ...(columns.masterPercent < 0 ? {} : { masterPercent: masterPercent ?? null }),
+      ...(masterPayMode ? { masterPayMode } : {}),
+      ...(masterFixedAmount !== undefined ? { masterFixedAmount } : {}),
       ...(columns.warrantyDays < 0 ? {} : { warrantyDays: warrantyDays ?? null }),
     });
   }
@@ -104,7 +114,7 @@ export function parseServiceImportMatrix(matrix: unknown[][]): ServiceImportRow[
 /** Stable column order used by both XLSX exports and the documented import template. */
 export function serviceExportMatrix(services: Service[]): (string | number)[][] {
   return [
-    ['ID', 'Название', 'Категория', 'Тип цены', 'Цена', 'От', 'До', '% мастера', 'Гарантия, дней'],
+    ['ID', 'Название', 'Категория', 'Тип цены', 'Цена', 'От', 'До', '% мастера', 'Гарантия, дней', 'Начисление мастеру', 'Фикс мастеру, ₽'],
     ...services.map((service) => [
       service.id,
       service.name,
@@ -115,6 +125,8 @@ export function serviceExportMatrix(services: Service[]): (string | number)[][] 
       service.priceType === 'range' ? (service.maxPrice ?? service.defaultPrice) : '',
       service.masterPercent ?? '',
       service.warrantyDays ?? '',
+      service.masterPayMode === 'fixed' ? 'Фикс' : 'Процент',
+      service.masterPayMode === 'fixed' ? (service.masterFixedAmount ?? 0) : '',
     ]),
   ];
 }

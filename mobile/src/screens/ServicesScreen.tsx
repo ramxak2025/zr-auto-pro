@@ -43,7 +43,7 @@ import {
 } from '../../../shared/utils/serviceSpreadsheet';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { serviceBrowserLevel } from '../../../shared/utils/serviceBrowser';
-import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
+import { servicePriceFormValue, preservePlaceholderServicePrice } from '../../../shared/utils/servicePrices';
 import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
@@ -133,6 +133,9 @@ export default function ServicesScreen() {
   // личный процент мастера для строки с этой услугой. Семантика уже
   // проверяется на бэке (Service.masterPercent) — контракт менять не нужно.
   const [masterPercent, setMasterPercent] = useState('');
+  const [masterPayMode, setMasterPayMode] = useState<'percent' | 'fixed'>('percent');
+  const [masterFixedAmount, setMasterFixedAmount] = useState('');
+  const [confirmPrice, setConfirmPrice] = useState(false);
   // Срок гарантии (дней) — необязательное поле. Пусто = без гарантии (null
   // на бэке). Число > 0 — сколько дней действует гарантия на услугу после
   // включения её в чек. Используется для авто-создания WarrantyClaim'ов.
@@ -334,6 +337,7 @@ export default function ServicesScreen() {
 
   const openCreate = () => {
     setEditingService(null);
+    setConfirmPrice(false);
     setName('');
     setCategory(activePath.join('/'));
     setDefaultPrice('');
@@ -341,12 +345,15 @@ export default function ServicesScreen() {
     setMinPrice('');
     setMaxPrice('');
     setMasterPercent('');
+    setMasterPayMode('percent');
+    setMasterFixedAmount('');
     setWarrantyDays('');
     setModalOpen(true);
   };
 
   const openEdit = useCallback((s: Service) => {
     setEditingService(s);
+    setConfirmPrice(false);
     setName(s.name);
     setCategory(s.category || '');
     setDefaultPrice(String(s.defaultPrice));
@@ -356,6 +363,8 @@ export default function ServicesScreen() {
     // masterPercent — number | null. Пустая строка = null (личный процент
     // мастера). Явный 0 показываем как «0», не как пусто.
     setMasterPercent(s.masterPercent != null ? String(s.masterPercent) : '');
+    setMasterPayMode(s.masterPayMode ?? 'percent');
+    setMasterFixedAmount(s.masterFixedAmount != null ? String(s.masterFixedAmount) : '');
     // warrantyDays приходит как number | null — пустая строка означает «без
     // гарантии», иначе показываем число дней.
     setWarrantyDays(s.warrantyDays != null ? String(s.warrantyDays) : '');
@@ -396,15 +405,34 @@ export default function ServicesScreen() {
       Alert.alert('Проверьте цену', error instanceof Error ? error.message : 'Введите корректную цену.');
       return;
     }
+    const fixedAmount = masterFixedAmount.trim() === '' ? NaN : Number(masterFixedAmount.replace(',', '.'));
+    if (
+      masterPayMode === 'fixed' &&
+      (!Number.isFinite(fixedAmount) || fixedAmount < 0 || fixedAmount > 9999999999.99)
+    ) {
+      Alert.alert('Проверьте начисление', 'Укажите фикс мастеру в рублях. Для нуля введите 0.');
+      return;
+    }
     const payload = {
       name,
       category: category || undefined,
       ...pricePolicy,
       masterPercent: masterPercentPayload,
+      masterPayMode,
+      masterFixedAmount: masterPayMode === 'fixed' ? fixedAmount : null,
       warrantyDays: warrantyPayload,
     };
     if (editingService) {
-      updateMutation.mutate({ id: editingService.id, data: payload });
+      const updatePayload = {
+        name: payload.name,
+        category: payload.category,
+        masterPercent: payload.masterPercent,
+        masterPayMode: payload.masterPayMode,
+        masterFixedAmount: payload.masterFixedAmount,
+        warrantyDays: payload.warrantyDays,
+        ...(preservePlaceholderServicePrice(editingService, pricePolicy, confirmPrice) ? {} : pricePolicy),
+      };
+      updateMutation.mutate({ id: editingService.id, data: updatePayload });
     } else {
       createMutation.mutate(payload);
     }
@@ -976,7 +1004,12 @@ export default function ServicesScreen() {
             Гарантия: {historyTarget.warrantyDays} дн.
           </Text>
         )}
-        {canManageServices && historyTarget?.masterPercent != null && (
+        {canManageServices && historyTarget?.masterPayMode === 'fixed' && (
+          <Text style={{ color: palette.text.secondary, marginBottom: spacing[3] }}>
+            Мастеру: {historyTarget.masterFixedAmount?.toLocaleString('ru-RU')} ₽ за выполнение
+          </Text>
+        )}
+        {canManageServices && historyTarget?.masterPayMode !== 'fixed' && historyTarget?.masterPercent != null && (
           <Text style={{ color: palette.text.secondary, marginBottom: 12 }}>
             Процент мастера: {historyTarget.masterPercent}%
           </Text>
@@ -1281,24 +1314,88 @@ export default function ServicesScreen() {
             ))}
           </View>
         )}
+        {editingService?.priceIsPlaceholder && (
+          <TouchableOpacity
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: confirmPrice }}
+            onPress={() => setConfirmPrice(!confirmPrice)}
+            style={{ minHeight: 44, justifyContent: 'center', marginBottom: spacing[3] }}
+          >
+            <Text style={{ color: confirmPrice ? palette.accent.primary : palette.text.secondary }}>
+              {confirmPrice ? 'Текущая цена подтверждена' : 'Подтвердить текущую цену'}
+            </Text>
+            <Text style={[styles.formHint, { color: palette.text.tertiary }]}>Сейчас цена предварительная.</Text>
+          </TouchableOpacity>
+        )}
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Особый % мастера</Text>
-          <TextInput
-            value={masterPercent}
-            onChangeText={onChangeMasterPercent}
-            style={[
-              styles.formInput,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-            ]}
-            keyboardType="numeric"
-            placeholder="Оставьте пустым — процент мастера"
-            placeholderTextColor={palette.text.tertiary}
-            maxLength={5}
-          />
-          <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
-            Если задан — считается по нему (важнее процента мастера). Пусто — берётся процент мастера.
-          </Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Начисление мастеру</Text>
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {(['percent', 'fixed'] as const).map((mode) => (
+              <TouchableOpacity
+                key={mode}
+                onPress={() => setMasterPayMode(mode)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: masterPayMode === mode }}
+                style={{
+                  flex: 1,
+                  minHeight: 44,
+                  justifyContent: 'center',
+                  borderRadius: borderRadius.lg,
+                  alignItems: 'center',
+                  backgroundColor: masterPayMode === mode ? palette.accent.primary : palette.bg.muted,
+                }}
+              >
+                <Text
+                  style={{
+                    color: masterPayMode === mode ? colors.white : palette.text.secondary,
+                    fontWeight: fontWeight.semibold,
+                  }}
+                >
+                  {mode === 'percent' ? 'Процент' : 'Фикс, ₽'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
+        {masterPayMode === 'fixed' ? (
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Фикс мастеру, ₽</Text>
+            <TextInput
+              value={masterFixedAmount}
+              onChangeText={setMasterFixedAmount}
+              keyboardType="decimal-pad"
+              accessibilityLabel="Фикс мастеру в рублях"
+              placeholder="Например, 300"
+              placeholderTextColor={palette.text.tertiary}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
+            />
+            <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
+              За каждое выполнение, независимо от цены и скидки.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Особый % мастера</Text>
+            <TextInput
+              value={masterPercent}
+              onChangeText={onChangeMasterPercent}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
+              keyboardType="numeric"
+              placeholder="Оставьте пустым — процент мастера"
+              placeholderTextColor={palette.text.tertiary}
+              maxLength={5}
+            />
+            <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
+              Если задан — считается по нему (важнее процента мастера). Пусто — берётся процент мастера.
+            </Text>
+          </View>
+        )}
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Срок гарантии (дней)</Text>
           <TextInput
