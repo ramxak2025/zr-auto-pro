@@ -86,3 +86,17 @@ test('existing callers without a timezone keep device-local presets', () => {
   assert.equal(p.read().getHours(), 9);
   assert.equal(p.read().getMinutes(), 0);
 });
+
+test('new check time selection can choose any exact minute', () => {
+  let actual;
+  const tree = sandbox.exports.privateProbe.TimePicker({
+    value: new Date('2026-10-11T23:00:00Z'),
+    timeZone: 'Asia/Vladivostok',
+    minuteStep: 1,
+    p: palette,
+    onChange: (d) => (actual = d),
+  });
+  const buttons = all(tree).filter((x) => x.type === 'TouchableOpacity');
+  buttons[2].props.onPress();
+  assert.equal(actual.toISOString(), '2026-10-11T23:01:00.000Z');
+});

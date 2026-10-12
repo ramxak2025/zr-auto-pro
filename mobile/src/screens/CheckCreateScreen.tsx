@@ -3252,6 +3252,7 @@ export default function CheckCreateScreen() {
                 visible={showTimePicker}
                 value={pickerValue}
                 timeZone={checkTimeZone}
+                minuteStep={1}
                 mode="time"
                 onConfirm={(date) => confirmCheckPicker(date, 'time')}
                 onCancel={() => setShowTimePicker(false)}
