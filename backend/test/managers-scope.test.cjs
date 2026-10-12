@@ -3863,6 +3863,7 @@ const CONTRACT_BODIES = [
       planId: PLAN_ID,
       director: { name: 'Иван Директоров', phone: '+79995556677', password: 'director-pass' },
       trialDays: 14,
+      starterDirections: ['oil_service', 'detailing'],
       note: 'заметка менеджера',
     },
   ],

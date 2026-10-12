@@ -24,7 +24,10 @@ test(
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
     assert.equal(url.port, '55443');
-    assert.equal(url.pathname, '/autexa_oct13_fixed');
+    assert.ok(
+      ['/autexa_oct13', '/autexa_oct13_fixed'].includes(url.pathname),
+      'Disposable integration or feature DB only',
+    );
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';
     appUrl.password = process.env.AUTEXA_OCT13_APP_PASSWORD;

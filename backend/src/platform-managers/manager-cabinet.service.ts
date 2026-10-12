@@ -141,7 +141,7 @@ export class ManagerCabinetService {
       await client.query('BEGIN');
       const created = await this.tenants.createWithOwnerAndTrialTx(client, {
         companyName,
-        starterDirections: dto.starterDirections,
+        ...(dto.starterDirections !== undefined ? { starterDirections: dto.starterDirections } : {}),
         ownerName,
         ownerPhone,
         ownerPasswordHash,
