@@ -1,3 +1,4 @@
+import { checkDateParts, checkDateInstant, type CheckDateParts } from '../../../shared/utils/checkDateTime';
 /**
  * DateTimePickerModal — единый пикер даты/времени для всего приложения
  * (8 экранов: касса, журнал, расписание, отчёты, расходы и т.д.).
@@ -16,7 +17,7 @@
  */
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../contexts/ThemeContext';
@@ -29,6 +30,8 @@ interface Props {
   visible: boolean;
   value: Date;
   mode: 'date' | 'time';
+  /** Optional service timezone; existing callers retain device-local behavior. */
+  timeZone?: string;
   onConfirm: (date: Date) => void;
   onCancel: () => void;
 }
@@ -58,10 +61,54 @@ function getFirstDayOfWeek(year: number, month: number): number {
   return d === 0 ? 6 : d - 1; // Monday = 0
 }
 
+function pickerParts(value: Date, timeZone?: string): CheckDateParts {
+  return timeZone
+    ? checkDateParts(value, timeZone)
+    : {
+        year: value.getFullYear(),
+        month: value.getMonth() + 1,
+        day: value.getDate(),
+        hour: value.getHours(),
+        minute: value.getMinutes(),
+        second: value.getSeconds(),
+        millisecond: value.getMilliseconds(),
+      };
+}
+function changePicker(
+  value: Date,
+  patch: Partial<CheckDateParts>,
+  timeZone: string | undefined,
+  onChange: (date: Date) => void,
+) {
+  const parts = { ...pickerParts(value, timeZone), ...patch };
+  try {
+    if (timeZone) onChange(checkDateInstant(parts, timeZone));
+    else {
+      const next = new Date(value);
+      next.setFullYear(parts.year, parts.month - 1, parts.day);
+      next.setHours(parts.hour, parts.minute, parts.second, parts.millisecond);
+      onChange(next);
+    }
+  } catch {
+    Alert.alert('Дата и время', 'Это время недоступно в часовом поясе автосервиса. Выберите другое.');
+  }
+}
+
 // ── Calendar Date Picker (Android-фоллбек, перекрашен в палитру) ──
-function CalendarPicker({ value, onChange, p }: { value: Date; onChange: (d: Date) => void; p: SemanticPalette }) {
-  const [viewYear, setViewYear] = useState(value.getFullYear());
-  const [viewMonth, setViewMonth] = useState(value.getMonth());
+function CalendarPicker({
+  value,
+  onChange,
+  p,
+  timeZone,
+}: {
+  value: Date;
+  onChange: (d: Date) => void;
+  p: SemanticPalette;
+  timeZone?: string;
+}) {
+  const selected = pickerParts(value, timeZone);
+  const [viewYear, setViewYear] = useState(selected.year);
+  const [viewMonth, setViewMonth] = useState(selected.month - 1);
 
   // Sync the displayed month/year to whatever Date the parent currently
   // shows. Parents often pass `value={someDate || new Date()}` inline — a
@@ -69,17 +116,18 @@ function CalendarPicker({ value, onChange, p }: { value: Date; onChange: (d: Dat
   // effect endlessly. Guard with functional setState + value-equality so
   // a same-day re-render is a no-op rather than a render-loop trigger.
   useEffect(() => {
-    const nextYear = value.getFullYear();
-    const nextMonth = value.getMonth();
+    const parts = pickerParts(value, timeZone);
+    const nextYear = parts.year;
+    const nextMonth = parts.month - 1;
     setViewYear((prev) => (prev === nextYear ? prev : nextYear));
     setViewMonth((prev) => (prev === nextMonth ? prev : nextMonth));
-  }, [value]);
+  }, [value, timeZone]);
 
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const firstDay = getFirstDayOfWeek(viewYear, viewMonth);
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
-  const selectedStr = `${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
+  const today = pickerParts(new Date(), timeZone);
+  const todayStr = `${today.year}-${today.month - 1}-${today.day}`;
+  const selectedStr = `${selected.year}-${selected.month - 1}-${selected.day}`;
 
   const prevMonth = () => {
     if (viewMonth === 0) {
@@ -139,9 +187,7 @@ function CalendarPicker({ value, onChange, p }: { value: Date; onChange: (d: Dat
                 isToday && !isSelected && [cs.dayCellRounded, { backgroundColor: p.accent.primarySoft }],
               ]}
               onPress={() => {
-                const newDate = new Date(value);
-                newDate.setFullYear(viewYear, viewMonth, day);
-                onChange(newDate);
+                changePicker(value, { year: viewYear, month: viewMonth + 1, day }, timeZone, onChange);
               }}
               activeOpacity={0.6}
             >
@@ -198,19 +244,26 @@ const cs = StyleSheet.create({
 });
 
 // ── Time Picker (Android-фоллбек, перекрашен в палитру) ──
-function TimePicker({ value, onChange, p }: { value: Date; onChange: (d: Date) => void; p: SemanticPalette }) {
-  const hours = value.getHours();
-  const minutes = value.getMinutes();
+function TimePicker({
+  value,
+  onChange,
+  p,
+  timeZone,
+}: {
+  value: Date;
+  onChange: (d: Date) => void;
+  p: SemanticPalette;
+  timeZone?: string;
+}) {
+  const selected = pickerParts(value, timeZone);
+  const hours = selected.hour;
+  const minutes = selected.minute;
 
   const setHours = (h: number) => {
-    const d = new Date(value);
-    d.setHours(h);
-    onChange(d);
+    changePicker(value, { hour: h }, timeZone, onChange);
   };
   const setMinutes = (m: number) => {
-    const d = new Date(value);
-    d.setMinutes(m);
-    onChange(d);
+    changePicker(value, { minute: m }, timeZone, onChange);
   };
 
   return (
@@ -273,9 +326,7 @@ function TimePicker({ value, onChange, p }: { value: Date; onChange: (d: Date) =
                 key={preset}
                 style={[ts.presetBtn, isActive && { backgroundColor: p.accent.primarySoft }]}
                 onPress={() => {
-                  const d = new Date(value);
-                  d.setHours(h, m);
-                  onChange(d);
+                  changePicker(value, { hour: h, minute: m }, timeZone, onChange);
                 }}
               >
                 <Text
@@ -335,7 +386,7 @@ const ts = StyleSheet.create({
 });
 
 // ── Main Modal ──
-export default function DateTimePickerModal({ visible, value, mode, onConfirm, onCancel }: Props) {
+export default function DateTimePickerModal({ visible, value, mode, timeZone, onConfirm, onCancel }: Props) {
   const p = useColors();
   const insets = useSafeAreaInsets();
   const [tempDate, setTempDate] = useState(value);
@@ -378,6 +429,7 @@ export default function DateTimePickerModal({ visible, value, mode, onConfirm, o
               <DateTimePicker
                 value={tempDate}
                 mode={mode}
+                timeZoneName={timeZone}
                 display={mode === 'date' ? 'inline' : 'spinner'}
                 onChange={handleNativeChange}
                 themeVariant={p.mode}
@@ -391,9 +443,9 @@ export default function DateTimePickerModal({ visible, value, mode, onConfirm, o
           ) : (
             <View style={styles.body}>
               {mode === 'date' ? (
-                <CalendarPicker value={tempDate} onChange={setTempDate} p={p} />
+                <CalendarPicker value={tempDate} onChange={setTempDate} p={p} timeZone={timeZone} />
               ) : (
-                <TimePicker value={tempDate} onChange={setTempDate} p={p} />
+                <TimePicker value={tempDate} onChange={setTempDate} p={p} timeZone={timeZone} />
               )}
             </View>
           )}
