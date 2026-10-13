@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { ReturnsService, CreateReturnDto } from './returns.service';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { ReturnsService } from './returns.service';
+import { CreateReturnDto } from './create-return.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
@@ -25,7 +26,11 @@ export class ReturnsController {
 
   @RequirePermission('payment_edit')
   @Post(':checkId')
-  create(@Param('checkId') checkId: string, @CurrentUser() user: JwtPayload, @Body() dto: CreateReturnDto) {
+  create(
+    @Param('checkId', ParseUUIDPipe) checkId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateReturnDto,
+  ) {
     // Актор передаётся целиком: возврат — это ЗАПИСЬ по чеку, и он режется
     // филиалом актора (161), как и остальные пути записи по чеку.
     return this.returnsService.createReturn(user.tenantID, user.userID, checkId, dto, user);

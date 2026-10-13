@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -27,7 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
-import SearchInput from '../components/SearchInput';
+import CompactScreenHeader, { CompactSearchInput } from '../components/CompactScreenHeader';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
@@ -43,7 +42,6 @@ import {
   journalQueryParams,
   type JournalFilters,
 } from './journal/filters';
-import { Text as NativeText } from '../platform/Typography';
 import {
   colors,
   fontSize,
@@ -1348,76 +1346,57 @@ export default function ChecksScreen() {
   );
 
   const isWarehouseLoading = warehouseLoading;
-  // The compact journal header stays inside the status-bar safe area.
-  const insets = useSafeAreaInsets();
-
   return (
-    <View style={[styles.safe, { paddingTop: insets.top + 8, backgroundColor: palette.bg.canvas }]}>
-      <View style={styles.journalTitleRow}>
-        <NativeText variant="title1" color={palette.text.primary}>
-          Журнал
-        </NativeText>
-        <FreshnessBadge
-          query={
-            activeTab === 'checks'
-              ? { isFetching, isLoading, dataUpdatedAt }
-              : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
-          }
-        />
-      </View>
-
-      {/* Автосервис журнала (156/160/163) — Журнал показывает чеки автосервиса
-          ЭТОЙ СЕССИИ, поэтому человек обязан видеть, чью выручку он сейчас
-          читает. Индикатор — подпись, а не кнопка: филиал выбран при входе.
-          Скрыт, когда автосервис один. */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
-
-      {/* Freshness pill — HYBRID-perf plan. ChecksScreen renders from
-          persistent cache instantly on cold start, so we expose the
-          "background refresh" state to the user as a 10pt secondary pill.
-          Position: above the search row, right-aligned, no chrome unless
-          actively fetching. */}
-      <View style={styles.freshnessRow}>
-        {/* «Доска» — вход на канбан-доску заказ-нарядов (приёмка → в работе →
-            готов → выдан). Живёт в ChecksStack, поэтому плавающий таб-бар
-            остаётся виден, а back возвращает в Журнал. Доска — другой ракурс
-            тех же чеков, поэтому вход логично рядом с журналом. */}
-        <View style={styles.entryBtnRow}>
-          <TouchableOpacity
-            style={styles.boardEntryBtn}
-            onPress={() => {
-              haptic('tap');
-              navigation.navigate('WorkBoard');
-            }}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Открыть доску заказ-нарядов"
-          >
-            <Ionicons name="albums-outline" size={15} color={colors.primary[600]} />
-            <Text style={styles.boardEntryText}>Доска</Text>
-          </TouchableOpacity>
-          {/* «Корзина» (106) — рядом с Доской, тот же pill-паттерн (owner
-              brief: «корзина должна быть в разделе журнал рядом с доской»).
-              Гейт checks_delete — бэкенд гейтит trash/restore тем же ключом,
-              без права кнопку не показываем. Тоже пуш внутри ChecksStack —
-              таб-бар остаётся, back возвращает в Журнал. */}
-          {canSeeTrash && (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <CompactScreenHeader
+        title="Журнал"
+        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+        status={
+          <FreshnessBadge
+            query={
+              activeTab === 'checks'
+                ? { isFetching, isLoading, dataUpdatedAt }
+                : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
+            }
+          />
+        }
+        actions={
+          <View style={styles.entryBtnRow}>
             <TouchableOpacity
               style={styles.boardEntryBtn}
               onPress={() => {
                 haptic('tap');
-                navigation.navigate('CheckTrash');
+                navigation.navigate('WorkBoard');
               }}
               activeOpacity={0.7}
               accessibilityRole="button"
-              accessibilityLabel="Открыть корзину удалённых заказ-нарядов"
+              accessibilityLabel="Открыть доску заказ-нарядов"
             >
-              <Ionicons name="trash-outline" size={15} color={colors.primary[600]} />
-              <Text style={styles.boardEntryText}>Корзина</Text>
+              <Ionicons name="albums-outline" size={21} color={colors.primary[600]} />
+              <Text style={styles.boardEntryText}>Доска</Text>
             </TouchableOpacity>
-          )}
-        </View>
-      </View>
+            {/* «Корзина» (106) — рядом с Доской, тот же pill-паттерн (owner
+              brief: «корзина должна быть в разделе журнал рядом с доской»).
+              Гейт checks_delete — бэкенд гейтит trash/restore тем же ключом,
+              без права кнопку не показываем. Тоже пуш внутри ChecksStack —
+              таб-бар остаётся, back возвращает в Журнал. */}
+            {canSeeTrash && (
+              <TouchableOpacity
+                style={styles.boardEntryBtn}
+                onPress={() => {
+                  haptic('tap');
+                  navigation.navigate('CheckTrash');
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Открыть корзину удалённых заказ-нарядов"
+              >
+                <Ionicons name="trash-outline" size={21} color={colors.primary[600]} />
+              </TouchableOpacity>
+            )}
+          </View>
+        }
+      />
 
       {/* «Ожидают отправки» — офлайн-очередь чеков (Round 9). Узкая пилюля в
           визуальном языке «Доски» выше; видна ТОЛЬКО когда очередь непуста.
@@ -1516,6 +1495,7 @@ export default function ChecksScreen() {
             activeOpacity={0.7}
             accessibilityRole="tab"
             accessibilityState={{ selected: activeTab === 'warehouse' }}
+            accessibilityLabel="Складские документы"
           >
             <Ionicons
               name="cube-outline"
@@ -1529,7 +1509,7 @@ export default function ChecksScreen() {
                 activeTab === 'warehouse' && styles.segmentBtnTextActive,
               ]}
             >
-              Складские документы
+              Документы
             </Text>
           </TouchableOpacity>
         </View>
@@ -1541,7 +1521,7 @@ export default function ChecksScreen() {
           названию / поставщику / комментарию загруженной ленты. */}
       <View style={styles.searchRow}>
         <View style={styles.searchInputWrap}>
-          <SearchInput
+          <CompactSearchInput
             value={search}
             onChange={(v) => {
               setSearch(v);
@@ -2202,29 +2182,7 @@ export default function ChecksScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
 
-  // Journal title, service context and secondary navigation.
-  // Чип филиала — своя строка над «Доской»: в одну строку с ней и бейджем
-  // свежести он бы сжал названия до многоточия.
-  journalTitleRow: {
-    paddingHorizontal: spacing[4],
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: spacing[2],
-  },
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
-  freshnessRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    marginBottom: spacing[1],
-    minHeight: 28,
-  },
-  // Группа входов слева («Доска» + owner-only «Корзина») — pills в ряд,
-  // FreshnessBadge остаётся прижат вправо через space-between родителя.
+  pointChipRow: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
   entryBtnRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2235,6 +2193,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[1.5],
     paddingHorizontal: spacing[1],
+    minWidth: Platform.OS === 'android' ? 48 : 44,
     minHeight: Platform.OS === 'android' ? 48 : 44,
   },
   boardEntryText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[600] },
@@ -2307,10 +2266,11 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: spacing[2],
     paddingHorizontal: spacing[4],
-    marginBottom: spacing[1],
+    marginBottom: spacing[2],
   },
   searchInputWrap: {
     flex: 1,
+    minWidth: 0,
   },
   filterBtn: {
     width: Platform.OS === 'android' ? 48 : 44,

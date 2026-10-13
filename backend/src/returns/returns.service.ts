@@ -13,27 +13,12 @@ import { invalidateReportsForTenant } from '../common/reports-cache';
 import { getTenantTimezone } from '../common/timezone';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { actorPointId, pointFilterSql } from '../common/point-scope';
-
-export type ReturnDestination = 'warehouse' | 'defect';
-export type ReturnScope = 'full' | 'partial';
+import { CreateReturnDto, ReturnDestination, ReturnScope, validateReturnInput } from './create-return.dto';
+export { CreateReturnDto, ReturnLineInput, ReturnDestination, ReturnScope } from './create-return.dto';
 
 /** Round to 2 decimals — money columns are NUMERIC(…,2); avoids float drift. */
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-
-export interface ReturnLineInput {
-  productLineId?: string;
-  serviceLineId?: string;
-  quantity?: number;
-}
-
-export interface CreateReturnDto {
-  destination: ReturnDestination;
-  reason?: string;
-  scope: ReturnScope;
-  refundAmount?: number;
-  lines?: ReturnLineInput[];
 }
 
 @Injectable()
@@ -68,23 +53,7 @@ export class ReturnsService {
    *      touched (the units came back from the client, not from the shelf).
    */
   async createReturn(tenantID: string, userID: string, checkId: string, dto: CreateReturnDto, actor?: JwtPayload) {
-    if (!dto || !dto.destination || !dto.scope) {
-      throw new BadRequestException({ message: 'destination и scope обязательны' });
-    }
-    if (dto.destination !== 'warehouse' && dto.destination !== 'defect') {
-      throw new BadRequestException({ message: 'Неверное направление возврата' });
-    }
-    if (dto.scope !== 'full' && dto.scope !== 'partial') {
-      throw new BadRequestException({ message: 'Неверный тип возврата' });
-    }
-    // Reason is required for defect destination — otherwise we lose the
-    // diagnostic trail of why the part was junked.
-    if (dto.destination === 'defect' && (!dto.reason || !dto.reason.trim())) {
-      throw new BadRequestException({ message: 'Для возврата в брак укажите причину' });
-    }
-    if (dto.scope === 'partial' && (!dto.lines || dto.lines.length === 0)) {
-      throw new BadRequestException({ message: 'Укажите позиции для частичного возврата' });
-    }
+    validateReturnInput(dto);
 
     const client = await this.pool.connect();
     try {
@@ -111,7 +80,7 @@ export class ReturnsService {
         // cash_amount читаем ЗДЕСЬ, под тем же локом: это наличные чека ДО
         // реверса, и только из них выводится наличная часть возврата (164).
         // После UPDATE ниже исходное значение уже не восстановить.
-        `SELECT id, total_revenue, cash_amount, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${lockPointFilter} LIMIT 1 FOR UPDATE`,
+        `SELECT id, total_revenue, cash_amount, is_returned, is_deferred FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${lockPointFilter} LIMIT 1 FOR UPDATE`,
         lockParams,
       );
       if (checkRows.length === 0) {
@@ -121,6 +90,11 @@ export class ReturnsService {
       // not a best-effort JS pre-check.
       if (checkRows[0].is_returned) {
         throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
+      }
+      // Drafts have neither a sale nor a stock deduction to reverse. Check
+      // under the same row lock as activation and competing returns.
+      if (checkRows[0].is_deferred) {
+        throw new BadRequestException({ message: 'Возврат доступен только для проведённого заказ-наряда' });
       }
 
       // Чек, проданный в рассрочку, возвращать нельзя, пока у него есть план:
@@ -206,13 +180,12 @@ export class ReturnsService {
         // Resolve each user-provided line back to a line in this check.
         for (const ln of dto.lines) {
           if (ln.productLineId) {
-            const match = allProductLines.rows.find((r) => r.id === ln.productLineId);
+            const match = allProductLines.rows.find((r) => r.id === ln.productLineId?.toLowerCase());
             if (!match) {
               throw new BadRequestException({ message: 'Позиция не найдена в заказ-наряде' });
             }
             const lineQty = parseFloat(match.quantity) || 0;
-            const requestedQty =
-              ln.quantity !== undefined && ln.quantity !== null ? parseFloat(String(ln.quantity)) : 1;
+            const requestedQty = ln.quantity ?? 1;
             // Never return more than was sold on that line — a forged quantity
             // would otherwise inflate stock on add-back.
             const qty = Math.max(0, Math.min(requestedQty, lineQty));
@@ -234,13 +207,12 @@ export class ReturnsService {
             // Services are intangible — no stock move. The line must still
             // belong to THIS check (needed for the price-derived amount; also
             // closes the hole where a foreign line id was recorded blindly).
-            const match = allServiceLines.rows.find((r) => r.id === ln.serviceLineId);
+            const match = allServiceLines.rows.find((r) => r.id === ln.serviceLineId?.toLowerCase());
             if (!match) {
               throw new BadRequestException({ message: 'Позиция не найдена в заказ-наряде' });
             }
             const lineQty = parseFloat(match.quantity) || 0;
-            const requestedQty =
-              ln.quantity !== undefined && ln.quantity !== null ? parseFloat(String(ln.quantity)) : 1;
+            const requestedQty = ln.quantity ?? 1;
             const qty = lineQty > 0 ? Math.max(0, Math.min(requestedQty, lineQty)) : Math.max(0, requestedQty);
             const lineTotal = parseFloat(match.total) || 0;
             const amount =
@@ -260,7 +232,7 @@ export class ReturnsService {
 
       const requestedRefund =
         dto.refundAmount !== undefined && dto.refundAmount !== null
-          ? Math.max(0, parseFloat(String(dto.refundAmount)))
+          ? dto.refundAmount
           : dto.scope === 'full'
             ? totalRevenue
             : // M6 — дефолт ЧАСТИЧНОГО возврата = продажная стоимость возвращаемых
@@ -269,7 +241,7 @@ export class ReturnsService {
               round2(pendingReturnLines.reduce((acc, l) => acc + l.amount, 0));
       // A refund can never exceed what was actually charged on the check —
       // otherwise reversing it would drive the check's revenue/cash negative.
-      const refundAmount = Math.min(requestedRefund, totalRevenue);
+      const refundAmount = round2(Math.min(requestedRefund, totalRevenue));
 
       // НАЛИЧНАЯ ЧАСТЬ ВОЗВРАТА (164) — ровно то, что реверс ниже снимет с
       // cash_amount: возврат гасит НАЛ ПЕРВЫМ, остаток добирает с карты
@@ -303,8 +275,8 @@ export class ReturnsService {
       // где его пробили: гейт филиала чека стоит выше).
       const targetWh =
         dto.destination === 'warehouse'
-          ? await this.warehouses.resolveByKind(tenantID, 'main', actorPointId(actor))
-          : await this.warehouses.resolveByKind(tenantID, 'defect', actorPointId(actor));
+          ? await this.warehouses.resolveByKind(tenantID, 'main', actorPointId(actor), client)
+          : await this.warehouses.resolveByKind(tenantID, 'defect', actorPointId(actor), client);
 
       // NEW-4 (защита от взаимоблокировки): цикл ниже лочит по строке-источнику
       // на позицию, а для возврата в брак ещё и строку-копию того же SKU на

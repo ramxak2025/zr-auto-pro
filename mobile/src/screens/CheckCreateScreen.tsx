@@ -20,7 +20,7 @@ import {
   AccessibilityInfo,
   Switch,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import CompactScreenHeader, { compactTouchSize } from '../components/CompactScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
@@ -428,7 +428,6 @@ export default function CheckCreateScreen() {
   const route = useRoute<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
-  const insetsTop = useSafeAreaInsets().top;
   const palette = useColors();
   // Dark-mode flag — gates accent-tile fills (avatars, icon chips, plate /
   // line badges, master/template chips) onto the muted `softTint` dark formula
@@ -3048,19 +3047,11 @@ export default function CheckCreateScreen() {
   if (editId && !editCheckFresh) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        {isStackScreen && (
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={[
-              styles.floatingBack,
-              buildShadow(palette, 'elevated'),
-              { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] },
-            ]}
-            hitSlop={10}
-          >
-            <Ionicons name="chevron-back" size={22} color={palette.text.primary} />
-          </TouchableOpacity>
-        )}
+        <CompactScreenHeader
+          title="Редактирование чека"
+          onBack={isStackScreen ? () => navigation.goBack() : undefined}
+          context={<PointIndicator variant="chip" style={styles.pointContext} />}
+        />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator size="large" color={colors.primary[500]} />
         </View>
@@ -3070,23 +3061,50 @@ export default function CheckCreateScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {/* Floating back chevron — only when this screen is pushed onto a
-          stack (edit-mode from Журнал). When opened from the central tab
-          it's the Касса itself and needs no header. Native edge-swipe
-          handles back as well. */}
-      {isStackScreen && (
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={[
-            styles.floatingBack,
-            buildShadow(palette, 'elevated'),
-            { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] },
-          ]}
-          hitSlop={10}
-        >
-          <Ionicons name="chevron-back" size={22} color={palette.text.primary} />
-        </TouchableOpacity>
-      )}
+      <CompactScreenHeader
+        title={editId ? 'Редактирование чека' : 'Касса'}
+        onBack={isStackScreen ? () => navigation.goBack() : undefined}
+        context={<PointIndicator variant="chip" style={styles.pointContext} />}
+        actions={
+          !editId && canEditCheckDate ? (
+            <>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать дату заказ-наряда"
+                onPress={() => openCheckPicker('date')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="calendar-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать время заказ-наряда"
+                onPress={() => openCheckPicker('time')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="time-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+            </>
+          ) : undefined
+        }
+        status={
+          !editId && canEditCheckDate && manualDate ? (
+            <View style={styles.manualDateSummary}>
+              <Text style={{ fontSize: 13, color: palette.text.secondary, flexShrink: 1 }}>
+                {dateStr} · {timeStr}
+              </Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Использовать время создания чека"
+                onPress={() => setManualDate(null)}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="close-circle" size={18} color={palette.text.secondary} />
+              </TouchableOpacity>
+            </View>
+          ) : undefined
+        }
+      />
 
       {/* KeyboardAwareScroll (Round 11 #1): активное поле Кассы (имя/телефон
           клиента, пробег, комментарий) держится над клавиатурой на iOS И
@@ -3096,71 +3114,9 @@ export default function CheckCreateScreen() {
           false, свой paddingBottom не нужен. */}
       <KeyboardAwareScroll
         style={styles.scroll}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: insetsTop + spacing[2] },
-          openedFromTab && { paddingBottom: tabBarHeight + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, openedFromTab && { paddingBottom: tabBarHeight + spacing[4] }]}
         reserveTabBar={openedFromTab}
       >
-        {/* ═══ АВТОСЕРВИС ЗАКАЗ-НАРЯДА (156/160/163) ═══
-            Главный страх владельца: «чтобы чек не туда случайно не пробил».
-            Один и тот же мастер работает в двух автосервисах, поэтому тот, в
-            который уйдёт чек, обязан быть виден ДО нажатия «Пробить». Это
-            ПОДПИСЬ, а не выбор: филиал выдан сессии при входе, сменить его
-            можно только выходом и новым входом (163). Ни выпадающего списка,
-            ни перехода — оба были способом промахнуться и увести кассу в
-            соседний автосервис. Скрыт, когда автосервис ровно один — там
-            показывать нечего. В push-режиме (правка чека из Журнала) слева
-            висит плавающая стрелка «назад», поэтому сдвигаем строку правее,
-            чтобы она не уезжала под кнопку. */}
-        <PointIndicator variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
-
-        {!editId && canEditCheckDate && (
-          <View
-            style={{
-              alignSelf: 'flex-end',
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: palette.bg.card,
-              borderColor: palette.border.subtle,
-              borderWidth: 1,
-              borderRadius: 14,
-              marginBottom: spacing[3],
-            }}
-          >
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Выбрать дату заказ-наряда"
-              onPress={() => openCheckPicker('date')}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, minHeight: 44 }}
-            >
-              <Ionicons name="calendar-outline" size={16} color={palette.accent.primary} />
-              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? dateStr : 'Дата'}</Text>
-            </TouchableOpacity>
-            <View style={{ width: 1, height: 18, backgroundColor: palette.border.subtle }} />
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Выбрать время заказ-наряда"
-              onPress={() => openCheckPicker('time')}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, minHeight: 44 }}
-            >
-              <Ionicons name="time-outline" size={16} color={palette.accent.primary} />
-              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? timeStr : 'Время'}</Text>
-            </TouchableOpacity>
-            {manualDate && (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Использовать время создания чека"
-                onPress={() => setManualDate(null)}
-                style={{ paddingHorizontal: 10, minHeight: 44, justifyContent: 'center' }}
-              >
-                <Ionicons name="close" size={16} color={palette.text.secondary} />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
         <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.sectionHeader}>
@@ -5684,19 +5640,6 @@ export default function CheckCreateScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[100] },
-  // Floating back chevron — shown only when CheckCreate is pushed onto
-  // the stack (edit-mode from Журнал). Sits in the top-left safe area.
-  floatingBack: {
-    position: 'absolute',
-    left: spacing[3],
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -5717,10 +5660,15 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scroll: { flex: 1 },
-  scrollContent: { padding: spacing[3], gap: spacing[2.5], paddingBottom: spacing[12] },
-  // Правка чека из Журнала: плавающая стрелка «назад» занимает левый край,
-  // строка филиала обязана начинаться после неё.
-  pointBannerStacked: { marginLeft: 40 },
+  scrollContent: { padding: spacing[3], paddingTop: spacing[1], gap: spacing[2.5], paddingBottom: spacing[12] },
+  dateHeaderAction: {
+    width: compactTouchSize,
+    minHeight: compactTouchSize,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualDateSummary: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', flexShrink: 1 },
+  pointContext: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
 
   // ═══ Section containers with distinct backgrounds ═══
   sectionClient: {

@@ -2982,6 +2982,12 @@ export class ChecksService {
     // никогда не зависает из-за него в очереди навсегда.
 
     const client = await this.pool.connect();
+    let clientReleased = false;
+    const releaseClient = (destroy = false): void => {
+      if (clientReleased) return;
+      clientReleased = true;
+      client.release(destroy);
+    };
     try {
       await client.query('BEGIN');
 
@@ -3473,6 +3479,9 @@ export class ChecksService {
       );
 
       await client.query('COMMIT');
+      // getById and push helpers use the pool. Keeping this client until the
+      // response is built starves a full pool AFTER the sale has committed.
+      releaseClient();
 
       // A new sale changes revenue/profit/ranking — drop cached aggregates so
       // the dashboard reflects it immediately instead of up to 30s late.
@@ -3530,7 +3539,17 @@ export class ChecksService {
 
       return savedCheck;
     } catch (err) {
-      await client.query('ROLLBACK');
+      if (!clientReleased) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          // A failed rollback must never return an uncertain transaction to
+          // the pool, nor replace the original failure.
+          releaseClient(true);
+          this.logger.error(`Check create rollback error: ${rollbackError}`);
+        }
+        releaseClient();
+      }
       // ── Идемпотентность (111): гонка двух КОНКУРЕНТНЫХ ретраев ──────────
       // Оба прошли pre-check до того, как первый закоммитился; проигравший
       // ловит 23505 на uq_checks_client_request (INSERT видит конфликт только
@@ -3543,26 +3562,33 @@ export class ChecksService {
       // uq_checks_tenant_number) — строки с нашим ключом нет, проваливаемся в
       // прежнюю обработку ошибок.
       if (clientRequestId && (err as { code?: string })?.code === '23505') {
+        let winnerId: string | undefined;
         try {
           const { rows: winnerRows } = await this.pool.query(
             `SELECT id FROM checks WHERE tenant_id = $1 AND client_request_id = $2`,
             [tenantID, clientRequestId],
           );
-          if (winnerRows.length > 0) {
-            return await this.getById(winnerRows[0].id, tenantID, actor);
-          }
+          winnerId = winnerRows[0]?.id;
         } catch (recoveryErr) {
           this.logger.error(`Check create idempotent-recovery error: ${recoveryErr}`);
         }
+        // Preserve the same visibility and deleted-check errors as the fast
+        // replay path. Only a failed SQL lookup belongs to recovery logging.
+        if (winnerId) return this.getById(winnerId, tenantID, actor);
       }
-      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+      if (
+        err instanceof BadRequestException ||
+        err instanceof NotFoundException ||
+        err instanceof ConflictException ||
+        err instanceof ForbiddenException
+      )
         throw err;
       // Log the full reason server-side (pino + Sentry) for diagnosis; return a
       // generic message to the client so raw SQL/internals are never exposed.
       this.logger.error(`Check create error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
-      client.release();
+      releaseClient();
     }
   }
 

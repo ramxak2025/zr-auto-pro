@@ -52,7 +52,7 @@ const bodyBetween = (src, startMarker, endMarker) => {
 
 test('возврат сохраняет НАЛИЧНУЮ часть, прочитанную под локом чека', () => {
   assert.ok(
-    returns.includes('SELECT id, total_revenue, cash_amount, is_returned FROM checks'),
+    returns.includes('SELECT id, total_revenue, cash_amount, is_returned, is_deferred FROM checks'),
     'returns.service: cash_amount больше не читается под локом — после реверса исходные наличные чека не восстановить',
   );
   assert.ok(

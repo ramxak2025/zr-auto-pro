@@ -30,8 +30,12 @@ async function until(predicate) {
 async function fixture(work) {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '55443');
-  assert.ok(['/autexa_oct13_fixed', '/autexa_oct13'].includes(url.pathname));
+  assert.ok(
+    (url.port === '55443' && ['/autexa_oct13_fixed', '/autexa_oct13'].includes(url.pathname)) ||
+      (url.port === '55438' && url.pathname === '/autexa_oct8_test') ||
+      (url.port === '55446' && url.pathname === '/autexa_oct13_recovery'),
+    'Named disposable QA databases only',
+  );
   const appUrl = new URL(url);
   appUrl.username = 'autexa_app';
   appUrl.password = process.env.AUTEXA_OCT13_APP_PASSWORD;

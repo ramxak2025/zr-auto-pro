@@ -17,8 +17,11 @@ test(
   async (t) => {
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.equal(url.port, '55446');
-    assert.equal(url.pathname, '/autexa_oct13_journal_polish', 'Only the approved disposable journal database');
+    assert.ok(
+      (url.port === '55446' && ['/autexa_oct13_journal_polish', '/autexa_oct13_recovery'].includes(url.pathname)) ||
+        (url.port === '55438' && url.pathname === '/autexa_oct8_test'),
+      'Named disposable QA databases only',
+    );
     const admin = new Pool({ connectionString: live });
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';

@@ -16,7 +16,7 @@ import {
 
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import IosScreenHeader from '../components/IosScreenHeader';
+import CompactScreenHeader, { CompactSearchInput, compactTouchSize } from '../components/CompactScreenHeader';
 import PointIndicator from '../components/PointIndicator';
 import { usePointAccess } from '../hooks/usePoints';
 import { Ionicons } from '@expo/vector-icons';
@@ -409,7 +409,6 @@ const ProductRow = React.memo(function ProductRow({
 export default function ProductsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
-  const insetsTop = useSafeAreaInsets().top;
   const insetsBottom = useSafeAreaInsets().bottom;
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
@@ -2329,38 +2328,38 @@ export default function ProductsScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          <View style={styles.selectedContextRow}>
+            <PointIndicator variant="chip" style={styles.pointChipRow} />
+            <FreshnessBadge
+              queries={[
+                { isFetching, isLoading, dataUpdatedAt },
+                { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
+              ]}
+            />
+          </View>
         </SafeAreaView>
       ) : (
-        /* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
-          / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title becomes the warehouse name (e.g. "\u0421\u043A\u043B\u0430\u0434
-          \u0431\u0440\u0430\u043A\u0430") so the user always knows which warehouse they're
-          looking at. A leading layers-glyph button (and a tap on the
-          title itself, via `leading` slot + onPress in the title row
-          below) opens the warehouse switcher sheet. */
-        <IosScreenHeader
-          title={activeWarehouse?.name || '\u0421\u043A\u043B\u0430\u0434'}
+        <CompactScreenHeader
+          title={activeWarehouse?.name || 'Склад'}
           subtitle={
             data === undefined
               ? undefined
               : listTruncated
-                ? `${allProducts.length} \u0438\u0437 ${data?.total} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
-                : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
+                ? `${allProducts.length} из ${data?.total} товаров`
+                : `${warehouseStats.count} товаров`
           }
-          leading={
-            warehouses && warehouses.length > 1 ? (
-              <TouchableOpacity
-                onPress={() => setShowWarehouseSwitcher(true)}
-                style={[styles.switcherBtn, { backgroundColor: palette.bg.muted }]}
-                accessibilityRole="button"
-                accessibilityLabel={'\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
-                hitSlop={8}
-              >
-                <Ionicons name="layers-outline" size={18} color={palette.text.primary} />
-                <Ionicons name="chevron-down" size={12} color={palette.text.secondary} style={{ marginLeft: -2 }} />
-              </TouchableOpacity>
-            ) : null
+          onTitlePress={warehouses && warehouses.length > 1 ? () => setShowWarehouseSwitcher(true) : undefined}
+          titleLabel={`Сменить склад. Текущий: ${activeWarehouse?.name || 'Склад'}`}
+          context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+          status={
+            <FreshnessBadge
+              queries={[
+                { isFetching, isLoading, dataUpdatedAt },
+                { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
+              ]}
+            />
           }
-          trailing={
+          actions={
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
               {/* Сканировать — barcode → найти и открыть товар. Read-only action,
                 shown to everyone who can see the warehouse. The scanner itself
@@ -2369,13 +2368,14 @@ export default function ProductsScreen() {
                 style={[
                   styles.opsBtn,
                   {
-                    backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                    backgroundColor: palette.bg.muted,
                   },
                 ]}
                 onPress={() => {
                   haptic('tap');
                   setShowScanner(true);
                 }}
+                accessibilityRole="button"
                 accessibilityLabel="Сканировать штрих-код"
               >
                 <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
@@ -2385,13 +2385,14 @@ export default function ProductsScreen() {
                   style={[
                     styles.opsBtn,
                     {
-                      backgroundColor:
-                        palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                      backgroundColor: palette.bg.muted,
                     },
                   ]}
                   onPress={() => setShowOpsModal(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Складские операции"
                 >
-                  <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+                  <Ionicons name="swap-horizontal-outline" size={18} color={palette.accent.primary} />
                 </TouchableOpacity>
               )}
               {/* «+» создаёт товар в текущем складе. На складе брака этого
@@ -2401,7 +2402,12 @@ export default function ProductsScreen() {
                 заводятся через «Покупка б/у» у системного поставщика,
                 поэтому на used-складе тоже прячем создание. */}
               {canManageWarehouse && activeWarehouse?.kind === 'main' && (
-                <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+                <TouchableOpacity
+                  style={styles.addBtn}
+                  onPress={openCreate}
+                  accessibilityRole="button"
+                  accessibilityLabel="Добавить товар"
+                >
                   <Ionicons name="add" size={18} color={colors.white} />
                 </TouchableOpacity>
               )}
@@ -2409,37 +2415,6 @@ export default function ProductsScreen() {
           }
         />
       )}
-      {/* Автосервис (169): склад и остатки — филиала сессии. Только подпись. */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
-      {/* FreshnessBadge \u2014 HYBRID-perf plan. Pinned just under the header,
-          driven by the products + warehouses queries. Hidden when there
-          is no data yet (cold cache miss + first fetch) so we don't
-          stack a pulsing pill on top of the skeleton. */}
-      <View style={styles.freshnessRow}>
-        <FreshnessBadge
-          queries={[
-            { isFetching, isLoading, dataUpdatedAt },
-            { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
-          ]}
-        />
-      </View>
-      {/* Title-tap zone \u2014 owner spec: tapping the word "\u0421\u043A\u043B\u0430\u0434" itself
-          opens the switcher. The IosScreenHeader doesn't expose a
-          title-press hook, so we overlay an invisible Pressable that
-          covers the title text region. Pinned to insetsTop so it sits
-          right over the title row regardless of device safe area. */}
-      {/* В режиме выделения НЕ рендерим: оверлей лежит поверх шапки и
-          перехватывал тап по «Отмена» и по счётчику «Выбрано N» — вместо выхода
-          из выделения открывалась шторка выбора склада. */}
-      {warehouses && warehouses.length > 1 && !selectMode && (
-        <Pressable
-          onPress={() => setShowWarehouseSwitcher(true)}
-          style={[styles.titleTapZone, { top: insetsTop + spacing[2] }]}
-          accessibilityRole="button"
-          accessibilityLabel={'\u0421\u043C\u0435\u043D\u0438\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
-        />
-      )}
-
       {/* Stats cards (\u0441\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C / \u0432 \u0440\u043E\u0437\u043D. \u0446\u0435\u043D\u0430\u0445) intentionally
           REMOVED from the warehouse top \u2014 these belong in the Reports
           screen, not in the warehouse header. Owner spec: "\u0441\u043A\u043B\u0430\u0434 \u0438\u043C\u0435\u0435\u0442
@@ -2472,7 +2447,7 @@ export default function ProductsScreen() {
       )}
 
       <View style={styles.searchWrap}>
-        <SearchInput
+        <CompactSearchInput
           value={search}
           onChange={(v) => {
             setSearch(v);
@@ -4499,7 +4474,16 @@ export default function ProductsScreen() {
 }
 
 const styles = StyleSheet.create({
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
+  selectedContextRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: 8,
+  },
+  pointChipRow: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
   branchTargetRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4525,10 +4509,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
+    minHeight: compactTouchSize,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  selectHeaderSide: { minWidth: 90 },
+  selectHeaderSide: { minWidth: 90, minHeight: compactTouchSize, justifyContent: 'center' },
   selectHeaderCancel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   selectHeaderTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, flex: 1, textAlign: 'center' },
   bulkBar: {
@@ -4578,36 +4562,11 @@ const styles = StyleSheet.create({
   },
   countBadgeText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[500] },
   opsBtn: {
-    width: 36,
-    height: 36,
+    width: compactTouchSize,
+    height: compactTouchSize,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  // Warehouse switcher button in the header leading slot. Stays
-  // theme-aware via inline backgroundColor from palette.bg.muted —
-  // these dimensions match the 36×36 squircle that IosScreenHeader
-  // uses for its built-in back button so the header reads as
-  // consistent across screens.
-  switcherBtn: {
-    height: 36,
-    paddingHorizontal: spacing[2],
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 2,
-  },
-  // Invisible tap zone that overlays the header title text. Sized to
-  // cover the title region (the centre of the header). The owner can
-  // tap "Склад брака" anywhere in that strip and the switcher opens.
-  // The `top` is set inline from `insetsTop + spacing[2]` so it aligns
-  // with the actual title row regardless of device safe area.
-  titleTapZone: {
-    position: 'absolute',
-    left: 64, // skip the leading button area
-    right: 120, // skip the trailing buttons area
-    height: 44, // approx header row height — title + subtitle
   },
   // Writeoff mode radio rows. Hairline-bordered cards with a leading
   // circle radio — light/dark theme-aware via inline backgroundColor.
@@ -4631,8 +4590,8 @@ const styles = StyleSheet.create({
   writeoffRadioTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   writeoffRadioDesc: { fontSize: fontSize.xs, marginTop: 2 },
   addBtn: {
-    width: 36,
-    height: 36,
+    width: compactTouchSize,
+    height: compactTouchSize,
     borderRadius: borderRadius.xl,
     backgroundColor: colors.primary[600],
     alignItems: 'center',
@@ -4663,7 +4622,7 @@ const styles = StyleSheet.create({
   breadcrumbItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingVertical: 2 },
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
-  searchWrap: { paddingHorizontal: spacing[4] },
+  searchWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
   // Плашка активного фильтра «ячейка X» под строкой поиска (2026-09-30).
   cellFilterRow: { flexDirection: 'row', paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
   cellFilterChip: {
@@ -4677,12 +4636,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   cellFilterChipText: { flexShrink: 1, fontSize: 13, fontWeight: '600' },
-  // FreshnessBadge slot — right-aligned, sits just below the header.
-  freshnessRow: {
-    paddingHorizontal: spacing[4],
-    alignItems: 'flex-end',
-    minHeight: 14,
-  },
   // iOS-grouped list: rows are flush — no gap, no horizontal padding (rows
   // own their gutter). The list itself sits on a slightly grey background
   // with a top hairline that meets the search bar.

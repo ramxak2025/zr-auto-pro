@@ -4,7 +4,7 @@ import * as path from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable, Transform } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
-import sharp from 'sharp';
+import sharp = require('sharp');
 
 // Max dimension for resized images
 const MAX_IMAGE_WIDTH = 1200;

@@ -83,9 +83,13 @@ export class WarehousesService {
    * основной сервис. Нужен ТОЛЬКО внутренним вызовам без актора; обычный
    * запрос всегда несёт филиал сессии (инвариант 163).
    */
-  private async effectivePointId(tenantID: string, pointId: string | null): Promise<string | null> {
+  private async effectivePointId(
+    tenantID: string,
+    pointId: string | null,
+    db: PointScopeQueryable = this.pool,
+  ): Promise<string | null> {
     if (pointId) return pointId;
-    const { rows } = await this.pool.query(
+    const { rows } = await db.query(
       `SELECT id::text AS id FROM tenant_points WHERE tenant_id = $1 AND is_main AND is_active LIMIT 1`,
       [tenantID],
     );
@@ -151,19 +155,26 @@ export class WarehousesService {
    * филиала: перемещение в брак уезжало бы в чужой автосервис. Без точки —
    * см. effectivePointId. Самолечение — досев набора филиала.
    */
-  async resolveByKind(tenantID: string, kind: WarehouseKind, pointId: string | null = null): Promise<WarehouseRow> {
-    const effectivePoint = await this.effectivePointId(tenantID, pointId);
+  async resolveByKind(
+    tenantID: string,
+    kind: WarehouseKind,
+    pointId: string | null = null,
+    db: PointScopeQueryable = this.pool,
+  ): Promise<WarehouseRow> {
+    // A caller already holding a transaction must reuse its client for both
+    // lookup and lazy seeding; a second checkout can exhaust the entire pool.
+    const effectivePoint = await this.effectivePointId(tenantID, pointId, db);
     const select = `SELECT id, tenant_id, name, kind, sort_order, point_id FROM warehouses
         WHERE tenant_id = $1 AND kind = $2 AND point_id IS NOT DISTINCT FROM $3::uuid LIMIT 1`;
-    const { rows } = await this.pool.query(select, [tenantID, kind, effectivePoint]);
+    const { rows } = await db.query(select, [tenantID, kind, effectivePoint]);
     if (rows.length > 0) return this.mapRow(rows[0]);
     // Tenant-less caller (nil-UUID sentinel) can't own a warehouse and the
     // seed would FK-violate — surface a clean 404 instead of a 500.
     if (tenantID === NO_TENANT_ID) {
       throw new NotFoundException({ message: `Склад "${kind}" не найден` });
     }
-    await seedWarehousesForPoint(this.pool, tenantID, effectivePoint);
-    const { rows: retry } = await this.pool.query(select, [tenantID, kind, effectivePoint]);
+    await seedWarehousesForPoint(db, tenantID, effectivePoint);
+    const { rows: retry } = await db.query(select, [tenantID, kind, effectivePoint]);
     if (retry.length === 0) {
       throw new NotFoundException({ message: `Склад "${kind}" не найден` });
     }
