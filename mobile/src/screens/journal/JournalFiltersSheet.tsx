@@ -81,6 +81,7 @@ export default function JournalFiltersSheet(props: Props) {
       <KeyboardProvider>
         <KeyboardAvoidingView
           behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
           style={[
             s.container,
             {
