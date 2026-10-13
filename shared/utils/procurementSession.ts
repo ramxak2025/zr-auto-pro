@@ -12,6 +12,7 @@ function ownedError(error: unknown, lease: object): Error {
   const wrapped = Object.assign(new Error(source?.message || 'Операция не подтверждена'), {
     code: source?.code,
     response: source?.response,
+    ...(error instanceof ProcurementRecoveryError && error.diagnostic ? { diagnostic: error.diagnostic } : {}),
   });
   owners.set(wrapped, lease);
   return wrapped;

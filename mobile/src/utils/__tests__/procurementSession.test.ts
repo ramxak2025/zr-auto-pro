@@ -1,5 +1,6 @@
 import { MutationObserver, QueryClient } from '@tanstack/query-core';
 import { ownsProcurementOutcome, runOwnedProcurement } from '../../../../shared/utils/procurementSession';
+import { ProcurementRecoveryError } from '../../../../shared/utils/durableProcurement';
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -11,6 +12,20 @@ const deferred = <T>() => {
 const result = { status: 200, data: { id: 'order-A' } };
 
 describe('procurement hook completion ownership across installed MutationObserver callbacks', () => {
+  it('safe storage diagnostics reach the owning UI lease without native error data', async () => {
+    const lease = {};
+    const diagnostic = { stage: 'reserve_write' as const, reason: 'CAPACITY' as const, delivery: 'not_sent' as const };
+    const error = await runOwnedProcurement({
+      lease,
+      isCurrent: () => true,
+      dispatch: async () => {
+        throw new ProcurementRecoveryError('STORAGE_UNAVAILABLE', 'Safe message', diagnostic);
+      },
+      refresh: async () => {},
+    }).catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: 'STORAGE_UNAVAILABLE', diagnostic });
+    expect(ownsProcurementOutcome(error, lease, () => true)).toBe(true);
+  });
   it('reproduces the old post-refresh gap: latest B callbacks see a successful A response', async () => {
     const entered = deferred<void>(),
       storageKeys = deferred<void>(),

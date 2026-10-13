@@ -449,7 +449,7 @@ it('actual removeAccount freezes new writes during a stale getAllKeys snapshot; 
       isCurrent: () => true,
       send,
     }),
-  ).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+  ).rejects.toMatchObject({ code: 'SESSION_CHANGED' });
   expect(send).not.toHaveBeenCalled();
   gate.resolve();
   await removing;
