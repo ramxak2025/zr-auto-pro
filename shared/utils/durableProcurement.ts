@@ -1,5 +1,7 @@
 /** Durable financial intents, never credentials. No expiry: only a proved
  * response may release an intent whose delivery to the server is uncertain. */
+import { storageWriteFailureKind } from './storageFailure';
+
 export interface ProcurementOwner {
   tenantId: string;
   userId: string;
@@ -37,24 +39,85 @@ export interface ProcurementResponse<T = unknown> {
 export const PROCUREMENT_PREFIX = 'autexa:procurement:v1:';
 const operations = new Set<ProcurementOperation>(['po-receive', 'delivery-create', 'delivery-return']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export interface ProcurementDiagnostic {
+  stage:
+    | 'target'
+    | 'payload'
+    | 'request_id'
+    | 'record'
+    | 'list'
+    | 'prepare_read'
+    | 'dispatch_read'
+    | 'reserve_write'
+    | 'reserve_readback'
+    | 'dispatch_write'
+    | 'dispatch_readback';
+  reason:
+    | 'INVALID_TARGET'
+    | 'INVALID_PAYLOAD'
+    | 'INVALID_REQUEST_ID'
+    | 'CORRUPT_RECORD'
+    | 'ACCOUNT_FROZEN'
+    | 'READBACK_MISMATCH'
+    | 'CAPACITY'
+    | 'NATIVE_WRITE_FAILURE'
+    | 'UNAVAILABLE';
+  delivery: 'not_sent' | 'uncertain';
+}
 export class ProcurementRecoveryError extends Error {
   constructor(
-    public readonly code: 'STORAGE_UNAVAILABLE' | 'SESSION_CHANGED' | 'PENDING_REQUEST' | 'RESPONSE_UNCONFIRMED',
+    public readonly code:
+      | 'STORAGE_UNAVAILABLE'
+      | 'SESSION_CHANGED'
+      | 'PENDING_REQUEST'
+      | 'RESPONSE_UNCONFIRMED'
+      | 'INVALID_REQUEST',
     message: string,
+    /** Allowlisted metadata only: never native messages, keys, bodies or credentials. */
+    public readonly diagnostic?: ProcurementDiagnostic,
   ) {
     super(message);
     this.name = 'ProcurementRecoveryError';
   }
 }
-const storageError = () =>
+function storageError(
+  stage: ProcurementDiagnostic['stage'] = 'record',
+  delivery: ProcurementDiagnostic['delivery'] = 'uncertain',
+  error?: unknown,
+  reason?: ProcurementDiagnostic['reason'],
+): ProcurementRecoveryError {
+  if ((error as { code?: unknown } | null)?.code === 'UNRESOLVED_INTENTS') {
+    return new ProcurementRecoveryError(
+      'SESSION_CHANGED',
+      'Запись операций этого аккаунта временно приостановлена. Дождитесь завершения смены или удаления аккаунта и повторите действие в нужном аккаунте.',
+      { stage, delivery, reason: 'ACCOUNT_FROZEN' },
+    );
+  }
+  // Preserve deliberate adapter errors (e.g. unsupported browser Web Locks).
+  if (error instanceof ProcurementRecoveryError) return error;
+  const kind = storageWriteFailureKind(error);
+  const cause =
+    reason ?? (kind === 'capacity' ? 'CAPACITY' : kind === 'native_write' ? 'NATIVE_WRITE_FAILURE' : 'UNAVAILABLE');
+  const message =
+    cause === 'CORRUPT_RECORD'
+      ? 'Сохранённая операция не читается и могла быть отправлена ранее. Не создавайте её повторно. Обратитесь в поддержку для восстановления; не удаляйте данные приложения.'
+      : delivery === 'uncertain'
+        ? 'Не удалось прочитать или обновить сохранённую операцию. Она могла быть проведена ранее. Повторите чтение, затем нажмите «Восстановить результат». При нехватке памяти освободите место; не удаляйте данные приложения.'
+        : cause === 'CAPACITY' || cause === 'NATIVE_WRITE_FAILURE'
+          ? 'Не удалось безопасно сохранить операцию. Восстановите незавершённые операции или освободите память устройства и повторите. Этот запрос не отправлен; не удаляйте данные приложения.'
+          : 'Не удалось безопасно сохранить операцию на устройстве. Повторите действие; если ошибка сохраняется, обратитесь в поддержку. Этот запрос не отправлен.';
+  return new ProcurementRecoveryError('STORAGE_UNAVAILABLE', message, { stage, delivery, reason: cause });
+}
+const invalidRequest = (stage: 'target' | 'payload' | 'request_id', reason: ProcurementDiagnostic['reason']) =>
   new ProcurementRecoveryError(
-    'STORAGE_UNAVAILABLE',
-    'Не удалось безопасно сохранить операцию. Проверьте доступ к хранилищу и повторите. Запрос не отправлен.',
+    'INVALID_REQUEST',
+    'Не удалось подготовить корректный запрос. Откройте документ заново из списка и повторите. Этот запрос не отправлен.',
+    { stage, reason, delivery: 'not_sent' },
   );
 const sessionError = () =>
   new ProcurementRecoveryError(
     'SESSION_CHANGED',
-    'Аккаунт или филиал изменился. Операция сохранена для прежнего аккаунта.',
+    'Аккаунт или филиал изменился. Продолжите в исходном аккаунте; сохранённые запросы остаются у него.',
   );
 function ownerKey(owner: ProcurementOwner): string {
   if (!uuid.test(owner.tenantId) || !uuid.test(owner.userId) || (owner.pointId !== null && !uuid.test(owner.pointId)))
@@ -62,11 +125,13 @@ function ownerKey(owner: ProcurementOwner): string {
   return `${owner.tenantId}/${owner.userId}/${owner.pointId ?? 'none'}/`;
 }
 function keyFor(owner: ProcurementOwner, target: ProcurementTarget): string {
-  if (!operations.has(target.operation) || !uuid.test(target.sourceId)) throw storageError();
+  if (!operations.has(target.operation) || !uuid.test(target.sourceId))
+    throw invalidRequest('target', 'INVALID_TARGET');
   return `${PROCUREMENT_PREFIX}${ownerKey(owner)}${target.operation}/${target.sourceId}`;
 }
 export function procurementPath(target: ProcurementTarget): string {
-  if (!operations.has(target.operation) || !uuid.test(target.sourceId)) throw storageError();
+  if (!operations.has(target.operation) || !uuid.test(target.sourceId))
+    throw invalidRequest('target', 'INVALID_TARGET');
   if (target.operation === 'po-receive') return `/purchase-orders/${target.sourceId}/receive`;
   if (target.operation === 'delivery-return') return `/suppliers/deliveries/${target.sourceId}/returns`;
   return '/suppliers/deliveries';
@@ -80,7 +145,7 @@ function cleanPayload(payload: object): Record<string, unknown> {
   const check = (value: unknown): void => {
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value)) {
-      if (forbidden.test(key)) throw storageError();
+      if (forbidden.test(key)) throw invalidRequest('payload', 'INVALID_PAYLOAD');
       check(child);
     }
   };
@@ -120,7 +185,9 @@ function readRecord(raw: string, key: string, owner: ProcurementOwner): PendingP
     cleanPayload(body);
     return record;
   } catch {
-    throw storageError();
+    // v1 requires dispatch metadata in its initial definition in project history.
+    // Missing fields are not evidence of a safely migratable old schema.
+    throw storageError('record', 'uncertain', undefined, 'CORRUPT_RECORD');
   }
 }
 export function confirmedProcurementResponse(target: ProcurementTarget, response: ProcurementResponse): boolean {
@@ -147,14 +214,31 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
   const guard = (isCurrent: () => boolean) => {
     if (!isCurrent()) throw sessionError();
   };
-  const write = async (key: string, record: PendingProcurement) => {
+  const read = async (
+    key: string,
+    stage: ProcurementDiagnostic['stage'],
+    delivery: ProcurementDiagnostic['delivery'],
+  ) => {
+    try {
+      return await storage.getItem(key);
+    } catch (error) {
+      throw storageError(stage, delivery, error);
+    }
+  };
+  const write = async (
+    key: string,
+    record: PendingProcurement,
+    phase: 'reserve' | 'dispatch',
+    delivery: ProcurementDiagnostic['delivery'],
+  ) => {
     const raw = JSON.stringify(record);
     try {
       await storage.setItem(key, raw);
-      if ((await storage.getItem(key)) !== raw) throw storageError();
-    } catch {
-      throw storageError();
+    } catch (error) {
+      throw storageError(`${phase}_write`, delivery, error);
     }
+    if ((await read(key, `${phase}_readback`, delivery)) !== raw)
+      throw storageError(`${phase}_readback`, delivery, undefined, 'READBACK_MISMATCH');
   };
   const list = async (owner: ProcurementOwner, isCurrent: () => boolean): Promise<PendingProcurement[]> => {
     guard(isCurrent);
@@ -170,7 +254,7 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
       return records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     } catch (error) {
       if (error instanceof ProcurementRecoveryError) throw error;
-      throw storageError();
+      throw storageError('list', 'uncertain', error);
     }
   };
   const execute = async <T>(options: {
@@ -196,7 +280,7 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
       active = (async () => {
         const record = await storage.exclusive(key, async () => {
           guard(isCurrent);
-          const raw = await storage.getItem(key);
+          const raw = await read(key, 'prepare_read', 'uncertain');
           // Account removal may have completed while the initial read waited.
           // Reject the stale owner before reserving or persisting a new intent.
           guard(isCurrent);
@@ -215,8 +299,13 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
           }
           if (!options.payload)
             throw new ProcurementRecoveryError('PENDING_REQUEST', 'Сохранённый запрос уже завершён. Обновите данные.');
-          const requestId = createId();
-          if (!uuid.test(requestId)) throw storageError();
+          let requestId: string;
+          try {
+            requestId = createId();
+            if (!uuid.test(requestId)) throw invalidRequest('request_id', 'INVALID_REQUEST_ID');
+          } catch {
+            throw invalidRequest('request_id', 'INVALID_REQUEST_ID');
+          }
           const saved: PendingProcurement = {
             version: 1,
             owner: { ...owner },
@@ -227,15 +316,20 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
             submitted: false,
             dispatches: 0,
           };
-          await write(key, saved);
+          await write(key, saved, 'reserve', 'not_sent');
           return saved;
         });
         guard(isCurrent);
+        let dispatched = false;
         // Persist uncertainty BEFORE dispatch: termination at any later point
         // requires exact recovery, never a replacement key.
         const updateOwn = async (change: (current: PendingProcurement) => Promise<void>, required = false) =>
           storage.exclusive(key, async () => {
-            const raw = await storage.getItem(key);
+            const raw = await read(
+              key,
+              'dispatch_read',
+              dispatched || record.submitted || record.dispatches > 0 ? 'uncertain' : 'not_sent',
+            );
             if (raw === null) {
               if (required)
                 throw new ProcurementRecoveryError(
@@ -257,11 +351,17 @@ export function createDurableProcurement(storage: ProcurementStorage, createId: 
         let firstDispatch = false;
         await updateOwn(async (current) => {
           firstDispatch = !current.submitted && current.dispatches === 0;
-          await write(key, { ...current, submitted: true, dispatches: current.dispatches + 1 });
+          await write(
+            key,
+            { ...current, submitted: true, dispatches: current.dispatches + 1 },
+            'dispatch',
+            firstDispatch ? 'not_sent' : 'uncertain',
+          );
         }, true);
         guard(isCurrent);
         let response: ProcurementResponse<T>;
         try {
+          dispatched = true;
           response = await send(procurementPath(record.target), record.body);
           if (!confirmedProcurementResponse(record.target, response)) {
             throw new ProcurementRecoveryError(

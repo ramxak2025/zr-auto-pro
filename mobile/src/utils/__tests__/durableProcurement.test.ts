@@ -45,6 +45,112 @@ const deferred = <T>() => {
 };
 
 describe('durable procurement recovery', () => {
+  it('diagnostics: invalid target is an input error, not a storage/quota failure', async () => {
+    const f = fixture(),
+      send = jest.fn(async () => result);
+    await expect(
+      f.store().execute({
+        owner,
+        target: { ...target, sourceId: 'local-placeholder' },
+        payload: body,
+        isCurrent: () => true,
+        send,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+      diagnostic: { stage: 'target', reason: 'INVALID_TARGET', delivery: 'not_sent' },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(f.disk.size).toBe(0);
+  });
+  it('diagnostics: unreadable preparation may contain an earlier dispatched intent and never exposes native details', async () => {
+    const f = fixture(),
+      send = jest.fn(async () => result);
+    f.storage.getItem = async () => {
+      throw new Error('private native key/body');
+    };
+    const failure = await f
+      .store()
+      .execute({ owner, target, payload: body, isCurrent: () => true, send })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: 'STORAGE_UNAVAILABLE',
+      diagnostic: { stage: 'prepare_read', reason: 'UNAVAILABLE', delivery: 'uncertain' },
+    });
+    expect(String(failure)).not.toContain('private native');
+    expect(String(failure)).not.toContain('Запрос не отправлен');
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('diagnostics: recovery readback mismatch preserves the uncertain original request and stops before another send', async () => {
+    const f = fixture();
+    await f
+      .store()
+      .execute({
+        owner,
+        target,
+        payload: body,
+        isCurrent: () => true,
+        send: async () => {
+          throw new Error('lost');
+        },
+      })
+      .catch(() => undefined);
+    const prior = [...f.disk.values()][0];
+    f.storage.setItem = async () => {};
+    const send = jest.fn(async () => result);
+    const failure = await f
+      .store()
+      .execute({ owner, target, isCurrent: () => true, send })
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: 'STORAGE_UNAVAILABLE',
+      diagnostic: { stage: 'dispatch_readback', reason: 'READBACK_MISMATCH', delivery: 'uncertain' },
+    });
+    expect(String(failure)).not.toContain('Запрос не отправлен');
+    expect([...f.disk.values()][0]).toBe(prior);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('diagnostics: v1 missing dispatch metadata remains untouched and uncertain; it is not an evidenced legacy schema', async () => {
+    const f = fixture();
+    await f
+      .store()
+      .execute({
+        owner,
+        target,
+        payload: body,
+        isCurrent: () => true,
+        send: async () => {
+          throw new Error('lost');
+        },
+      })
+      .catch(() => undefined);
+    const key = [...f.disk.keys()][0];
+    const record = JSON.parse(f.disk.get(key)!);
+    delete record.dispatches;
+    const raw = JSON.stringify(record);
+    f.disk.set(key, raw);
+    const send = jest.fn(async () => result);
+    await expect(f.store().execute({ owner, target, isCurrent: () => true, send })).rejects.toMatchObject({
+      code: 'STORAGE_UNAVAILABLE',
+      diagnostic: { stage: 'record', reason: 'CORRUPT_RECORD', delivery: 'uncertain' },
+    });
+    expect(f.disk.get(key)).toBe(raw);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('diagnostics: account removal freeze is a session boundary, never a disk-full error', async () => {
+    const f = fixture(),
+      send = jest.fn(async () => result);
+    f.storage.setItem = async () => {
+      throw Object.assign(new Error('blocked'), { code: 'UNRESOLVED_INTENTS' });
+    };
+    await expect(
+      f.store().execute({ owner, target, payload: body, isCurrent: () => true, send }),
+    ).rejects.toMatchObject({
+      code: 'SESSION_CHANGED',
+      diagnostic: { stage: 'reserve_write', reason: 'ACCOUNT_FROZEN', delivery: 'not_sent' },
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
   it('commit + lost response, remount, changed date/refetch and full outstanding zero replay the exact saved request', async () => {
     const f = fixture(),
       ledger = new Map<string, typeof result>();
@@ -447,7 +553,7 @@ describe('durable procurement recovery', () => {
         isCurrent: () => true,
         send,
       }),
-    ).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     expect(send).not.toHaveBeenCalled();
     expect([...f.disk.values()].join('')).not.toContain('not-saved');
   });
