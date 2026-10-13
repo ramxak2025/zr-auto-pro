@@ -33,6 +33,12 @@ import {
 } from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
 import { formatQty, formatQtyUnit } from '../utils/units';
+import {
+  clampReturnLineQuantity,
+  getReturnUnavailableReason,
+  parseReturnAmount,
+  roundReturnAmountToCents,
+} from '../utils/checkReturnForm';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
@@ -737,11 +743,13 @@ export default function CheckDetailScreen() {
   // и видеть актуальные строки чека.
   const openReturnModal = () => {
     if (!check) return;
+    const unavailableReason = getReturnUnavailableReason(!!check.isDeferred, !!check.isReturned);
+    if (unavailableReason) return;
     haptic('select');
     setReturnScope('full');
     setReturnDestination('warehouse');
     setReturnReason('');
-    setReturnRefundAmount(String(Math.round(check.totalRevenue)));
+    setReturnRefundAmount(String(roundReturnAmountToCents(check.totalRevenue)));
     const lineMap: Record<string, { selected: boolean; qty: number }> = {};
     (check.services ?? []).forEach((s, i) => {
       const key = `s-${s.id ?? i}`;
@@ -775,7 +783,7 @@ export default function CheckDetailScreen() {
         sum += (row.qty / p.quantity) * p.totalSell;
       }
     });
-    return Math.round(sum);
+    return roundReturnAmountToCents(sum);
   }, [check, returnScope, returnLines]);
 
   // Когда пользователь меняет состав строк в режиме partial — обновляем
@@ -785,7 +793,8 @@ export default function CheckDetailScreen() {
   const refundAutoPrefillRef = useRef<string>('');
   useEffect(() => {
     if (!returnModalOpen) return;
-    const next = returnScope === 'full' ? String(Math.round(check?.totalRevenue ?? 0)) : String(partialRefundAuto);
+    const next =
+      returnScope === 'full' ? String(roundReturnAmountToCents(check?.totalRevenue ?? 0)) : String(partialRefundAuto);
     // Топчем поле только когда оно ещё равно прошлому auto-значению —
     // т.е. пользователь не вводил руками. Это разрешает менять чек-боксы
     // и видеть пересчёт, но защищает от тёрки введённой вручную суммы.
@@ -807,20 +816,22 @@ export default function CheckDetailScreen() {
     setReturnLines((prev) => {
       const row = prev[key];
       if (!row) return prev;
-      const nextQty = Math.max(1, Math.min(max, row.qty + delta));
+      const nextQty = clampReturnLineQuantity(row.qty, delta, max);
       return { ...prev, [key]: { ...row, qty: nextQty } };
     });
   };
 
   const handleSubmitReturn = () => {
     if (!check) return;
+    const unavailableReason = getReturnUnavailableReason(!!check.isDeferred, !!check.isReturned);
+    if (unavailableReason) return;
     if (returnDestination === 'defect' && !returnReason.trim()) {
       haptic('warning');
       Alert.alert('Ошибка', 'Укажите причину возврата в брак.');
       return;
     }
-    const refund = Number(returnRefundAmount);
-    if (!isFinite(refund) || refund < 0) {
+    const refund = parseReturnAmount(returnRefundAmount);
+    if (refund === null || refund < 0) {
       haptic('warning');
       Alert.alert('Ошибка', 'Сумма возврата должна быть положительной.');
       return;
@@ -899,6 +910,7 @@ export default function CheckDetailScreen() {
   // (PATCH /checks/:id вернёт 409 на returned-чек).
   const isReturned = !!check.isReturned;
   const isDeferred = !!check.isDeferred;
+  const returnUnavailableReason = getReturnUnavailableReason(isDeferred, isReturned);
   // «Права как в Битрикс24» (2026-07): admin снят из owner-class на сервере,
   // /auth/me отдаёт эффективные права матрицы — ручной admin-байпас больше не
   // нужен, hasPermission сам байпасит только superadmin/director.
@@ -1006,11 +1018,11 @@ export default function CheckDetailScreen() {
           {canFileReturn && (
             <TouchableOpacity
               onPress={openReturnModal}
-              disabled={isReturned}
+              disabled={!!returnUnavailableReason}
               style={[
                 styles.actionBtn,
                 {
-                  backgroundColor: isReturned
+                  backgroundColor: returnUnavailableReason
                     ? palette.bg.muted
                     : isDark
                       ? softTint(colors.red[600], 'dark')
@@ -1018,14 +1030,15 @@ export default function CheckDetailScreen() {
                 },
               ]}
               accessibilityRole="button"
-              accessibilityLabel={isReturned ? 'Возврат уже оформлен' : 'Оформить возврат'}
-              accessibilityState={{ disabled: isReturned }}
+              accessibilityLabel={returnUnavailableReason ?? 'Оформить возврат'}
+              accessibilityHint={isDeferred ? 'Сначала проведите отложенный чек.' : undefined}
+              accessibilityState={{ disabled: !!returnUnavailableReason }}
               hitSlop={6}
             >
               <Ionicons
                 name="arrow-undo-outline"
                 size={17}
-                color={isReturned ? palette.text.tertiary : colors.red[600]}
+                color={returnUnavailableReason ? palette.text.tertiary : colors.red[600]}
               />
             </TouchableOpacity>
           )}
@@ -2023,7 +2036,11 @@ export default function CheckDetailScreen() {
       {/* Return modal — единый поток для full / partial.
           Дизайн ориентируется на iOS sheet с сегментным переключателем
           вверху, картами выбора направления и валидируемой формой. */}
-      <Modal visible={returnModalOpen} onClose={() => setReturnModalOpen(false)} title="Оформить возврат">
+      <Modal
+        visible={returnModalOpen && !isDeferred && !isReturned}
+        onClose={() => setReturnModalOpen(false)}
+        title="Оформить возврат"
+      >
         {/* Сегментный переключатель Полный / Частичный */}
         <View style={[styles.returnScopeRow, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
