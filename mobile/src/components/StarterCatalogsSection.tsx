@@ -23,7 +23,7 @@ const groups = {
   serviceFolders: 'Папки услуг',
   templateFolders: 'Папки шаблонов',
 };
-export default function StarterCatalogsSection() {
+export default function StarterCatalogsSection({ onStepChange }: { onStepChange?: () => void } = {}) {
   const { user } = useAuth();
   const owner = user?.role === 'director' || user?.role === 'superadmin';
   const palette = useColors();
@@ -68,6 +68,7 @@ export default function StarterCatalogsSection() {
         await starterCatalogsApi.preview({ directionIds, parts, warehouseId: warehouseId || warehouses[0]?.id })
       ).data;
       setPreview(next);
+      onStepChange?.();
       setResolutions({});
       setExpandedGroups(
         Object.fromEntries(next.items.filter((item) => item.status === 'ambiguous').map((item) => [item.kind, true])),
@@ -84,6 +85,7 @@ export default function StarterCatalogsSection() {
     setError('');
     try {
       setResult((await starterCatalogsApi.install({ previewId: preview.id, resolutions })).data);
+      onStepChange?.();
       await Promise.all(
         ['products', 'services', 'check-templates', 'warehouse-categories', 'service-folders'].map((key) =>
           client.invalidateQueries({ queryKey: [key] }),
@@ -102,7 +104,14 @@ export default function StarterCatalogsSection() {
         <Text style={[body, { marginTop: 4 }]}>Готовая основа для легковых автомобилей</Text>
       </View>
       {!open ? (
-        <Button title="Выбрать направления" variant="secondary" onPress={() => setOpen(true)} />
+        <Button
+          title="Выбрать направления"
+          variant="secondary"
+          onPress={() => {
+            setOpen(true);
+            onStepChange?.();
+          }}
+        />
       ) : result ? (
         <>
           <Text style={{ fontSize: 16, fontWeight: '600', color: palette.text.primary }} accessibilityRole="header">
@@ -122,6 +131,7 @@ export default function StarterCatalogsSection() {
             onPress={() => {
               setResult(null);
               setPreview(null);
+              onStepChange?.();
             }}
           />
         </>
@@ -305,6 +315,7 @@ export default function StarterCatalogsSection() {
             disabled={busy}
             onPress={() => {
               setPreview(null);
+              onStepChange?.();
               setError('');
             }}
           />

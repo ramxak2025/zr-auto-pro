@@ -17,7 +17,10 @@ if (live) {
   const fixtureUrl = new URL(process.env.DATABASE_URL);
   assert.equal(fixtureUrl.hostname, '127.0.0.1');
   assert.equal(fixtureUrl.port, '55443');
-  assert.equal(fixtureUrl.pathname, '/autexa_oct13_starter');
+  assert.ok(
+    ['/autexa_oct13', '/autexa_oct13_starter'].includes(fixtureUrl.pathname),
+    'Disposable integration or starter DB only',
+  );
 }
 
 test(
@@ -266,9 +269,10 @@ test(
       ).rows[0];
       await pool.query('UPDATE products SET sell_price=99 WHERE id=$1', [matched.resource_id]);
       await assert.rejects(service.install(tenantId, actor, { previewId: stale.id }), (e) => e.getStatus() === 409);
+      // Compression is absent; unlike shared LPG/AC leak checking this recipe needs a new service.
       // Deselecting service/product parts cannot create them through a template dependency.
       const templatesOnly = await service.preview(tenantId, actor, {
-        directionIds: ['ac_service'],
+        directionIds: ['engine_repair'],
         parts: ['templates'],
         warehouseId: warehouse,
       });

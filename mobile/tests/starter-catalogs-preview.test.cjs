@@ -5,7 +5,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
-let states, hookIndex, response, requests, failInstall;
+let states, hookIndex, response, requests, failInstall, scrollEvents;
 const filename = path.resolve(__dirname, '../src/components/StarterCatalogsSection.tsx');
 const componentModule = new Module(filename, module);
 componentModule.filename = filename;
@@ -101,7 +101,7 @@ const fixture = () => ({
 });
 const render = () => {
   hookIndex = 0;
-  return Section();
+  return Section({ onStepChange: () => scrollEvents++ });
 };
 function nodes(tree, type) {
   const found = [];
@@ -134,16 +134,21 @@ const text = (tree) => {
 };
 async function openPreview(data) {
   states = [];
+  scrollEvents = 0;
   requests = [];
   failInstall = false;
   response = data;
   let tree = render();
   button(tree, 'Выбрать направления').props.onPress();
   tree = render();
+  assert.equal(scrollEvents, 1, 'Opening directions resets the parent viewport');
   nodes(tree, 'DirectionPicker')[0].props.onChange(['lpg']);
   tree = render();
+  assert.equal(scrollEvents, 1, 'Changing selection does not jump the viewport');
   await button(tree, 'Посмотреть состав').props.onPress();
-  return render();
+  const previewTree = render();
+  assert.equal(scrollEvents, 2, 'Successful preview starts at the top of its content');
+  return previewTree;
 }
 test('native compact preview exposes full details on demand and retains restored choices across collapse/retry', async () => {
   let tree = await openPreview(fixture());
@@ -156,6 +161,7 @@ test('native compact preview exposes full details on demand and retains restored
   assert.ok(text(tree).includes('Недоступно: 1'));
   group(tree, 'Товары · 1').props.onPress();
   tree = render();
+  assert.equal(scrollEvents, 2, 'Inspecting details keeps the current viewport');
   assert.ok(text(tree).includes('Note product'));
   assert.ok(nodes(tree, 'TouchableOpacity').some((node) => node.props.accessibilityRole === 'link'));
   nodes(tree, 'TouchableOpacity')
@@ -176,6 +182,7 @@ test('native compact preview exposes full details on demand and retains restored
   await button(tree, 'Установить выбранное').props.onPress();
   tree = render();
   assert.ok(text(tree).includes('Retry this installation'));
+  assert.equal(scrollEvents, 2, 'An error keeps the current decisions visible');
   await button(tree, 'Установить выбранное').props.onPress();
   tree = render();
   assert.deepEqual(requests, [
@@ -183,6 +190,7 @@ test('native compact preview exposes full details on demand and retains restored
     { previewId: 'preview-1', resolutions: { product: { action: 'restore' } } },
   ]);
   assert.ok(text(tree).includes('Каталоги установлены'));
+  assert.equal(scrollEvents, 3, 'Successful install reveals the confirmation at the top');
 });
 test('native automatically opens unresolved collision group and requires its choice before installation', async () => {
   const data = fixture();
