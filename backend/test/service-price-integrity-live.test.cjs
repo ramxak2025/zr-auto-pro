@@ -25,7 +25,12 @@ test(
   async (t) => {
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.ok((url.port === '55438' && url.pathname === '/autexa_oct8_test') || (url.port === '55440' && url.pathname === '/autexa_oct12_core'), 'disposable QA database only');
+    assert.ok(
+      (url.port === '55438' && url.pathname === '/autexa_oct8_test') ||
+        (url.port === '55440' && url.pathname === '/autexa_oct12_core') ||
+        (url.port === '55446' && url.pathname === '/autexa_release_base'),
+      'disposable QA database only',
+    );
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';
     appUrl.password = process.env.OCT10_PRICING_APP_PASSWORD;
@@ -297,6 +302,7 @@ test(
             service = await f.service();
           const locked = await admin.connect();
           let entered;
+          let writerPid;
           const reached = new Promise((resolve) => {
             entered = resolve;
           });
@@ -304,10 +310,17 @@ test(
             query: (...args) => pool.query(...args),
             connect: async () => {
               const client = await pool.connect();
+              try {
+                writerPid = (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+              } catch (error) {
+                client.release();
+                throw error;
+              }
               return {
                 release: () => client.release(),
                 query: async (sql, args) => {
-                  if (String(sql).includes('FROM services WHERE tenant_id=$1') && String(sql).includes('FOR SHARE'))
+                  const normalized = String(sql).replace(/\s+/g, ' ');
+                  if (normalized.includes('FROM services WHERE tenant_id=$1') && normalized.includes('FOR SHARE'))
                     entered();
                   return client.query(sql, args);
                 },
@@ -333,16 +346,39 @@ test(
                 f.actor(),
               ),
             );
-            await reached;
+            // Observe any service policy snapshot lock, including fixed wages,
+            // before the later price snapshot. Propagate early writer failure so
+            // a stale barrier cannot strand the transaction and hang cleanup.
+            await Promise.race([
+              reached,
+              pending.then(() => {
+                throw new Error('writer completed without taking a service snapshot lock');
+              }),
+            ]);
+            let blocked = false;
+            const deadline = Date.now() + 3000;
+            do {
+              blocked = (
+                await admin.query('SELECT $2::integer = ANY(pg_blocking_pids($1)) AS blocked', [
+                  writerPid,
+                  locked.processID,
+                ])
+              ).rows[0].blocked;
+              if (!blocked) await new Promise((resolve) => setTimeout(resolve, 10));
+            } while (!blocked && Date.now() < deadline);
+            assert.equal(blocked, true, 'snapshot read must actually wait for the in-flight catalogue transaction');
             await locked.query('COMMIT');
             const check = await pending;
             assert.equal(check.services[0].priceThreshold, 200);
             assert.equal(check.services[0].catalogPriceVersion, 2);
             assert.equal(check.services[0].priceExcess, 0);
           } finally {
-            await locked.query('ROLLBACK');
-            locked.release();
-            if (pending) await pending;
+            try {
+              await locked.query('ROLLBACK');
+            } finally {
+              locked.release();
+              if (pending) await pending;
+            }
           }
         },
       );
