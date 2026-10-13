@@ -84,6 +84,7 @@ jobs:
           test/service-import-live.test.cjs
           test/client-check-history-live.test.cjs
           test/catalog-financial-integrity-live.test.cjs
+          test/catalog-ordering-live.test.cjs
           test/check-recovery-live.test.cjs
           test/service-fixed-pay-live.test.cjs
           test/check-product-locks-live.test.cjs

@@ -15,8 +15,11 @@ const options = { skip: !live, timeout: 30000 };
 async function fixture(work) {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '55446');
-  assert.equal(url.pathname, '/autexa_oct13_recovery');
+  assert.ok(
+    (url.port === '55446' && url.pathname === '/autexa_oct13_recovery') ||
+      (url.port === '55438' && url.pathname === '/autexa_oct8_test'),
+    'Use only the named disposable recovery or CI fixture',
+  );
   const appUrl = new URL(url);
   appUrl.username = 'autexa_app';
   appUrl.password = process.env.AUTEXA_RECOVERY_APP_PASSWORD;
