@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as Crypto from 'expo-crypto';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -161,17 +162,34 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
       sequence === uploadSequence.current;
     setUploadingBranding(field);
     try {
-      const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
       if (picked.canceled || !current()) return;
       const asset = picked.assets[0];
-      if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) throw new Error('Изображение должно быть до 5 МБ');
-      const form = new FormData();
-      // RN's native FormData accepts a URI descriptor; its DOM typing exposes Blob only.
-      form.append('file', {
+      let upload = {
         uri: asset.uri,
         name: asset.fileName ?? 'branding.jpg',
-        type: asset.mimeType ?? 'image/jpeg',
-      } as unknown as Blob);
+        type: asset.mimeType?.toLowerCase() ?? 'application/octet-stream',
+      };
+      // iPhone libraries may still provide an original HEIC despite the
+      // compatible picker request. Convert it locally; the server accepts only
+      // bounded raster JPEG/PNG/WebP and validates the actual uploaded bytes.
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(upload.type)) {
+        const compatible = await ImageManipulator.manipulateAsync(asset.uri, [], {
+          format: ImageManipulator.SaveFormat.JPEG,
+          compress: 0.9,
+        });
+        if (!current()) return;
+        upload = { uri: compatible.uri, name: 'branding.jpg', type: 'image/jpeg' };
+      } else if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) {
+        throw new Error('Изображение должно быть до 5 МБ');
+      }
+      const form = new FormData();
+      // RN's native FormData accepts a URI descriptor; its DOM typing exposes Blob only.
+      form.append('file', upload as unknown as Blob);
       const response = await scopedBookingsApi.uploadPublicBranding(form);
       if (current()) setDraft((previous) => ({ ...previous, [field]: response.data.url }));
     } catch (error) {
