@@ -1,4 +1,5 @@
 import { loadProductCatalog } from '../../../shared/api/productCatalog';
+import { prefetchLoginReferences } from './prefetchReferences';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -324,7 +325,6 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   if (!lease.token || !lease.isCurrent()) return;
   const bound = createSessionBoundClient(lease.token);
   const productsApi = serviceFactories.createProductsApi(bound);
-  const servicesApi = serviceFactories.createServicesApi(bound);
   const usersApi = serviceFactories.createUsersApi(bound);
   const warehouseCategoriesApi = serviceFactories.createWarehouseCategoriesApi(bound);
   const warehousesApi = serviceFactories.createWarehousesApi(bound);
@@ -437,27 +437,9 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
     })
     .catch(() => {});
 
-  qc.prefetchQuery({
-    queryKey: ['all-services'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 500 });
-      return res.data?.data || res.data;
-    },
-    staleTime: 10 * 60_000,
-  }).catch(() => {});
-
-  qc.prefetchQuery({
-    queryKey: ['all-users'],
-    queryFn: async () => (await usersApi.getAll()).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
-
-  // Mirror key 'users' since some screens use it instead of 'all-users'
-  qc.prefetchQuery({
-    queryKey: ['users'],
-    queryFn: async () => (await usersApi.getAll()).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
+  // One users request feeds the existing aliases. Journal warms its current
+  // cursor key; obsolete service keys are intentionally not fetched.
+  void prefetchLoginReferences(qc, usersApi, checksApi, lease.isCurrent);
 
   // Suppliers / clients / cars / equipment — heavy reference lists; user
   // perceives screens as instant when these are warm. Suppliers is
@@ -500,52 +482,6 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   qc.prefetchQuery({
     queryKey: ['eq-summary'],
     queryFn: async () => (await equipmentApi.getSummary()).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
-
-  // ── Journal (Чеки) — owner explicitly reported this list opens
-  // slowly with a flash of empty. ChecksScreen reads via
-  // `useInfiniteQuery`, NOT `useQuery`, so the previous `['checks', …]`
-  // prefetch landed in a slot nothing reads (React Query compares keys
-  // structurally → a dead slot). Match the EXACT default infinite key
-  // the screen uses for the first page with no filters:
-  //   ['checks-infinite', search='', dateFrom='', dateTo='', masterId='']
-  // with `prefetchInfiniteQuery` + the same `initialPageParam` and a
-  // queryFn that mirrors the screen's page-1 request (limit=20). This
-  // way the screen's first render is a cache HIT. Persistent cache
-  // ('checks-infinite' is in PERSISTED_KEYS) carries it across cold
-  // starts; this prefetch warms the slot on the first login.
-  qc.prefetchInfiniteQuery({
-    queryKey: ['checks-infinite', '', '', '', ''],
-    initialPageParam: 1,
-    queryFn: async ({ pageParam = 1 }) => {
-      const res = await checksApi.getAll({ page: pageParam as number, limit: 20 });
-      return res.data;
-    },
-    staleTime: 60_000,
-  }).catch(() => {});
-
-  // ChecksScreen's master-filter dropdown uses a separate key so the
-  // dropdown opens populated even before the user touches anything.
-  qc.prefetchQuery({
-    queryKey: ['users-for-filter'],
-    queryFn: async () => (await usersApi.getAll()).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
-
-  // EmployeesScreen uses 'users-all' (separate key from 'users' /
-  // 'all-users' to avoid invalidation cross-talk). Prefetch so the
-  // More → Сотрудники screen is instant.
-  qc.prefetchQuery({
-    queryKey: ['users-all'],
-    queryFn: async () => (await usersApi.getAll()).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
-
-  // ServicesScreen first page (default filters: search='', page=1, limit=30).
-  qc.prefetchQuery({
-    queryKey: ['services', { search: '', page: 1, limit: 30 }],
-    queryFn: async () => (await servicesApi.getAll({ search: '', page: 1, limit: 30 })).data,
     staleTime: 5 * 60_000,
   }).catch(() => {});
 
