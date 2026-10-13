@@ -1,6 +1,11 @@
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
 let mockIndex = 0;
+const mockEffects: { deps?: unknown[]; cleanup?: (() => void) | void }[] = [];
+const mockPendingEffects: (() => void)[] = [];
+function flushEffects() {
+  mockPendingEffects.splice(0).forEach((run) => run());
+}
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useState: (initial: unknown) => {
@@ -19,7 +24,16 @@ jest.mock('react', () => ({
     if (!(index in mockRefs)) mockRefs[index] = { current: initial };
     return mockRefs[index];
   },
-  useEffect: () => undefined,
+  useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {
+    const index = mockIndex++;
+    const old = mockEffects[index];
+    if (!old || !deps || deps.some((value, i) => !Object.is(value, old.deps?.[i]))) {
+      mockPendingEffects.push(() => {
+        old?.cleanup?.();
+        mockEffects[index] = { deps, cleanup: effect() };
+      });
+    }
+  },
 }));
 jest.mock('react-native', () => ({
   View: 'View',
@@ -50,6 +64,8 @@ beforeEach(() => {
   mockStates.length = 0;
   mockRefs.length = 0;
   mockIndex = 0;
+  mockEffects.length = 0;
+  mockPendingEffects.length = 0;
   jest.useFakeTimers();
 });
 afterEach(() => jest.useRealTimers());
@@ -93,4 +109,23 @@ it('typing debounces; clear immediately cancels a pending search without restori
   expect(change.mock.calls).toEqual([['масло'], ['']]);
   tree = render();
   expect(nodes(tree).find((node) => node.type === 'TextInput')!.props.value).toBe('');
+});
+
+it('external clear cancels a pending query instead of restoring the typed text', () => {
+  const change = jest.fn();
+  let value = 'old search';
+  const render = () => {
+    mockIndex = 0;
+    const tree = CompactSearchInput({ value, onChange: change });
+    flushEffects();
+    return tree;
+  };
+  const input = nodes(render()).find((node) => node.type === 'TextInput')!;
+  (input.props.onChangeText as (text: string) => void)('new search');
+  jest.advanceTimersByTime(100);
+  value = '';
+  render();
+  jest.advanceTimersByTime(300);
+  expect(change).not.toHaveBeenCalled();
+  expect(nodes(render()).find((node) => node.type === 'TextInput')!.props.value).toBe('');
 });

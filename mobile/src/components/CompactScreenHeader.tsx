@@ -92,6 +92,10 @@ export function CompactSearchInput({
   const [local, setLocal] = useState(value);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
     setLocal((previous) => (previous === value ? previous : value));
   }, [value]);
   useEffect(
