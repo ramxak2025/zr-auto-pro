@@ -133,10 +133,12 @@ export class StarterCatalogsService {
     const [members, products, services, templates, productFolders, serviceFolders, templateFolders] = await Promise.all(
       [
         db.query('SELECT * FROM starter_catalog_memberships WHERE tenant_id=$1' + suffix, [tenantId]),
-        db.query('SELECT *, xmin::text AS revision FROM products WHERE tenant_id=$1 AND warehouse_id=$2' + suffix, [
-          tenantId,
-          warehouseId,
-        ]),
+        // Warehouse/check writers lock products by id. A SHARE scan in heap
+        // order can deadlock with them even while merely validating a preview.
+        db.query(
+          'SELECT *, xmin::text AS revision FROM products WHERE tenant_id=$1 AND warehouse_id=$2 ORDER BY id' + suffix,
+          [tenantId, warehouseId],
+        ),
         db.query('SELECT *, xmin::text AS revision FROM services WHERE tenant_id=$1' + suffix, [tenantId]),
         db.query(
           'SELECT *, xmin::text AS revision FROM check_templates WHERE tenant_id=$1 AND user_id IS NULL' + suffix,
