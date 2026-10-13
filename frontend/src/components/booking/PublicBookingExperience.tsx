@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import type { PublicBookingLanding, PublicBookingSlotPage } from '../../../../shared/types';
 import './public-booking.css';
+import BookingPhoneInput from './BookingPhoneInput';
+import { normalizeBookingPhone } from '../../utils/bookingPhone';
 
 type Props = {
   landing: PublicBookingLanding;
@@ -95,9 +97,76 @@ function safeLink(value: string | undefined) {
 
 export default function PublicBookingExperience(props: Props) {
   const { landing, selected, date, selectedSlot, resourceKey, busy } = props;
-  const [step, setStep] = useState(0);
+  const [step, updateStep] = useState(0);
   const [path, setPath] = useState<'service' | 'master'>('service');
-  const [choosingMaster, setChoosingMaster] = useState(false);
+  const [choosingMaster, updateChoosingMaster] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
+  const [coverFailed, setCoverFailed] = useState(false);
+  const shell = useRef<HTMLElement>(null);
+  const allowedStep = useRef(0);
+  allowedStep.current = selectedSlot ? 2 : selected.length ? 1 : 0;
+  const setStep = (next: number) => {
+    if (next === step) return;
+    if (typeof window !== 'undefined')
+      window.history.pushState(
+        {
+          ...window.history.state,
+          bookingSlug: landing.slug,
+          bookingStep: next,
+          bookingMaster: false,
+          bookingPath: path,
+        },
+        '',
+      );
+    updateStep(next);
+  };
+  const setChoosingMaster = (next: boolean) => {
+    if (next !== choosingMaster && typeof window !== 'undefined')
+      window.history.pushState(
+        {
+          ...window.history.state,
+          bookingSlug: landing.slug,
+          bookingStep: 0,
+          bookingMaster: next,
+          bookingPath: next ? 'master' : path,
+        },
+        '',
+      );
+    updateChoosingMaster(next);
+  };
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.history.replaceState(
+      {
+        ...window.history.state,
+        bookingSlug: landing.slug,
+        bookingStep: 0,
+        bookingMaster: false,
+        bookingPath: 'service',
+      },
+      '',
+    );
+    const back = (event: PopStateEvent) => {
+      if (event.state?.bookingSlug !== landing.slug) return;
+      updateStep(Math.max(0, Math.min(allowedStep.current, event.state.bookingStep ?? 0)));
+      updateChoosingMaster(event.state.bookingMaster === true);
+      setPath(event.state.bookingPath === 'master' ? 'master' : 'service');
+    };
+    window.addEventListener('popstate', back);
+    const viewport = window.visualViewport;
+    const resize = () =>
+      shell.current?.style.setProperty('--pb-viewport', `${viewport?.height ?? window.innerHeight}px`);
+    resize();
+    viewport?.addEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('popstate', back);
+      viewport?.removeEventListener('resize', resize);
+    };
+  }, [landing.slug]);
+  useEffect(() => {
+    setLogoFailed(false);
+    setCoverFailed(false);
+  }, [landing.logoUrl, landing.backgroundImageUrl]);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
   const [contactsOpen, setContactsOpen] = useState(false);
@@ -141,11 +210,11 @@ export default function PublicBookingExperience(props: Props) {
     if (previousStep.current === step) return;
     previousStep.current = step;
     heading.current?.focus({ preventScroll: true });
-    heading.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    heading.current?.closest('.pb-content')?.scrollTo({ top: 0, behavior: 'auto' });
   }, [step]);
 
   useEffect(() => {
-    if (hadReceipt.current && !props.receipt) setStep(0);
+    if (hadReceipt.current && !props.receipt) updateStep(0);
     hadReceipt.current = !!props.receipt;
   }, [props.receipt]);
 
@@ -159,38 +228,54 @@ export default function PublicBookingExperience(props: Props) {
   };
 
   return (
-    <main className="public-booking" data-public-booking>
+    <main className={`public-booking${showForm ? ' pb-wizard' : ''}`} data-public-booking data-step={step} ref={shell}>
       <div className="pb-container">
-        <header className={`pb-business${step > 0 && showForm ? ' pb-business-compact' : ''}`}>
-          <div className="pb-business-mark" aria-hidden="true">
-            <MapPin size={26} />
-          </div>
-          <h1>{landing.displayName}</h1>
-          <p className="pb-address">
-            <MapPin size={14} aria-hidden="true" />
-            {landing.address}
-          </p>
-          <button
-            className="pb-contact-button"
-            type="button"
-            onClick={() => setContactsOpen((current) => !current)}
-            aria-expanded={contactsOpen}
-            aria-controls="pb-business-contacts"
-          >
-            <Phone size={14} aria-hidden="true" />
-            Контакты сервиса
-            <ChevronDown size={13} aria-hidden="true" />
-          </button>
-          {contactsOpen && (
-            <div className="pb-contact-links" id="pb-business-contacts" ref={contacts}>
-              {phoneHref ? <a href={phoneHref}>{phoneText}</a> : <span>{phoneText}</span>}
-              {socialLinks.map((link) => (
-                <a key={link.key} href={link.href} target="_blank" rel="noopener noreferrer">
-                  {link.label}
-                </a>
-              ))}
-            </div>
+        <header
+          className={`pb-business${step > 0 && showForm ? ' pb-business-compact' : ''}${landing.backgroundImageUrl && !coverFailed ? ' pb-business-cover' : ''}`}
+        >
+          {landing.backgroundImageUrl && !coverFailed && (
+            <img
+              className="pb-cover-image"
+              src={landing.backgroundImageUrl}
+              alt=""
+              onError={() => setCoverFailed(true)}
+            />
           )}
+          <div className="pb-business-details">
+            <div className="pb-business-mark" aria-hidden="true">
+              {landing.logoUrl && !logoFailed ? (
+                <img src={landing.logoUrl} alt="" onError={() => setLogoFailed(true)} />
+              ) : (
+                <MapPin size={26} />
+              )}
+            </div>
+            <h1>{landing.displayName}</h1>
+            <p className="pb-address">
+              <MapPin size={14} aria-hidden="true" />
+              {landing.address}
+            </p>
+            <button
+              className="pb-contact-button"
+              type="button"
+              onClick={() => setContactsOpen((current) => !current)}
+              aria-expanded={contactsOpen}
+              aria-controls="pb-business-contacts"
+            >
+              <Phone size={14} aria-hidden="true" />
+              Контакты сервиса
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+            {contactsOpen && (
+              <div className="pb-contact-links" id="pb-business-contacts" ref={contacts}>
+                {phoneHref ? <a href={phoneHref}>{phoneText}</a> : <span>{phoneText}</span>}
+                {socialLinks.map((link) => (
+                  <a key={link.key} href={link.href} target="_blank" rel="noopener noreferrer">
+                    {link.label}
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
         </header>
         {showForm && (
           <nav className="pb-steps" aria-label="Этапы записи">
@@ -475,18 +560,9 @@ export default function PublicBookingExperience(props: Props) {
                         onChange={(event) => props.onName(event.target.value)}
                       />
                     </label>
-                    <label>
+                    <label htmlFor="pb-phone">
                       Номер телефона
-                      <input
-                        required
-                        type="tel"
-                        inputMode="tel"
-                        autoComplete="tel"
-                        maxLength={32}
-                        placeholder="+7 (999) 123-45-67"
-                        value={props.phone}
-                        onChange={(event) => props.onPhone(event.target.value)}
-                      />
+                      <BookingPhoneInput value={props.phone} onChange={props.onPhone} />
                     </label>
                     <label>
                       Комментарий <span className="pb-optional">необязательно</span>
@@ -574,7 +650,7 @@ export default function PublicBookingExperience(props: Props) {
                         !selectedSlot ||
                         !props.consented ||
                         !props.name.trim() ||
-                        !props.phone.trim()
+                        !normalizeBookingPhone(props.phone)
                       }
                     >
                       {busy ? 'Отправляем…' : landing.mode === 'approval' ? 'Отправить заявку' : 'Подтвердить запись'}
@@ -583,7 +659,16 @@ export default function PublicBookingExperience(props: Props) {
                   </>
                 )}
                 {step > 0 && (
-                  <button type="button" className="pb-back" disabled={busy} onClick={() => setStep(step - 1)}>
+                  <button
+                    type="button"
+                    className="pb-back"
+                    disabled={busy}
+                    onClick={() => {
+                      if (typeof window !== 'undefined' && window.history.state?.bookingSlug === landing.slug)
+                        window.history.back();
+                      else updateStep(step - 1);
+                    }}
+                  >
                     <ArrowLeft size={14} />
                     Назад
                   </button>

@@ -292,7 +292,8 @@ test(
     assert.ok(
       ['127.0.0.1', 'localhost'].includes(url.hostname) &&
         ((url.port === '55438' && url.pathname === '/autexa_oct8_test') ||
-          (url.port === '55440' && url.pathname === '/autexa_oct12_booking')),
+          (url.port === '55440' && url.pathname === '/autexa_oct12_booking') ||
+          (url.port === '55446' && ['/autexa_oct13_booking_polish', '/autexa_release_base'].includes(url.pathname))),
       'Disposable fixture only',
     );
     const admin = new Pool({ connectionString: live, max: 20, statement_timeout: 10000 });
@@ -493,6 +494,95 @@ test(
     const scenario = (name, fn) =>
       selectedCase && !name.includes(selectedCase) ? Promise.resolve() : t.test(name, fn);
     try {
+      await scenario(
+        'branding upload is gated, scoped, partial compatible and revision checked in real PostgreSQL',
+        async () => {
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const os = require('node:os');
+          const sharp = require('sharp');
+          const { PublicBookingBrandingStorage } = require('../dist/bookings/public-booking-branding');
+          const originalDir = process.env.UPLOAD_DIR;
+          const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'booking-branding-pg-'));
+          process.env.UPLOAD_DIR = temporary;
+          try {
+            const f = await seed(),
+              other = await seed();
+            await run(f, () => service.authorizeBranding(f.boss));
+            await assert.rejects(
+              run(f, () => service.authorizeBranding(f.actor)),
+              failure(403),
+            );
+            await assert.rejects(
+              run(f, () => service.authorizeBranding({ ...f.boss, currentPointId: other.point })),
+              failure(403),
+            );
+            const bytes = await sharp({ create: { width: 40, height: 40, channels: 3, background: '#1760df' } })
+              .png()
+              .toBuffer();
+            const storage = new PublicBookingBrandingStorage();
+            const logo = await storage.save(bytes, f.tenant, f.point);
+            const cover = await storage.save(bytes, f.tenant, f.point);
+            const foreign = await storage.save(bytes, other.tenant, other.point);
+            const otherBranch = await storage.save(bytes, f.tenant, f.otherPoint);
+            const beforeUpload = await run(f, () => service.getSettings(f.boss));
+            assert.equal(beforeUpload.logoUrl, null);
+            assert.equal(beforeUpload.revision, f.page.revision);
+            const saved = await f.edit({ logoUrl: logo.url, backgroundImageUrl: cover.url });
+            const landing = await service.landing(f.slug);
+            assert.equal(landing.logoUrl, logo.url);
+            assert.equal(landing.backgroundImageUrl, cover.url);
+            for (const key of ['tenantId', 'pointId', 'logoId', 'backgroundImageId'])
+              assert.equal(key in landing, false);
+            const legacy = { ...f.settings, requestId: uuid(), revision: saved.revision, displayName: 'Старый клиент' };
+            delete legacy.logoUrl;
+            delete legacy.backgroundImageUrl;
+            const preserved = await run(f, () => service.putSettings(f.boss, legacy));
+            assert.equal(preserved.logoUrl, logo.url);
+            assert.equal(preserved.backgroundImageUrl, cover.url);
+            assert.deepEqual(wire(await run(f, () => service.putSettings(f.boss, legacy))), wire(preserved));
+            await assert.rejects(
+              run(f, () => service.putSettings(f.boss, { ...legacy, requestId: uuid() })),
+              failure(409, 'SETTINGS_CHANGED'),
+            );
+            for (const url of [
+              foreign.url,
+              otherBranch.url,
+              'https://autexa.pw/logo.png',
+              '/api/uploads/private/secret.png',
+              logo.url + '?x=1',
+              logo.url.replace(/[^/]+$/, uuid() + '.webp'),
+            ]) {
+              await assert.rejects(
+                run(f, () =>
+                  service.putSettings(f.boss, {
+                    ...legacy,
+                    requestId: uuid(),
+                    revision: preserved.revision,
+                    logoUrl: url,
+                  }),
+                ),
+                failure(400),
+              );
+            }
+            const removed = await run(f, () =>
+              service.putSettings(f.boss, {
+                ...legacy,
+                requestId: uuid(),
+                revision: preserved.revision,
+                logoUrl: null,
+              }),
+            );
+            assert.equal(removed.logoUrl, null);
+            assert.equal(removed.backgroundImageUrl, cover.url);
+            assert.equal((await service.landing(f.slug)).logoUrl, null);
+          } finally {
+            if (originalDir === undefined) delete process.env.UPLOAD_DIR;
+            else process.env.UPLOAD_DIR = originalDir;
+            fs.rmSync(temporary, { recursive: true, force: true });
+          }
+        },
+      );
       await scenario(
         'working owner is a real resource; consent proof, RLS isolation, hash-only capability and safe projections',
         async () => {

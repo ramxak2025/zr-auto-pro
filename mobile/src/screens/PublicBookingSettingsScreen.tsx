@@ -1,13 +1,24 @@
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Share, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  Share,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as ImagePicker from 'expo-image-picker';
 import * as Crypto from 'expo-crypto';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import QueryErrorState from '../components/QueryErrorState';
 import { useAuth } from '../contexts/AuthContext';
 import { createBookingsApi } from '../../../shared/api/createServices';
-import { createSessionBoundClient } from '../api/axios';
+import { createSessionBoundClient, getImageUrl, captureAuthSession } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
 import type {
@@ -43,9 +54,19 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
   const scopedBookingsApi = useMemo(() => (sessionClient ? createBookingsApi(sessionClient) : null), [sessionClient]);
   const ownerScope = `${user?.id ?? ''}:${user?.currentPointId ?? ''}`;
   const [draft, setDraft] = useState<Partial<PutPublicBookingSettingsRequest>>({});
+  const sessionRef = useRef({ ownerScope, token });
+  sessionRef.current = { ownerScope, token };
+  const uploadSequence = useRef(0);
+  useEffect(() => {
+    uploadSequence.current += 1;
+    setUploadingBranding(null);
+  }, [token]);
+  const [uploadingBranding, setUploadingBranding] = useState<'logoUrl' | 'backgroundImageUrl' | null>(null);
   const [activeDay, setActiveDay] = useState('1');
   useEffect(() => {
     setDraft({});
+    uploadSequence.current += 1;
+    setUploadingBranding(null);
     setActiveDay('1');
   }, [ownerScope]);
   const settingsQuery = useQuery<PublicBookingPageSettings | null>({
@@ -90,6 +111,9 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
   const resources = resourcesQuery.data ?? [];
   const value = useMemo(
     () => ({
+      logoUrl: draft.logoUrl !== undefined ? draft.logoUrl : (settings?.logoUrl ?? null),
+      backgroundImageUrl:
+        draft.backgroundImageUrl !== undefined ? draft.backgroundImageUrl : (settings?.backgroundImageUrl ?? null),
       displayName: draft.displayName ?? settings?.displayName ?? user?.tenant?.name ?? '',
       address: draft.address ?? settings?.address ?? user?.tenant?.address ?? '',
       contacts:
@@ -110,6 +134,7 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
       return scopedBookingsApi.putPublicSettings(body);
     },
     onSuccess: (result) => {
+      if (sessionRef.current.ownerScope !== ownerScope || sessionRef.current.token !== token) return;
       queryClient.setQueryData(['bookings', 'public-settings', ownerScope], result.data);
       setDraft({});
     },
@@ -125,6 +150,36 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
     onSuccess: (result) => queryClient.setQueryData(['bookings', 'public-settings', ownerScope], result.data),
     onError: showMutationErrorToast,
   });
+  const uploadBranding = async (field: 'logoUrl' | 'backgroundImageUrl') => {
+    if (!scopedBookingsApi || !canManage || uploadingBranding) return;
+    const sequence = ++uploadSequence.current;
+    const auth = captureAuthSession();
+    const current = () =>
+      auth.isCurrent() &&
+      sessionRef.current.ownerScope === ownerScope &&
+      sessionRef.current.token === token &&
+      sequence === uploadSequence.current;
+    setUploadingBranding(field);
+    try {
+      const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+      if (picked.canceled || !current()) return;
+      const asset = picked.assets[0];
+      if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) throw new Error('Изображение должно быть до 5 МБ');
+      const form = new FormData();
+      // RN's native FormData accepts a URI descriptor; its DOM typing exposes Blob only.
+      form.append('file', {
+        uri: asset.uri,
+        name: asset.fileName ?? 'branding.jpg',
+        type: asset.mimeType ?? 'image/jpeg',
+      } as unknown as Blob);
+      const response = await scopedBookingsApi.uploadPublicBranding(form);
+      if (current()) setDraft((previous) => ({ ...previous, [field]: response.data.url }));
+    } catch (error) {
+      if (current()) showMutationErrorToast(error);
+    } finally {
+      if (current()) setUploadingBranding(null);
+    }
+  };
   const setText = (field: 'displayName' | 'address' | 'contacts', text: string) =>
     setDraft((current) => ({ ...current, [field]: text }));
   const setPublicLink = (key: keyof PublicBookingContactLinks, text: string) =>
@@ -158,6 +213,8 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
     save.mutate({
       requestId: Crypto.randomUUID(),
       revision: settings?.revision ?? 0,
+      logoUrl: value.logoUrl,
+      backgroundImageUrl: value.backgroundImageUrl,
       displayName: value.displayName,
       address: value.address,
       contacts: value.contacts,
@@ -201,6 +258,53 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
               </Text>
             )}
           </View>
+          <SettingsSection title="Оформление страницы" summary="Логотип и изображение шапки" initialOpen>
+            {(
+              [
+                ['logoUrl', 'Логотип сервиса', value.logoUrl],
+                ['backgroundImageUrl', 'Изображение шапки', value.backgroundImageUrl],
+              ] as const
+            ).map(([field, label, url]) => (
+              <View key={field} style={styles.brandingRow}>
+                {url ? (
+                  <Image
+                    source={{ uri: getImageUrl(url) }}
+                    accessibilityLabel={label}
+                    resizeMode={field === 'logoUrl' ? 'contain' : 'cover'}
+                    style={[styles.brandingPreview, field === 'logoUrl' && styles.brandingLogo]}
+                  />
+                ) : (
+                  <View style={[styles.brandingPreview, { backgroundColor: palette.bg.card }]} />
+                )}
+                <View style={styles.brandingControls}>
+                  <Text style={[styles.label, { color: palette.text.primary }]}>{label}</Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    disabled={!!uploadingBranding}
+                    onPress={() => void uploadBranding(field)}
+                    style={styles.brandingAction}
+                  >
+                    <Text style={{ color: colors.primary[600] }}>
+                      {uploadingBranding === field ? 'Загружаем…' : url ? 'Заменить' : 'Загрузить'}
+                    </Text>
+                  </TouchableOpacity>
+                  {url && (
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      disabled={!!uploadingBranding}
+                      onPress={() => setDraft((previous) => ({ ...previous, [field]: null }))}
+                      style={styles.brandingAction}
+                    >
+                      <Text style={{ color: palette.text.secondary }}>Удалить</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+            <Text style={[styles.note, { color: palette.text.secondary }]}>
+              JPEG, PNG или WebP до 5 МБ. Изображения появятся у клиентов после сохранения страницы.
+            </Text>
+          </SettingsSection>
           <SettingsSection title="Автосервис" summary={value.displayName || 'Название и адрес'} initialOpen>
             <Text style={[styles.label, { color: palette.text.secondary }]}>Название сервиса</Text>
             <TextInput
@@ -471,7 +575,7 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
           </SettingsSection>
           <TouchableOpacity
             accessibilityRole="button"
-            disabled={save.isPending}
+            disabled={save.isPending || !!uploadingBranding}
             onPress={submit}
             style={[styles.button, save.isPending && styles.disabled]}
           >
@@ -480,7 +584,7 @@ export default function PublicBookingSettingsScreen({ embedded = false }: { embe
           {settings && (
             <TouchableOpacity
               accessibilityRole="button"
-              disabled={publish.isPending || Object.keys(draft).length > 0}
+              disabled={publish.isPending || !!uploadingBranding || Object.keys(draft).length > 0}
               onPress={() => publish.mutate(settings.published)}
               style={[
                 styles.button,
@@ -546,6 +650,11 @@ function SettingsSection({
 }
 
 const styles = StyleSheet.create({
+  brandingRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 18 },
+  brandingPreview: { width: 88, height: 68, borderRadius: 12, backgroundColor: '#fff' },
+  brandingLogo: { width: 68, height: 68, borderRadius: 34 },
+  brandingControls: { flex: 1 },
+  brandingAction: { minHeight: 44, justifyContent: 'center' },
   intro: { paddingVertical: spacing[3], marginBottom: spacing[3] },
   introTitle: { fontSize: 27, fontWeight: '700', letterSpacing: -0.5 },
   link: { fontSize: 14, marginTop: spacing[2] },

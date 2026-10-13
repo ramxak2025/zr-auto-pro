@@ -19,6 +19,8 @@ import {
   recoverPublicBookingIntent,
   type PublicBookingSavedIntent,
 } from '../utils/publicBookingIntent';
+import { normalizeBookingPhone } from '../utils/bookingPhone';
+import BookingFireworks from '../components/booking/BookingFireworks';
 type SavedRequest = PublicBookingSavedIntent;
 const storageKey = (slug: string) => `autexa.public-booking.recovery.v1:${slug}`;
 let nextPageLease = 0;
@@ -150,6 +152,7 @@ function PublicBookingView({ slug }: { slug: string }) {
   const [saved, setSaved] = useState<SavedRequest | null>(null);
   const [corruptRecovery, setCorruptRecovery] = useState(false);
   const [receipt, setReceipt] = useState<PublicBookingReceipt | null>(null);
+  const [celebrationId, setCelebrationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -279,6 +282,7 @@ function PublicBookingView({ slug }: { slug: string }) {
     actionInFlightRef.current = true;
     setBusy(true);
     setError('');
+    setCelebrationId(null);
     setReceipt(null);
     try {
       const result = await recoverPublicBookingIntent({
@@ -355,8 +359,11 @@ function PublicBookingView({ slug }: { slug: string }) {
       });
       if (!current()) return;
       setSaved(result.record);
-      if (result.kind === 'current') setReceipt(result.result);
-      else if (result.kind === 'unverified')
+      if (result.kind === 'current') {
+        setReceipt(result.result);
+        if (result.result.status === 'pending' || result.result.status === 'confirmed')
+          setCelebrationId(result.result.requestId);
+      } else if (result.kind === 'unverified')
         setError(
           'Повторный запрос получил подтверждение, но текущий статус проверить не удалось. Проверьте его ещё раз.',
         );
@@ -374,6 +381,7 @@ function PublicBookingView({ slug }: { slug: string }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const normalizedPhone = normalizeBookingPhone(phone);
     if (
       !landing ||
       !selectedSlot ||
@@ -382,7 +390,7 @@ function PublicBookingView({ slug }: { slug: string }) {
       saved ||
       corruptRecovery ||
       !name.trim() ||
-      !phone.trim() ||
+      !normalizedPhone ||
       actionInFlightRef.current ||
       !isCurrent()
     )
@@ -405,7 +413,7 @@ function PublicBookingView({ slug }: { slug: string }) {
         startsAt: selectedSlot,
         ...(resourceKey ? { resourceKey } : {}),
         name: name.trim(),
-        phone: phone.trim(),
+        phone: normalizedPhone,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         consentVersion: landing.consentVersion,
         consentAccepted: true,
@@ -444,8 +452,11 @@ function PublicBookingView({ slug }: { slug: string }) {
       });
       if (!current()) return;
       setSaved(result.record);
-      if (result.kind === 'current') setReceipt(result.result);
-      else if (result.kind === 'unverified')
+      if (result.kind === 'current') {
+        setReceipt(result.result);
+        if (result.result.status === 'pending' || result.result.status === 'confirmed')
+          setCelebrationId(result.result.requestId);
+      } else if (result.kind === 'unverified')
         setError('Заявка получила ответ, но её актуальный статус проверить не удалось. Проверьте его ещё раз.');
       else setError('Ответ неоднозначен. Проверьте статус сохранённой заявки, не отправляйте новую.');
     } catch (cause) {
@@ -489,6 +500,7 @@ function PublicBookingView({ slug }: { slug: string }) {
     }
     setSaved(null);
     setReceipt(null);
+    setCelebrationId(null);
     setDate('');
     setSlots(null);
     setSelectedSlot(null);
@@ -554,14 +566,23 @@ function PublicBookingView({ slug }: { slug: string }) {
       comment={comment}
       consented={consentedForCurrentVersion}
       onSelected={(value) => {
+        if (value.length === selected.length && value.every((id, index) => id === selected[index])) return;
+        slotsGeneration.current += 1;
+        setSlots(null);
         setSelected(value);
         setSelectedSlot(null);
       }}
       onDate={(value) => {
+        if (value === date) return;
+        slotsGeneration.current += 1;
+        setSlots(null);
         setDate(value);
         setSelectedSlot(null);
       }}
       onResource={(value) => {
+        if (value === resourceKey) return;
+        slotsGeneration.current += 1;
+        setSlots(null);
         setResourceKey(value);
         setSelectedSlot(null);
       }}
@@ -581,6 +602,7 @@ function PublicBookingView({ slug }: { slug: string }) {
           <ReceiptPanel
             receipt={receipt}
             timezone={landing.timezone}
+            celebrate={celebrationId === receipt.requestId}
             busy={busy}
             onRefresh={recover}
             onNew={() => void startNewRequestAfterReceipt()}
@@ -632,15 +654,17 @@ function RecoveryPanel({
   );
 }
 
-function ReceiptPanel({
+export function ReceiptPanel({
   receipt,
   timezone = 'UTC',
+  celebrate = false,
   busy,
   onRefresh,
   onNew,
 }: {
   receipt: PublicBookingReceipt;
   timezone?: string;
+  celebrate?: boolean;
   busy: boolean;
   onRefresh: () => void;
   onNew: () => void;
@@ -652,6 +676,7 @@ function ReceiptPanel({
   const path = confirmed ? 'M6 12.5l4 4L18.5 8' : rejected ? 'M7 7l10 10M17 7L7 17' : '';
   return (
     <section className="pb-receipt" aria-live="polite">
+      <BookingFireworks requestId={receipt.requestId} enabled={celebrate && !rejected} />
       <div className="mb-4 flex items-center gap-3">
         <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-50" aria-hidden="true">
           <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none">
@@ -675,9 +700,9 @@ function ReceiptPanel({
           <p className="text-sm text-slate-600">Заявка {receipt.requestId.slice(0, 8)}</p>
           <h2 className="mt-2 text-2xl font-bold">
             {receipt.status === 'confirmed'
-              ? 'Ваша запись зарегистрирована'
+              ? 'Запись подтверждена'
               : receipt.status === 'pending'
-                ? 'Ваша запись зарегистрирована'
+                ? 'Заявка отправлена'
                 : receipt.status === 'rejected'
                   ? 'Заявка отклонена'
                   : 'Запись отменена'}
