@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Layers } from 'lucide-react';
+import { ChevronDown, Layers } from 'lucide-react';
 import { starterCatalogsApi, warehousesApi } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button, Card, CardHeader, CardBody, Checkbox, Field, Select } from '../../ui';
@@ -31,6 +31,7 @@ export default function StarterCatalogsCard() {
   const [warehouseId, setWarehouseId] = useState('');
   const [preview, setPreview] = useState<StarterPreview | null>(null);
   const [resolutions, setResolutions] = useState<Record<string, StarterResolution>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<StarterInstallResult | null>(null);
@@ -54,6 +55,9 @@ export default function StarterCatalogsCard() {
       ).data;
       setPreview(next);
       setResolutions({});
+      setExpandedGroups(
+        Object.fromEntries(next.items.filter((item) => item.status === 'ambiguous').map((item) => [item.kind, true])),
+      );
     } catch (e) {
       setError(apiErrorMessage(e) ?? 'Не удалось загрузить предпросмотр');
     } finally {
@@ -172,98 +176,135 @@ export default function StarterCatalogsCard() {
                 ₽. Остатки — 0. Ваши цены и настройки сохранятся.
               </p>
             </div>
-            {Object.entries(itemLabels).map(([kind, label]) => {
-              const items = preview.items.filter((i) => i.kind === kind);
-              return (
-                items.length > 0 && (
-                  <section key={kind}>
-                    <h4 className="mb-2 text-sm font-semibold text-ink">
-                      {label} · {items.length}
-                    </h4>
-                    <ul className="divide-y divide-line">
-                      {items.map((item) => (
-                        <li key={item.key} className="py-3">
-                          <div className="flex flex-wrap justify-between gap-2">
-                            <span className="text-sm text-ink">{item.name}</span>
-                            <span className="text-xs text-ink-3">
-                              {
-                                {
-                                  add: 'Добавится',
-                                  reuse: 'Уже есть',
-                                  ambiguous: 'Есть совпадение',
-                                  deleted: 'Удалено — пропустить',
-                                  blocked: 'Не хватает позиций — включите услуги или товары',
-                                }[item.status]
-                              }
-                            </span>
-                          </div>
-                          <p className="mt-1 text-xs text-ink-3">
-                            {item.category}
-                            {item.article ? ` · Артикул ${item.article}` : ''}
-                          </p>
-                          {item.note && <p className="mt-1 text-xs text-ink-3">{item.note}</p>}
-                          {item.sourceUrl && (
-                            <a
-                              href={item.sourceUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-1 inline-block text-xs text-accent underline"
-                            >
-                              Источник производителя
-                            </a>
-                          )}
-                          {item.status === 'ambiguous' && (
-                            <Field label={`Действие для ${item.name}`}>
-                              <Select
-                                disabled={busy}
-                                value={
-                                  resolutions[item.key]?.action === 'reuse'
-                                    ? resolutions[item.key].resourceId
-                                    : (resolutions[item.key]?.action ?? '')
-                                }
-                                onChange={(e) =>
-                                  setResolutions({
-                                    ...resolutions,
-                                    [item.key]:
-                                      e.target.value === 'skip' || e.target.value === 'separate'
-                                        ? { action: e.target.value }
-                                        : { action: 'reuse', resourceId: e.target.value },
-                                  })
-                                }
-                              >
-                                <option value="" disabled>
-                                  Выберите действие
-                                </option>
-                                <option value="separate">Добавить отдельную позицию</option>
-                                <option value="skip">Пропустить</option>
-                                {item.candidates.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    Использовать: {c.name} · {c.id.slice(0, 8)}
-                                  </option>
-                                ))}
-                              </Select>
-                            </Field>
-                          )}
-                          {item.status === 'deleted' && (
-                            <Checkbox
-                              label="Восстановить эту позицию"
-                              checked={resolutions[item.key]?.action === 'restore'}
-                              disabled={busy}
-                              onChange={(e) =>
-                                setResolutions({
-                                  ...resolutions,
-                                  [item.key]: { action: e.target.checked ? 'restore' : 'skip' },
-                                })
-                              }
-                            />
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )
-              );
-            })}
+            <div className="divide-y divide-line">
+              {Object.entries(itemLabels).map(([kind, label]) => {
+                const items = preview.items.filter((i) => i.kind === kind);
+                const unresolved = items.filter((item) => item.status === 'ambiguous' && !resolutions[item.key]).length;
+                const expanded = unresolved > 0 || expandedGroups[kind] === true;
+                const deleted = items.filter((item) => item.status === 'deleted').length;
+                const blocked = items.filter((item) => item.status === 'blocked').length;
+                const summary = [
+                  unresolved ? `Требуют выбора: ${unresolved}` : '',
+                  deleted ? `Удалено: ${deleted}` : '',
+                  blocked ? `Недоступно: ${blocked}` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                return (
+                  items.length > 0 && (
+                    <details
+                      key={kind}
+                      open={expanded}
+                      onToggle={(event) => {
+                        const nextOpen = event.currentTarget.open;
+                        if (!unresolved) setExpandedGroups((previous) => ({ ...previous, [kind]: nextOpen }));
+                      }}
+                    >
+                      <summary
+                        className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 py-2 text-sm font-semibold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent [&::-webkit-details-marker]:hidden"
+                        onClick={(event) => {
+                          if (unresolved) event.preventDefault();
+                        }}
+                      >
+                        <span className="min-w-0">
+                          <span className="block">
+                            {label} · {items.length}
+                          </span>
+                          {summary && <span className="mt-0.5 block text-xs font-normal text-ink-2">{summary}</span>}
+                        </span>
+                        <ChevronDown
+                          size={18}
+                          aria-hidden="true"
+                          className={expanded ? 'shrink-0 rotate-180' : 'shrink-0'}
+                        />
+                      </summary>
+                      {expanded && (
+                        <ul className="divide-y divide-line">
+                          {items.map((item) => (
+                            <li key={item.key} className="py-3">
+                              <div className="flex flex-wrap justify-between gap-2">
+                                <span className="text-sm text-ink">{item.name}</span>
+                                <span className="text-xs text-ink-3">
+                                  {
+                                    {
+                                      add: 'Добавится',
+                                      reuse: 'Уже есть',
+                                      ambiguous: 'Есть совпадение',
+                                      deleted: 'Удалено — пропустить',
+                                      blocked: 'Не хватает позиций — включите услуги или товары',
+                                    }[item.status]
+                                  }
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-ink-3">
+                                {item.category}
+                                {item.article ? ` · Артикул ${item.article}` : ''}
+                              </p>
+                              {item.note && <p className="mt-1 text-xs text-ink-3">{item.note}</p>}
+                              {item.sourceUrl && (
+                                <a
+                                  href={item.sourceUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-1 inline-block text-xs text-accent underline"
+                                >
+                                  Источник производителя
+                                </a>
+                              )}
+                              {item.status === 'ambiguous' && (
+                                <Field label={`Действие для ${item.name}`}>
+                                  <Select
+                                    disabled={busy}
+                                    value={
+                                      resolutions[item.key]?.action === 'reuse'
+                                        ? resolutions[item.key].resourceId
+                                        : (resolutions[item.key]?.action ?? '')
+                                    }
+                                    onChange={(e) =>
+                                      setResolutions({
+                                        ...resolutions,
+                                        [item.key]:
+                                          e.target.value === 'skip' || e.target.value === 'separate'
+                                            ? { action: e.target.value }
+                                            : { action: 'reuse', resourceId: e.target.value },
+                                      })
+                                    }
+                                  >
+                                    <option value="" disabled>
+                                      Выберите действие
+                                    </option>
+                                    <option value="separate">Добавить отдельную позицию</option>
+                                    <option value="skip">Пропустить</option>
+                                    {item.candidates.map((c) => (
+                                      <option key={c.id} value={c.id}>
+                                        Использовать: {c.name} · {c.id.slice(0, 8)}
+                                      </option>
+                                    ))}
+                                  </Select>
+                                </Field>
+                              )}
+                              {item.status === 'deleted' && (
+                                <Checkbox
+                                  label="Восстановить эту позицию"
+                                  checked={resolutions[item.key]?.action === 'restore'}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    setResolutions({
+                                      ...resolutions,
+                                      [item.key]: { action: e.target.checked ? 'restore' : 'skip' },
+                                    })
+                                  }
+                                />
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </details>
+                  )
+                );
+              })}
+            </div>
             <div className="flex flex-wrap gap-3">
               <Button
                 type="button"

@@ -34,6 +34,7 @@ export default function StarterCatalogsSection() {
   const [warehouseId, setWarehouseId] = useState('');
   const [preview, setPreview] = useState<StarterPreview | null>(null);
   const [resolutions, setResolutions] = useState<Record<string, StarterResolution>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<StarterInstallResult | null>(null);
@@ -63,10 +64,14 @@ export default function StarterCatalogsSection() {
     setBusy(true);
     setError('');
     try {
-      setPreview(
-        (await starterCatalogsApi.preview({ directionIds, parts, warehouseId: warehouseId || warehouses[0]?.id })).data,
-      );
+      const next = (
+        await starterCatalogsApi.preview({ directionIds, parts, warehouseId: warehouseId || warehouses[0]?.id })
+      ).data;
+      setPreview(next);
       setResolutions({});
+      setExpandedGroups(
+        Object.fromEntries(next.items.filter((item) => item.status === 'ambiguous').map((item) => [item.kind, true])),
+      );
     } catch (e) {
       setError(apiErrorMessage(e) ?? 'Не удалось открыть предпросмотр');
     } finally {
@@ -166,84 +171,128 @@ export default function StarterCatalogsSection() {
             Склад: {warehouses.find((w) => w.id === preview.warehouseId)?.name ?? 'Основной склад'}. Новые цены — 1 ₽,
             остатки — 0. Ваши цены и настройки сохранятся.
           </Text>
-          {Object.entries(groups).map(([kind, label]) => {
-            const items = preview.items.filter((i) => i.kind === kind);
-            return (
-              items.length > 0 && (
-                <View key={kind} style={{ gap: 4 }}>
-                  <Text style={{ fontSize: 16, fontWeight: '600', color: palette.text.primary }}>
-                    {label} · {items.length}
-                  </Text>
-                  {items.map((item) => (
-                    <View
-                      key={item.key}
+          <View>
+            {Object.entries(groups).map(([kind, label]) => {
+              const items = preview.items.filter((i) => i.kind === kind);
+              const unresolved = items.filter((item) => item.status === 'ambiguous' && !resolutions[item.key]).length;
+              const expanded = unresolved > 0 || expandedGroups[kind] === true;
+              const deleted = items.filter((item) => item.status === 'deleted').length;
+              const blocked = items.filter((item) => item.status === 'blocked').length;
+              const summary = [
+                unresolved ? `Требуют выбора: ${unresolved}` : '',
+                deleted ? `Удалено: ${deleted}` : '',
+                blocked ? `Недоступно: ${blocked}` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              return (
+                items.length > 0 && (
+                  <View key={kind} style={{ borderBottomWidth: 0.5, borderBottomColor: palette.border.subtle }}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={`${label} · ${items.length}`}
+                      accessibilityState={{ expanded, disabled: unresolved > 0 }}
+                      disabled={unresolved > 0}
+                      onPress={() => setExpandedGroups((previous) => ({ ...previous, [kind]: !expanded }))}
                       style={{
-                        paddingVertical: 12,
-                        borderBottomWidth: 0.5,
-                        borderBottomColor: palette.border.subtle,
-                        gap: 4,
+                        minHeight: 44,
+                        paddingVertical: 10,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 12,
                       }}
                     >
-                      <Text style={{ fontSize: 15, color: palette.text.primary }}>{item.name}</Text>
-                      <Text style={body}>
-                        {
-                          {
-                            add: 'Добавится',
-                            reuse: 'Уже есть',
-                            ambiguous: 'Есть совпадение',
-                            deleted: 'Удалено — пропустить',
-                            blocked: 'Не хватает позиций — включите услуги или товары',
-                          }[item.status]
-                        }
-                      </Text>
-                      <Text style={body}>
-                        {item.category}
-                        {item.article ? ` · Артикул ${item.article}` : ''}
-                      </Text>
-                      {item.note && <Text style={body}>{item.note}</Text>}
-                      {item.sourceUrl && (
-                        <TouchableOpacity
-                          accessibilityRole="link"
-                          onPress={() => {
-                            void Linking.openURL(item.sourceUrl!);
-                          }}
-                          style={{ minHeight: 44, justifyContent: 'center' }}
-                        >
-                          <Text style={{ color: palette.accent.primary }}>Источник производителя</Text>
-                        </TouchableOpacity>
-                      )}
-                      {item.status === 'ambiguous' && (
-                        <View>
-                          {choice('Добавить отдельную позицию', resolutions[item.key]?.action === 'separate', () =>
-                            setResolutions({ ...resolutions, [item.key]: { action: 'separate' } }),
-                          )}
-                          {choice('Пропустить', resolutions[item.key]?.action === 'skip', () =>
-                            setResolutions({ ...resolutions, [item.key]: { action: 'skip' } }),
-                          )}
-                          {item.candidates.map((c) =>
-                            choice(
-                              `Использовать: ${c.name} · ${c.id.slice(0, 8)}`,
-                              resolutions[item.key]?.resourceId === c.id,
-                              () =>
-                                setResolutions({ ...resolutions, [item.key]: { action: 'reuse', resourceId: c.id } }),
-                              c.id,
-                            ),
-                          )}
-                        </View>
-                      )}
-                      {item.status === 'deleted' &&
-                        choice('Восстановить эту позицию', resolutions[item.key]?.action === 'restore', () =>
-                          setResolutions({
-                            ...resolutions,
-                            [item.key]: { action: resolutions[item.key]?.action === 'restore' ? 'skip' : 'restore' },
-                          }),
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={{ fontSize: 16, fontWeight: '600', color: palette.text.primary }}>
+                          {label} · {items.length}
+                        </Text>
+                        {summary && (
+                          <Text style={{ fontSize: 12, lineHeight: 16, color: palette.text.secondary }}>{summary}</Text>
                         )}
-                    </View>
-                  ))}
-                </View>
-              )
-            );
-          })}
+                      </View>
+                      <Ionicons
+                        name={expanded ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color={palette.text.secondary}
+                      />
+                    </TouchableOpacity>
+                    {expanded &&
+                      items.map((item) => (
+                        <View
+                          key={item.key}
+                          style={{
+                            paddingVertical: 12,
+                            borderBottomWidth: 0.5,
+                            borderBottomColor: palette.border.subtle,
+                            gap: 4,
+                          }}
+                        >
+                          <Text style={{ fontSize: 15, color: palette.text.primary }}>{item.name}</Text>
+                          <Text style={body}>
+                            {
+                              {
+                                add: 'Добавится',
+                                reuse: 'Уже есть',
+                                ambiguous: 'Есть совпадение',
+                                deleted: 'Удалено — пропустить',
+                                blocked: 'Не хватает позиций — включите услуги или товары',
+                              }[item.status]
+                            }
+                          </Text>
+                          <Text style={body}>
+                            {item.category}
+                            {item.article ? ` · Артикул ${item.article}` : ''}
+                          </Text>
+                          {item.note && <Text style={body}>{item.note}</Text>}
+                          {item.sourceUrl && (
+                            <TouchableOpacity
+                              accessibilityRole="link"
+                              onPress={() => {
+                                void Linking.openURL(item.sourceUrl!);
+                              }}
+                              style={{ minHeight: 44, justifyContent: 'center' }}
+                            >
+                              <Text style={{ color: palette.accent.primary }}>Источник производителя</Text>
+                            </TouchableOpacity>
+                          )}
+                          {item.status === 'ambiguous' && (
+                            <View>
+                              {choice('Добавить отдельную позицию', resolutions[item.key]?.action === 'separate', () =>
+                                setResolutions({ ...resolutions, [item.key]: { action: 'separate' } }),
+                              )}
+                              {choice('Пропустить', resolutions[item.key]?.action === 'skip', () =>
+                                setResolutions({ ...resolutions, [item.key]: { action: 'skip' } }),
+                              )}
+                              {item.candidates.map((c) =>
+                                choice(
+                                  `Использовать: ${c.name} · ${c.id.slice(0, 8)}`,
+                                  resolutions[item.key]?.resourceId === c.id,
+                                  () =>
+                                    setResolutions({
+                                      ...resolutions,
+                                      [item.key]: { action: 'reuse', resourceId: c.id },
+                                    }),
+                                  c.id,
+                                ),
+                              )}
+                            </View>
+                          )}
+                          {item.status === 'deleted' &&
+                            choice('Восстановить эту позицию', resolutions[item.key]?.action === 'restore', () =>
+                              setResolutions({
+                                ...resolutions,
+                                [item.key]: {
+                                  action: resolutions[item.key]?.action === 'restore' ? 'skip' : 'restore',
+                                },
+                              }),
+                            )}
+                        </View>
+                      ))}
+                  </View>
+                )
+              );
+            })}
+          </View>
           <Button
             title="Установить выбранное"
             onPress={install}
