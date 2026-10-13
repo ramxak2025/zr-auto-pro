@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { IosAsyncStorageModel } from './fixtures/ios-async-storage';
+import { IosAsyncStorageModel } from '../../../tests/fixtures/ios-async-storage';
 import { createDurableProcurement } from '../../../../shared/utils/durableProcurement';
 import { storageWriteFailureKind } from '../../../../shared/utils/storageFailure';
 
