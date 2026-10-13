@@ -103,3 +103,19 @@
   opacity: 0.5;
   cursor: default;
 }
+
+@media (max-width: 480px) {
+  .booking-branding-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .booking-branding-preview:not(.is-logo) {
+    width: 100%;
+    height: 112px;
+  }
+  .booking-branding-upload,
+  .booking-branding-row button {
+    white-space: nowrap;
+  }
+}
