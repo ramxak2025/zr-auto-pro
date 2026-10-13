@@ -1117,6 +1117,23 @@ export class UsersService {
 
     const { monthStart, nextMonthStart } = UsersService.monthBoundsInZone(month, tz);
 
+    // Check edits lock checks before their service lines. Recomputing in the
+    // opposite order creates a check↔line deadlock. Lock the affected check
+    // set in a stable order first, and keep every update within that set.
+    const { rows: lockedChecks } = await client.query<{ id: string }>(
+      `SELECT c.id FROM checks c
+        WHERE c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
+          AND c.date >= $3 AND c.date < $4
+          AND (($5::boolean AND EXISTS (
+            SELECT 1 FROM check_service_lines sl
+             WHERE sl.check_id = c.id AND COALESCE(sl.master_id, c.master_id) = $2
+          )) OR ($6::boolean AND c.master_id = $2))
+        ORDER BY c.id FOR UPDATE OF c`,
+      [tenantID, userId, monthStart, nextMonthStart, pct.servicePct !== undefined, pct.productPct !== undefined],
+    );
+    const checkIds = lockedChecks.map((row) => row.id);
+    if (checkIds.length === 0) return;
+
     if (pct.servicePct !== undefined) {
       // 1) Re-bake per-line salary for the lines THIS user executes (no override).
       //    Процент — литеральный параметр $5 (НЕ users.salary_percent): для
@@ -1128,13 +1145,14 @@ export class UsersService {
           WHERE sl.check_id = c.id
             AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4
+            AND c.id = ANY($6::uuid[])
             AND COALESCE(sl.master_id, c.master_id) = $2
             AND sl.salary_mode = 'percent'
             AND NOT EXISTS (
               SELECT 1 FROM services s
                WHERE s.id = sl.service_id AND s.tenant_id = $1 AND s.master_percent IS NOT NULL
             )`,
-        [tenantID, userId, monthStart, nextMonthStart, pct.servicePct],
+        [tenantID, userId, monthStart, nextMonthStart, pct.servicePct, checkIds],
       );
       // 2) Refresh service_salary_total (+ cost / profit) for the affected checks
       //    from the sum of ALL their (now-updated) service lines.
@@ -1150,6 +1168,7 @@ export class UsersService {
                JOIN checks cc ON cc.id = sl.check_id
               WHERE cc.tenant_id = $1 AND cc.is_deferred = false AND cc.deleted_at IS NULL
                 AND cc.date >= $3 AND cc.date < $4
+                AND cc.id = ANY($5::uuid[])
               GROUP BY sl.check_id
            ) agg
           WHERE c.id = agg.check_id
@@ -1159,7 +1178,7 @@ export class UsersService {
               SELECT 1 FROM check_service_lines sl2
                WHERE sl2.check_id = c.id AND COALESCE(sl2.master_id, c.master_id) = $2
             )`,
-        [tenantID, userId, monthStart, nextMonthStart],
+        [tenantID, userId, monthStart, nextMonthStart, checkIds],
       );
     }
 
@@ -1186,6 +1205,7 @@ export class UsersService {
                     AND cc.master_id = $2 AND cc.tenant_id = $1 AND cc.is_deferred = false
                     AND cc.deleted_at IS NULL
                     AND cc.date >= $3 AND cc.date < $4
+                    AND cc.id = ANY($6::uuid[])
                LEFT JOIN product_commissions pc
                     ON pc.product_id = pl.product_id AND pc.user_id = cc.master_id AND pc.tenant_id = cc.tenant_id
               GROUP BY pl.check_id
@@ -1193,7 +1213,7 @@ export class UsersService {
           WHERE c.id = agg.check_id
             AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4`,
-        [tenantID, userId, monthStart, nextMonthStart, pct.productPct],
+        [tenantID, userId, monthStart, nextMonthStart, pct.productPct, checkIds],
       );
     }
   }
