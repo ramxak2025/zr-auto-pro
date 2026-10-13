@@ -21,7 +21,6 @@
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -244,7 +243,7 @@ export default function CashierPaymentScreen() {
   }, [searching, trimmed, ready, rest]);
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Оплата"
         subtitle={board ? `${ready.length} готов${ready.length === 1 ? '' : 'ы'} к оплате` : undefined}
@@ -378,7 +377,7 @@ export default function CashierPaymentScreen() {
           )}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 

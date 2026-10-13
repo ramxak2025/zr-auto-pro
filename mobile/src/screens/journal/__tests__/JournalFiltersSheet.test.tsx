@@ -25,6 +25,8 @@ jest.mock('react', () => ({
 }));
 jest.mock('react-native', () => ({
   Modal: 'Modal',
+  Pressable: 'Pressable',
+  Keyboard: { dismiss: jest.fn() },
   View: 'View',
   TouchableOpacity: 'TouchableOpacity',
   ActivityIndicator: 'ActivityIndicator',
@@ -51,7 +53,7 @@ jest.mock('../../../contexts/ThemeContext', () => ({
   }),
 }));
 jest.mock('../../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
-jest.mock('../../../components/SearchInput', () => ({ __esModule: true, default: 'SearchInput' }));
+jest.mock('../../../components/CompactScreenHeader', () => ({ CompactSearchInput: 'SearchInput' }));
 import React from 'react';
 import JournalFiltersSheet from '../JournalFiltersSheet';
 import { emptyJournalFilters } from '../filters';
@@ -103,6 +105,8 @@ beforeEach(() => {
 });
 it('draft changes do not apply until Apply, reset remains draft, cancel discards on reopening', () => {
   let tree = render();
+  press(tree, 'Дополнительно');
+  tree = render();
   const input = nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!;
   (input.props.onChangeText as (v: string) => void)('0');
   tree = render();
@@ -146,6 +150,8 @@ it('employee picker is searchable, keeps full names, and back returns to draft',
 });
 it('invalid range stays open with a recoverable error; employee loading/error/empty are visible', () => {
   let tree = render();
+  press(tree, 'Дополнительно');
+  tree = render();
   for (const [label, value] of [
     ['Сумма от, рубли', '10'],
     ['Сумма до, рубли', '1'],
@@ -168,4 +174,54 @@ it('invalid range stays open with a recoverable error; employee loading/error/em
   props = { ...props, usersError: false, users: [] };
   tree = render();
   expect(words(tree)).toContain('Сотрудники не найдены');
+});
+
+it('basic filters remain visible while optional criteria are folded; folding preserves draft values', () => {
+  let tree = render();
+  expect(words(tree)).toContain('Все сотрудники');
+  expect(words(tree)).toContain('Сегодня');
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Сумма от, рубли')).toBe(false);
+  press(tree, 'Дополнительно');
+  tree = render();
+  const input = nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!;
+  (input.props.onChangeText as (value: string) => void)('1000');
+  tree = render();
+  press(tree, 'Дополнительно');
+  tree = render();
+  expect(words(tree)).toContain('Сумма: 1000');
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Сумма от, рубли')).toBe(false);
+  press(tree, 'Применить');
+  expect(apply).toHaveBeenCalledWith({ ...emptyJournalFilters(), amountFrom: '1000' });
+});
+it('active optional criteria autoexpand and remain discoverable after folding', () => {
+  props = { ...props, applied: { ...emptyJournalFilters(), amountTo: '2500', isReturned: true } };
+  render();
+  let tree = render();
+  expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма до, рубли')!.props.value).toBe('2500');
+  const returned = nodes(tree).find((node) => node.props.accessibilityLabel === 'Только возвраты клиентов')!;
+  expect(returned.props.value).toBe(true);
+  press(tree, 'Дополнительно');
+  tree = render();
+  expect(words(tree)).toContain('Возвраты клиентов');
+  press(tree, 'Применить');
+  expect(apply).toHaveBeenCalledWith(props.applied);
+});
+it('date presets, date clearing and employee retry remain draft actions', () => {
+  let tree = render();
+  press(tree, 'Сегодня');
+  tree = render();
+  const clearFrom = nodes(tree).find((node) => node.props.accessibilityLabel === 'Очистить дату от')!;
+  (clearFrom.props.onPress as () => void)();
+  tree = render();
+  expect(apply).not.toHaveBeenCalled();
+  press(tree, 'По сотруднику');
+  props = { ...props, usersError: true };
+  tree = render();
+  press(tree, 'Повторить');
+  expect(props.retryUsers).toHaveBeenCalledTimes(1);
+  (nodes(tree).find((node) => node.type === 'Modal')!.props.onRequestClose as () => void)();
+  tree = render();
+  press(tree, 'Применить');
+  expect(apply.mock.calls[0][0]).toMatchObject({ dateFrom: '', masterId: '' });
+  expect(apply.mock.calls[0][0].dateTo).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 });
