@@ -1,3 +1,4 @@
+import { validateJournalFilters } from './journal-filters';
 import {
   Injectable,
   Inject,
@@ -1156,6 +1157,7 @@ export class ChecksService {
   }
 
   async getAll(tenantID: string, query: any, actor?: ChecksActor, clientHistory = false) {
+    const filters = validateJournalFilters(query);
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -1277,6 +1279,16 @@ export class ChecksService {
         params.push(query.dateTo);
       }
     }
+    // Inclusive final amount after discount; same WHERE drives count and both paging modes.
+    if (filters.amountFrom !== undefined) {
+      where += ` AND ch.total_revenue >= $${idx++}`;
+      params.push(filters.amountFrom);
+    }
+    if (filters.amountTo !== undefined) {
+      where += ` AND ch.total_revenue <= $${idx++}`;
+      params.push(filters.amountTo);
+    }
+    if (filters.hasDiscount) where += ' AND ch.discount > 0';
     if (query.retail === 'true') {
       where += ` AND ch.client_id IS NULL`;
     }

@@ -34,6 +34,16 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import PointIndicator from '../components/PointIndicator';
+import JournalFiltersSheet from './journal/JournalFiltersSheet';
+import {
+  emptyJournalFilters,
+  journalDateLabel,
+  journalFilterCount,
+  journalQueryKey,
+  journalQueryParams,
+  type JournalFilters,
+} from './journal/filters';
+import { Text as NativeText } from '../platform/Typography';
 import {
   colors,
   fontSize,
@@ -863,21 +873,27 @@ export default function ChecksScreen() {
 
   // Filters
   const [showFilters, setShowFilters] = useState(false);
-  const [dateFrom, setDateFrom] = useState<Date | null>(null);
-  const [dateTo, setDateTo] = useState<Date | null>(null);
-  const [filterMasterId, setFilterMasterId] = useState('');
-  // «Возврат клиента» — СЕРВЕРНЫЙ фильтр: бэк принимает аддитивный
-  // параметр isReturned=true (GET /checks) и отдаёт только возвраты.
-  // Раньше это был клиентский filter по уже загруженным страницам —
-  // возвраты со старых, ещё не догруженных страниц просто не попадали
-  // в выдачу. Теперь фильтрует сервер, как и isDeferred ниже.
-  const [returnsOnly, setReturnsOnly] = useState(false);
-  // «Отложенные» — СЕРВЕРНЫЙ фильтр: бэк принимает аддитивный параметр
-  // isDeferred=true (GET /checks) и отдаёт только отложенные черновики —
-  // тот же контракт, что у isReturned выше.
-  const [deferredOnly, setDeferredOnly] = useState(false);
-  const [showDateFromPicker, setShowDateFromPicker] = useState(false);
-  const [showDateToPicker, setShowDateToPicker] = useState(false);
+  const [appliedFilters, setAppliedFilters] = useState<JournalFilters>(emptyJournalFilters);
+  const {
+    dateFrom,
+    dateTo,
+    masterId: filterMasterId,
+    amountFrom,
+    amountTo,
+    hasDiscount,
+    isReturned: returnsOnly,
+    isDeferred: deferredOnly,
+  } = appliedFilters;
+  const updateApplied = (values: Partial<JournalFilters>) => {
+    const next = { ...appliedFilters, ...values };
+    void queryClient.resetQueries({ queryKey: journalQueryKey(search, next), exact: true });
+    setAppliedFilters(next);
+  };
+  const setDateFrom = (value: string | null) => updateApplied({ dateFrom: value || '' });
+  const setDateTo = (value: string | null) => updateApplied({ dateTo: value || '' });
+  const setFilterMasterId = (value: string) => updateApplied({ masterId: value });
+  const setReturnsOnly = (value: boolean) => updateApplied({ isReturned: value });
+  const setDeferredOnly = (value: boolean) => updateApplied({ isDeferred: value });
 
   // Warehouse-tab kind filter — null means "Все". Persists across tab
   // switches so toggling Чеки → Складские документы keeps the last
@@ -896,12 +912,16 @@ export default function ChecksScreen() {
   // the dot/active-state reflects only the filters of the visible tab. The
   // checks panel below still reads `activeFilterCount` (== checksFilterCount
   // whenever that panel is on screen), so its behaviour is unchanged.
-  const checksFilterCount =
-    (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0) + (deferredOnly ? 1 : 0);
+  const checksFilterCount = journalFilterCount(appliedFilters);
   const warehouseFilterCount = (warehouseKind ? 1 : 0) + (warehouseDateFrom ? 1 : 0) + (warehouseDateTo ? 1 : 0);
   const activeFilterCount = activeTab === 'warehouse' ? warehouseFilterCount : checksFilterCount;
 
-  const { data: allUsers } = useQuery<User[]>({
+  const {
+    data: allUsers,
+    isLoading: usersLoading,
+    isError: usersError,
+    refetch: refetchUsers,
+  } = useQuery<User[]>({
     queryKey: ['users-for-filter'],
     queryFn: async () => {
       const res = await usersApi.getAll();
@@ -925,10 +945,10 @@ export default function ChecksScreen() {
     }, []),
   );
 
-  const formatFilterDate = (d: Date) =>
-    `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
-  const toISODate = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const formatFilterDate = (d: Date | string) =>
+    typeof d === 'string'
+      ? journalDateLabel(d)
+      : `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 
   const {
     data: checksData,
@@ -946,21 +966,7 @@ export default function ChecksScreen() {
     // pages share a single cache entry. This is what lets the user
     // come back from a check detail and still see today + older
     // pages already loaded — no re-fetch flash.
-    queryKey: [
-      'checks-infinite',
-      search,
-      dateFrom ? toISODate(dateFrom) : '',
-      dateTo ? toISODate(dateTo) : '',
-      filterMasterId,
-      // Слот 5 — фильтр «Отложенные». Всегда присутствует (стабильная
-      // длина ключа); позиции 0..4 НЕ двигать — persistentCache
-      // (POSITIONAL_SEARCH_IDX) опирается на то, что search стоит в
-      // индексе 1. Новые фильтры — только дописывать в хвост.
-      deferredOnly ? 'deferred' : '',
-      // Слот 6 — фильтр «Возврат клиента» (серверный isReturned).
-      // Дописан строго в хвост по тому же правилу.
-      returnsOnly ? 'returns' : '',
-    ],
+    queryKey: journalQueryKey(search, appliedFilters),
     // КУРСОР, а не номер страницы. Offset-пагинация по живой ленте — источник
     // жалоб «при скролле чеки исчезают / появляется пустота / дубли»: пока
     // мастера создают чеки, каждая вставка сдвигает ленту, и следующая
@@ -970,18 +976,12 @@ export default function ChecksScreen() {
     // первая страница (сервер трактует наличие параметра как keyset-режим).
     initialPageParam: '',
     queryFn: async ({ pageParam = '' }) => {
-      const params: Record<string, any> = { cursor: pageParam as string, limit };
-      if (search) params.search = search;
-      if (dateFrom) params.dateFrom = toISODate(dateFrom);
-      if (dateTo) params.dateTo = toISODate(dateTo);
-      if (filterMasterId) params.masterId = filterMasterId;
-      // isDeferred — аддитивный серверный параметр: true → только
-      // отложенные. Выключенный фильтр параметр НЕ шлёт (undefined),
-      // поведение и ответ сервера идентичны прежним.
-      if (deferredOnly) params.isDeferred = true;
-      // isReturned — тот же аддитивный контракт: true → только возвраты
-      // клиентов. Выключен — параметр не шлём вовсе.
-      if (returnsOnly) params.isReturned = true;
+      const params = {
+        cursor: pageParam as string,
+        limit,
+        ...journalQueryParams(appliedFilters),
+        ...(search && { search }),
+      };
       const res = await checksApi.getAll(params);
       return res.data;
     },
@@ -1049,7 +1049,12 @@ export default function ChecksScreen() {
   //      cached fetch + an in-memory filter is instant when switching
   //      chips (no per-chip refetch / white flash).
   // The cache key has no `warehouseKind`, so all chips share one entry.
-  const { data: allWarehouseDocs = [], isLoading: warehouseLoading } = useQuery<JournalDoc[]>({
+  const {
+    data: allWarehouseDocs = [],
+    isLoading: warehouseLoading,
+    isFetching: warehouseFetching,
+    dataUpdatedAt: warehouseUpdatedAt,
+  } = useQuery<JournalDoc[]>({
     queryKey: ['journal-warehouse-docs'],
     queryFn: async () => {
       const res = await journalApi.warehouseDocs({});
@@ -1248,22 +1253,20 @@ export default function ChecksScreen() {
   // в пустоте под концом контента. Даты сравниваем по ISO-строке, чтобы
   // повторный выбор того же дня (новый Date-объект) не дёргал скролл.
   const checksListRef = useRef<FlatList<Check>>(null);
-  const dateFromKey = dateFrom ? toISODate(dateFrom) : '';
-  const dateToKey = dateTo ? toISODate(dateTo) : '';
+  const dateFromKey = dateFrom;
+  const dateToKey = dateTo;
   useEffect(() => {
     checksListRef.current?.scrollToOffset({ offset: 0, animated: false });
-  }, [search, dateFromKey, dateToKey, filterMasterId, deferredOnly, returnsOnly]);
+  }, [search, dateFromKey, dateToKey, filterMasterId, deferredOnly, returnsOnly, amountFrom, amountTo, hasDiscount]);
 
   // Единая точка сброса фильтров вкладки «Чеки» — используется кнопкой
   // «Сбросить фильтры» в панели, чипом «Сбросить всё» над списком и
-  // empty-state'ом «ничего не найдено». Сеттеры стабильны — deps пусты.
+  // empty-state'ом «ничего не найдено». Поиск и вкладка сохраняются.
   const resetChecksFilters = useCallback(() => {
-    setDateFrom(null);
-    setDateTo(null);
-    setFilterMasterId('');
-    setReturnsOnly(false);
-    setDeferredOnly(false);
-  }, []);
+    const next = emptyJournalFilters();
+    void queryClient.resetQueries({ queryKey: journalQueryKey(search, next), exact: true });
+    setAppliedFilters(next);
+  }, [queryClient, search]);
 
   // Stable navigation handler — `useCallback` so the prop passed to
   // CheckRow doesn't change across screen renders (would bust React.memo).
@@ -1345,16 +1348,23 @@ export default function ChecksScreen() {
   );
 
   const isWarehouseLoading = warehouseLoading;
-  // No IosScreenHeader on this screen — the tab bar already names it
-  // «Журнал», so we just reserve the top safe-area inset ourselves so
-  // the search bar doesn't slide under the Dynamic Island / status bar.
+  // The compact journal header stays inside the status-bar safe area.
   const insets = useSafeAreaInsets();
 
   return (
     <View style={[styles.safe, { paddingTop: insets.top + 8, backgroundColor: palette.bg.canvas }]}>
-      {/* Header removed per owner — the screen reads as Журнал from the
-          tab-bar label already, and the count duplicates info shown at
-          the bottom of the list (pagination). Less chrome → more list. */}
+      <View style={styles.journalTitleRow}>
+        <NativeText variant="title1" color={palette.text.primary}>
+          Журнал
+        </NativeText>
+        <FreshnessBadge
+          query={
+            activeTab === 'checks'
+              ? { isFetching, isLoading, dataUpdatedAt }
+              : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
+          }
+        />
+      </View>
 
       {/* Автосервис журнала (156/160/163) — Журнал показывает чеки автосервиса
           ЭТОЙ СЕССИИ, поэтому человек обязан видеть, чью выручку он сейчас
@@ -1374,7 +1384,7 @@ export default function ChecksScreen() {
             тех же чеков, поэтому вход логично рядом с журналом. */}
         <View style={styles.entryBtnRow}>
           <TouchableOpacity
-            style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            style={styles.boardEntryBtn}
             onPress={() => {
               haptic('tap');
               navigation.navigate('WorkBoard');
@@ -1393,7 +1403,7 @@ export default function ChecksScreen() {
               таб-бар остаётся, back возвращает в Журнал. */}
           {canSeeTrash && (
             <TouchableOpacity
-              style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              style={styles.boardEntryBtn}
               onPress={() => {
                 haptic('tap');
                 navigation.navigate('CheckTrash');
@@ -1407,7 +1417,6 @@ export default function ChecksScreen() {
             </TouchableOpacity>
           )}
         </View>
-        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
       {/* «Ожидают отправки» — офлайн-очередь чеков (Round 9). Узкая пилюля в
@@ -1444,14 +1453,25 @@ export default function ChecksScreen() {
           UISegmentedControl: серая подложка, активный сегмент — карточка
           с мягкой тенью. */}
       <View style={styles.segmentedWrap}>
-        <View style={[styles.segmentedControl, { backgroundColor: palette.bg.muted }]}>
+        <View
+          style={[
+            styles.segmentedControl,
+            { backgroundColor: palette.bg.muted },
+            Platform.OS === 'android' && {
+              borderWidth: 1,
+              borderColor: palette.border.strong,
+              backgroundColor: palette.bg.canvas,
+            },
+          ]}
+        >
           <TouchableOpacity
             style={[
               styles.segmentBtn,
+              Platform.OS === 'android' && styles.segmentBtnAndroid,
               activeTab === 'checks' && [
                 styles.segmentBtnActive,
-                buildShadow(palette),
-                { backgroundColor: palette.bg.card },
+                Platform.OS === 'ios' && buildShadow(palette),
+                { backgroundColor: Platform.OS === 'ios' ? palette.bg.card : palette.accent.primarySoft },
               ],
             ]}
             onPress={() => {
@@ -1482,10 +1502,11 @@ export default function ChecksScreen() {
           <TouchableOpacity
             style={[
               styles.segmentBtn,
+              Platform.OS === 'android' && styles.segmentBtnAndroid,
               activeTab === 'warehouse' && [
                 styles.segmentBtnActive,
-                buildShadow(palette),
-                { backgroundColor: palette.bg.card },
+                Platform.OS === 'ios' && buildShadow(palette),
+                { backgroundColor: Platform.OS === 'ios' ? palette.bg.card : palette.accent.primarySoft },
               ],
             ]}
             onPress={() => {
@@ -1508,7 +1529,7 @@ export default function ChecksScreen() {
                 activeTab === 'warehouse' && styles.segmentBtnTextActive,
               ]}
             >
-              Склад. документы
+              Складские документы
             </Text>
           </TouchableOpacity>
         </View>
@@ -1547,7 +1568,7 @@ export default function ChecksScreen() {
           }}
           activeOpacity={0.7}
           accessibilityRole="button"
-          accessibilityLabel={showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+          accessibilityLabel={`Фильтры${activeFilterCount ? `, применено: ${activeFilterCount}` : ''}`}
         >
           <Ionicons
             name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
@@ -1591,8 +1612,29 @@ export default function ChecksScreen() {
               )}
               {filterMasterId !== '' && (
                 <ActiveFilterChip
-                  label={activeUsers.find((u) => u.id === filterMasterId)?.fullName?.split(' ')[0] ?? 'Сотрудник'}
+                  label={activeUsers.find((u) => u.id === filterMasterId)?.fullName ?? 'Сотрудник'}
                   onClear={() => setFilterMasterId('')}
+                  palette={palette}
+                />
+              )}
+              {amountFrom && (
+                <ActiveFilterChip
+                  label={`От ${amountFrom} ₽`}
+                  onClear={() => updateApplied({ amountFrom: '' })}
+                  palette={palette}
+                />
+              )}
+              {amountTo && (
+                <ActiveFilterChip
+                  label={`До ${amountTo} ₽`}
+                  onClear={() => updateApplied({ amountTo: '' })}
+                  palette={palette}
+                />
+              )}
+              {hasDiscount && (
+                <ActiveFilterChip
+                  label="Со скидкой"
+                  onClear={() => updateApplied({ hasDiscount: false })}
                   palette={palette}
                 />
               )}
@@ -1637,243 +1679,24 @@ export default function ChecksScreen() {
         </View>
       )}
 
-      {/* Filters panel (only for checks tab) — сгруппированный «лоток»:
-          приглушённая подложка + hairline, внутри секции с 11pt-лейблами
-          (паттерн iOS grouped list). Белые контролы читаются на подложке
-          как отдельные кнопки, а сам лоток — как единый временный слой
-          настроек над списком. */}
-      {showFilters && activeTab === 'checks' && (
-        <View style={[styles.filtersPanel, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          {/* Date range */}
-          <Text style={[styles.filterSectionLabel, { color: palette.text.tertiary }]}>Период</Text>
-          <View style={styles.filterRow}>
-            <TouchableOpacity
-              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              onPress={() => setShowDateFromPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
-              <Text
-                style={[
-                  styles.filterDateText,
-                  { color: palette.text.tertiary },
-                  dateFrom && { color: palette.text.primary },
-                ]}
-              >
-                {dateFrom ? formatFilterDate(dateFrom) : 'С даты'}
-              </Text>
-              {dateFrom && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setDateFrom(null);
-                    setPage(1);
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-            <Ionicons name="arrow-forward" size={12} color={palette.text.tertiary} />
-            <TouchableOpacity
-              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              onPress={() => setShowDateToPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
-              <Text
-                style={[
-                  styles.filterDateText,
-                  { color: palette.text.tertiary },
-                  dateTo && { color: palette.text.primary },
-                ]}
-              >
-                {dateTo ? formatFilterDate(dateTo) : 'По дату'}
-              </Text>
-              {dateTo && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setDateTo(null);
-                    setPage(1);
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Employee filter */}
-          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
-            Сотрудник
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={{ flexDirection: 'row', gap: spacing[1.5] }}>
-              <TouchableOpacity
-                style={[
-                  styles.empChip,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  !filterMasterId && styles.empChipActive,
-                  !filterMasterId && {
-                    backgroundColor:
-                      palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-                  },
-                ]}
-                onPress={() => {
-                  setFilterMasterId('');
-                  setPage(1);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.empChipText,
-                    { color: palette.text.secondary },
-                    !filterMasterId && styles.empChipTextActive,
-                    !filterMasterId && palette.mode === 'dark' && { color: colors.primary[300] },
-                  ]}
-                >
-                  Все
-                </Text>
-              </TouchableOpacity>
-              {activeUsers.map((u) => (
-                <TouchableOpacity
-                  key={u.id}
-                  style={[
-                    styles.empChip,
-                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                    filterMasterId === u.id && styles.empChipActive,
-                    filterMasterId === u.id && {
-                      backgroundColor:
-                        palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-                    },
-                  ]}
-                  onPress={() => {
-                    setFilterMasterId(filterMasterId === u.id ? '' : u.id);
-                    setPage(1);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.empChipText,
-                      { color: palette.text.secondary },
-                      filterMasterId === u.id && styles.empChipTextActive,
-                      filterMasterId === u.id && palette.mode === 'dark' && { color: colors.primary[300] },
-                    ]}
-                  >
-                    {u.fullName?.split(' ')[0]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </ScrollView>
-
-          {/* Returns-only toggle — moved inside the filter sheet (was
-              a standalone chip above the list). Owner brief: keep the
-              functionality but hide it behind the funnel button so the
-              main view stays clean. */}
-          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
-            Показать только
-          </Text>
-          <View style={{ gap: spacing[2] }}>
-            <TouchableOpacity
-              onPress={() => {
-                // Тумблер — значимое переключение состояния списка: та же
-                // selection-хаптика, что у сегментов (не на каждом чипе).
-                haptic('select');
-                setReturnsOnly((v) => !v);
-              }}
-              activeOpacity={0.7}
-              style={[
-                styles.returnsToggleRow,
-                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                returnsOnly && styles.returnsToggleRowActive,
-              ]}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: returnsOnly }}
-              accessibilityLabel="Только возвраты клиентов"
-            >
-              <Ionicons
-                name="arrow-undo-outline"
-                size={14}
-                color={returnsOnly ? colors.red[600] : palette.text.secondary}
-              />
-              <Text
-                style={[styles.returnsToggleLabel, { color: returnsOnly ? colors.red[700] : palette.text.primary }]}
-              >
-                Возврат клиента
-              </Text>
-              <View
-                style={[
-                  styles.returnsToggleSwitch,
-                  // Off-трек — border.strong: subtle в тёмной теме почти невидим,
-                  // и выключенный тумблер сливался с фоном ряда.
-                  { backgroundColor: returnsOnly ? colors.red[500] : palette.border.strong },
-                ]}
-              >
-                <View style={[styles.returnsToggleSwitchKnob, returnsOnly && styles.returnsToggleSwitchKnobOn]} />
-              </View>
-            </TouchableOpacity>
-
-            {/* «Отложенные» — серверный фильтр по isDeferred. Тот же
-              toggle-row паттерн, что и «Только возвраты» выше. Красная
-              палитра сознательно совпадает с плашкой «Отложен» на
-              карточках чеков (red[100]/red[700]) — фильтр и статус
-              читаются как одно состояние. */}
-            <TouchableOpacity
-              onPress={() => {
-                haptic('select');
-                setDeferredOnly((v) => !v);
-                setPage(1);
-              }}
-              activeOpacity={0.7}
-              style={[
-                styles.returnsToggleRow,
-                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                deferredOnly && styles.returnsToggleRowActive,
-              ]}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: deferredOnly }}
-              accessibilityLabel="Только отложенные"
-            >
-              <Ionicons name="time-outline" size={14} color={deferredOnly ? colors.red[600] : palette.text.secondary} />
-              <Text
-                style={[styles.returnsToggleLabel, { color: deferredOnly ? colors.red[700] : palette.text.primary }]}
-              >
-                Отложенные
-              </Text>
-              {/* Счётчик «бесплатный»: когда фильтр активен, total первой
-                страницы УЖЕ равен числу отложенных — отдельный запрос
-                ради цифры не нужен. isPlaceholderData-guard прячет цифру,
-                пока на экране данные предыдущего ключа (иначе на миг
-                мелькал бы общий total всех чеков). */}
-              {deferredOnly && !isPlaceholderData && checksData !== undefined && (
-                <View
-                  style={[
-                    styles.deferredCountBadge,
-                    { backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100] },
-                  ]}
-                >
-                  <Text style={styles.deferredCountBadgeText}>{total}</Text>
-                </View>
-              )}
-              <View
-                style={[
-                  styles.returnsToggleSwitch,
-                  { backgroundColor: deferredOnly ? colors.red[500] : palette.border.strong },
-                ]}
-              >
-                <View style={[styles.returnsToggleSwitchKnob, deferredOnly && styles.returnsToggleSwitchKnobOn]} />
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {activeFilterCount > 0 && (
-            <TouchableOpacity style={styles.clearFiltersBtn} onPress={resetChecksFilters}>
-              <Ionicons name="close-circle-outline" size={14} color={colors.red[500]} />
-              <Text style={styles.clearFiltersBtnText}>Сбросить фильтры</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
+      <JournalFiltersSheet
+        visible={showFilters && activeTab === 'checks'}
+        applied={appliedFilters}
+        timeZone={tenantTz}
+        users={activeUsers}
+        usersLoading={usersLoading}
+        usersError={usersError}
+        retryUsers={() => {
+          void refetchUsers();
+        }}
+        onClose={() => setShowFilters(false)}
+        onApply={(filters) => {
+          // Reusing a cached key must also restart at the first cursor page.
+          void queryClient.resetQueries({ queryKey: journalQueryKey(search, filters), exact: true });
+          checksListRef.current?.scrollToOffset({ offset: 0, animated: false });
+          setAppliedFilters(filters);
+        }}
+      />
 
       {/* Filters panel (warehouse-documents tab) — mirrors the checks
           funnel panel exactly: collapsed by default, revealed by the SAME
@@ -1995,29 +1818,6 @@ export default function ChecksScreen() {
         </View>
       )}
 
-      {/* Date pickers */}
-      <DateTimePickerModal
-        visible={showDateFromPicker}
-        value={dateFrom || new Date()}
-        mode="date"
-        onConfirm={(d) => {
-          setShowDateFromPicker(false);
-          setDateFrom(d);
-          setPage(1);
-        }}
-        onCancel={() => setShowDateFromPicker(false)}
-      />
-      <DateTimePickerModal
-        visible={showDateToPicker}
-        value={dateTo || new Date()}
-        mode="date"
-        onConfirm={(d) => {
-          setShowDateToPicker(false);
-          setDateTo(d);
-          setPage(1);
-        }}
-        onCancel={() => setShowDateToPicker(false)}
-      />
       {/* Warehouse-tab date pickers — separate visibility + state from the
           checks pickers above so the two tabs' date ranges stay independent. */}
       <DateTimePickerModal
@@ -2076,20 +1876,15 @@ export default function ChecksScreen() {
             <ListSkeleton count={8} />
           ) : checks.length === 0 && !isLoading ? (
             // Filter-aware empty: «ничего не найдено с фильтрами» — не то же
-            // самое, что «чеков вообще нет». В первом случае даём кнопку,
-            // которая сбрасывает фильтры И поиск одним тапом — выход из
-            // тупика без раскапывания панели.
+            // самое, что «чеков вообще нет». Сброс условий сохраняет поиск.
             checksFilterCount > 0 || search ? (
               <EmptyState
                 icon="search"
                 title="Ничего не найдено"
                 description="С текущими фильтрами и поиском чеков нет"
                 action={{
-                  label: 'Сбросить фильтры',
-                  onPress: () => {
-                    resetChecksFilters();
-                    setSearch('');
-                  },
+                  label: checksFilterCount > 0 ? 'Сбросить фильтры' : 'Очистить поиск',
+                  onPress: checksFilterCount > 0 ? resetChecksFilters : () => setSearch(''),
                 }}
               />
             ) : (
@@ -2407,11 +2202,18 @@ export default function ChecksScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
 
-  // «Доска» entry (left) + FreshnessBadge (right) — single row above search.
-  // (Bespoke title-header styles removed — the header itself was removed
-  // per owner brief, tab bar already names the screen «Журнал».)
+  // Journal title, service context and secondary navigation.
   // Чип филиала — своя строка над «Доской»: в одну строку с ней и бейджем
   // свежести он бы сжал названия до многоточия.
+  journalTitleRow: {
+    paddingHorizontal: spacing[4],
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
   pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   freshnessRow: {
     flexDirection: 'row',
@@ -2432,10 +2234,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[1.5],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
+    paddingHorizontal: spacing[1],
+    minHeight: Platform.OS === 'android' ? 48 : 44,
   },
   boardEntryText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   // ── Офлайн-очередь чеков (Round 9) ──────────────────────────────
@@ -2513,8 +2313,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   filterBtn: {
-    width: 42,
-    height: 42,
+    width: Platform.OS === 'android' ? 48 : 44,
+    height: Platform.OS === 'android' ? 48 : 44,
     borderRadius: borderRadius.xl,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -2643,13 +2443,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing[1],
     paddingVertical: spacing[2],
+    minHeight: Platform.OS === 'android' ? 48 : 44,
     borderRadius: borderRadius.lg,
   },
+  segmentBtnAndroid: { borderRadius: borderRadius.lg },
   segmentBtnActive: {
     backgroundColor: colors.white,
   },
   segmentBtnText: {
     fontSize: fontSize.sm,
+    flexShrink: 1,
+    textAlign: 'center',
     fontWeight: fontWeight.medium,
     color: colors.gray[500],
   },
@@ -2729,10 +2533,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[1.5],
     paddingHorizontal: spacing[3],
-    height: 28,
-    borderRadius: borderRadius.full,
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
-    maxWidth: 200,
+    maxWidth: 240,
   },
   activeFilterChipText: { fontSize: 13, fontWeight: fontWeight.medium },
 
