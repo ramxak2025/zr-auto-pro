@@ -1,4 +1,5 @@
 import '../components/booking/booking-settings.css';
+import BookingBrandingEditor from '../components/booking/BookingBrandingEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -38,9 +39,19 @@ export default function BookingsPage() {
   const scopedBookingsApi = useMemo(() => (sessionClient ? createBookingsApi(sessionClient) : null), [sessionClient]);
   const scopedClientsApi = useMemo(() => (sessionClient ? createClientsApi(sessionClient) : null), [sessionClient]);
   const [settingsDraft, setSettingsDraft] = useState<Partial<PutPublicBookingSettingsRequest> | null>(null);
+  const sessionRef = useRef({ ownerScope, token });
+  sessionRef.current = { ownerScope, token };
+  const uploadSequence = useRef(0);
+  useEffect(() => {
+    uploadSequence.current += 1;
+    setUploadingBranding(null);
+  }, [token]);
+  const [uploadingBranding, setUploadingBranding] = useState<'logoUrl' | 'backgroundImageUrl' | null>(null);
   const decisionKeys = useRef(new Map<string, { accept: boolean; requestId: string }>());
   useEffect(() => {
     setSettingsDraft(null);
+    uploadSequence.current += 1;
+    setUploadingBranding(null);
     decisionKeys.current.clear();
   }, [ownerScope]);
   useEffect(() => {
@@ -103,6 +114,11 @@ export default function BookingsPage() {
     const profileLinks: PublicBookingContactLinks = tenant?.phone ? { phone: tenant.phone } : {};
     return {
       requestId: '',
+      logoUrl: settingsDraft?.logoUrl !== undefined ? settingsDraft.logoUrl : (settings?.logoUrl ?? null),
+      backgroundImageUrl:
+        settingsDraft?.backgroundImageUrl !== undefined
+          ? settingsDraft.backgroundImageUrl
+          : (settings?.backgroundImageUrl ?? null),
       revision: settings?.revision ?? 0,
       displayName: settingsDraft?.displayName ?? settings?.displayName ?? tenant?.name ?? '',
       address: settingsDraft?.address ?? settings?.address ?? tenant?.address ?? '',
@@ -123,7 +139,7 @@ export default function BookingsPage() {
       return scopedBookingsApi.putPublicSettings(body);
     },
     onSuccess: (result) => {
-      if (readStoredToken() !== token) return;
+      if (readStoredToken() !== token || sessionRef.current.ownerScope !== ownerScope) return;
       setSettingsDraft(null);
       queryClient.setQueryData(['bookings', 'public-settings', ownerScope], result.data);
       toast.success('Настройки страницы сохранены');
@@ -176,6 +192,30 @@ export default function BookingsPage() {
 
   const putDraft = (patch: Partial<PutPublicBookingSettingsRequest>) =>
     setSettingsDraft((current) => ({ ...current, ...patch }));
+  const uploadBranding = async (field: 'logoUrl' | 'backgroundImageUrl', file: File) => {
+    if (!scopedBookingsApi || !canManage || uploadingBranding) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Изображение должно быть до 5 МБ');
+      return;
+    }
+    const sequence = ++uploadSequence.current;
+    const current = () =>
+      sessionRef.current.ownerScope === ownerScope &&
+      sessionRef.current.token === token &&
+      readStoredToken() === token &&
+      uploadSequence.current === sequence;
+    setUploadingBranding(field);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const response = await scopedBookingsApi.uploadPublicBranding(form);
+      if (current()) putDraft({ [field]: response.data.url });
+    } catch (error) {
+      if (current()) toast.error(apiErrorMessage(error) ?? 'Не удалось загрузить изображение');
+    } finally {
+      if (current()) setUploadingBranding(null);
+    }
+  };
   const toggleService = (serviceId: string, checked: boolean) => {
     const current = settingsDraft?.services ?? settings?.services ?? [];
     putDraft({
@@ -245,6 +285,20 @@ export default function BookingsPage() {
               </div>
             ) : (
               <>
+                <details open className="booking-settings-section">
+                  <summary>
+                    Оформление страницы <span>Логотип и изображение шапки</span>
+                  </summary>
+                  <BookingBrandingEditor
+                    logoUrl={draft?.logoUrl !== undefined ? draft.logoUrl : settings?.logoUrl}
+                    backgroundImageUrl={
+                      draft?.backgroundImageUrl !== undefined ? draft.backgroundImageUrl : settings?.backgroundImageUrl
+                    }
+                    uploading={uploadingBranding}
+                    onUpload={(field, file) => void uploadBranding(field, file)}
+                    onRemove={(field) => putDraft({ [field]: null })}
+                  />
+                </details>
                 <details open className="booking-settings-section">
                   <summary>
                     Автосервис <span>Название, ссылка и адрес</span>
@@ -496,7 +550,7 @@ export default function BookingsPage() {
                 </details>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Button
-                    disabled={!draft || !settingsDraft || save.isPending || !canManage}
+                    disabled={!draft || !settingsDraft || save.isPending || !!uploadingBranding || !canManage}
                     onClick={() => {
                       if (draft) save.mutate({ ...draft, requestId: operationId() });
                     }}
@@ -506,7 +560,7 @@ export default function BookingsPage() {
                   {settings?.published && (
                     <Button
                       variant="secondary"
-                      disabled={publish.isPending || save.isPending || !!settingsDraft}
+                      disabled={publish.isPending || save.isPending || !!uploadingBranding || !!settingsDraft}
                       onClick={() => publish.mutate(true)}
                     >
                       Снять с публикации
@@ -515,7 +569,7 @@ export default function BookingsPage() {
                   {settings && !settings.published && (
                     <Button
                       variant="secondary"
-                      disabled={publish.isPending || save.isPending || !!settingsDraft}
+                      disabled={publish.isPending || save.isPending || !!uploadingBranding || !!settingsDraft}
                       onClick={() => publish.mutate(false)}
                     >
                       Опубликовать

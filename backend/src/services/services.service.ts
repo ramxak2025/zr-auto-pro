@@ -9,6 +9,7 @@ import { actorPointId } from '../common/point-scope';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { PutServiceVisibilityRuleDto } from './dto/put-service-visibility-rule.dto';
 import { normalizeServicePrice, ServicePriceInput } from './service-price-policy';
+import { normalizeServicePay, ServicePayInput } from './service-pay-policy';
 import type {
   ServiceImportPreview,
   ServiceImportPreviewRow,
@@ -17,7 +18,7 @@ import type {
   Service,
 } from './service-import-types';
 
-interface ServiceWriteInput extends ServicePriceInput {
+interface ServiceWriteInput extends ServicePriceInput, ServicePayInput {
   name?: string;
   category?: string | null;
   masterPercent?: unknown;
@@ -59,12 +60,15 @@ export class ServicesService {
       name: row.name,
       category: row.category,
       defaultPrice: parseFloat(row.default_price) || 0,
+      priceIsPlaceholder: row.price_is_placeholder === true,
       priceType: (row.price_type ?? 'fixed') as 'fixed' | 'range',
       minPrice: Number(row.min_price ?? row.default_price) || 0,
       maxPrice: Number(row.max_price ?? row.default_price) || 0,
       priceVersion: Number(row.price_version) || 1,
       masterPercent:
         row.master_percent !== null && row.master_percent !== undefined ? parseFloat(row.master_percent) : null,
+      masterPayMode: (row.master_pay_mode ?? 'percent') as 'percent' | 'fixed',
+      masterFixedAmount: row.master_fixed_amount == null ? null : Number(row.master_fixed_amount),
       warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
       createdAt: row.created_at,
     };
@@ -378,6 +382,7 @@ export class ServicesService {
 
   async create(tenantID: string, dto: ServiceWriteInput, actorId?: string) {
     const price = normalizeServicePrice(dto);
+    const pay = normalizeServicePay(dto);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -385,8 +390,8 @@ export class ServicesService {
       await client.query("SELECT set_config('app.service_price_actor', $1, true)", [actorId ?? '']);
       const { rows } = await client.query(
         `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id,
-                               price_type, min_price, max_price)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+                               price_type, min_price, max_price, master_pay_mode, master_fixed_amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
         [
           dto.name,
           dto.category,
@@ -397,6 +402,8 @@ export class ServicesService {
           price.priceType,
           price.minPrice,
           price.maxPrice,
+          pay.masterPayMode,
+          pay.masterFixedAmount,
         ],
       );
       await client.query('COMMIT');
@@ -434,6 +441,12 @@ export class ServicesService {
         set('default_price', price.defaultPrice);
         set('min_price', price.minPrice);
         set('max_price', price.maxPrice);
+        set('price_is_placeholder', false);
+      }
+      if (dto.masterPayMode !== undefined || dto.masterFixedAmount !== undefined) {
+        const pay = normalizeServicePay(dto, prior);
+        set('master_pay_mode', pay.masterPayMode);
+        set('master_fixed_amount', pay.masterFixedAmount);
       }
       if (dto.masterPercent !== undefined) set('master_percent', this.normalizeMasterPercent(dto.masterPercent));
       if (dto.warrantyDays !== undefined) set('warranty_days', this.normalizeWarrantyDays(dto.warrantyDays));
@@ -466,6 +479,7 @@ export class ServicesService {
     return rows.map((row) => ({
       id: row.id,
       version: row.version,
+      priceIsPlaceholder: row.price_is_placeholder === true,
       priceType: row.price_type,
       defaultPrice: Number(row.default_price),
       minPrice: Number(row.min_price),
@@ -534,6 +548,8 @@ export class ServicesService {
         minPrice: input.minPrice as number | undefined,
         maxPrice: input.maxPrice as number | undefined,
         masterPercent: input.masterPercent as number | null | undefined,
+        masterPayMode: input.masterPayMode as ServiceImportRow['masterPayMode'],
+        masterFixedAmount: input.masterFixedAmount as number | null | undefined,
         warrantyDays: input.warrantyDays as number | null | undefined,
       };
       let service: (typeof existing)[number] | undefined;
@@ -595,6 +611,7 @@ export class ServicesService {
             if (matches && matches.length > 1) message = 'Несколько услуг с таким названием и категорией — укажите ID';
             else service = matches?.[0];
           }
+          normalizeServicePay(row, service);
         } catch (error) {
           if (error instanceof BadRequestException) {
             const response = error.getResponse();
@@ -747,12 +764,19 @@ export class ServicesService {
       const imported: Service[] = [];
       for (const op of operations) {
         const price = op.normalizedPrice;
+        const priorPay = op.serviceId
+          ? await client.query('SELECT * FROM services WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+              op.serviceId,
+              tenantID,
+            ])
+          : undefined;
+        const pay = normalizeServicePay(op, priorPay?.rows[0] ? this.mapService(priorPay.rows[0]) : undefined);
         if (op.action === 'create') {
           const masterPercent = op.masterPercent == null ? null : this.normalizeMasterPercent(op.masterPercent);
           const warrantyDays = this.normalizeWarrantyDays(op.warrantyDays);
           const result = await client.query(
-            `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id, price_type, min_price, max_price)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+            `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id, price_type, min_price, max_price, master_pay_mode, master_fixed_amount)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
             [
               op.name.trim(),
               op.category || null,
@@ -763,6 +787,8 @@ export class ServicesService {
               price.priceType,
               price.minPrice,
               price.maxPrice,
+              pay.masterPayMode,
+              pay.masterFixedAmount,
             ],
           );
           imported.push(this.mapService(result.rows[0]));
@@ -770,10 +796,10 @@ export class ServicesService {
           const masterPercent = op.masterPercent == null ? null : this.normalizeMasterPercent(op.masterPercent);
           const warrantyDays = this.normalizeWarrantyDays(op.warrantyDays);
           const result = await client.query(
-            `UPDATE services SET name=$1, category=$2, default_price=$3,
+            `UPDATE services SET name=$1, category=$2, default_price=$3, price_is_placeholder=false,
                master_percent=CASE WHEN $4::boolean THEN $5 ELSE master_percent END,
                warranty_days=CASE WHEN $6::boolean THEN $7 ELSE warranty_days END,
-               price_type=$8, min_price=$9, max_price=$10 WHERE id=$11 AND tenant_id=$12 RETURNING *`,
+               price_type=$8, min_price=$9, max_price=$10, master_pay_mode=$13, master_fixed_amount=$14 WHERE id=$11 AND tenant_id=$12 RETURNING *`,
             [
               op.name.trim(),
               op.category || null,
@@ -787,6 +813,8 @@ export class ServicesService {
               price.maxPrice,
               op.serviceId,
               tenantID,
+              pay.masterPayMode,
+              pay.masterFixedAmount,
             ],
           );
           if (!result.rows.length) throw new ConflictException({ message: 'Услуга больше не найдена' });

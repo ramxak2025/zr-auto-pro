@@ -64,3 +64,14 @@ export function serviceLinePriceExcess(
   const value = (line.price - line.priceThreshold) * (line.quantity || 1);
   return Number.isFinite(value) ? Math.max(0, Math.round((value + Number.EPSILON) * 100) / 100) : 0;
 }
+
+/** Wage/name-only editing must not confirm a provisional catalogue price. */
+export function preservePlaceholderServicePrice(
+  service: { priceIsPlaceholder?: boolean; priceType?: 'fixed' | 'range'; defaultPrice: number; minPrice?: number; maxPrice?: number },
+  price: { priceType: 'fixed' | 'range'; defaultPrice: number; minPrice: number; maxPrice: number },
+  explicitlyConfirmed: boolean,
+): boolean {
+  return service.priceIsPlaceholder === true && !explicitlyConfirmed &&
+    price.priceType === (service.priceType ?? 'fixed') && price.defaultPrice === service.defaultPrice &&
+    price.minPrice === (service.minPrice ?? service.defaultPrice) && price.maxPrice === (service.maxPrice ?? service.defaultPrice);
+}

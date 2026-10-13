@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from './company/StarterDirectionsPicker';
 import { ReactNode, useId, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -81,6 +82,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('');
   const [comment, setComment] = useState('');
+  const [starterDirections, setStarterDirections] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -118,6 +120,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         phone: phone.trim(),
         password: generateRequestSecret(),
         comment: fullComment,
+        starterDirections,
       });
       setSubmitted(true);
       onSubmittedChange?.(true);
@@ -206,6 +209,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         />
       </Field>
 
+      <StarterDirectionsPicker value={starterDirections} onChange={setStarterDirections} disabled={submitting} />
       <Field
         label="Комментарий"
         htmlFor={`${uid}-comment`}

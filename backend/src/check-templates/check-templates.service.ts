@@ -56,7 +56,7 @@ export class CheckTemplatesService {
     const services = serviceIds.length
       ? (
           await db.query(
-            'SELECT id, default_price, price_type, min_price, max_price FROM services WHERE tenant_id=$1 AND id=ANY($2::uuid[])',
+            'SELECT id, default_price, price_type, min_price, max_price, price_is_placeholder FROM services WHERE tenant_id=$1 AND id=ANY($2::uuid[])',
             [tenantId, serviceIds],
           )
         ).rows
@@ -64,7 +64,7 @@ export class CheckTemplatesService {
     const products = productIds.length
       ? (
           await db.query(
-            `SELECT id, sell_price${canSeeCost ? ', cost_price' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL
+            `SELECT id, sell_price${canSeeCost ? ', cost_price, cost_price_is_placeholder' : ''} FROM products WHERE tenant_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL
              AND ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM warehouses w WHERE w.id=products.warehouse_id AND w.point_id=$3::uuid))`,
             [tenantId, productIds, actorPointId(actor)],
           )
@@ -81,7 +81,7 @@ export class CheckTemplatesService {
           const manual = isManualTemplateProduct(line);
           const cost = manual
             ? manualTemplateProductCost(line)
-            : current?.cost_price == null
+            : current?.cost_price == null || current.cost_price_is_placeholder === true
               ? null
               : Number(current.cost_price);
           const knownCost = cost !== null && Number.isFinite(cost) && cost >= 0;
@@ -122,6 +122,7 @@ export class CheckTemplatesService {
             ...(current
               ? {
                   price: Number(current.default_price),
+                  priceIsPlaceholder: current.price_is_placeholder === true,
                   priceType: current.price_type ?? 'fixed',
                   minPrice: Number(current.min_price ?? current.default_price),
                   maxPrice: Number(current.max_price ?? current.default_price),

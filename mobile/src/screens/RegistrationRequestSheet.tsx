@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from '../components/StarterDirectionsPicker';
 /**
  * RegistrationRequestSheet — self-service registration form (migration 123).
  *
@@ -57,6 +58,7 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [comment, setComment] = useState('');
+  const [starterDirections, setStarterDirections] = useState<string[]>([]);
   const [showPassword, setShowPassword] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
@@ -70,6 +72,7 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
     setPhone('');
     setPassword('');
     setComment('');
+    setStarterDirections([]);
     setShowPassword(false);
     setFormError('');
     setSubmitted(false);
@@ -104,6 +107,7 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
         phone: normalizePhone(phone),
         password,
         comment: comment.trim() || undefined,
+        starterDirections,
       });
       haptic('success');
       setSubmitted(true);
@@ -262,6 +266,11 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
                     </TouchableOpacity>
                   </View>
 
+                  <StarterDirectionsPicker
+                    value={starterDirections}
+                    onChange={setStarterDirections}
+                    disabled={submitting}
+                  />
                   {/* Comment */}
                   <Text style={[styles.label, { color: palette.text.secondary }]}>КОММЕНТАРИЙ (НЕОБЯЗАТЕЛЬНО)</Text>
                   <TextInput

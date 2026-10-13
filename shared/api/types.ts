@@ -160,6 +160,7 @@ export interface SwitchSessionPointResponse {
 }
 
 export interface RegisterRequest {
+  starterDirections?: string[];
   phone: string;
   password: string;
   fullName: string;
@@ -175,6 +176,7 @@ export interface RegisterRequest {
  * create the owner account on approval. The endpoint returns only `{ ok: true }`.
  */
 export interface RegisterRequestPayload {
+  starterDirections?: string[];
   companyName: string;
   ownerName: string;
   phone: string;
@@ -283,6 +285,11 @@ export interface ProductsQuery extends PaginationParams {
 }
 
 export interface ChecksParams extends PaginationParams {
+  amountFrom?: number;
+  amountTo?: number;
+  hasDiscount?: boolean;
+  isDeferred?: boolean;
+  isReturned?: boolean;
   masterId?: string;
   clientId?: string;
   carId?: string;
@@ -412,6 +419,9 @@ export interface TransferCarOwnerRequest {
 }
 
 export interface CreateProductRequest {
+  brand?: string;
+  article?: string;
+  packaging?: string;
   name: string;
   category?: string;
   /** Photo URL. Send `null` or `''` to store no photo. */
@@ -438,6 +448,9 @@ export interface CreateProductRequest {
 }
 
 export interface UpdateProductRequest {
+  brand?: string;
+  article?: string;
+  packaging?: string;
   name?: string;
   category?: string;
   /**
@@ -657,6 +670,8 @@ export interface CreateServiceRequest {
   category?: string;
   defaultPrice: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 
@@ -668,6 +683,8 @@ export interface UpdateServiceRequest {
   category?: string;
   defaultPrice?: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 
@@ -682,6 +699,8 @@ export interface ServiceImportRow {
   minPrice?: number;
   maxPrice?: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 
@@ -944,6 +963,7 @@ export interface UpdateWorkModeRequest {
 }
 
 export interface CreateTenantRequest {
+  starterDirections?: string[];
   name: string;
   phone?: string;
   address?: string;
@@ -1097,6 +1117,7 @@ export interface CreateSettlementRequest {
  * `min(14, maxFreeDays)` дней.
  */
 export interface CreateManagerTenantRequest {
+  starterDirections?: string[];
   name: string;
   phone?: string;
   address?: string;
@@ -1567,6 +1588,9 @@ export interface ApprovePublicBookingRequest extends BookingOperationRequest {
   resourceId?: string;
 }
 export interface PutPublicBookingSettingsRequest extends BookingOperationRequest {
+  /** Omitted preserves existing branding; null explicitly removes it. Server-owned public URL only. */
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   /** 0 for the first draft; otherwise the last read server revision. Slug is immutable after creation. */
   revision: number;
   slug?: string;

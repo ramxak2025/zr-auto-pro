@@ -45,6 +45,9 @@ function harness() {
     const [resourceKey, setResource] = React.useState('');
     const [selectedSlot, onSlot] = React.useState(null);
     const [consented, onConsent] = React.useState(false);
+    const [name, onName] = React.useState('Клиент');
+    const [phone, onPhone] = React.useState('+79991112233');
+    const [comment, onComment] = React.useState('');
     return React.createElement(Experience, {
       landing,
       selected,
@@ -63,14 +66,14 @@ function harness() {
       minDate: '2026-10-12',
       maxDate: '2026-11-11',
       slots: { slots: [{ startsAt: '2026-10-12T09:00:00Z' }], nextAfter: null },
-      name: 'Клиент',
-      phone: '+79991112233',
-      comment: '',
+      name,
+      phone,
+      comment,
       busy: false,
       blocked: false,
-      onName() {},
-      onPhone() {},
-      onComment() {},
+      onName,
+      onPhone,
+      onComment,
       onDate() {},
       onSubmit() {},
       onMoreSlots() {},
@@ -127,4 +130,58 @@ test('service-first permits any free master and changing master invalidates a se
   assert.equal(h.button('Указать контакты').props.disabled, false);
   Renderer.act(() => h.tree.root.findByProps({ className: 'pb-master' }).props.onClick());
   assert.equal(h.button('Указать контакты').props.disabled, true);
+});
+
+test('system Back restores the previous step while contacts, phone, comment and selected master survive', () => {
+  const listeners = new Map();
+  const stack = [{}];
+  let index = 0;
+  global.window = {
+    innerHeight: 700,
+    history: {
+      get state() {
+        return stack[index];
+      },
+      replaceState(state) {
+        stack[index] = state;
+      },
+      pushState(state) {
+        stack.splice(index + 1);
+        stack.push(state);
+        index++;
+      },
+      back() {
+        index = Math.max(0, index - 1);
+        listeners.get('popstate')?.({ state: stack[index] });
+      },
+    },
+    addEventListener(name, fn) {
+      listeners.set(name, fn);
+    },
+    removeEventListener(name) {
+      listeners.delete(name);
+    },
+  };
+  try {
+    const h = harness();
+    h.selectService();
+    h.click('Выбрать время');
+    Renderer.act(() => h.tree.root.findByProps({ className: 'pb-times' }).findByType('button').props.onClick());
+    h.click('Указать контакты');
+    Renderer.act(() => {
+      h.tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'Алексей' } });
+      h.tree.root.findByType('textarea').props.onChange({ target: { value: 'Автомобиль' } });
+    });
+    Renderer.act(() => window.history.back());
+    assert.equal(h.tree.root.findByProps({ id: 'pb-heading' }).children[0], 'Когда вам удобно?');
+    h.click('Указать контакты');
+    assert.equal(h.tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Алексей');
+    assert.equal(h.tree.root.findByType('textarea').props.value, 'Автомобиль');
+    assert.equal(h.tree.root.findByProps({ type: 'tel' }).props.value, '+79991112233');
+    assert.equal(h.tree.root.findByProps({ className: 'pb-consent' }).findByType('input').props.checked, false);
+    Renderer.act(() => h.tree.unmount());
+    assert.equal(listeners.size, 0);
+  } finally {
+    delete global.window;
+  }
 });

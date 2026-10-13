@@ -431,9 +431,11 @@ export class ReturnsService {
             defectAfter = mv.quantity;
             const { rows: insRows } = await client.query(
               `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
-                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
+                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
+                                     brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
                SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
-                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode
+                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
+                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
                  FROM products WHERE id=$1 AND tenant_id=$2
                RETURNING id`,
               [mv.productId, tenantID, mv.quantity, targetWh.id],

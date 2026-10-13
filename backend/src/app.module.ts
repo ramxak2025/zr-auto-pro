@@ -1,3 +1,4 @@
+import { StarterCatalogsModule } from './starter-catalogs/starter-catalogs.module';
 import { Module } from '@nestjs/common';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { DatabaseModule } from './database.module';
@@ -63,6 +64,7 @@ import { OneCModule } from './one-c/one-c.module';
 
 @Module({
   imports: [
+    StarterCatalogsModule,
     NestScheduleModule.forRoot(),
     DatabaseModule,
     AuthModule,

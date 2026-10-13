@@ -294,8 +294,8 @@ function BulkDeleteBody({
 export interface ImportRow {
   name: string;
   category: string;
-  costPrice: number;
-  sellPrice: number;
+  costPrice?: number;
+  sellPrice?: number;
   stock: number;
   minStock: number;
   unit: string;
@@ -381,8 +381,8 @@ export function ImportPreviewModal({
                   <td className="text-ink-3">{item.category || '—'}</td>
                   {hasCells && <td className="font-mono text-xs tabular-nums text-ink-2">{item.storageCell || '—'}</td>}
                   <td className="text-ink-3">{unitLabel(item.unit) !== DEFAULT_UNIT ? unitLabel(item.unit) : '—'}</td>
-                  <td className="num">{item.sellPrice || 0}</td>
-                  <td className="num">{item.costPrice || 0}</td>
+                  <td className="num">{item.sellPrice ?? 'Не менять'}</td>
+                  <td className="num">{item.costPrice ?? 'Не менять'}</td>
                   <td className="num">{item.stock || 0}</td>
                 </tr>
               ))}

@@ -183,16 +183,19 @@ export default function LoginPage() {
         className="hidden flex-col justify-between bg-rail px-12 py-10 text-rail-text lg:flex"
         aria-label="О продукте"
       >
-        <a
-          href="https://autexa.pw"
-          className={cn(
-            'inline-flex w-fit items-center gap-2.5 rounded-lg',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-rail',
-          )}
-        >
-          <img src="/logo-icon.png" alt="" width={36} height={36} className="h-9 w-9 rounded-lg object-contain" />
-          <span className="text-lg font-bold tracking-tight text-white">Autexa</span>
-        </a>
+        <div>
+          <a
+            href="https://autexa.pw"
+            className={cn(
+              'inline-flex w-fit items-center gap-2.5 rounded-lg',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-rail',
+            )}
+          >
+            <img src="/logo-icon.png" alt="" width={36} height={36} className="h-9 w-9 rounded-lg object-contain" />
+            <span className="text-lg font-bold tracking-tight text-white">Autexa</span>
+          </a>
+          <p className="mt-1 max-w-[18rem] text-xs leading-5 text-rail-muted">Система управления автосервисами</p>
+        </div>
 
         <div className="max-w-md">
           <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-rail-muted">
@@ -226,8 +229,11 @@ export default function LoginPage() {
       <main className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-8 sm:px-6">
         <div className="w-full max-w-[400px]">
           {/* Логотип показываем над карточкой там, где нет левой панели */}
-          <div className="mb-6 flex justify-center lg:hidden">
+          <div className="mb-6 flex flex-col items-center lg:hidden">
             <img src="/logo.png" alt="Autexa" className="h-10 w-auto object-contain" />
+            <p className="mt-1 max-w-[18rem] text-center text-xs leading-5 text-ink-3">
+              Система управления автосервисами
+            </p>
           </div>
 
           <Card padding="none" className="px-6 py-7 sm:px-8 sm:py-8">
@@ -310,7 +316,7 @@ export default function LoginPage() {
                     onClick={() => setRegisterOpen(true)}
                     className={cn('rounded font-medium text-accent-text hover:underline', focusRing)}
                   >
-                    Оставить заявку
+                    Зарегистрироваться
                   </button>
                 </p>
               </>

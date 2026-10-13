@@ -847,3 +847,242 @@
 .pb-receipt-actions button {
   min-height: 46px;
 }
+
+/* Booking is an independent light surface, including app dark mode. */
+.public-booking button {
+  color: inherit;
+}
+.public-booking .pb-primary {
+  color: #fff;
+}
+.public-booking .pb-primary:disabled {
+  color: #536987;
+}
+.public-booking .pb-link,
+.public-booking .pb-back,
+.public-booking .pb-contact-button {
+  color: var(--pb-accent);
+}
+.pb-business {
+  position: relative;
+  isolation: isolate;
+  background: #eef3fa;
+  backdrop-filter: none;
+}
+.pb-cover-image {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pb-business-details {
+  position: relative;
+}
+.pb-business-cover .pb-business-details {
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.pb-business-mark {
+  border-radius: 50%;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.pb-business-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 5px;
+}
+.pb-business-compact .pb-business-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  width: 100%;
+}
+.pb-business-compact h1 {
+  flex: 1;
+  min-width: 100px;
+}
+.pb-business-compact .pb-business-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  flex: none;
+}
+.pb-business-compact.pb-business-cover .pb-business-details {
+  padding: 8px;
+}
+.pb-wizard .pb-container {
+  display: flex;
+  flex-direction: column;
+  height: calc(var(--pb-viewport, 100dvh) - 48px);
+  max-height: 940px;
+}
+.pb-wizard .pb-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.pb-wizard form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.pb-wizard form > section {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 16px;
+}
+.pb-wizard .pb-action-area {
+  flex: none;
+  margin: 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--pb-rule);
+  background: #fff;
+}
+.pb-wizard .pb-footer {
+  flex: none;
+  padding: 8px 20px max(12px, env(safe-area-inset-bottom));
+}
+.pb-wizard .pb-total {
+  margin-bottom: 8px;
+}
+.pb-wizard .pb-total strong {
+  font-size: 17px;
+}
+.pb-wizard .pb-section-title {
+  margin-top: 16px !important;
+}
+.pb-wizard .pb-resources {
+  max-height: 168px;
+  overflow-y: auto;
+}
+.pb-wizard[data-step='0'] .pb-resources {
+  max-height: none;
+}
+.pb-wizard .pb-categories {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.pb-wizard .pb-categories button {
+  flex: none;
+}
+.pb-wizard .pb-business {
+  padding: 18px 24px;
+}
+.pb-wizard .pb-business h1 {
+  font-size: 22px;
+}
+.pb-wizard .pb-business-compact {
+  padding: 10px 24px;
+}
+.pb-wizard .pb-business-compact h1 {
+  font-size: 17px;
+}
+.pb-wizard .pb-content {
+  padding-top: 18px;
+  padding-bottom: 0;
+}
+.pb-receipt {
+  position: relative;
+}
+.pb-fireworks {
+  position: relative;
+  width: 180px;
+  height: 120px;
+  margin: 0 auto 12px;
+  pointer-events: none;
+  overflow: hidden;
+}
+.pb-fireworks i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--burst-color);
+  animation: pb-burst 1250ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes pb-burst {
+  0% {
+    transform: translate(0, 0) scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--burst-x), var(--burst-y)) scale(0.2);
+    opacity: 0;
+  }
+}
+@media (min-width: 768px) {
+  .pb-wizard {
+    padding-top: 24px;
+    padding-bottom: 24px;
+  }
+}
+@media (max-width: 600px) {
+  .pb-wizard {
+    padding: 0;
+    min-height: var(--pb-viewport, 100dvh);
+  }
+  .pb-wizard .pb-container {
+    height: var(--pb-viewport, 100dvh);
+    max-height: none;
+    border-radius: 0;
+  }
+  .pb-wizard .pb-business {
+    padding: max(14px, env(safe-area-inset-top)) 18px 14px;
+  }
+  .pb-wizard .pb-business-compact {
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: 8px;
+  }
+  .pb-wizard .pb-content {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .pb-wizard .pb-footer {
+    padding-top: 5px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+@media (max-height: 650px) {
+  .pb-wizard .pb-business-mark {
+    width: 38px;
+    height: 38px;
+    margin-bottom: 6px;
+  }
+  .pb-wizard .pb-business {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .pb-wizard .pb-business h1 {
+    font-size: 18px;
+  }
+  .pb-wizard .pb-address {
+    display: none;
+  }
+  .pb-wizard .pb-total,
+  .pb-wizard .pb-price-note,
+  .pb-wizard .pb-confirmation-note {
+    display: none;
+  }
+}

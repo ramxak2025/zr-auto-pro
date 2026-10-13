@@ -13,6 +13,8 @@ export interface BookingContactLinks {
 }
 
 export interface BookingPageSettings {
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   displayName: string;
   address: string;
   contacts: string;

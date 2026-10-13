@@ -105,15 +105,17 @@ export async function resolveTemplateProductSources<T>(
   ];
   const catalog = productIds.length
     ? (
-        await client.query<{ id: string; cost_price: string | null }>(
-          `SELECT p.id, p.cost_price FROM products p WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[])
+        await client.query<{ id: string; cost_price: string | null; cost_price_is_placeholder?: boolean }>(
+          `SELECT p.id, p.cost_price, p.cost_price_is_placeholder FROM products p WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[])
        AND p.deleted_at IS NULL AND ($3::uuid IS NULL OR EXISTS (
          SELECT 1 FROM warehouses w WHERE w.id=p.warehouse_id AND w.point_id=$3::uuid))`,
           [tenantId, productIds, pointId],
         )
       ).rows
     : [];
-  const catalogCosts = new Map(catalog.map((product) => [product.id, product.cost_price]));
+  const catalogCosts = new Map(
+    catalog.map((product) => [product.id, product.cost_price_is_placeholder ? null : product.cost_price]),
+  );
   return products.map((value, index) => {
     const stored = resolvedSources[index];
     if (!stored) return value;

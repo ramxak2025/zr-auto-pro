@@ -1,3 +1,4 @@
+import StarterCatalogsSection from '../components/StarterCatalogsSection';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useEffect } from 'react';
 import {
@@ -70,6 +71,10 @@ export default function CompanySettingsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const companyScrollRef = React.useRef<React.ElementRef<typeof ScrollView>>(null);
+  const scrollToStarterCatalogs = React.useCallback(() => {
+    requestAnimationFrame(() => companyScrollRef.current?.scrollTo({ y: 0, animated: true }));
+  }, []);
   const palette = useColors();
   const { hasPermission } = useAuth();
   // «Права как в Битрикс24» (2026-07): данные компании и тумблер «Смены»
@@ -209,8 +214,12 @@ export default function CompanySettingsScreen() {
       {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
           вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
       <KeyboardAwareView style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
+        <ScrollView
+          ref={companyScrollRef}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        >
           {/* Basic info */}
+          <StarterCatalogsSection onStepChange={scrollToStarterCatalogs} />
           <AnimatedCard index={0}>
             <View style={cardStyle}>
               <View style={styles.cardHeader}>

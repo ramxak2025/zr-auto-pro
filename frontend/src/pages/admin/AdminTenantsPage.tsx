@@ -1,3 +1,4 @@
+import StarterDirectionsPicker from '../../components/company/StarterDirectionsPicker';
 import { useId, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -94,6 +95,7 @@ export default function AdminTenantsPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<TenantFormData>({ ...emptyForm });
+  const [starterDirections, setStarterDirections] = useState<string[]>([]);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // Поиск / фильтры / страница — в URL
@@ -166,6 +168,7 @@ export default function AdminTenantsPage() {
   const createMutation = useMutation({
     mutationFn: (payload: any) => tenantsApi.create(payload),
     onSuccess: () => {
+      setStarterDirections([]);
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
       // Новый клиент с менеджером меняет его счётчики «Клиентов / Активных».
@@ -193,12 +196,14 @@ export default function AdminTenantsPage() {
 
   const openCreate = () => {
     setForm({ ...emptyForm });
+    setStarterDirections([]);
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
     setForm({ ...emptyForm });
+    setStarterDirections([]);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -232,6 +237,7 @@ export default function AdminTenantsPage() {
       isActive: true,
       subscriptionEnd: form.subscriptionEnd || null,
       subscriptionNote: form.subscriptionNote || null,
+      starterDirections,
       directorName: form.directorName || undefined,
       directorPhone: form.directorPhone,
       directorPassword: form.directorPassword,
@@ -502,6 +508,7 @@ export default function AdminTenantsPage() {
             </Field>
           </div>
 
+          <StarterDirectionsPicker value={starterDirections} onChange={setStarterDirections} />
           <Field label="Адрес" htmlFor={`${uid}-address`}>
             <Input
               id={`${uid}-address`}

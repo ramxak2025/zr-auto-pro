@@ -1,5 +1,6 @@
 import {
   Body,
+  Req,
   Controller,
   Get,
   Header,
@@ -11,6 +12,9 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Request } from 'express';
+import { actorPointId } from '../common/point-scope';
+import { PublicBookingBrandingStorage, readBookingBranding } from './public-booking-branding';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
@@ -64,7 +68,16 @@ export class PublicBookingsController {
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('bookings')
 export class BookingPublicationController {
-  constructor(private readonly service: PublicBookingsService) {}
+  constructor(
+    private readonly service: PublicBookingsService,
+    private readonly branding: PublicBookingBrandingStorage,
+  ) {}
+  @Post('public-branding')
+  @RequirePermission('company_manage')
+  async uploadBranding(@CurrentUser() actor: JwtPayload, @Req() req: Request) {
+    await this.service.authorizeBranding(actor);
+    return this.branding.save(await readBookingBranding(req), actor.tenantID, actorPointId(actor));
+  }
   @Get('public-settings')
   @RequirePermission('company_manage')
   settings(@CurrentUser() actor: JwtPayload) {

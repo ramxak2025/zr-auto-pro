@@ -1,3 +1,4 @@
+import { PublicBookingBrandingStorage } from './public-booking-branding';
 import { Module } from '@nestjs/common';
 import { MarketingModule } from '../marketing/marketing.module';
 import { BookingsController } from './bookings.controller';
@@ -11,6 +12,6 @@ import { PublicBookingsController, BookingPublicationController } from './public
   // PushService is provided globally by PushModule (@Global) — no import needed.
   imports: [MarketingModule],
   controllers: [BookingPublicationController, BookingsController, PublicBookingsController],
-  providers: [BookingsService, BookingReminderService, PublicBookingsService],
+  providers: [BookingsService, BookingReminderService, PublicBookingsService, PublicBookingBrandingStorage],
 })
 export class BookingsModule {}

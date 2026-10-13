@@ -774,8 +774,12 @@ test('ProductsService.create: ячейка другого склада — 400 �
   assert.equal(created.storageCellId, CA);
   assert.equal(created.storageCellCode, 'A-1');
   const insert = findOne(ok, /^INSERT INTO products/);
-  assert.match(insert.sql, /storage_cell_id\) VALUES/);
-  assert.equal(insert.params[15], CA);
+  const columns = insert.sql
+    .match(/INSERT INTO products \(([^)]+)\)/)?.[1]
+    .split(',')
+    .map((value) => value.trim());
+  assert.ok(columns?.includes('storage_cell_id'));
+  assert.equal(insert.params[columns.indexOf('storage_cell_id')], CA);
 
   // Без storageCellId адреса нет, ячейки не читаются.
   const plain = makePool((sql) => {

@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
   InternalServerErrorException,
@@ -298,7 +299,8 @@ export class StockMovementsService {
       return result;
     } catch (err) {
       await client.query('ROLLBACK');
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ConflictException)
+        throw err;
       this.logger.error(`Stock movement error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
@@ -490,10 +492,19 @@ export class StockMovementsService {
     const warehouseId = await this.resolveWarehouse(client, tenantID, dto.warehouseId, 'main', expensePointId);
     const recordAsExpense = !!dto.recordAsExpense;
 
-    const { rows } = await client.query('SELECT stock FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
-      dto.productId,
-      tenantID,
-    ]);
+    const { rows } = await client.query(
+      'SELECT stock, cost_price, cost_price_is_placeholder FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+      [dto.productId, tenantID],
+    );
+    if (recordAsExpense && rows[0]?.cost_price_is_placeholder === true)
+      throw new ConflictException({
+        code: 'PRODUCT_COST_CONFIRMATION_REQUIRED',
+        message:
+          'Подтвердите закупочную цену товара в карточке или проведите фактическую закупку перед списанием в расходы.',
+      });
+    // The fallback must come from the same locked row as its confirmation flag.
+    // A concurrent price confirmation can invalidate create()'s earlier read.
+    const writeoffCost = dto.purchasePrice != null ? purchasePrice : parseFloat(String(rows[0].cost_price)) || 0;
     const stockBefore = parseFloat(rows[0].stock) || 0;
     const stockAfter = Math.max(stockBefore - qty, 0);
 
@@ -506,7 +517,7 @@ export class StockMovementsService {
     let linkedExpenseId: string | null = null;
     if (recordAsExpense) {
       const categoryId = await this.getOrInsertExpenseCategory(client, tenantID, 'Списание со склада');
-      const amount = qty * purchasePrice;
+      const amount = qty * writeoffCost;
       const { rows: expRows } = await client.query(
         `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
          VALUES ($1,$2,$3,now(),$4,$5,$6) RETURNING id`,
@@ -674,9 +685,11 @@ export class StockMovementsService {
         // брак/Б-У stock must never ring low-stock alerts.
         const { rows: insRows } = await client.query(
           `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
-                                 is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
+                                 is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode,
+                                     brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder)
            SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
-                  is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode
+                  is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode,
+                      brand, article, packaging, source_url, sell_price_is_placeholder, cost_price_is_placeholder
              FROM products WHERE id=$1 AND tenant_id=$2
            RETURNING id`,
           [dto.productId, tenantID, qty, targetWarehouseId],

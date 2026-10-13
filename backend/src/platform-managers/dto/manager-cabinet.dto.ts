@@ -1,3 +1,4 @@
+import { IsArray, ArrayMaxSize } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
   IsDefined,
@@ -49,6 +50,12 @@ export class ManagerTenantDirectorDto {
 
 /** POST /manager/tenants */
 export class CreateManagerTenantDto {
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  starterDirections?: string[];
+
   @IsString({ message: 'Укажите название автосервиса' })
   @IsNotEmpty({ message: 'Укажите название автосервиса' })
   @MaxLength(200, { message: 'Название слишком длинное' })

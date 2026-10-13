@@ -32,3 +32,90 @@
   outline: 3px solid #8eb3fa;
   outline-offset: 3px;
 }
+.booking-branding-editor {
+  display: grid;
+  gap: 20px;
+}
+.booking-branding-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.booking-branding-preview {
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 76px;
+  flex: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #f0f3f8;
+  color: #606c7e;
+}
+.booking-branding-preview.is-logo {
+  width: 76px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #e5e9f0;
+}
+.booking-branding-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.booking-branding-preview.is-logo img {
+  object-fit: contain;
+  padding: 6px;
+}
+.booking-branding-row strong {
+  font-size: 14px;
+}
+.booking-branding-row p,
+.booking-branding-note {
+  color: #606c7e;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.booking-branding-upload,
+.booking-branding-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  color: #1760df;
+  font-size: 13px;
+  margin-right: 16px;
+  cursor: pointer;
+  position: relative;
+}
+.booking-branding-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.booking-branding-upload:focus-within {
+  outline: 3px solid #8eb3fa;
+  outline-offset: 3px;
+}
+.booking-branding-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 480px) {
+  .booking-branding-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .booking-branding-preview:not(.is-logo) {
+    width: 100%;
+    height: 112px;
+  }
+  .booking-branding-upload,
+  .booking-branding-row button {
+    white-space: nowrap;
+  }
+}

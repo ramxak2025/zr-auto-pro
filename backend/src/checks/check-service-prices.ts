@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PoolClient } from 'pg';
 
-interface ServiceLineInput {
+export interface ServiceLineInput {
   id?: string;
   serviceId?: string | null;
   masterId?: string | null;
@@ -45,6 +45,8 @@ export interface SavedServiceLine extends PriceSnapshotRow {
   quantity: number | null;
   total: string | number;
   salary_amount?: string | number | null;
+  salary_mode?: 'percent' | 'fixed';
+  salary_fixed_amount?: string | number | null;
   master_name?: string;
   matching_master_id?: string | null;
   price_changed_by_name?: string | null;
@@ -58,6 +60,7 @@ interface CatalogPriceRow {
   min_price: string;
   max_price: string;
   price_version: number;
+  price_is_placeholder?: boolean;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -97,11 +100,21 @@ function snapshot(row: SavedServiceLine): PriceSnapshotRow {
 /** Do not guess between duplicate historical lines with different provenance. */
 function choose(candidates: SavedServiceLine[]): SavedServiceLine | undefined {
   if (candidates.length < 2) return candidates[0];
-  if (new Set(candidates.map((row) => JSON.stringify(snapshot(row)))).size > 1) {
+  if (
+    new Set(
+      candidates.map((row) =>
+        JSON.stringify({
+          ...snapshot(row),
+          salaryMode: row.salary_mode ?? 'percent',
+          salaryFixedAmount: money(row.salary_fixed_amount ?? null),
+        }),
+      ),
+    ).size > 1
+  ) {
     throw new ConflictException({
       code: 'SERVICE_LINE_ID_REQUIRED',
       message:
-        'Не удалось однозначно определить строки услуг с разной историей цен. Обновите приложение и заново откройте заказ-наряд.',
+        'Не удалось однозначно определить строки услуг с разной историей цен или начислений. Обновите приложение и заново откройте заказ-наряд.',
     });
   }
   return candidates[0];
@@ -164,6 +177,70 @@ export function matchServiceLineIds(lines: readonly ServiceLineInput[], prior: r
   return matches;
 }
 
+export interface ServicePaySnapshot {
+  salaryMode: 'percent' | 'fixed';
+  salaryFixedAmount: number | null;
+}
+
+function savedPay(row: SavedServiceLine): ServicePaySnapshot {
+  return { salaryMode: row.salary_mode ?? 'percent', salaryFixedAmount: money(row.salary_fixed_amount ?? null) };
+}
+
+/** Resolve historical modes before calculating totals, under the same transaction/parent lock as saving. */
+export async function resolveCheckServicePay(
+  client: PoolClient,
+  tenantId: string,
+  checkId: string | null,
+  lines: readonly ServiceLineInput[],
+): Promise<ServicePaySnapshot[]> {
+  const prior = checkId
+    ? (
+        await client.query<SavedServiceLine>(
+          `SELECT sl.*, COALESCE(sl.master_id, ch.master_id) AS matching_master_id FROM check_service_lines sl
+       JOIN checks ch ON ch.id=sl.check_id AND ch.tenant_id=$2
+      WHERE sl.check_id=$1 ORDER BY sl.id FOR UPDATE OF sl`,
+          [checkId, tenantId],
+        )
+      ).rows
+    : [];
+  const matches = matchServiceLineIds(lines, prior);
+  const ids = [
+    ...new Set(
+      lines
+        .filter((line, i) => line.serviceId && (!matches[i] || ref(matches[i]?.service_id) !== ref(line.serviceId)))
+        .map((line) => ref(line.serviceId) as string),
+    ),
+  ];
+  const catalog = ids.length
+    ? (
+        await client.query<{
+          id: string;
+          master_pay_mode: 'percent' | 'fixed';
+          master_fixed_amount: string | null;
+        }>(
+          `SELECT id, master_pay_mode, master_fixed_amount FROM services
+        WHERE tenant_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE`,
+          [tenantId, ids],
+        )
+      ).rows
+    : [];
+  const byId = new Map(catalog.map((row) => [ref(row.id), row]));
+  return lines.map((line, i) => {
+    const old = matches[i];
+    if (old && ref(old.service_id) === ref(line.serviceId)) return savedPay(old);
+    const service = byId.get(ref(line.serviceId));
+    if (line.serviceId && !service) throw new BadRequestException({ message: 'Услуга не найдена' });
+    return {
+      salaryMode: service?.master_pay_mode ?? 'percent',
+      salaryFixedAmount: money(service?.master_fixed_amount ?? null),
+    };
+  });
+}
+
+export function serviceLineSalary(pay: ServicePaySnapshot, total: number, quantity: number, percent: number): number {
+  return round2(pay.salaryMode === 'fixed' ? (pay.salaryFixedAmount ?? 0) * (quantity || 1) : (total * percent) / 100);
+}
+
 /** Caller holds the parent check lock (or has just inserted it) in this transaction. */
 export async function saveCheckServiceLines(
   client: PoolClient,
@@ -179,6 +256,7 @@ export async function saveCheckServiceLines(
     [checkId, tenantId],
   );
   const matches = matchServiceLineIds(lines, prior);
+  const paySnapshots = await resolveCheckServicePay(client, tenantId, checkId, lines);
   const needsCatalog = [
     ...new Set(
       lines
@@ -190,7 +268,8 @@ export async function saveCheckServiceLines(
   if (needsCatalog.length) {
     // Deterministic row locks serialize the first snapshot with catalogue changes.
     const { rows } = await client.query<CatalogPriceRow>(
-      `SELECT id, price_type, default_price, min_price, max_price, price_version
+      `SELECT id, price_type, default_price, min_price, max_price, price_version,
+              COALESCE((to_jsonb(services)->>'price_is_placeholder')::boolean, false) AS price_is_placeholder
          FROM services WHERE tenant_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE`,
       [tenantId, needsCatalog],
     );
@@ -207,16 +286,17 @@ export async function saveCheckServiceLines(
     if (!sameService && line.serviceId) {
       const price = catalog.get(ref(line.serviceId) as string);
       if (!price) throw new BadRequestException({ message: 'Услуга не найдена' });
-      saved = {
-        ...saved,
-        price_snapshot_status: 'catalog',
-        catalog_price_type: price.price_type,
-        catalog_default_price: price.default_price,
-        catalog_min_price: price.min_price,
-        catalog_max_price: price.max_price,
-        catalog_price_version: price.price_version,
-        price_threshold: price.price_type === 'range' ? price.max_price : price.default_price,
-      };
+      if (!price.price_is_placeholder)
+        saved = {
+          ...saved,
+          price_snapshot_status: 'catalog',
+          catalog_price_type: price.price_type,
+          catalog_default_price: price.default_price,
+          catalog_min_price: price.min_price,
+          catalog_max_price: price.max_price,
+          catalog_price_version: price.price_version,
+          price_threshold: price.price_type === 'range' ? price.max_price : price.default_price,
+        };
     }
     if (saved.catalog_price_type === 'range' && line.price == null) {
       throw new BadRequestException({ message: 'Для услуги с диапазоном укажите цену' });
@@ -246,6 +326,8 @@ export async function saveCheckServiceLines(
       line.quantity || 1,
       line.total,
       line.salaryAmount ?? 0,
+      paySnapshots[i].salaryMode,
+      paySnapshots[i].salaryFixedAmount,
       saved.price_snapshot_status,
       saved.catalog_price_type,
       saved.catalog_default_price,
@@ -266,6 +348,8 @@ export async function saveCheckServiceLines(
       'quantity',
       'total',
       'salary_amount',
+      'salary_mode',
+      'salary_fixed_amount',
       'price_snapshot_status',
       'catalog_price_type',
       'catalog_default_price',

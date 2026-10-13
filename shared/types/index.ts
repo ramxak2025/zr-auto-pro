@@ -770,6 +770,7 @@ export interface AuditLogEntry {
  * account — it is never exposed in any API response.
  */
 export interface RegistrationRequest {
+  starterDirections?: string[];
   id: string;
   companyName: string;
   ownerName: string;
@@ -1801,6 +1802,12 @@ export interface BundleItem {
 }
 
 export interface Product {
+  brand?: string;
+  article?: string;
+  packaging?: string;
+  sourceUrl?: string;
+  sellPriceIsPlaceholder?: boolean;
+  costPriceIsPlaceholder?: boolean;
   id: string;
   name: string;
   category?: string;
@@ -1885,6 +1892,7 @@ export interface ServiceExecutionHistoryEntry {
 }
 
 export interface Service {
+  priceIsPlaceholder?: boolean;
   id: string;
   name: string;
   category?: string;
@@ -1896,6 +1904,8 @@ export interface Service {
   priceVersion?: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
   warrantyDays: number | null;
   createdAt: string;
@@ -2012,6 +2022,9 @@ export interface CheckServicePriceSnapshot {
 }
 
 export interface CheckServiceLine extends CheckServicePriceSnapshot {
+  /** Financial read fields, omitted without the existing profit visibility permission. */
+  salaryMode?: 'percent' | 'fixed';
+  salaryFixedAmount?: number | null;
   id?: string;
   serviceId?: string;
   masterId?: string;
@@ -2545,6 +2558,8 @@ export interface PublicBookingContactLinks {
   telegram?: string;
 }
 export interface PublicBookingPageSettings {
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   id: string;
   pointId: string | null;
   slug: string;
@@ -2579,6 +2594,8 @@ export interface PublicBookingServiceOption {
   category?: string | null;
 }
 export interface PublicBookingLanding {
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   slug: string;
   /** Derive the first calendar day from this server clock in the tenant IANA zone. */
   timezone: string;
@@ -6037,3 +6054,5 @@ export interface ReportCatalogResponse {
 export type AttendanceNfcRequestResult =
   | { status: 'completed'; result: AttendanceNfcScanResult }
   | { status: 'unknown' };
+
+export type * from './starterCatalogs';

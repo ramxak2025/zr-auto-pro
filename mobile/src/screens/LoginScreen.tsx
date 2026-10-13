@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  Platform,
   Animated,
   AccessibilityInfo,
 } from 'react-native';
@@ -256,7 +255,7 @@ export default function LoginScreen() {
               <CachedImage source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </Animated.View>
             <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>
-              Система управления автосервисом для организаций
+              Система управления автосервисами
             </Animated.Text>
 
             {/* Phone */}
@@ -332,25 +331,16 @@ export default function LoginScreen() {
               </TouchableOpacity>
             ) : null}
 
-            {/* Self-service registration — secondary action under the login form.
-                HIDDEN on iOS (App Store Guideline 3.1.1): in-app account creation
-                that unlocks a subscription paid outside Apple is not allowed. On
-                iOS the app is login-only for existing accounts; new autoservices
-                register on the web (autexa.pw). Android keeps self-service signup. */}
-            {Platform.OS !== 'ios' && (
-              <Animated.View
-                style={[styles.registerWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}
-              >
-                <Button
-                  title="Регистрация"
-                  variant="secondary"
-                  onPress={() => setRegisterOpen(true)}
-                  disabled={submitting}
-                  size="md"
-                  hapticIntent="tap"
-                />
-              </Animated.View>
-            )}
+            <Animated.View style={[styles.registerWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
+              <Button
+                title="Зарегистрироваться"
+                variant="secondary"
+                onPress={() => setRegisterOpen(true)}
+                disabled={submitting}
+                size="md"
+                hapticIntent="tap"
+              />
+            </Animated.View>
           </View>
 
           {/* Footer — версия из app.json (не хардкодить, чтобы не устаревала). */}
@@ -358,9 +348,7 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAwareView>
 
-      {Platform.OS !== 'ios' && (
-        <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
-      )}
+      <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
       <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </SafeAreaView>
   );
@@ -394,11 +382,14 @@ const styles = StyleSheet.create({
     height: 58,
   },
   subtitle: {
+    alignSelf: 'center',
+    maxWidth: 360,
     textAlign: 'center',
     fontSize: fontSize.sm,
+    lineHeight: 20,
     color: colors.gray[400],
     marginBottom: spacing[8],
-    letterSpacing: 1,
+    letterSpacing: 0.2,
   },
   fieldWrap: {
     marginBottom: spacing[5],

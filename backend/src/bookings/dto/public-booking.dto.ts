@@ -47,6 +47,8 @@ export class PublicBookingLinksDto {
 }
 export type BookingHours = Record<string, { start: string; end: string } | null>;
 export class PublicBookingSettingsDto extends BookingOperationDto {
+  @IsOptional() @IsString() @MaxLength(250) logoUrl?: string | null;
+  @IsOptional() @IsString() @MaxLength(250) backgroundImageUrl?: string | null;
   @IsInt() @Min(0) revision!: number;
   /** Accepted for old clients. New owner flows let the server generate it. */
   @IsOptional() @IsString() @Matches(/^[a-z0-9][a-z0-9-]{2,63}$/) slug?: string;

@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import { validateBookingBrandingUrl } from './public-booking-branding';
 import { generatePublicBookingCode, isPublicBookingCode } from './public-booking-code';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
@@ -153,6 +154,9 @@ export class PublicBookingsService {
       links: page.settings.links,
     });
   }
+  async authorizeBranding(actor: JwtPayload) {
+    await bookingActor(this.pool, actor, 'company_manage');
+  }
   async getSettings(actor: JwtPayload) {
     await bookingActor(this.pool, actor, 'company_manage');
     const page = await this.pageForActor(this.pool, actor);
@@ -213,7 +217,18 @@ export class PublicBookingsService {
         throw new BadRequestException({ message: 'Адрес созданной страницы сохраняется для восстановления заявок' });
       const slug = previous?.slug ?? dto.slug ?? `booking-${randomBytes(8).toString('hex')}`;
       const legal = await this.legalDocuments(client, { tenant_id: actor.tenantID, settings });
-      const persistedSettings = { ...settings, ...legal };
+      const persistedSettings = {
+        ...settings,
+        ...legal,
+        logoUrl:
+          dto.logoUrl === undefined
+            ? (previous?.settings.logoUrl ?? null)
+            : validateBookingBrandingUrl(dto.logoUrl, actor.tenantID, actorPointId(actor)),
+        backgroundImageUrl:
+          dto.backgroundImageUrl === undefined
+            ? (previous?.settings.backgroundImageUrl ?? null)
+            : validateBookingBrandingUrl(dto.backgroundImageUrl, actor.tenantID, actorPointId(actor)),
+      };
       const resourceIds = [...new Set(dto.resourceIds)].sort();
       const existingResources = previous
         ? await client.query<{ user_id: string; resource_key: string }>(
@@ -462,6 +477,8 @@ export class PublicBookingsService {
         timezone: page.timezone,
         serverAt: page.server_at.toISOString(),
         displayName: s.displayName,
+        logoUrl: s.logoUrl ?? null,
+        backgroundImageUrl: s.backgroundImageUrl ?? null,
         address: s.address,
         contacts: s.contacts,
         links: s.links,

@@ -185,8 +185,16 @@ export default function ProductDetailModal({
           <div className="grid grid-cols-2 gap-3">
             {/* Закуп. цена — cost price is manage-only (backend zeroes it for
                 users without warehouse_manage; never render "0 ₽" as real). */}
-            {canManage && infoTile('Закупочная цена', <Money value={product.costPrice} />)}
-            {infoTile('Продажная цена', <Money value={product.sellPrice} />, 'accent')}
+            {canManage &&
+              infoTile(
+                product.costPriceIsPlaceholder ? 'Закупочная цена · заготовка' : 'Закупочная цена',
+                <Money value={product.costPrice} />,
+              )}
+            {infoTile(
+              product.sellPriceIsPlaceholder ? 'Продажная цена · заготовка' : 'Продажная цена',
+              <Money value={product.sellPrice} />,
+              'accent',
+            )}
             {infoTile('Остаток', `${formatQty(product.stock)} ${uLabel}`, isLow ? 'bad' : undefined)}
             {infoTile('Минимальный остаток', `${formatQty(product.minStock)} ${uLabel}`)}
           </div>
@@ -280,8 +288,15 @@ export default function ProductDetailModal({
 
         <TabPanel idPrefix="product-detail" tabKey="prices" active={tab === 'prices'} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            {infoTile('Закупочная', <Money value={product.costPrice} />)}
-            {infoTile('Продажная', <Money value={product.sellPrice} />, 'accent')}
+            {infoTile(
+              product.costPriceIsPlaceholder ? 'Закупочная · заготовка' : 'Закупочная',
+              <Money value={product.costPrice} />,
+            )}
+            {infoTile(
+              product.sellPriceIsPlaceholder ? 'Продажная · заготовка' : 'Продажная',
+              <Money value={product.sellPrice} />,
+              'accent',
+            )}
           </div>
           <p className="text-sm font-medium text-ink">История изменений</p>
           <QueryState

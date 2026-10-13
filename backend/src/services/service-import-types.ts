@@ -15,6 +15,8 @@ export interface Service {
   priceVersion?: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
   warrantyDays: number | null;
   createdAt: string;
@@ -30,6 +32,8 @@ export interface ServiceImportRow {
   minPrice?: number;
   maxPrice?: number;
   masterPercent?: number | null;
+  masterPayMode?: 'percent' | 'fixed';
+  masterFixedAmount?: number | null;
   warrantyDays?: number | null;
 }
 

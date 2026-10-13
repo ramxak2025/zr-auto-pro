@@ -4,7 +4,7 @@
     "slug": "autexa-mobile",
     "scheme": "autexa",
     "owner": "ramxak",
-    "version": "3.15.0",
+    "version": "3.16.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -20,7 +20,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.autexa.mobile",
       "associatedDomains": ["applinks:autexa-cloud.ru", "applinks:autexa.pw"],
-      "buildNumber": "3",
+      "buildNumber": "104",
       "entitlements": {
         "com.apple.security.application-groups": ["group.com.autexa.mobile"]
       },
@@ -75,7 +75,7 @@
           ]
         }
       ],
-      "versionCode": 15,
+      "versionCode": 113,
       "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
       "permissions": [

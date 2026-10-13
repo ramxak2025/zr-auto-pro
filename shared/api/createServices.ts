@@ -2364,6 +2364,11 @@ export function createBookingsApi(api: HttpClient) {
     convert: (id: string, data: ConvertBookingRequest) => api.post<Booking>(`/bookings/${id}/convert`, data),
     linkClient: (id: string, data: LinkBookingClientRequest) => api.post<Booking>(`/bookings/${id}/link-client`, data),
     getPublicSettings: () => api.get<PublicBookingPageSettings | null>('/bookings/public-settings'),
+    /** Multipart image upload; does not save or publish settings. */
+    uploadPublicBranding: (formData: unknown) =>
+      api.post<{ url: string }>('/bookings/public-branding', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
     putPublicSettings: (data: PutPublicBookingSettingsRequest) =>
       api.put<PublicBookingPageSettings>('/bookings/public-settings', data),
     publicResources: () => api.get<PublicBookingResource[]>('/bookings/public-resources'),

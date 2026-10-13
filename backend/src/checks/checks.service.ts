@@ -1,3 +1,4 @@
+import { validateJournalFilters } from './journal-filters';
 import {
   Injectable,
   Inject,
@@ -40,7 +41,15 @@ import {
   zonedMidnight,
 } from '../common/timezone';
 import { ComparePeriod, previousComparableWindow } from '../common/period-compare';
-import { hydrateOmittedCheckLines, mapServiceLinePrice, saveCheckServiceLines } from './check-service-prices';
+import { resolveConfirmedProductCosts } from './check-product-costs';
+import {
+  hydrateOmittedCheckLines,
+  mapServiceLinePrice,
+  saveCheckServiceLines,
+  resolveCheckServicePay,
+  serviceLineSalary,
+  ServiceLineInput,
+} from './check-service-prices';
 import { resolveTemplateProductSources } from '../check-templates/template-product-source';
 
 /** Actor context for visibility decisions (checks_view_all). */
@@ -1148,6 +1157,7 @@ export class ChecksService {
   }
 
   async getAll(tenantID: string, query: any, actor?: ChecksActor, clientHistory = false) {
+    const filters = validateJournalFilters(query);
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -1269,6 +1279,16 @@ export class ChecksService {
         params.push(query.dateTo);
       }
     }
+    // Inclusive final amount after discount; same WHERE drives count and both paging modes.
+    if (filters.amountFrom !== undefined) {
+      where += ` AND ch.total_revenue >= $${idx++}`;
+      params.push(filters.amountFrom);
+    }
+    if (filters.amountTo !== undefined) {
+      where += ` AND ch.total_revenue <= $${idx++}`;
+      params.push(filters.amountTo);
+    }
+    if (filters.hasDiscount) where += ' AND ch.discount > 0';
     if (query.retail === 'true') {
       where += ` AND ch.client_id IS NULL`;
     }
@@ -1593,6 +1613,12 @@ export class ChecksService {
     );
     ch.services = svcRows.map((s) => ({
       ...mapServiceLinePrice(s),
+      ...(this.canSeeProfit(actor)
+        ? {
+            salaryMode: s.salary_mode ?? 'percent',
+            salaryFixedAmount: s.salary_fixed_amount == null ? null : Number(s.salary_fixed_amount),
+          }
+        : {}),
       id: s.id,
       serviceId: s.service_id,
       masterId: s.master_id,
@@ -3039,7 +3065,13 @@ export class ChecksService {
       }
 
       const serviceLines: any[] = [];
-      for (const svc of services) {
+      const paySnapshots = await resolveCheckServicePay(
+        client,
+        tenantID,
+        null,
+        services.map((svc: ServiceLineInput) => ({ ...svc, masterId: svc.masterId || dto.masterId })),
+      );
+      for (const [index, svc] of services.entries()) {
         // Money precision (audit round 7, item 6): the line total is a real
         // 2-decimal amount, same round2 discipline as lineSalary below.
         const total = round2((svc.price || 0) * (svc.quantity || 1));
@@ -3052,7 +3084,7 @@ export class ChecksService {
         // (masterId). Rounded to money precision so the persisted per-line amounts
         // sum EXACTLY to service_salary_total (which we keep as Σ of the rounded
         // lines) — the salary reads now attribute service earnings per line.
-        const lineSalary = round2((total * salaryPct) / 100);
+        const lineSalary = serviceLineSalary(paySnapshots[index], total, svc.quantity || 1, salaryPct);
         serviceSalaryTotal += lineSalary;
         serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
       }
@@ -3086,6 +3118,7 @@ export class ChecksService {
         }
       }
 
+      const historicalCosts = await resolveConfirmedProductCosts(client, tenantID, products, null);
       // Product price lock: warehouse sell_price is authoritative (see helper).
       const warehouseSellMap = await this.loadWarehouseSellPrices(
         client,
@@ -3103,7 +3136,7 @@ export class ChecksService {
         actorPointId(actor),
       );
 
-      for (const prod of products) {
+      for (const [productIndex, prod] of products.entries()) {
         // Lock the SELL price to the current warehouse value when the product is
         // a warehouse item with a positive price; otherwise keep the client price
         // (ad-hoc line / product with no warehouse price).
@@ -3113,7 +3146,7 @@ export class ChecksService {
         // a present cost of 0 is a genuine value and wins). Ad-hoc lines with no
         // productId keep the client-sent cost.
         const effectiveCostPrice = prod.productId
-          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+          ? (historicalCosts.get(productIndex) ?? warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
           : prod.costPrice || 0;
         // Money precision (item 6): per-line sell/cost are real 2-decimal
         // amounts, so Σ(lines) matches the stored totals cent-for-cent.
@@ -3318,24 +3351,9 @@ export class ChecksService {
       // First-save price policy and identity are written in the check transaction.
       await saveCheckServiceLines(client, tenantID, checkId, serviceLines, actor?.userID ?? userID);
 
-      // Insert product lines and update stock.
-      // NEW-4 (антидедлок): при активной продаже строки products лочатся FOR
-      // UPDATE по ВОЗРАСТАНИЮ id ОДНИМ оператором ДО поштучных списаний — единый
-      // глобальный порядок с stock-movements.applyTransfer (ORDER BY id FOR
-      // UPDATE), иначе перенос/возврат того же SKU и продажа лочат две строки в
-      // обратном порядке → взаимоблокировка 40P01. Последующие UPDATE лишь
-      // пере-лочат уже удерживаемые строки, поэтому их порядок больше не важен.
-      if (!effectiveIsDeferred) {
-        const lockIds = Array.from(
-          new Set(productLines.map((p) => p.productId).filter((x: unknown): x is string => !!x)),
-        );
-        if (lockIds.length > 0) {
-          await client.query(
-            `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id = $2 ORDER BY id FOR UPDATE`,
-            [lockIds, tenantID],
-          );
-        }
-      }
+      // The cost guard already holds every product FOR UPDATE in id order,
+      // before allocating the check number. Inserts and stock writes reuse
+      // those locks without a SHARE→UPDATE upgrade or a counter/product cycle.
       for (const prod of productLines) {
         await client.query(
           `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
@@ -3934,6 +3952,23 @@ export class ChecksService {
       // check means a genuine true→false activation; an already-active check is
       // a no-op re-save that must NOT re-apply effects.
       const isActivating = checkRows[0].is_deferred === true;
+      if (isActivating) {
+        const { rows: storedProducts } = await client.query('SELECT * FROM check_product_lines WHERE check_id=$1', [
+          id,
+        ]);
+        await resolveConfirmedProductCosts(
+          client,
+          tenantID,
+          storedProducts.map((row) => ({
+            productId: row.product_id,
+            name: row.name,
+            sellPrice: Number(row.sell_price),
+            quantity: Number(row.quantity),
+          })),
+          id,
+        );
+      }
+
       // Machine exchange may close a known draft only; it must never race into
       // editing an already-booked payment or normalize a stale external amount.
       if (
@@ -4564,7 +4599,13 @@ export class ChecksService {
 
       const serviceLines: any[] = [];
       const primaryMasterId = dto.masterId || existingMasterId;
-      for (const svc of services) {
+      const paySnapshots = await resolveCheckServicePay(
+        client,
+        tenantID,
+        id,
+        services.map((svc: ServiceLineInput) => ({ ...svc, masterId: svc.masterId || primaryMasterId })),
+      );
+      for (const [index, svc] of services.entries()) {
         // Money precision (audit round 7, item 6): the line total is a real
         // 2-decimal amount, same round2 discipline as lineSalary below.
         const total = preserve.services ? svc.total : round2((svc.price || 0) * (svc.quantity || 1));
@@ -4573,7 +4614,9 @@ export class ChecksService {
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
         const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
         // #56: bake the per-line salary for THIS line's executor (see create()).
-        const lineSalary = preserve.services ? svc.salaryAmount : round2((total * salaryPct) / 100);
+        const lineSalary = preserve.services
+          ? svc.salaryAmount
+          : serviceLineSalary(paySnapshots[index], total, svc.quantity || 1, salaryPct);
         serviceSalaryTotal += lineSalary;
         serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
       }
@@ -4622,6 +4665,7 @@ export class ChecksService {
           }
         }
 
+        const historicalCosts = await resolveConfirmedProductCosts(client, tenantID, products, id);
         // Product price lock (same rule as create): warehouse sell_price wins.
         const warehouseSellMap = await this.loadWarehouseSellPrices(
           client,
@@ -4637,11 +4681,11 @@ export class ChecksService {
           actorPointId(actor),
         );
 
-        for (const prod of products) {
+        for (const [productIndex, prod] of products.entries()) {
           const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
           const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
           const effectiveCostPrice = prod.productId
-            ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+            ? (historicalCosts.get(productIndex) ?? warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
             : prod.costPrice || 0;
           // Money precision (item 6): per-line sell/cost are real 2-decimal
           // amounts, so Σ(lines) matches the stored totals cent-for-cent.
@@ -4974,14 +5018,22 @@ export class ChecksService {
     let serviceTotal = 0;
     let serviceSalaryTotal = 0;
     const serviceLines: any[] = [];
-    for (const svc of services) {
+    const paySnapshots = await resolveCheckServicePay(
+      client,
+      tenantID,
+      prior.id,
+      services.map((svc: ServiceLineInput) => ({ ...svc, masterId: svc.masterId || primaryMasterId })),
+    );
+    for (const [index, svc] of services.entries()) {
       // Money precision (item 6) — same round2 discipline as create/fullUpdate.
       const total = preserve.services ? svc.total : round2((svc.price || 0) * (svc.quantity || 1));
       serviceTotal += total;
       const masterId = svc.masterId || primaryMasterId;
       const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
       const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
-      const lineSalary = preserve.services ? svc.salaryAmount : round2((total * salaryPct) / 100);
+      const lineSalary = preserve.services
+        ? svc.salaryAmount
+        : serviceLineSalary(paySnapshots[index], total, svc.quantity || 1, salaryPct);
       serviceSalaryTotal += lineSalary;
       serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
     }
@@ -5027,6 +5079,7 @@ export class ChecksService {
         for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
       }
 
+      const historicalCosts = await resolveConfirmedProductCosts(client, tenantID, products, prior.id);
       const warehouseSellMap = await this.loadWarehouseSellPrices(
         client,
         tenantID,
@@ -5041,11 +5094,11 @@ export class ChecksService {
         (prior?.point_id as string | null) ?? null,
       );
 
-      for (const prod of products) {
+      for (const [productIndex, prod] of products.entries()) {
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
         const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
         const effectiveCostPrice = prod.productId
-          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+          ? (historicalCosts.get(productIndex) ?? warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
           : prod.costPrice || 0;
         // Money precision (item 6) — same round2 discipline as create/fullUpdate.
         const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
@@ -5390,26 +5443,16 @@ export class ChecksService {
         [id],
       );
 
-      // Recompute lines + money from the edit DTO (same math as close).
-      // Round 14 review MEDIUM-4: ставки — за МЕСТНЫЙ месяц ИТОГОВОЙ даты чека
-      // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
-      // правка июльского чека в августе перепекается по июльской ставке.
-      const rateMonth = tenantDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs, tz).slice(0, 7);
-      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth, preserve);
-
       // NEW-4 (антидедлок): реверс СТАРОГО и списание НОВОГО стока лочат строки
       // products в РАЗНЫХ множествах внутри одной транзакции. Лочим ОБЪЕДИНЕНИЕ
-      // (старые + новые product_id) ОДНИМ оператором по ВОЗРАСТАНИЮ id ДО обоих
-      // циклов — единый глобальный порядок с stock-movements.applyTransfer,
+      // (старые + новые product_id) ОДНИМ оператором по ВОЗРАСТАНИЮ id ДО
+      // пересчёта: его cost guard тоже блокирует товары. Иначе guard успеет
+      // захватить новое подмножество в обратном порядке к старым товарам.
+      // Это единый глобальный порядок с stock-movements.applyTransfer,
       // иначе перенос/возврат того же SKU и правка чека лочат пересекающиеся
       // строки в обратном порядке → 40P01. Дальнейшие UPDATE лишь пере-лочат.
       {
-        const lockIds = Array.from(
-          new Set<string>([
-            ...oldProdRows.map((r) => r.product_id as string),
-            ...c.productLines.map((p: any) => p.productId).filter((x: unknown): x is string => !!x),
-          ]),
-        );
+        const lockIds = Array.from(new Set<string>([...oldProdRows.map((r) => r.product_id as string), ...prodIds]));
         if (lockIds.length > 0) {
           await client.query(
             `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id = $2 ORDER BY id FOR UPDATE`,
@@ -5417,6 +5460,13 @@ export class ChecksService {
           );
         }
       }
+
+      // Recompute lines + money from the edit DTO (same math as close).
+      // Round 14 review MEDIUM-4: ставки — за МЕСТНЫЙ месяц ИТОГОВОЙ даты чека
+      // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
+      // правка июльского чека в августе перепекается по июльской ставке.
+      const rateMonth = tenantDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs, tz).slice(0, 7);
+      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth, preserve);
 
       // ── 1) Reverse OLD stock: add back exactly what the sale deducted ──────
       for (const r of preserve.products ? [] : oldProdRows) {

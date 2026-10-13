@@ -71,6 +71,7 @@ describe('service pricing and spreadsheet contract', () => {
         defaultPrice: 0,
         masterPercent: 0,
         warrantyDays: 0,
+        masterPayMode: 'percent',
       },
       {
         sourceRow: 3,
@@ -83,6 +84,7 @@ describe('service pricing and spreadsheet contract', () => {
         maxPrice: 1200,
         masterPercent: 35,
         warrantyDays: 30,
+        masterPayMode: 'percent',
       },
     ]);
   });
