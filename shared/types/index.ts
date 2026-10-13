@@ -2558,6 +2558,8 @@ export interface PublicBookingContactLinks {
   telegram?: string;
 }
 export interface PublicBookingPageSettings {
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   id: string;
   pointId: string | null;
   slug: string;
@@ -2592,6 +2594,8 @@ export interface PublicBookingServiceOption {
   category?: string | null;
 }
 export interface PublicBookingLanding {
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   slug: string;
   /** Derive the first calendar day from this server clock in the tenant IANA zone. */
   timezone: string;

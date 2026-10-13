@@ -285,6 +285,11 @@ export interface ProductsQuery extends PaginationParams {
 }
 
 export interface ChecksParams extends PaginationParams {
+  amountFrom?: number;
+  amountTo?: number;
+  hasDiscount?: boolean;
+  isDeferred?: boolean;
+  isReturned?: boolean;
   masterId?: string;
   clientId?: string;
   carId?: string;
@@ -1583,6 +1588,9 @@ export interface ApprovePublicBookingRequest extends BookingOperationRequest {
   resourceId?: string;
 }
 export interface PutPublicBookingSettingsRequest extends BookingOperationRequest {
+  /** Omitted preserves existing branding; null explicitly removes it. Server-owned public URL only. */
+  logoUrl?: string | null;
+  backgroundImageUrl?: string | null;
   /** 0 for the first draft; otherwise the last read server revision. Slug is immutable after creation. */
   revision: number;
   slug?: string;
