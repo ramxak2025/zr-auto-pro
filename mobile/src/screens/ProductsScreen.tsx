@@ -2368,7 +2368,7 @@ export default function ProductsScreen() {
                 style={[
                   styles.opsBtn,
                   {
-                    backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                    backgroundColor: palette.bg.muted,
                   },
                 ]}
                 onPress={() => {
@@ -2385,15 +2385,14 @@ export default function ProductsScreen() {
                   style={[
                     styles.opsBtn,
                     {
-                      backgroundColor:
-                        palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                      backgroundColor: palette.bg.muted,
                     },
                   ]}
                   onPress={() => setShowOpsModal(true)}
                   accessibilityRole="button"
                   accessibilityLabel="Складские операции"
                 >
-                  <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+                  <Ionicons name="swap-horizontal-outline" size={18} color={palette.accent.primary} />
                 </TouchableOpacity>
               )}
               {/* «+» создаёт товар в текущем складе. На складе брака этого

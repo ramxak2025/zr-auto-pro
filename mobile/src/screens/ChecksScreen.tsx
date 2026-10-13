@@ -1495,6 +1495,7 @@ export default function ChecksScreen() {
             activeOpacity={0.7}
             accessibilityRole="tab"
             accessibilityState={{ selected: activeTab === 'warehouse' }}
+            accessibilityLabel="Складские документы"
           >
             <Ionicons
               name="cube-outline"
@@ -1508,7 +1509,7 @@ export default function ChecksScreen() {
                 activeTab === 'warehouse' && styles.segmentBtnTextActive,
               ]}
             >
-              Складские документы
+              Документы
             </Text>
           </TouchableOpacity>
         </View>

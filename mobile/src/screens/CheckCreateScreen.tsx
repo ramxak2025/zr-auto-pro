@@ -3065,6 +3065,45 @@ export default function CheckCreateScreen() {
         title={editId ? 'Редактирование чека' : 'Касса'}
         onBack={isStackScreen ? () => navigation.goBack() : undefined}
         context={<PointIndicator variant="chip" style={styles.pointContext} />}
+        actions={
+          !editId && canEditCheckDate ? (
+            <>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать дату заказ-наряда"
+                onPress={() => openCheckPicker('date')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="calendar-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать время заказ-наряда"
+                onPress={() => openCheckPicker('time')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="time-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+            </>
+          ) : undefined
+        }
+        status={
+          !editId && canEditCheckDate && manualDate ? (
+            <View style={styles.manualDateSummary}>
+              <Text style={{ fontSize: 13, color: palette.text.secondary, flexShrink: 1 }}>
+                {dateStr} · {timeStr}
+              </Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Использовать время создания чека"
+                onPress={() => setManualDate(null)}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="close-circle" size={18} color={palette.text.secondary} />
+              </TouchableOpacity>
+            </View>
+          ) : undefined
+        }
       />
 
       {/* KeyboardAwareScroll (Round 11 #1): активное поле Кассы (имя/телефон
@@ -3078,65 +3117,6 @@ export default function CheckCreateScreen() {
         contentContainerStyle={[styles.scrollContent, openedFromTab && { paddingBottom: tabBarHeight + spacing[4] }]}
         reserveTabBar={openedFromTab}
       >
-        {!editId && canEditCheckDate && (
-          <View
-            style={{
-              alignSelf: 'flex-end',
-              maxWidth: '100%',
-              flexWrap: 'wrap',
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: palette.bg.card,
-              borderColor: palette.border.subtle,
-              borderWidth: 1,
-              borderRadius: 14,
-              marginBottom: 0,
-            }}
-          >
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Выбрать дату заказ-наряда"
-              onPress={() => openCheckPicker('date')}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 6,
-                paddingHorizontal: 12,
-                minHeight: compactTouchSize,
-              }}
-            >
-              <Ionicons name="calendar-outline" size={16} color={palette.accent.primary} />
-              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? dateStr : 'Дата'}</Text>
-            </TouchableOpacity>
-            <View style={{ width: 1, height: 18, backgroundColor: palette.border.subtle }} />
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Выбрать время заказ-наряда"
-              onPress={() => openCheckPicker('time')}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 6,
-                paddingHorizontal: 12,
-                minHeight: compactTouchSize,
-              }}
-            >
-              <Ionicons name="time-outline" size={16} color={palette.accent.primary} />
-              <Text style={{ fontSize: 13, color: palette.text.primary }}>{manualDate ? timeStr : 'Время'}</Text>
-            </TouchableOpacity>
-            {manualDate && (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Использовать время создания чека"
-                onPress={() => setManualDate(null)}
-                style={{ paddingHorizontal: 10, minHeight: compactTouchSize, justifyContent: 'center' }}
-              >
-                <Ionicons name="close" size={16} color={palette.text.secondary} />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
         <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.sectionHeader}>
@@ -5681,6 +5661,13 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[3], paddingTop: spacing[1], gap: spacing[2.5], paddingBottom: spacing[12] },
+  dateHeaderAction: {
+    width: compactTouchSize,
+    minHeight: compactTouchSize,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualDateSummary: { flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', flexShrink: 1 },
   pointContext: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
 
   // ═══ Section containers with distinct backgrounds ═══
