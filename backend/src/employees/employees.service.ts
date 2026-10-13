@@ -1,6 +1,6 @@
 import { Injectable, Inject, BadRequestException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
-import sharp from 'sharp';
+import sharp = require('sharp');
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';

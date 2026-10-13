@@ -1,5 +1,5 @@
 import { PKPass } from 'passkit-generator';
-import sharp from 'sharp';
+import sharp = require('sharp');
 
 /**
  * Apple Wallet store-card (.pkpass) builder for the loyalty / bonus card.
