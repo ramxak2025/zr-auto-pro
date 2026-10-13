@@ -42,3 +42,27 @@ test('deletion across mask separators removes a digit; middle edits and selected
   assert.equal(selected.caret, 12);
   assert.deepEqual(editBookingPhone(value, 0, value.length, '', 'backspace'), { value: '', caret: 0 });
 });
+
+test('complete pasted numbers replace country-only or partially selected phone without corrupting contact', () => {
+  for (const raw of ['9884444436', '89884444436', '79884444436', '+7 (988) 444-44-36']) {
+    for (const [value, start, end] of [
+      ['+7 (', 4, 4],
+      ['+7 (999) 111-22-33', 4, 18],
+      ['+7 (999)', 8, 8],
+    ]) {
+      const result = editBookingPhone(value, start, end, raw);
+      assert.equal(result.value, '+7 (988) 444-44-36');
+      assert.equal(normalizeBookingPhone(result.value), '+79884444436');
+      assert.equal(result.caret, 18);
+    }
+  }
+});
+
+test('ten-digit national numbers retain leading 8 and 7 instead of losing a contact digit', () => {
+  for (const national of ['8121234567', '7121234567']) {
+    assert.equal(normalizeBookingPhone(national), '+7' + national);
+    assert.equal(formatBookingPhoneInput(national, 10).caret, 18);
+    assert.equal(normalizeBookingPhone(formatBookingPhone(national)), '+7' + national);
+    assert.equal(normalizeBookingPhone(editBookingPhone('+7 (', 4, 4, national).value), '+7' + national);
+  }
+});

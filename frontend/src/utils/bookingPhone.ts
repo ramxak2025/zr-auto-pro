@@ -1,6 +1,7 @@
 /** Booking-only mask. Existing saved request bodies are never passed through it. */
 export function bookingPhoneDigits(value: string): string {
   const digits = value.replace(/\D/g, '');
+  if (digits.length === 10 && !value.trim().startsWith('+')) return digits;
   if (value.trim().startsWith('+') || digits.length > 10 || /^[78]/.test(digits)) return digits.slice(1, 11);
   return digits.slice(0, 10);
 }
@@ -37,6 +38,16 @@ export function editBookingPhone(
   inserted: string,
   operation: 'insert' | 'backspace' | 'delete' = 'insert',
 ): { value: string; caret: number } {
+  const insertedDigits = inserted.replace(/\D/g, '');
+  // Pasting a complete Russian phone replaces the field, including an existing
+  // country prefix or partially selected national number. Never concatenate it.
+  if (
+    operation === 'insert' &&
+    (insertedDigits.length === 10 || (insertedDigits.length === 11 && /^[78]/.test(insertedDigits)))
+  ) {
+    const formatted = formatBookingPhone(inserted);
+    return { value: formatted, caret: formatted.length };
+  }
   const digits = bookingPhoneDigits(value);
   let from = digitIndex(value, start);
   let to = digitIndex(value, end);
@@ -50,7 +61,9 @@ export function editBookingPhone(
 export function formatBookingPhoneInput(value: string, caret: number) {
   const formatted = formatBookingPhone(value);
   const country =
-    value.trim().startsWith('+') || /^[78]/.test(value.replace(/\D/g, '')) || value.replace(/\D/g, '').length > 10;
+    value.trim().startsWith('+') ||
+    value.replace(/\D/g, '').length > 10 ||
+    (value.replace(/\D/g, '').length < 10 && /^[78]/.test(value.replace(/\D/g, '')));
   const index = Math.max(0, value.slice(0, caret).replace(/\D/g, '').length - Number(country));
   return { value: formatted, caret: bookingPhoneCaret(formatted, index) };
 }
