@@ -64,11 +64,15 @@ async function oldestCacheKeys(): Promise<string[]> {
 
 /** The caller reserves its intent owner BEFORE entering this queue. Never nest
  * this inside enqueueStorageMutation: the complete retry is one mutation. */
-export function setItemWithCacheRecovery(key: string, value: string): Promise<void> {
+export function setItemWithCacheRecovery(
+  key: string,
+  value: string,
+  write: (key: string, value: string) => Promise<void> = AsyncStorage.setItem,
+): Promise<void> {
   return enqueueStorageMutation(async () => {
     let failure: unknown;
     try {
-      await AsyncStorage.setItem(key, value);
+      await write(key, value);
       return;
     } catch (error) {
       failure = error;
@@ -87,7 +91,7 @@ export function setItemWithCacheRecovery(key: string, value: string): Promise<vo
       await AsyncStorage.removeItem(candidate);
       try {
         // Retry the SAME bytes and requestId; never bypass durable persistence.
-        await AsyncStorage.setItem(key, value);
+        await write(key, value);
         return;
       } catch (error) {
         failure = error;

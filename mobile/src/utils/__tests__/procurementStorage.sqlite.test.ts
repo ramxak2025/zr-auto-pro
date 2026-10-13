@@ -45,7 +45,10 @@ const mockStorage = {
   }),
 };
 jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockStorage }));
-jest.mock('react-native', () => ({ InteractionManager: { runAfterInteractions: (run: () => void) => run() } }));
+jest.mock('react-native', () => ({
+  Platform: { OS: 'android' },
+  InteractionManager: { runAfterInteractions: (run: () => void) => run() },
+}));
 jest.mock('../../contexts/authAccountStorage', () => ({ authAccounts: { read: async () => null } }));
 
 const owner = {

@@ -1,4 +1,5 @@
 const mockDisk = new Map<string, string>();
+jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 const mockNative = {
   getItem: jest.fn(async (key: string) => mockDisk.get(key) ?? null),
   setItem: jest.fn(async (key: string, value: string) => {
