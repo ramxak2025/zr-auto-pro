@@ -1,4 +1,5 @@
 const mockDisk = new Map<string, string>();
+jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {

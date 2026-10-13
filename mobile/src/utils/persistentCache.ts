@@ -25,6 +25,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import { authAccounts } from '../contexts/authAccountStorage';
 import { activeAccount } from '../contexts/accountRegistry';
 import { dataOwnerKey, userDataOwner, type DataOwner } from '../contexts/dataSession';
+import { enqueueStorageMutation, SCOPED_CACHE_PREFIX } from './persistentCacheStorage';
 import {
   PERSISTED_KEYS,
   VARIANT_CAPS,
@@ -112,7 +113,7 @@ let persistenceGeneration = 0;
 let persistenceBoundaryReady = false;
 let activePrefix: string | null = null;
 let sessionBoundaryInitialized = false;
-export const SCOPED_CACHE_PREFIX = 'rqcache:v2:';
+export { SCOPED_CACHE_PREFIX } from './persistentCacheStorage';
 export const cachePrefixFor = (owner: DataOwner) => SCOPED_CACHE_PREFIX + dataOwnerKey(owner) + ':';
 
 /** Synchronous invalidation; existing per-owner durable data stays intact. */
@@ -122,16 +123,6 @@ export function setPersistentCacheSession(owner: DataOwner | null): void {
   activePrefix = owner ? cachePrefixFor(owner) : null;
   persistenceBoundaryReady = owner !== null;
 }
-let storageMutationTail: Promise<void> = Promise.resolve();
-
-function enqueueStorageMutation(mutation: () => Promise<void>): Promise<void> {
-  const queued = storageMutationTail.then(mutation);
-  // A failed mutation must not poison the queue for later clears or writes.
-  // Callers still receive `queued`, so clear failures can gate auth commits.
-  storageMutationTail = queued.catch(() => {});
-  return queued;
-}
-
 function isCurrentGeneration(generation: number): boolean {
   return generation === persistenceGeneration;
 }
