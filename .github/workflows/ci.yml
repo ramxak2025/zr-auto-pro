@@ -49,6 +49,14 @@ jobs:
         run: node ../scripts/ci-oct8-live-db.cjs
       - name: Run maintained PostgreSQL 16 integration suites
         env:
+          DATABASE_URL: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          DB_APP_PASSWORD: oct8_app_fixture_only
+          AUTEXA_OCT13_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          AUTEXA_OCT13_APP_PASSWORD: oct8_app_fixture_only
+          AUTEXA_RECOVERY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          AUTEXA_RECOVERY_APP_PASSWORD: oct8_app_fixture_only
+          AUTEXA_JOURNAL_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          AUTEXA_JOURNAL_APP_PASSWORD: oct8_app_fixture_only
           SUPPLIER_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           SUPPLIER_LIVE_APP_PASSWORD: oct8_app_fixture_only
           NFC_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
@@ -76,6 +84,11 @@ jobs:
           test/service-import-live.test.cjs
           test/client-check-history-live.test.cjs
           test/catalog-financial-integrity-live.test.cjs
+          test/check-recovery-live.test.cjs
+          test/service-fixed-pay-live.test.cjs
+          test/check-product-locks-live.test.cjs
+          test/starter-catalogs.live.test.cjs
+          test/journal-filters-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)

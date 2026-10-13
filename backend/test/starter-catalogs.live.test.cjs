@@ -16,10 +16,11 @@ const live = Boolean(process.env.AUTEXA_OCT13_LIVE_DB);
 if (live) {
   const fixtureUrl = new URL(process.env.DATABASE_URL);
   assert.equal(fixtureUrl.hostname, '127.0.0.1');
-  assert.equal(fixtureUrl.port, '55443');
   assert.ok(
-    ['/autexa_oct13', '/autexa_oct13_starter'].includes(fixtureUrl.pathname),
-    'Disposable integration or starter DB only',
+    (fixtureUrl.port === '55443' && ['/autexa_oct13', '/autexa_oct13_starter'].includes(fixtureUrl.pathname)) ||
+      (fixtureUrl.port === '55438' && fixtureUrl.pathname === '/autexa_oct8_test') ||
+      (fixtureUrl.port === '55446' && fixtureUrl.pathname === '/autexa_oct13_recovery'),
+    'Named disposable QA databases only',
   );
 }
 
@@ -29,10 +30,11 @@ test(
   async () => {
     const url = new URL(process.env.DATABASE_URL);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.equal(url.port, '55443');
     assert.ok(
-      ['/autexa_oct13', '/autexa_oct13_starter'].includes(url.pathname),
-      'Disposable integration or feature DB only',
+      (url.port === '55443' && ['/autexa_oct13', '/autexa_oct13_starter'].includes(url.pathname)) ||
+        (url.port === '55438' && url.pathname === '/autexa_oct8_test') ||
+        (url.port === '55446' && url.pathname === '/autexa_oct13_recovery'),
+      'Named disposable QA databases only',
     );
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     const appUrl = new URL(process.env.DATABASE_URL);
