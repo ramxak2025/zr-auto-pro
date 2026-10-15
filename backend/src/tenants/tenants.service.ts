@@ -4,12 +4,15 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Pool, PoolClient } from 'pg';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import { pricingFromPlanRow } from '../plans/plan-pricing-row';
+import { SubscriptionBillingPeriod, calculateSubscriptionQuote } from '../plans/subscription-pricing';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
@@ -68,6 +71,9 @@ export function computeSubscriptionStatusOf(row: {
  * `amount > 0`; `until` must be future) are enforced in the method.
  */
 export interface ExtendSubscriptionOptions {
+  period?: SubscriptionBillingPeriod;
+  quoteToken?: string;
+  requestId?: string;
   days?: number;
   type?: 'paid' | 'free';
   amount?: number;
@@ -222,6 +228,8 @@ export class TenantsService {
       ownerShareAmount: TenantsService.nullableNumber(row.last_payment_owner_share_amount),
       planId: (row.last_payment_plan_id as string | null) ?? null,
       planName: (row.last_payment_plan_name as string | null) ?? null,
+      ...(row.last_payment_composition_snapshot ? { compositionSnapshot: row.last_payment_composition_snapshot } : {}),
+      ...(row.last_payment_request_id ? { requestId: row.last_payment_request_id } : {}),
     };
   }
 
@@ -248,6 +256,8 @@ export class TenantsService {
       ownerShareAmount: TenantsService.nullableNumber(row.owner_share_amount),
       planId: (row.plan_id as string | null) ?? null,
       planName: (row.plan_name as string | null) ?? null,
+      ...(row.composition_snapshot ? { compositionSnapshot: row.composition_snapshot } : {}),
+      ...(row.request_id ? { requestId: row.request_id } : {}),
     };
   }
 
@@ -264,7 +274,7 @@ export class TenantsService {
       SELECT sp.id, sp.amount, sp.is_free, sp.period_from, sp.period_to,
              sp.previous_end, sp.note, sp.created_by, sp.created_at,
              sp.manager_id, sp.owner_share_percent, sp.owner_share_amount,
-             sp.plan_id, sp.plan_name
+             sp.plan_id, sp.plan_name, sp.composition_snapshot, sp.request_id
         FROM subscription_payments sp
        WHERE sp.tenant_id = t.id
        ORDER BY sp.created_at DESC, sp.id DESC
@@ -286,6 +296,8 @@ export class TenantsService {
     lp.owner_share_amount   AS last_payment_owner_share_amount,
     lp.plan_id              AS last_payment_plan_id,
     lp.plan_name            AS last_payment_plan_name,
+    lp.composition_snapshot AS last_payment_composition_snapshot,
+    lp.request_id AS last_payment_request_id,
     CASE
       WHEN lp.id IS NULL THEN NULL
       WHEN lp.period_to IS NOT DISTINCT FROM t.subscription_end
@@ -687,6 +699,8 @@ export class TenantsService {
           id: p.id,
           name: p.name,
           monthlyPrice: parseFloat(p.monthly_price) || 0,
+          code: p.code ?? null,
+          pricing: pricingFromPlanRow(p),
           description: p.description,
           features: p.features || [],
           maxUsers: p.max_users,
@@ -698,6 +712,77 @@ export class TenantsService {
     }
 
     return tenant;
+  }
+
+  /** No writes: active people are counted once across every branch, including the owner. */
+  private async subscriptionUsage(db: Pick<Pool, 'query'> | PoolClient, tenantId: string) {
+    const { rows } = await db.query(
+      `SELECT (SELECT COUNT(*)::int FROM users WHERE tenant_id=$1 AND is_active=true
+                 AND dismissed_at IS NULL AND purged_at IS NULL) AS employees,
+              (SELECT COUNT(*)::int FROM tenant_points WHERE tenant_id=$1 AND is_active=true) AS active_points`,
+      [tenantId],
+    );
+    return {
+      employees: Number(rows[0].employees),
+      activePoints: Number(rows[0].active_points),
+      billablePoints: Math.max(1, Number(rows[0].active_points)),
+    };
+  }
+
+  private async subscriptionQuoteWithDb(
+    db: Pick<Pool, 'query'> | PoolClient,
+    tenantId: string,
+    period: SubscriptionBillingPeriod,
+    scope: TenantScope = {},
+    planId?: string,
+  ) {
+    if (period !== 'monthly' && period !== 'yearly') {
+      throw new BadRequestException({ code: 'INVALID_PERIOD', message: 'Выберите месяц или год' });
+    }
+    const { rows } = await db.query(
+      `SELECT t.plan_id, t.subscription_end, p.* FROM tenants t
+         JOIN plans p ON p.id=COALESCE($3::uuid,t.plan_id)
+        WHERE t.id=$1 AND ($2::uuid IS NULL OR t.manager_id=$2::uuid)`,
+      [tenantId, scope.managerId ?? null, planId ?? null],
+    );
+    if (!rows.length) throw new NotFoundException({ message: 'Тенант или тариф не найден' });
+    const row = rows[0];
+    const pricing = pricingFromPlanRow(row);
+    if (!pricing) throw new BadRequestException({ code: 'LEGACY_PLAN', message: 'Для тарифа нет составного расчёта' });
+    const usage = await this.subscriptionUsage(db, tenantId);
+    const result = calculateSubscriptionQuote(pricing, {
+      period,
+      employees: usage.employees,
+      points: usage.billablePoints,
+    });
+    if (!result.ok)
+      throw new BadRequestException({
+        code: result.code,
+        message:
+          result.code === 'UNPRICED_POINTS'
+            ? 'Стоимость дополнительных филиалов согласуется отдельно'
+            : 'Для расчёта нужен хотя бы один активный сотрудник',
+      });
+    const snapshot = { planId: String(row.id), pricing, usage, quote: result.quote };
+    const quoteToken = createHash('sha256')
+      .update(
+        JSON.stringify({
+          tenantId,
+          ...snapshot,
+          subscriptionEnd: row.subscription_end ? new Date(row.subscription_end).toISOString() : null,
+        }),
+      )
+      .digest('hex');
+    return { ...snapshot, quoteToken };
+  }
+
+  async getSubscriptionQuote(
+    tenantId: string,
+    period: SubscriptionBillingPeriod = 'monthly',
+    scope: TenantScope = {},
+    planId?: string,
+  ) {
+    return this.subscriptionQuoteWithDb(this.pool, tenantId, period, scope, planId);
   }
 
   /**
@@ -732,7 +817,7 @@ export class TenantsService {
 
     const hasDays = typeof opts.days === 'number' && Number.isFinite(opts.days) && opts.days > 0;
     const hasUntil = typeof opts.until === 'string' && opts.until.length > 0;
-    if (!hasDays && !hasUntil) {
+    if (!opts.period && !hasDays && !hasUntil) {
       throw new BadRequestException({ message: 'Укажите дату (until) или количество дней (days)' });
     }
     if (hasUntil) {
@@ -742,6 +827,27 @@ export class TenantsService {
       }
     }
 
+    if (opts.period && (hasDays || hasUntil || !opts.quoteToken)) {
+      throw new BadRequestException({
+        message: 'Для расчётного продления передайте period и quoteToken без days/until',
+      });
+    }
+    if (!opts.period && opts.quoteToken) throw new BadRequestException({ message: 'Укажите period' });
+    const requestFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          actorId: actor?.userId ?? null,
+          type: opts.type ?? null,
+          amount,
+          days: opts.days ?? null,
+          until: opts.until ?? null,
+          note,
+          period: opts.period ?? null,
+          quoteToken: opts.quoteToken ?? null,
+          credit: ctx.credit ?? null,
+        }),
+      )
+      .digest('hex');
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -762,6 +868,38 @@ export class TenantsService {
       );
       if (cur.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
       const previousEnd: string | null = cur[0].subscription_end ?? null;
+      // Under the same tenant lock: exact retries never extend twice, even after a lost response.
+      if (opts.requestId) {
+        const { rows: prior } = await client.query(
+          'SELECT request_fingerprint FROM subscription_payments WHERE tenant_id=$1 AND request_id=$2',
+          [id, opts.requestId],
+        );
+        if (prior.length) {
+          if (prior[0].request_fingerprint !== requestFingerprint) {
+            throw new ConflictException({ code: 'REQUEST_ID_REUSED', message: 'Повторите запрос с новым requestId' });
+          }
+          const { rows: current } = await client.query('SELECT * FROM tenants WHERE id=$1', [id]);
+          await client.query('COMMIT');
+          return this.mapTenant(current[0]);
+        }
+      }
+      let composition: Awaited<ReturnType<TenantsService['subscriptionQuoteWithDb']>> | null = null;
+      if (opts.period) {
+        try {
+          composition = await this.subscriptionQuoteWithDb(client, id, opts.period, ctx.scope);
+        } catch (err) {
+          if (err instanceof BadRequestException || err instanceof NotFoundException) {
+            throw new ConflictException({
+              code: 'QUOTE_CHANGED',
+              message: 'Состав или тариф изменился. Обновите расчёт',
+            });
+          }
+          throw err;
+        }
+      }
+      if (composition && composition.quoteToken !== opts.quoteToken) {
+        throw new ConflictException({ code: 'QUOTE_CHANGED', message: 'Состав или тариф изменился. Обновите расчёт' });
+      }
 
       // 173 — доля владельца. Снимок процента и суммы пишется В ТОЙ ЖЕ транзакции,
       // что и продление: пересчитать «потом» нельзя, менеджеру могут поменять
@@ -792,9 +930,16 @@ export class TenantsService {
         `SELECT
            GREATEST(COALESCE($1::timestamptz, now()), now()) AS anchor,
            CASE WHEN $2::timestamptz IS NOT NULL THEN $2::timestamptz
-                ELSE GREATEST(COALESCE($1::timestamptz, now()), now()) + ($3::int * interval '1 day')
+                ELSE GREATEST(COALESCE($1::timestamptz, now()), now()) +
+                  CASE WHEN $4::int IS NOT NULL THEN ($4::int * interval '1 month')
+                       ELSE ($3::int * interval '1 day') END
            END AS new_end`,
-        [previousEnd, hasUntil ? opts.until : null, hasDays ? Math.trunc(opts.days as number) : null],
+        [
+          previousEnd,
+          hasUntil ? opts.until : null,
+          hasDays ? Math.trunc(opts.days as number) : null,
+          composition?.quote.serviceMonths ?? null,
+        ],
       );
       const anchor: string = calc[0].anchor;
       const newEnd: string = calc[0].new_end;
@@ -807,8 +952,9 @@ export class TenantsService {
       await client.query(
         `INSERT INTO subscription_payments
            (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by,
-            manager_id, owner_share_percent, owner_share_amount, plan_id, plan_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+            manager_id, owner_share_percent, owner_share_amount, plan_id, plan_name,
+            composition_snapshot, request_id, request_fingerprint)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::uuid, $16)`,
         [
           id,
           amount,
@@ -823,6 +969,9 @@ export class TenantsService {
           share?.amount ?? null,
           cur[0].plan_id ?? null,
           cur[0].plan_name ?? null,
+          composition ? JSON.stringify(composition) : null,
+          opts.requestId ?? null,
+          opts.requestId ? requestFingerprint : null,
         ],
       );
 
@@ -860,7 +1009,8 @@ export class TenantsService {
       } catch {
         /* connection already dead — release below discards it */
       }
-      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      if (err instanceof NotFoundException || err instanceof BadRequestException || err instanceof ConflictException)
+        throw err;
       this.logger.error(`Tenant extend error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка при продлении подписки' });
     } finally {
@@ -1709,10 +1859,13 @@ export class TenantsService {
       subscriptionNote: r.subscription_note,
       maxUsers: r.max_users,
       currentUsers: parseInt(r.current_users),
+      usage: await this.subscriptionUsage(this.pool, tenantID),
       plans: plans.map((p) => ({
         id: p.id,
         name: p.name,
         monthlyPrice: parseFloat(p.monthly_price) || 0,
+        code: p.code ?? null,
+        pricing: pricingFromPlanRow(p),
         description: p.description,
         features: p.features || [],
         maxUsers: p.max_users,
