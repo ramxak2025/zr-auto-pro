@@ -1,4 +1,6 @@
 import React from 'react';
+import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
+import { planCompositionLabel } from '../utils/subscriptionPricingText';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -43,6 +45,8 @@ export default function SubscriptionScreen() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
   const [refreshing, setRefreshing] = React.useState(false);
+  const [quotePeriod, setQuotePeriod] = React.useState<'monthly' | 'yearly'>('monthly');
+  const isIos = Platform.OS === 'ios';
 
   const { data: sub, isLoading } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
@@ -52,9 +56,19 @@ export default function SubscriptionScreen() {
     },
   });
 
+  const quoteQuery = useQuery({
+    queryKey: ['subscription-quote', quotePeriod],
+    queryFn: async () => (await subscriptionApi.quote({ period: quotePeriod })).data,
+    enabled: !isIos && !!sub?.planId,
+    retry: false,
+    placeholderData: () => undefined,
+  });
+  const currentPricing = sub?.plans?.find((plan) => plan.id === sub.planId)?.pricing;
+
   const onRefresh = async () => {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['subscription'] });
+    await queryClient.invalidateQueries({ queryKey: ['subscription-quote'] });
     setRefreshing(false);
   };
 
@@ -67,8 +81,6 @@ export default function SubscriptionScreen() {
   // the current plan + tariffs for information, but the purchasing path is
   // replaced with a neutral «manage on the website» note. Android keeps the
   // CTAs (Google Play permits it for this business-software category).
-  const isIos = Platform.OS === 'ios';
-
   const openWhatsApp = () => {
     const msg = encodeURIComponent('Здравствуйте! Хочу оплатить подписку.');
     Linking.openURL(`https://wa.me/${WHATSAPP_PHONE}?text=${msg}`);
@@ -142,7 +154,7 @@ export default function SubscriptionScreen() {
                 <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="card-outline" size={18} color={palette.text.tertiary} />
                   <View>
-                    <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
+                    <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Базовая стоимость</Text>
                     <Text style={[styles.infoValue, { color: palette.text.primary }]}>
                       {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
                     </Text>
@@ -159,11 +171,63 @@ export default function SubscriptionScreen() {
                   <Text style={[styles.usersLabel, { color: palette.text.secondary }]}>Сотрудников</Text>
                 </View>
                 <Text style={[styles.usersValue, { color: palette.text.primary }]}>
-                  {sub.currentUsers} / {sub.maxUsers}
+                  {currentPricing
+                    ? `${sub.usage?.employees ?? sub.currentUsers} · включено ${currentPricing.includedEmployees}`
+                    : `${sub.currentUsers} / ${sub.maxUsers}`}
                 </Text>
               </View>
             )}
 
+            {currentPricing && isIos && (
+              <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
+                Сотрудники учитываются вместе с владельцем. Филиалов используется: {sub?.usage?.activePoints ?? 0}.
+              </Text>
+            )}
+            {!isIos && sub?.planId && (
+              <>
+                <View style={{ flexDirection: 'row', gap: spacing[3], marginTop: spacing[3] }}>
+                  {(['monthly', 'yearly'] as const).map((period) => (
+                    <TouchableOpacity
+                      key={period}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: quotePeriod === period }}
+                      onPress={() => setQuotePeriod(period)}
+                      style={{ minHeight: 44, justifyContent: 'center' }}
+                    >
+                      <Text
+                        style={{
+                          color: palette.accent.primaryText,
+                          fontWeight: quotePeriod === period ? '700' : '400',
+                        }}
+                      >
+                        {period === 'monthly' ? 'Месяц' : 'Год · 12 за 10'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {quoteQuery.isFetching ? (
+                  <Text style={{ color: palette.text.secondary }}>Загружаем расчёт…</Text>
+                ) : quoteQuery.data && !quoteQuery.isError ? (
+                  <SubscriptionQuoteBreakdown preview={quoteQuery.data} />
+                ) : (
+                  <>
+                    <Text style={{ color: palette.text.secondary }}>
+                      Расчёт по текущему составу недоступен. Для прежних тарифов и дополнительных филиалов стоимость
+                      уточняется отдельно.
+                    </Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      onPress={() => {
+                        void quoteQuery.refetch();
+                      }}
+                      style={{ minHeight: 44, justifyContent: 'center' }}
+                    >
+                      <Text style={{ color: palette.accent.primaryText }}>Повторить расчёт</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </>
+            )}
             {/* Note */}
             {sub?.subscriptionNote && (
               <View
@@ -230,7 +294,7 @@ export default function SubscriptionScreen() {
                         <Text style={[styles.priceValue, { color: palette.text.primary }]}>
                           {plan.monthlyPrice.toLocaleString('ru-RU')}
                         </Text>
-                        <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}> ₽/мес</Text>
+                        <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}> ₽/мес · база</Text>
                       </View>
 
                       <View
@@ -240,7 +304,7 @@ export default function SubscriptionScreen() {
                         ]}
                       >
                         <Ionicons name="people" size={16} color={colors.primary[600]} />
-                        <Text style={styles.maxUsersText}>До {plan.maxUsers} сотрудников</Text>
+                        <Text style={[styles.maxUsersText, { flex: 1 }]}>{planCompositionLabel(plan)}</Text>
                       </View>
 
                       {/* Features list — grouped (core / section / integration). */}
