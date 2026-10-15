@@ -78,10 +78,9 @@ export function useSubscriptionRenewal({
   const locked = sending || uncertain;
   const quoteReady = !!quoteQuery.data && !quoteQuery.isFetching && !quoteQuery.isError && !changed;
   const setPeriod = (next: RenewalPeriod) => {
-    if (busy.current || intent.current) return;
+    if (next === period || changed || busy.current || intent.current) return;
     dirtyAmount.current = false;
     setMessage('');
-    setChanged(false);
     setFallback('');
     if (next === 'custom') setAmountState(legacyPrice > 0 ? String(legacyPrice) : '');
     setPeriodState(next);

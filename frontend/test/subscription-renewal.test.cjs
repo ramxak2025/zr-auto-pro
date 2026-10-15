@@ -146,6 +146,14 @@ test('stale 409 refreshes composition, preserves collected amount, and requires 
     assert.equal(form.state().changed, true);
     assert.equal(form.state().quoteReady, false);
     assert.equal(calls, 1);
+    for (const period of ['monthly', 'yearly', 'custom']) {
+      Renderer.act(() => form.state().setPeriod(period));
+      assert.equal(form.state().period, 'monthly');
+      assert.equal(form.state().changed, true);
+      assert.equal(form.state().quoteReady, false);
+      assert.equal(form.state().amount, '5000');
+      assert.equal(calls, 1);
+    }
     Renderer.act(() => form.state().acknowledgeChange());
     assert.equal(form.state().quoteReady, true);
   } finally {
@@ -326,8 +334,16 @@ test('actual form disables confirmation during stale review and locks fields/can
   });
   try {
     await settle(() => field(form.tree).props.value === '5490');
+    Renderer.act(() => field(form.tree).props.onChange({ target: { value: '5000' } }));
     await Renderer.act(async () => submitButton(form.tree).props.onClick());
-    assert.equal(submitButton(form.tree).props.disabled, true);
+    for (const period of ['monthly', 'yearly', 'custom']) {
+      Renderer.act(() => periodControl(form.tree).props.onChange(period));
+      assert.equal(periodControl(form.tree).props.value, 'monthly');
+      assert.equal(field(form.tree).props.value, '5000');
+      assert.equal(submitButton(form.tree).props.disabled, true);
+      await Renderer.act(async () => submitButton(form.tree).props.onClick());
+      assert.equal(calls.length, 1);
+    }
     const acknowledge = form.tree.root
       .findAllByType('Button')
       .find((button) => button.props.children === 'Расчёт проверен');

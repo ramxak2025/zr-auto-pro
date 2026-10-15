@@ -105,7 +105,7 @@ it('prefills month/year with the full MAX staff/branch total and selects the man
   expect(mockGetTenant).not.toHaveBeenCalled();
 });
 it('stale quote requires review and preserves the actual operator amount after refreshed composition', async () => {
-  const submit = jest.fn(async () => {
+  const submit = jest.fn<Promise<unknown>, [unknown]>(async () => {
     throw { response: { status: 409, data: { code: 'QUOTE_CHANGED' } } };
   });
   const render = mount(submit);
@@ -116,8 +116,27 @@ it('stale quote requires review and preserves the actual operator amount after r
   expect(render().quoteReady).toBe(false);
   expect(render().changed).toBe(true);
   expect(mockQuote.refetch).toHaveBeenCalledTimes(1);
+  for (const period of ['monthly', 'yearly', 'custom'] as const) {
+    render().setPeriod(period);
+    expect(render().period).toBe('monthly');
+    expect(render().changed).toBe(true);
+    expect(render().quoteReady).toBe(false);
+    expect(render().amount).toBe('20000');
+    expect(submit).toHaveBeenCalledTimes(1);
+  }
+  mockQuote.data = preview('monthly', 21500);
+  expect(render().amount).toBe('20000');
+  expect(render().changed).toBe(true);
   render().acknowledgeChange();
   expect(render().quoteReady).toBe(true);
+  submit.mockResolvedValueOnce(undefined);
+  await render().send({ type: 'paid', amount: 20000, period: 'monthly', quoteToken: mockQuote.data.quoteToken });
+  expect(submit).toHaveBeenCalledTimes(2);
+  expect(submit.mock.calls[1][0]).toMatchObject({
+    amount: 20000,
+    period: 'monthly',
+    quoteToken: mockQuote.data.quoteToken,
+  });
 });
 it('locks a pending or uncertain intent and retries exactly the same amount/token/id after timeout', async () => {
   let reject!: (error: unknown) => void;
