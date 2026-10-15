@@ -71,6 +71,8 @@ import type {
   WorkMode,
   StockMovement,
   PaginatedResponse,
+  SubscriptionQuotePreview,
+  SubscriptionQuoteQuery,
   SubscriptionInfo,
   FeatureCatalogItem,
   TenantCabinet,
@@ -540,6 +542,8 @@ export function createTenantsApi(api: HttpClient) {
      * a FREE one to a specific date (`{ type: 'free', until }`). Free never
      * counts as revenue.
      */
+    getSubscriptionQuote: (id: string, params?: SubscriptionQuoteQuery) =>
+      api.get<SubscriptionQuotePreview>(`/tenants/${id}/subscription-quote`, { params }),
     extend: (id: string, daysOrOpts: number | ExtendSubscriptionRequest) =>
       api.post<Tenant>(
         `/tenants/${id}/extend`,
@@ -741,6 +745,7 @@ export function createPlansApi(api: HttpClient) {
 export function createSubscriptionApi(api: HttpClient) {
   return {
     get: () => api.get<SubscriptionInfo>('/subscription'),
+    quote: (params?: SubscriptionQuoteQuery) => api.get<SubscriptionQuotePreview>('/subscription/quote', { params }),
   };
 }
 
@@ -3092,6 +3097,8 @@ export function createManagerCabinetApi(api: HttpClient) {
      * `until` запрещён; `{ type: 'paid', amount, days | until }` — платный, `amount > 0`
      * обязателен, в платёж пишется доля владельца (`ownerShareAmount`).
      */
+    getSubscriptionQuote: (id: string, params?: SubscriptionQuoteQuery) =>
+      api.get<SubscriptionQuotePreview>(`/manager/tenants/${id}/subscription-quote`, { params }),
     extend: (id: string, data: ExtendSubscriptionRequest) => api.post<Tenant>(`/manager/tenants/${id}/extend`, data),
     /** Сменить тариф автосервиса. */
     assignPlan: (id: string, data: AssignPlanRequest) => api.post<Tenant>(`/manager/tenants/${id}/assign-plan`, data),

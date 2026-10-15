@@ -18,6 +18,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { CompositionRenewalDto } from '../../tenants/dto/subscription.dto';
 import { NoNulBytes } from './no-nul-bytes';
 
 // Тела запросов кабинета МЕНЕДЖЕРА (`/manager/*`). Контракт — shared/api/types.ts
@@ -111,7 +112,7 @@ export class CreateManagerTenantDto {
  * проверяется в сервисе: free → `days` ≤ maxFreeDays, `until` запрещён; paid →
  * `amount > 0`.
  */
-export class ManagerExtendDto {
+export class ManagerExtendDto extends CompositionRenewalDto {
   @IsIn(['paid', 'free'], { message: 'Укажите тип продления: платное или бесплатное' })
   type!: 'paid' | 'free';
 

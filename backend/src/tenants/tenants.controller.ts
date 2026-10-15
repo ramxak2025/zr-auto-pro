@@ -6,7 +6,12 @@ import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
-import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
+import {
+  ExtendSubscriptionDto,
+  AssignPlanDto,
+  SuspendTenantDto,
+  SubscriptionQuoteQueryDto,
+} from './dto/subscription.dto';
 import { UpdateMyCompanyDto } from './dto/company.dto';
 import { ParseUuidParam } from '../common/parse-uuid.pipe';
 
@@ -99,6 +104,12 @@ export class TenantsController {
   // ─── Subscription management (from the tenant card) ─────────────────
 
   @Roles('superadmin')
+  @Get('tenants/:id/subscription-quote')
+  getSubscriptionQuote(@Param('id', ParseUuidParam) id: string, @Query() query: SubscriptionQuoteQueryDto) {
+    return this.tenantsService.getSubscriptionQuote(id, query.period, {}, query.planId);
+  }
+
+  @Roles('superadmin')
   @Post('tenants/:id/extend')
   async extend(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ExtendSubscriptionDto) {
     // 122 — pass the whole DTO (paid/free, amount, until, days, note). The
@@ -160,6 +171,11 @@ export class TenantsController {
   }
 
   // ─── Regular user route (view own subscription) ───────────────────
+
+  @Get('subscription/quote')
+  getOwnSubscriptionQuote(@CurrentUser() user: JwtPayload, @Query() query: SubscriptionQuoteQueryDto) {
+    return this.tenantsService.getSubscriptionQuote(user.tenantID, query.period, {}, query.planId);
+  }
 
   @Get('subscription')
   getSubscription(@CurrentUser() user: JwtPayload) {

@@ -4,7 +4,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../common/guards/roles.guard';
 import { ParseUuidParam } from '../common/parse-uuid.pipe';
-import { AssignPlanDto } from '../tenants/dto/subscription.dto';
+import { AssignPlanDto, SubscriptionQuoteQueryDto } from '../tenants/dto/subscription.dto';
 import {
   CreateManagerTenantDto,
   ManagerExtendDto,
@@ -77,6 +77,16 @@ export class ManagerCabinetController {
     @Query('offset') offset?: string,
   ) {
     return this.cabinet.tenantAuditLog(cabinetActor(user), id, limit, offset);
+  }
+
+  @Roles('manager', 'superadmin')
+  @Get('tenants/:id/subscription-quote')
+  getSubscriptionQuote(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUuidParam) id: string,
+    @Query() query: SubscriptionQuoteQueryDto,
+  ) {
+    return this.cabinet.getSubscriptionQuote(cabinetActor(user), id, query);
   }
 
   @Roles('manager', 'superadmin')

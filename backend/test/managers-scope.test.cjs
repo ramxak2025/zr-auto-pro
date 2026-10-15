@@ -333,6 +333,7 @@ const EXPECTED_CABINET_ROUTES = [
   'POST /manager/tenants',
   'GET /manager/tenants/:id',
   'GET /manager/tenants/:id/cabinet',
+  'GET /manager/tenants/:id/subscription-quote',
   'GET /manager/tenants/:id/audit-log',
   'POST /manager/tenants/:id/extend',
   'POST /manager/tenants/:id/assign-plan',
@@ -358,7 +359,7 @@ const EXPECTED_ADMIN_ROUTES = [
 const routeKeys = (controllers) =>
   controllers.flatMap((Controller) => routesOf(Controller).map((r) => methodKey(r.verb, r.path))).sort();
 
-test('кабинет менеджера: ровно 14 маршрутов, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
+test('кабинет менеджера: ровно 15 маршрутов, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
   const routes = routesOf(ManagerCabinetController);
   assert.deepEqual(routeKeys([ManagerCabinetController]), [...EXPECTED_CABINET_ROUTES].sort());
   for (const route of routes) {
@@ -426,7 +427,7 @@ test('маршруты контроллеров 1:1 совпадают с кон
     AdminTenantManagerController,
   ]).map((key) => key.replace(/:\w+/g, ':p'));
   const fromContract = contractManagerRoutes();
-  assert.equal(fromContract.length, 22, `в контракте ожидалось 22 маршрута (14 + 8), найдено ${fromContract.length}`);
+  assert.equal(fromContract.length, 23, `в контракте ожидалось 23 маршрута (15 + 8), найдено ${fromContract.length}`);
   assert.deepEqual([...fromController].sort(), fromContract);
 });
 
@@ -1098,6 +1099,9 @@ test('extend: платное продление менеджером — сни�
     3000,
     PLAN_ID,
     'Бизнес',
+    null, // no composition on the legacy days path
+    null, // no requestId
+    null, // no fingerprint
   ]);
 
   assert.equal(result.id, TENANT_ID);
@@ -3875,6 +3879,9 @@ const EXTEND_BODY = {
   until: '2027-01-01T00:00:00.000Z',
   note: 'оплата',
   creditManager: true,
+  period: 'monthly',
+  quoteToken: '0'.repeat(64),
+  requestId: '16100000-0000-4000-a000-000000000099',
 };
 
 test('контракт: DTO принимают ВСЕ поля тел запросов из shared/api/types.ts и не вводят лишних', async () => {
@@ -5372,6 +5379,7 @@ test('кабинет менеджера: каждый запрос к tenants н
   const scopedMethods = new Set([
     'getAll',
     'getCabinet',
+    'getSubscriptionQuote',
     'assignPlan',
     'suspend',
     'unsuspend',
@@ -5450,7 +5458,7 @@ test('менеджер платформы не получает ни одног�
   }
 });
 
-test('маршруты суперадмина в tenants и admin-audit: менеджеру и директору закрыты RolesGuard; без @Roles остаются ровно три', () => {
+test('маршруты суперадмина в tenants и admin-audit: менеджеру и директору закрыты RolesGuard; без @Roles остаются ровно четыре', () => {
   const guard = new RolesGuard(new Reflector());
   const reflector = new Reflector();
   const withoutRoles = [];
@@ -5478,10 +5486,15 @@ test('маршруты суперадмина в tenants и admin-audit: мен�
       closed += 1;
     }
   }
-  assert.equal(closed, 17, 'закрытых маршрутов суперадмина: 14 в TenantsController + 3 в AdminAuditController');
+  assert.equal(closed, 18, 'закрытых маршрутов суперадмина: 15 в TenantsController + 3 в AdminAuditController');
   assert.deepEqual(
     withoutRoles.sort(),
-    ['TenantsController.getMyCompany', 'TenantsController.getSubscription', 'TenantsController.updateMyCompany'],
+    [
+      'TenantsController.getMyCompany',
+      'TenantsController.getOwnSubscriptionQuote',
+      'TenantsController.getSubscription',
+      'TenantsController.updateMyCompany',
+    ],
     'без @Roles остались только «свои» маршруты тенанта: /my-company (закрыт PermissionsGuard) и /subscription',
   );
 });

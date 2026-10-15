@@ -2,7 +2,36 @@
 //  Shared Types — used by both Web and Mobile apps
 // ═══════════════════════════════════════════════════════════════════════════════
 
+import type {
+  SubscriptionPlanCode,
+  SubscriptionPlanPricing,
+  SubscriptionBillingPeriod,
+  SubscriptionQuote,
+} from '../utils/subscriptionPricing';
+
+export interface SubscriptionUsage {
+  employees: number;
+  activePoints: number;
+  /** Legacy tenants with no active point are quoted for one base branch without writes. */
+  billablePoints: number;
+}
+
+export interface SubscriptionQuotePreview {
+  planId: string;
+  pricing: SubscriptionPlanPricing;
+  usage: SubscriptionUsage;
+  quote: SubscriptionQuote;
+  quoteToken: string;
+}
+
+export interface SubscriptionQuoteQuery {
+  period?: SubscriptionBillingPeriod;
+  planId?: string;
+}
+
 export interface Plan {
+  code?: SubscriptionPlanCode | null;
+  pricing?: SubscriptionPlanPricing | null;
   id: string;
   name: string;
   monthlyPrice: number;
@@ -178,6 +207,8 @@ export type SubscriptionPeriodKind = 'paid' | 'free';
  * этим продлением; `previousEnd` — что было до него.
  */
 export interface SubscriptionPayment {
+  compositionSnapshot?: SubscriptionQuotePreview | null;
+  requestId?: string | null;
   id: string;
   tenantId: string;
   /** Рубли; 0 для бесплатного продления. */
@@ -273,6 +304,7 @@ export interface PosSettingsConflict {
 }
 
 export interface SubscriptionInfo {
+  usage?: SubscriptionUsage;
   tenantName: string;
   /**
    * The tenant's current plan id (authoritative link to `plans`). Prefer this
