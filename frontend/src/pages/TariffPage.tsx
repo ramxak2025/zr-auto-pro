@@ -1,3 +1,6 @@
+import { useState } from 'react';
+import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
+import { planCompositionLabel } from '../utils/subscriptionPricingText';
 import { useQuery } from '@tanstack/react-query';
 import { CalendarDays, Check, CreditCard, Info, MessageCircle, Users, X } from 'lucide-react';
 import { format, isPast, parseISO } from 'date-fns';
@@ -24,6 +27,7 @@ import { FEATURE_GROUPS } from '../utils/featureGroups';
 import { getWhatsAppChatUrl } from '../config/contacts';
 
 export default function TariffPage() {
+  const [quotePeriod, setQuotePeriod] = useState<'monthly' | 'yearly'>('monthly');
   // В слоте ['subscription'] лежит САМ объект подписки — так его пишут оболочка,
   // FeatureGate и App. Раньше страница клала сюда ответ axios и читала `.data`
   // через select: если слот уже был прогрет оболочкой, страница показывала
@@ -39,6 +43,14 @@ export default function TariffPage() {
     queryFn: async () => (await subscriptionApi.get()).data,
   });
 
+  const quoteQuery = useQuery({
+    queryKey: ['subscription-quote', quotePeriod],
+    queryFn: async () => (await subscriptionApi.quote({ period: quotePeriod })).data,
+    enabled: !!sub?.planId,
+    retry: false,
+    placeholderData: () => undefined,
+  });
+  const currentPricing = sub?.plans?.find((plan) => plan.id === sub.planId)?.pricing;
   const subscriptionEnd = sub?.subscriptionEnd ? parseISO(sub.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
@@ -101,7 +113,7 @@ export default function TariffPage() {
                   tone={isExpired ? 'bad' : 'neutral'}
                 />
                 <MiniStat
-                  label="Стоимость тарифа"
+                  label="Базовая стоимость"
                   value={sub?.monthlyPrice ? <Money value={sub.monthlyPrice} /> : 'Не указано'}
                   hint={sub?.monthlyPrice ? 'в месяц' : undefined}
                 />
@@ -113,12 +125,56 @@ export default function TariffPage() {
                         Сотрудников
                       </span>
                     }
-                    value={`${sub.currentUsers} / ${sub.maxUsers}`}
-                    tone={sub.currentUsers >= sub.maxUsers ? 'warn' : 'neutral'}
+                    value={
+                      currentPricing
+                        ? `${sub.usage?.employees ?? sub.currentUsers} · включено ${currentPricing.includedEmployees}`
+                        : `${sub.currentUsers} / ${sub.maxUsers}`
+                    }
+                    tone={!currentPricing && sub.currentUsers >= sub.maxUsers ? 'warn' : 'neutral'}
                   />
                 )}
               </div>
 
+              {sub?.planId && (
+                <div className="space-y-3">
+                  <div role="group" aria-label="Период расчёта" className="flex flex-wrap gap-2">
+                    {(['monthly', 'yearly'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        aria-pressed={period === quotePeriod}
+                        className={buttonClasses({ variant: quotePeriod === period ? 'primary' : 'secondary' })}
+                        onClick={() => setQuotePeriod(period)}
+                      >
+                        {period === 'monthly' ? 'Месяц' : 'Год · 12 за 10'}
+                      </button>
+                    ))}
+                  </div>
+                  {quoteQuery.isFetching ? (
+                    <p role="status" className="text-sm text-ink-3">
+                      Загружаем расчёт…
+                    </p>
+                  ) : quoteQuery.data && !quoteQuery.isError ? (
+                    <SubscriptionQuoteBreakdown preview={quoteQuery.data} />
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-ink-2">
+                        Расчёт по текущему составу недоступен. Для прежних тарифов и дополнительных филиалов стоимость
+                        уточняется отдельно.
+                      </p>
+                      <button
+                        type="button"
+                        className={buttonClasses({ variant: 'secondary' })}
+                        onClick={() => {
+                          void quoteQuery.refetch();
+                        }}
+                      >
+                        Повторить расчёт
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               {sub?.subscriptionNote && (
                 <div className="flex items-start gap-2.5 rounded-lg border border-info/20 bg-info-soft px-4 py-3">
                   <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-info" aria-hidden="true" />
@@ -175,12 +231,12 @@ export default function TariffPage() {
 
                         <p className="mt-4 flex items-baseline gap-1">
                           <Money value={plan.monthlyPrice} className="text-2xl font-semibold tracking-tight text-ink" />
-                          <span className="text-sm text-ink-3">/ мес</span>
+                          <span className="text-sm text-ink-3">/ мес · база</span>
                         </p>
 
                         <p className="mt-3 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2">
                           <Users className="h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
-                          До {plan.maxUsers} сотрудников
+                          {planCompositionLabel(plan)}
                         </p>
                       </div>
 

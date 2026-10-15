@@ -1,3 +1,4 @@
+import { planCompositionLabel } from '../../utils/subscriptionPricingText';
 /**
  * AdminPlansScreen — in-app tariff editor (full CRUD via plansApi).
  *
@@ -370,7 +371,7 @@ export default function AdminPlansScreen() {
                       </Text>
                     ) : null}
                     <Text style={[styles.planMeta, { color: palette.text.tertiary }]}>
-                      до {plan.maxUsers} польз. · {subscribers} подписчиков · {features.length} функций ·{' '}
+                      {planCompositionLabel(plan)} · {subscribers} подписчиков · {features.length} функций ·{' '}
                       {plan.voiceMinutes ?? 0} мин голоса
                     </Text>
                   </View>

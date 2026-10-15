@@ -314,6 +314,7 @@ export default function ManagerTenantDetailPage() {
 
       {/* Продление: платное несёт долю владельца, бесплатное ограничено лимитом менеджера */}
       <ExtendModal
+        tenantId={tenant.id}
         isOpen={extendModalOpen}
         onClose={() => setExtendModalOpen(false)}
         mode="manager"
@@ -323,7 +324,7 @@ export default function ManagerTenantDetailPage() {
         maxFreeDays={summary?.maxFreeDays}
         ownerSharePercent={summary?.ownerSharePercent}
         isPending={extend.isPending}
-        onSubmit={(request) => extend.mutate(request, { onSuccess: () => setExtendModalOpen(false) })}
+        onSubmit={(request) => extend.mutateAsync(request, { onSuccess: () => setExtendModalOpen(false) })}
       />
 
       <AssignPlanModal

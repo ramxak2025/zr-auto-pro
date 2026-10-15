@@ -14,6 +14,8 @@
  * платёж пишется снимок с сервера.
  */
 import React from 'react';
+import { useSubscriptionRenewal } from './useSubscriptionRenewal';
+import SubscriptionQuoteBreakdown from '../../components/SubscriptionQuoteBreakdown';
 import { Alert, StyleSheet, View, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,7 +26,6 @@ import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing } from '../../theme';
-import { extractApiErrorMessage } from '../../utils/apiError';
 import type { PlatformManager, ManagerSummary, SubscriptionPeriodKind } from '../../../../shared/types';
 import type { ExtendSubscriptionRequest } from '../../../../shared/api/types';
 import {
@@ -107,7 +108,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
   const subscriptionEnd = tenant?.subscriptionEnd ?? null;
 
   const [type, setType] = React.useState<'paid' | 'free'>('paid');
-  const [amount, setAmount] = React.useState('');
+
   const [until, setUntil] = React.useState<Date | null>(null);
   const [days, setDays] = React.useState('');
   const [creditManager, setCreditManager] = React.useState(false);
@@ -117,9 +118,8 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
   const wasVisible = React.useRef(false);
   React.useEffect(() => {
     if (visible && !wasVisible.current) {
-      const price = planPrice ?? tenant?.monthlyPrice ?? 0;
       setType(mode === 'superadmin' && currentKind === 'free' ? 'free' : 'paid');
-      setAmount(price > 0 ? String(Math.round(price * 100) / 100).replace('.', ',') : '');
+
       setUntil(null);
       setDays('');
       setCreditManager(false);
@@ -163,12 +163,17 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
       onClose();
       onDone?.();
     },
-    onError: (err) => {
-      haptic('error');
-      Alert.alert('Ошибка', extractApiErrorMessage(err, 'Не удалось продлить подписку'));
-    },
+    retry: false,
   });
 
+  const renewal = useSubscriptionRenewal({
+    open: visible,
+    tenantId,
+    mode,
+    legacyPrice: planPrice ?? tenant?.monthlyPrice ?? 0,
+    onSubmit: (request) => mutation.mutateAsync(request),
+  });
+  const { amount, changeAmount: setAmount } = renewal;
   const amountNum = parseAmount(amount) ?? Number.NaN;
   const paid = type === 'paid';
   const shareOn = paid && (mode === 'manager' || (hasManager && creditManager));
@@ -184,13 +189,24 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
   };
 
   const submit = () => {
-    if (!tenant) return;
+    if (!tenant || renewal.sending) return;
     if (paid) {
       if (!Number.isFinite(amountNum) || amountNum <= 0) {
         haptic('error');
         Alert.alert('Укажите сумму', 'Для платного продления введите сумму больше нуля.');
         return;
       }
+    }
+    if (paid && renewal.period !== 'custom') {
+      if (!renewal.quoteReady && !renewal.uncertain) return;
+      void renewal.send({
+        type: 'paid',
+        amount: amountNum,
+        period: renewal.period,
+        quoteToken: renewal.quoteQuery.data?.quoteToken,
+        ...(hasManager && creditManager ? { creditManager: true } : {}),
+      });
+      return;
     }
     // Пробный доступ менеджера задаётся днями (сервер не принимает `until`), остальное — датой.
     if (mode === 'manager' && !paid) {
@@ -205,7 +221,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
         Alert.alert('Слишком много дней', `Пробный доступ — не больше ${maxFree} дн. за одно продление.`);
         return;
       }
-      mutation.mutate({ type: 'free', days: n });
+      void renewal.send({ type: 'free', days: n });
       return;
     }
     if (!until) {
@@ -220,14 +236,14 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
       return;
     }
     if (paid) {
-      mutation.mutate({
+      void renewal.send({
         type: 'paid',
         amount: amountNum,
         until: end.toISOString(),
         ...(hasManager && creditManager ? { creditManager: true } : {}),
       });
     } else {
-      mutation.mutate({ type: 'free', until: end.toISOString() });
+      void renewal.send({ type: 'free', until: end.toISOString() });
     }
   };
 
@@ -240,9 +256,12 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
       <AdminSheet
         visible={visible}
         title="Продлить подписку"
-        saveLabel="Продлить"
-        saving={mutation.isPending}
-        onClose={onClose}
+        saving={renewal.sending}
+        saveLabel={renewal.uncertain ? 'Повторить запрос' : 'Продлить'}
+        saveDisabled={paid && renewal.period !== 'custom' && !renewal.quoteReady && !renewal.uncertain}
+        onClose={() => {
+          if (renewal.canClose()) onClose();
+        }}
         onSave={submit}
       >
         <View style={[styles.recap, surface.cardCompact]}>
@@ -255,99 +274,163 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
           </Text>
         </View>
 
-        <SheetLabel>Тип продления</SheetLabel>
-        <SheetSegmented
-          value={type}
-          onChange={setType}
-          options={[
-            { value: 'paid', label: 'Платно', icon: 'card-outline' },
-            { value: 'free', label: 'Бесплатно', icon: 'gift-outline' },
-          ]}
-        />
-
-        {paid ? (
-          <SheetInput
-            label="Сумма, ₽"
-            value={amount}
-            onChangeText={(v) => setAmount(v.replace(/[^0-9.,]/g, ''))}
-            placeholder="0"
-            keyboardType="decimal-pad"
-            big
-          />
-        ) : null}
-
-        {hasManager && paid ? (
-          <SheetSwitchRow
-            label={`Оплату получил менеджер ${managerLabel}${
-              clientManager ? ` (доля ${formatPercent(clientManager.ownerSharePercent)})` : ''
-            }`}
-            value={creditManager}
-            onValueChange={setCreditManager}
-          />
-        ) : null}
-
-        {mode === 'manager' && !paid ? (
-          <>
-            <SheetLabel>Дней пробного доступа</SheetLabel>
-            <SheetChips
-              chips={trialPresets.map((d) => ({
-                label: `${d} дн.`,
-                active: days === String(d),
+        {!!renewal.message && <SheetHint icon="information-circle-outline">{renewal.message}</SheetHint>}
+        {renewal.changed && (
+          <SheetChips
+            chips={[
+              {
+                label: 'Обновить расчёт',
                 onPress: () => {
-                  haptic('select');
-                  setDays(String(d));
+                  void renewal.quoteQuery.refetch();
                 },
-              }))}
-            />
-            <SheetInput
-              value={days}
-              onChangeText={(v) => setDays(v.replace(/[^0-9]/g, ''))}
-              placeholder="Другое число дней"
-              keyboardType="number-pad"
-            />
-          </>
-        ) : (
-          <>
-            <SheetLabel>Продлить до</SheetLabel>
-            <SheetChips chips={PAID_PRESETS.map((p) => ({ label: p.label, onPress: () => applyPreset(p.days) }))} />
-            <Pressable
-              onPress={() => {
-                haptic('tap');
-                setDatePickerOpen(true);
-              }}
-              style={[styles.dateRow, surface.cardCompact]}
-            >
-              <Ionicons name="calendar-outline" size={18} color={palette.text.secondary} />
-              <Text style={[styles.dateValue, { color: until ? palette.text.primary : palette.text.tertiary }]}>
-                {until ? formatFullDate(until.toISOString()) : 'Выбрать дату'}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-            </Pressable>
-          </>
+              },
+              { label: 'Расчёт проверен', onPress: renewal.acknowledgeChange },
+            ]}
+          />
         )}
+        <View pointerEvents={renewal.locked ? 'none' : 'auto'}>
+          <SheetLabel>Тип продления</SheetLabel>
+          <SheetSegmented
+            value={type}
+            onChange={setType}
+            options={[
+              { value: 'paid', label: 'Платно', icon: 'card-outline' },
+              { value: 'free', label: 'Бесплатно', icon: 'gift-outline' },
+            ]}
+          />
 
-        {shareOn && sharePercent != null ? (
-          <SheetHint icon="wallet-outline" tint={colors.green[600]}>
-            {shareAmount != null
-              ? `Доля владельца: ${formatMoneyExact(shareAmount)} (${formatPercent(sharePercent)}) — запишется в ${
-                  mode === 'manager' ? 'ваш долг владельцу' : `долг менеджера ${managerLabel}`
-                }.`
-              : `С оплаты ${formatPercent(sharePercent)} — доля владельца, она запишется в ${
-                  mode === 'manager' ? 'ваш долг владельцу' : `долг менеджера ${managerLabel}`
-                }.`}
-          </SheetHint>
-        ) : (
-          <SheetHint
-            icon={paid ? 'trending-up-outline' : 'information-circle-outline'}
-            tint={paid ? colors.green[600] : undefined}
-          >
-            {paid
-              ? 'Сумма попадёт в платную выручку от подписок.'
-              : mode === 'manager'
-                ? `Пробный доступ не считается оплатой и долга не создаёт. Не больше ${maxFree} дн. за одно продление.`
-                : 'Бесплатное продление не учитывается как выручка.'}
-          </SheetHint>
-        )}
+          {paid && (
+            <>
+              <SheetLabel>Период</SheetLabel>
+              <SheetChips
+                chips={[
+                  { label: 'Месяц', active: renewal.period === 'monthly', onPress: () => renewal.setPeriod('monthly') },
+                  {
+                    label: 'Год · 12 за 10',
+                    active: renewal.period === 'yearly',
+                    onPress: () => renewal.setPeriod('yearly'),
+                  },
+                  {
+                    label: 'Своя дата',
+                    active: renewal.period === 'custom',
+                    onPress: () => renewal.setPeriod('custom'),
+                  },
+                ]}
+              />
+              {!!renewal.fallback && <SheetHint icon="information-circle-outline">{renewal.fallback}</SheetHint>}
+              {renewal.period !== 'custom' && (
+                <>
+                  {renewal.quoteQuery.isFetching ? (
+                    <SheetHint icon="information-circle-outline">Загружаем расчёт…</SheetHint>
+                  ) : renewal.quoteQuery.isError ? (
+                    <>
+                      <SheetHint icon="information-circle-outline">
+                        Расчёт недоступен. Повторите загрузку или выберите свою дату.
+                      </SheetHint>
+                      <SheetChips
+                        chips={[
+                          {
+                            label: 'Повторить расчёт',
+                            onPress: () => {
+                              void renewal.quoteQuery.refetch();
+                            },
+                          },
+                        ]}
+                      />
+                    </>
+                  ) : renewal.quoteQuery.data ? (
+                    <SubscriptionQuoteBreakdown preview={renewal.quoteQuery.data} />
+                  ) : null}
+                </>
+              )}
+            </>
+          )}
+          {paid ? (
+            <SheetInput
+              editable={!renewal.locked}
+              label="Фактически получено, ₽"
+              value={amount}
+              onChangeText={(v) => setAmount(v.replace(/[^0-9.,]/g, ''))}
+              placeholder="0"
+              keyboardType="decimal-pad"
+              big
+            />
+          ) : null}
+
+          {hasManager && paid ? (
+            <SheetSwitchRow
+              label={`Оплату получил менеджер ${managerLabel}${
+                clientManager ? ` (доля ${formatPercent(clientManager.ownerSharePercent)})` : ''
+              }`}
+              value={creditManager}
+              onValueChange={setCreditManager}
+            />
+          ) : null}
+
+          {mode === 'manager' && !paid ? (
+            <>
+              <SheetLabel>Дней пробного доступа</SheetLabel>
+              <SheetChips
+                chips={trialPresets.map((d) => ({
+                  label: `${d} дн.`,
+                  active: days === String(d),
+                  onPress: () => {
+                    haptic('select');
+                    setDays(String(d));
+                  },
+                }))}
+              />
+              <SheetInput
+                value={days}
+                editable={!renewal.locked}
+                onChangeText={(v) => setDays(v.replace(/[^0-9]/g, ''))}
+                placeholder="Другое число дней"
+                keyboardType="number-pad"
+              />
+            </>
+          ) : !paid || renewal.period === 'custom' ? (
+            <>
+              <SheetLabel>Продлить до</SheetLabel>
+              <SheetChips chips={PAID_PRESETS.map((p) => ({ label: p.label, onPress: () => applyPreset(p.days) }))} />
+              <Pressable
+                onPress={() => {
+                  haptic('tap');
+                  setDatePickerOpen(true);
+                }}
+                style={[styles.dateRow, surface.cardCompact]}
+              >
+                <Ionicons name="calendar-outline" size={18} color={palette.text.secondary} />
+                <Text style={[styles.dateValue, { color: until ? palette.text.primary : palette.text.tertiary }]}>
+                  {until ? formatFullDate(until.toISOString()) : 'Выбрать дату'}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </Pressable>
+            </>
+          ) : null}
+
+          {shareOn && sharePercent != null ? (
+            <SheetHint icon="wallet-outline" tint={colors.green[600]}>
+              {shareAmount != null
+                ? `Доля владельца: ${formatMoneyExact(shareAmount)} (${formatPercent(sharePercent)}) — запишется в ${
+                    mode === 'manager' ? 'ваш долг владельцу' : `долг менеджера ${managerLabel}`
+                  }.`
+                : `С оплаты ${formatPercent(sharePercent)} — доля владельца, она запишется в ${
+                    mode === 'manager' ? 'ваш долг владельцу' : `долг менеджера ${managerLabel}`
+                  }.`}
+            </SheetHint>
+          ) : (
+            <SheetHint
+              icon={paid ? 'trending-up-outline' : 'information-circle-outline'}
+              tint={paid ? colors.green[600] : undefined}
+            >
+              {paid
+                ? 'Сумма попадёт в платную выручку от подписок.'
+                : mode === 'manager'
+                  ? `Пробный доступ не считается оплатой и долга не создаёт. Не больше ${maxFree} дн. за одно продление.`
+                  : 'Бесплатное продление не учитывается как выручка.'}
+            </SheetHint>
+          )}
+        </View>
       </AdminSheet>
 
       {/* Пикер даты — соседняя модалка (проверенный паттерн), не вложенная. */}

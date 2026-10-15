@@ -1,3 +1,4 @@
+import { planCompositionLabel } from '../../utils/subscriptionPricingText';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -466,9 +467,7 @@ export default function AdminPlansPage() {
                         <div className="inline-flex items-center gap-1.5">
                           <Users className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />
                           <dt className="sr-only">Сотрудников</dt>
-                          <dd>
-                            до <span className="tabular-nums">{plan.maxUsers}</span> сотр.
-                          </dd>
+                          <dd>{planCompositionLabel(plan)}</dd>
                         </div>
                         <div className="inline-flex items-center gap-1.5">
                           <Mic className="h-3.5 w-3.5 text-ink-4" aria-hidden="true" />

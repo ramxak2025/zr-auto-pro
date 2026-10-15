@@ -120,6 +120,7 @@ export function SheetLabel({ children }: { children: string }) {
 }
 
 interface SheetInputProps {
+  editable?: boolean;
   label?: string;
   value: string;
   onChangeText: (v: string) => void;
@@ -134,6 +135,7 @@ interface SheetInputProps {
 
 /** Текстовое поле шторки (подпись + карточка-обёртка). */
 export function SheetInput({
+  editable,
   label,
   value,
   onChangeText,
@@ -163,6 +165,7 @@ export function SheetInput({
           autoCapitalize={autoCapitalize}
           multiline={multiline}
           maxLength={maxLength}
+          editable={editable}
           value={value}
           onChangeText={onChangeText}
         />
@@ -328,6 +331,7 @@ export function SheetHint({ icon, tint, children }: SheetHintProps) {
 }
 
 interface SheetOptionRowProps {
+  subtitleLines?: number;
   title: string;
   subtitle?: string;
   selected: boolean;
@@ -335,7 +339,7 @@ interface SheetOptionRowProps {
 }
 
 /** Вариант выбора в списке (менеджер, тариф): отметка справа, выбранный подсвечен. */
-export function SheetOptionRow({ title, subtitle, selected, onPress }: SheetOptionRowProps) {
+export function SheetOptionRow({ title, subtitle, subtitleLines = 1, selected, onPress }: SheetOptionRowProps) {
   const palette = useColors();
   const surface = useIosSurface();
   return (
@@ -355,7 +359,7 @@ export function SheetOptionRow({ title, subtitle, selected, onPress }: SheetOpti
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.optionSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
+          <Text style={[styles.optionSubtitle, { color: palette.text.tertiary }]} numberOfLines={subtitleLines}>
             {subtitle}
           </Text>
         ) : null}
