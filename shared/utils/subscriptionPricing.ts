@@ -12,9 +12,33 @@ export interface SubscriptionPlanPricing {
 }
 
 export const SUBSCRIPTION_PLAN_PRICING: Readonly<Record<SubscriptionPlanCode, SubscriptionPlanPricing>> = {
-  baza: { code: 'baza', name: 'БАЗА', monthlyPrice: 990, includedEmployees: 1, extraEmployeeMonthlyPrice: 990, includedPoints: 1, extraPointMonthlyPrice: null },
-  pro: { code: 'pro', name: 'ПРО', monthlyPrice: 4990, includedEmployees: 5, extraEmployeeMonthlyPrice: 500, includedPoints: 1, extraPointMonthlyPrice: null },
-  max: { code: 'max', name: 'МАКС', monthlyPrice: 15000, includedEmployees: 50, extraEmployeeMonthlyPrice: 500, includedPoints: 1, extraPointMonthlyPrice: 5000 },
+  baza: {
+    code: 'baza',
+    name: 'BAZA',
+    monthlyPrice: 990,
+    includedEmployees: 1,
+    extraEmployeeMonthlyPrice: 990,
+    includedPoints: null,
+    extraPointMonthlyPrice: null,
+  },
+  pro: {
+    code: 'pro',
+    name: 'PRO',
+    monthlyPrice: 4990,
+    includedEmployees: 5,
+    extraEmployeeMonthlyPrice: 500,
+    includedPoints: null,
+    extraPointMonthlyPrice: null,
+  },
+  max: {
+    code: 'max',
+    name: 'MAX',
+    monthlyPrice: 15000,
+    includedEmployees: 50,
+    extraEmployeeMonthlyPrice: 500,
+    includedPoints: 1,
+    extraPointMonthlyPrice: 5000,
+  },
 };
 
 export interface SubscriptionQuote {
@@ -40,26 +64,63 @@ export type SubscriptionQuoteResult =
   | { ok: true; quote: SubscriptionQuote }
   | { ok: false; code: 'INVALID_COUNT' | 'UNPRICED_POINTS' };
 
+export interface SubscriptionQuoteInput {
+  period: SubscriptionBillingPeriod;
+  employees: number;
+  points: number;
+}
+
 export function calculateSubscriptionQuote(
   pricing: SubscriptionPlanPricing,
-  input: { period: SubscriptionBillingPeriod; employees: number; points: number },
+  input: SubscriptionQuoteInput,
 ): SubscriptionQuoteResult {
-  if (![input.employees, input.points].every((count) => Number.isSafeInteger(count) && count >= 1)) {
+  if (
+    (input.period !== 'monthly' && input.period !== 'yearly') ||
+    ![input.employees, input.points].every((count) => Number.isSafeInteger(count) && count >= 1)
+  ) {
     return { ok: false, code: 'INVALID_COUNT' };
   }
   const extraEmployees = Math.max(0, input.employees - pricing.includedEmployees);
-  const extraPoints = pricing.includedPoints === null ? 0 : Math.max(0, input.points - pricing.includedPoints);
+  const extraPoints = Math.max(0, input.points - (pricing.includedPoints ?? 1));
   if (extraPoints > 0 && pricing.extraPointMonthlyPrice === null) {
     return { ok: false, code: 'UNPRICED_POINTS' };
   }
   const employeesMonthlyAmount = extraEmployees * pricing.extraEmployeeMonthlyPrice;
   const pointsMonthlyAmount = extraPoints * (pricing.extraPointMonthlyPrice ?? 0);
-  const monthlyTotal = pricing.monthlyPrice + employeesMonthlyAmount + pointsMonthlyAmount;
+  const monthlyTotal = Math.round((pricing.monthlyPrice + employeesMonthlyAmount + pointsMonthlyAmount) * 100) / 100;
+  // Bound money as integer kopecks: no NaN, overflow or imprecise payable amounts.
+  if (
+    ![
+      pricing.monthlyPrice,
+      pricing.extraEmployeeMonthlyPrice,
+      pricing.extraPointMonthlyPrice ?? 0,
+      employeesMonthlyAmount,
+      pointsMonthlyAmount,
+      monthlyTotal,
+    ].every((value) => Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100) * 10))
+  ) {
+    return { ok: false, code: 'INVALID_COUNT' };
+  }
   const yearly = input.period === 'yearly';
-  return { ok: true, quote: {
-    planCode: pricing.code, period: input.period, employees: input.employees, points: input.points,
-    includedEmployees: pricing.includedEmployees, extraEmployees, includedPoints: pricing.includedPoints, extraPoints,
-    baseMonthlyAmount: pricing.monthlyPrice, employeesMonthlyAmount, pointsMonthlyAmount, monthlyTotal,
-    total: monthlyTotal * (yearly ? 10 : 1), serviceMonths: yearly ? 12 : 1, chargedMonths: yearly ? 10 : 1, currency: 'RUB',
-  } };
+  return {
+    ok: true,
+    quote: {
+      planCode: pricing.code,
+      period: input.period,
+      employees: input.employees,
+      points: input.points,
+      includedEmployees: pricing.includedEmployees,
+      extraEmployees,
+      includedPoints: pricing.includedPoints,
+      extraPoints,
+      baseMonthlyAmount: pricing.monthlyPrice,
+      employeesMonthlyAmount,
+      pointsMonthlyAmount,
+      monthlyTotal,
+      total: Math.round(monthlyTotal * (yearly ? 10 : 1) * 100) / 100,
+      serviceMonths: yearly ? 12 : 1,
+      chargedMonths: yearly ? 10 : 1,
+      currency: 'RUB',
+    },
+  };
 }
