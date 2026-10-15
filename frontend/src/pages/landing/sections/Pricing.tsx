@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Building2, Wrench } from 'lucide-react';
 import { gsap, useGSAP, EASE } from '../gsap';
 import { b2bNotice, pricing } from '../content';
+import { formatPlanMoney } from './PricingCalculator';
 
 /**
  * Компактный тизер тарифов на главной. id="pricing" сохранён — старые якоря
@@ -133,7 +134,11 @@ export default function Pricing() {
                   <span className="mt-0.5 block text-sm text-slate-500">{plan.description}</span>
                 </span>
                 <span className="relative z-10 shrink-0 whitespace-nowrap text-right text-sm font-medium text-slate-500">
-                  {plan.employees}
+                  <span className="block font-semibold tabular-nums text-slate-900">
+                    {formatPlanMoney(plan.monthlyPrice)}
+                    <span className="font-normal text-slate-500">/мес.</span>
+                  </span>
+                  <span className="mt-1 block text-xs">{plan.employees}</span>
                 </span>
               </li>
             ))}
