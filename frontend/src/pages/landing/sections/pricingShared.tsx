@@ -121,7 +121,7 @@ export function PlanCard({ plan, period = 'monthly' }: { plan: PricingPlan; peri
         </span>
       )}
       <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
-      <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
+      <p className="mt-1 text-sm text-slate-500 md:min-h-[40px]">{plan.description}</p>
       <p className="mt-5 text-sm font-semibold text-slate-900">{plan.employees}</p>
       <p className="mt-3 text-3xl font-bold tracking-tight tabular-nums text-slate-900">
         {formatPlanMoney(plan.monthlyPrice * chargedMonths)}

@@ -8,7 +8,7 @@ import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import { ComparisonTable, ComparisonTableMobile, ImplementationCard, PlanCard } from './sections/pricingShared';
-import { b2bNotice, pricing, pricingFaq, tarifyHero } from './content';
+import { pricing, pricingFaq, tarifyHero } from './content';
 
 /**
  * Отдельная страница тарифов /tarify. Публичная — доступна и гостям,
@@ -142,8 +142,7 @@ export default function TarifyPage() {
               <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
             </span>
             <p className="text-sm leading-relaxed text-slate-600">
-              <span className="font-semibold text-slate-900">Для организаций — юрлиц и ИП.</span> {b2bNotice} Оставьте
-              заявку — менеджер поможет подключить организацию.
+              Для автосервисов: ИП и организаций. Оставьте заявку — поможем с подключением и началом работы.
             </p>
           </div>
         </GsapReveal>

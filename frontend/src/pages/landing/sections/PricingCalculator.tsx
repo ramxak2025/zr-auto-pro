@@ -49,7 +49,7 @@ function CountField({
   note: string;
 }) {
   const count = Number(value);
-  const valid = value.trim() !== '' && Number.isSafeInteger(count) && count >= 1;
+  const valid = /^\d+$/.test(value) && Number.isSafeInteger(count) && count >= 1;
   return (
     <label className="block">
       <span className="block text-sm font-medium text-slate-900">{label}</span>
@@ -95,8 +95,8 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
   const pricing = SUBSCRIPTION_PLAN_PRICING[plan];
   const result = calculateSubscriptionQuote(pricing, {
     period,
-    employees: employees.trim() === '' ? 0 : Number(employees),
-    points: plan === 'max' ? (points.trim() === '' ? 0 : Number(points)) : 1,
+    employees: /^\d+$/.test(employees) ? Number(employees) : 0,
+    points: plan === 'max' ? (/^\d+$/.test(points) ? Number(points) : 0) : 1,
   });
   const quote = result.ok ? result.quote : null;
   const multiplier = period === 'yearly' ? 10 : 1;
@@ -194,7 +194,7 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
               <p className="mt-5 text-xs leading-relaxed text-slate-500">
                 {period === 'yearly'
                   ? 'Один платёж за год. Скидка действует и на дополнительных сотрудников, и на филиалы.'
-                  : 'Все доплаты включены в итог. Изменение состава здесь ничего не списывает.'}
+                  : 'Итог включает доплаты за сотрудников и филиалы.'}
               </p>
             </>
           ) : (
