@@ -92,8 +92,11 @@ export class PlansService {
       vals.push(JSON.stringify(dto.features));
     }
     if (dto.maxUsers !== undefined) {
-      sets.push(`max_users=$${idx++}`);
-      // Legacy maxUsers remains the included employee count.
+      sets.push(`max_users=$${idx}`);
+      // The existing editor's maxUsers is the included count for coded plans.
+      // Update both columns atomically; custom/legacy pricing stays untouched.
+      sets.push(`included_employees=CASE WHEN code IN ('baza','pro','max') THEN $${idx} ELSE included_employees END`);
+      idx++;
       vals.push(this.floorMaxUsers(dto.maxUsers));
     }
     if (dto.isActive !== undefined) {
