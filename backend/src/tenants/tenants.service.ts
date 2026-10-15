@@ -739,8 +739,14 @@ export class TenantsService {
     if (period !== 'monthly' && period !== 'yearly') {
       throw new BadRequestException({ code: 'INVALID_PERIOD', message: 'Выберите месяц или год' });
     }
+    // Plan, term and live composition must come from ONE statement snapshot.
+    // A tenant row lock does not serialize price or employee/point updates.
     const { rows } = await db.query(
-      `SELECT t.plan_id, t.subscription_end, p.* FROM tenants t
+      `SELECT t.plan_id, t.subscription_end, p.*,
+              (SELECT COUNT(*)::int FROM users WHERE tenant_id=t.id AND is_active=true
+                 AND dismissed_at IS NULL AND purged_at IS NULL) AS employees,
+              (SELECT COUNT(*)::int FROM tenant_points WHERE tenant_id=t.id AND is_active=true) AS active_points
+         FROM tenants t
          JOIN plans p ON p.id=COALESCE($3::uuid,t.plan_id)
         WHERE t.id=$1 AND ($2::uuid IS NULL OR t.manager_id=$2::uuid)`,
       [tenantId, scope.managerId ?? null, planId ?? null],
@@ -749,7 +755,11 @@ export class TenantsService {
     const row = rows[0];
     const pricing = pricingFromPlanRow(row);
     if (!pricing) throw new BadRequestException({ code: 'LEGACY_PLAN', message: 'Для тарифа нет составного расчёта' });
-    const usage = await this.subscriptionUsage(db, tenantId);
+    const usage = {
+      employees: Number(row.employees),
+      activePoints: Number(row.active_points),
+      billablePoints: Math.max(1, Number(row.active_points)),
+    };
     const result = calculateSubscriptionQuote(pricing, {
       period,
       employees: usage.employees,
@@ -820,11 +830,13 @@ export class TenantsService {
     if (!opts.period && !hasDays && !hasUntil) {
       throw new BadRequestException({ message: 'Укажите дату (until) или количество дней (days)' });
     }
-    if (hasUntil) {
-      const untilTs = new Date(opts.until as string).getTime();
-      if (!Number.isFinite(untilTs) || untilTs <= Date.now()) {
-        throw new BadRequestException({ message: 'Дата продления должна быть в будущем' });
-      }
+    const untilTs = hasUntil ? new Date(opts.until as string).getTime() : null;
+    if (untilTs !== null && !Number.isFinite(untilTs)) {
+      throw new BadRequestException({ message: 'Дата продления должна быть в будущем' });
+    }
+    // Legacy calls without a replay key still reject expired dates before DB access.
+    if (!opts.requestId && untilTs !== null && untilTs <= Date.now()) {
+      throw new BadRequestException({ message: 'Дата продления должна быть в будущем' });
     }
 
     if (opts.period && (hasDays || hasUntil || !opts.quoteToken)) {
@@ -882,6 +894,10 @@ export class TenantsService {
           await client.query('COMMIT');
           return this.mapTenant(current[0]);
         }
+      }
+      // Expiry invalidates a NEW request, never a proved exact replay above.
+      if (untilTs !== null && untilTs <= Date.now()) {
+        throw new BadRequestException({ message: 'Дата продления должна быть в будущем' });
       }
       let composition: Awaited<ReturnType<TenantsService['subscriptionQuoteWithDb']>> | null = null;
       if (opts.period) {
@@ -967,8 +983,8 @@ export class TenantsService {
           share?.managerId ?? null,
           share?.percent ?? null,
           share?.amount ?? null,
-          cur[0].plan_id ?? null,
-          cur[0].plan_name ?? null,
+          composition?.planId ?? cur[0].plan_id ?? null,
+          composition?.pricing.name ?? cur[0].plan_name ?? null,
           composition ? JSON.stringify(composition) : null,
           opts.requestId ?? null,
           opts.requestId ? requestFingerprint : null,
