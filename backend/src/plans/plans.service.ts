@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { pricingFromPlanRow } from './plan-pricing-row';
 import { ALL_FEATURES, ALL_FEATURE_KEYS, FeatureDef } from './feature-catalog';
 
 @Injectable()
@@ -19,6 +20,8 @@ export class PlansService {
   private mapPlan(row: any) {
     return {
       id: row.id,
+      code: row.code ?? null,
+      pricing: pricingFromPlanRow(row),
       name: row.name,
       monthlyPrice: parseFloat(row.monthly_price) || 0,
       description: row.description,
@@ -37,14 +40,8 @@ export class PlansService {
     return Math.max(0, Math.trunc(Number(v) || 0));
   }
 
-  /**
-   * Минимальный размер команды на любом тарифе — 2 сотрудника (App Store
-   * 3.1.3(c) «Enterprise Services»: сервис для «organizations or groups of
-   * employees», а не одиночного пользователя). Ни один тариф не может обслуживать
-   * одного человека. Пол — только вверх: суперадмин-редактор физически не может
-   * сохранить тариф с max_users < 2. Пустой/битый ввод → дефолт 5.
-   */
-  static readonly MIN_TEAM_USERS = 2;
+  /** Included employee count supports an owner working alone. */
+  static readonly MIN_TEAM_USERS = 1;
   private floorMaxUsers(v: unknown, fallback = 5): number {
     const n = Math.trunc(Number(v));
     const base = Number.isFinite(n) && n > 0 ? n : fallback;
@@ -95,8 +92,11 @@ export class PlansService {
       vals.push(JSON.stringify(dto.features));
     }
     if (dto.maxUsers !== undefined) {
-      sets.push(`max_users=$${idx++}`);
-      // Пол ≥2: тариф не может обслуживать одного человека (App Store 3.1.3(c)).
+      sets.push(`max_users=$${idx}`);
+      // The existing editor's maxUsers is the included count for coded plans.
+      // Update both columns atomically; custom/legacy pricing stays untouched.
+      sets.push(`included_employees=CASE WHEN code IN ('baza','pro','max') THEN $${idx} ELSE included_employees END`);
+      idx++;
       vals.push(this.floorMaxUsers(dto.maxUsers));
     }
     if (dto.isActive !== undefined) {

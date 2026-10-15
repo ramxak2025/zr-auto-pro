@@ -1,4 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import type { SubscriptionBillingPeriod } from '../../../../shared/utils/subscriptionPricing';
+import { BillingPeriodSwitch, PricingCalculator } from './sections/PricingCalculator';
 import { Link, useNavigationType } from 'react-router-dom';
 import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
 import { GsapReveal, useReveal } from './gsap';
@@ -6,13 +8,13 @@ import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import { ComparisonTable, ComparisonTableMobile, ImplementationCard, PlanCard } from './sections/pricingShared';
-import { b2bNotice, pricing, pricingFaq, tarifyHero } from './content';
+import { pricing, pricingFaq, tarifyHero } from './content';
 
 /**
  * Отдельная страница тарифов /tarify. Публичная — доступна и гостям,
  * и залогиненным (по образцу /f/:slug, без редиректа).
  *
- * Тарифы описаны ВОЗМОЖНОСТЯМИ, без цен: стоимость подбирается индивидуально
+ * Тарифы показывают цены, включённый состав и калькулятор дополнений; оплата за год
  * под размер команды при подключении. Единственный CTA карточек — «Оставить
  * заявку». Структура: мини-Header (лого + Войти) → крошки «Autexa → Тарифы» →
  * hero-строка → карточки планов (мобиле — вертикальная стопка, «Легенда»
@@ -68,6 +70,7 @@ function Breadcrumbs() {
 
 export default function TarifyPage() {
   const navigationType = useNavigationType();
+  const [period, setPeriod] = useState<SubscriptionBillingPeriod>('monthly');
   // Карточки планов въезжают каскадом снизу (как ценовые блоки на главной).
   // Стаггер по прямым детям сетки — обёрткам планов; их внутренний md:-translate-y-2
   // (подъём «Легенды») живёт на самой карточке и не задевается transform reveal'а.
@@ -139,21 +142,24 @@ export default function TarifyPage() {
               <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
             </span>
             <p className="text-sm leading-relaxed text-slate-600">
-              <span className="font-semibold text-slate-900">Для организаций — юрлиц и ИП.</span> {b2bNotice} Оставьте
-              заявку — менеджер подберёт тариф под вашу команду и подключит организацию.
+              Для автосервисов: ИП и организаций. Оставьте заявку — поможем с подключением и началом работы.
             </p>
           </div>
         </GsapReveal>
+
+        <BillingPeriodSwitch period={period} onChange={setPeriod} />
 
         {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки;
             ref = стаггер-контейнер (каждая обёртка плана оседает по очереди) */}
         <div ref={plansRef} className="mt-8 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
           {pricing.plans.map((plan) => (
             <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
-              <PlanCard plan={plan} />
+              <PlanCard plan={plan} period={period} />
             </div>
           ))}
         </div>
+
+        <PricingCalculator period={period} />
 
         {/* Внедрение под ключ */}
         <GsapReveal type="rise" delay={0.1} className="mt-10">

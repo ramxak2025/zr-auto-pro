@@ -906,6 +906,7 @@ export default function AdminTenantDetailPage() {
 
       {/* Продление подписки — платно / бесплатно (общий модал кабинетов суперадмина и менеджера) */}
       <ExtendModal
+        tenantId={tenant.id}
         isOpen={extendModalOpen}
         onClose={() => setExtendModalOpen(false)}
         mode="superadmin"
@@ -920,7 +921,7 @@ export default function AdminTenantDetailPage() {
               : null
         }
         isPending={extendMutation.isPending}
-        onSubmit={(request) => extendMutation.mutate(request, { onSuccess: () => setExtendModalOpen(false) })}
+        onSubmit={(request) => extendMutation.mutateAsync(request, { onSuccess: () => setExtendModalOpen(false) })}
       />
 
       {/* Назначить тариф */}

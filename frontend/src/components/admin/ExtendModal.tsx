@@ -1,4 +1,6 @@
 import { useId, useState } from 'react';
+import { useSubscriptionRenewal } from './useSubscriptionRenewal';
+import SubscriptionQuoteBreakdown from '../SubscriptionQuoteBreakdown';
 import { addDays, addYears, format, isPast, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Gift, Wallet } from 'lucide-react';
@@ -31,6 +33,7 @@ const digitsOnly = (v: string) => v.replace(/[^\d]/g, '');
 type ExtendKind = 'paid' | 'free';
 
 export interface ExtendModalProps {
+  tenantId: string;
   isOpen: boolean;
   onClose: () => void;
   /** superadmin — как раньше (дата, без лимита); manager — бесплатно только днями ≤ maxFreeDays, доля владельца в подсказке. */
@@ -47,7 +50,7 @@ export interface ExtendModalProps {
   /** manager: моя ставка доли владельца, % — для подсказки «Из них доля владельца». */
   ownerSharePercent?: number;
   isPending: boolean;
-  onSubmit: (request: ExtendSubscriptionRequest) => void;
+  onSubmit: (request: ExtendSubscriptionRequest) => Promise<unknown>;
 }
 
 /**
@@ -56,6 +59,7 @@ export interface ExtendModalProps {
  * прямо в рендере — Modal монтирует содержимое только пока открыт.
  */
 export default function ExtendModal({
+  tenantId,
   isOpen,
   onClose,
   mode,
@@ -77,7 +81,8 @@ export default function ExtendModal({
   const anchor = (): Date => (end && endActive ? end : new Date());
 
   const [kind, setKind] = useState<ExtendKind>('paid');
-  const [amount, setAmount] = useState('');
+  const renewal = useSubscriptionRenewal({ open: isOpen, tenantId, mode, legacyPrice: planPrice ?? 0, onSubmit });
+  const { amount, changeAmount: setAmount } = renewal;
   const [until, setUntil] = useState(''); // YYYY-MM-DD
   const [days, setDays] = useState('');
   const [creditManager, setCreditManager] = useState(false);
@@ -87,7 +92,6 @@ export default function ExtendModal({
     setWasOpen(isOpen);
     if (isOpen) {
       setKind('paid');
-      setAmount(planPrice ? String(planPrice) : '');
       setUntil(format(addDays(anchor(), 30), 'yyyy-MM-dd'));
       setDays(String(Math.min(14, maxDays)));
       setCreditManager(false);
@@ -103,7 +107,14 @@ export default function ExtendModal({
 
   // Менеджер бесплатно выдаёт срок днями, суперадмин — датой.
   const freeByDays = isManager && kind === 'free';
-  const canSubmit = kind === 'paid' ? untilValid && amountValid : freeByDays ? daysValid : untilValid;
+  const canSubmit =
+    !renewal.sending &&
+    (renewal.uncertain ||
+      (kind === 'paid'
+        ? amountValid && (renewal.period === 'custom' ? untilValid : renewal.quoteReady)
+        : freeByDays
+          ? daysValid
+          : untilValid));
 
   const sharePercent = isManager ? ownerSharePercent : (manager?.ownerSharePercent ?? null);
   const paidAmount = amountValid ? Math.round(amountNum * 100) / 100 : 0;
@@ -112,14 +123,20 @@ export default function ExtendModal({
   const handleSubmit = () => {
     if (!canSubmit) return;
     if (kind === 'paid') {
-      const request: ExtendSubscriptionRequest = { type: 'paid', amount: paidAmount, until };
+      const request: ExtendSubscriptionRequest = {
+        type: 'paid',
+        amount: paidAmount,
+        ...(renewal.period === 'custom'
+          ? { until }
+          : { period: renewal.period, quoteToken: renewal.quoteQuery.data?.quoteToken }),
+      };
       // Менеджерские платные продления несут долю всегда — сервер флаг там игнорирует.
       if (!isManager && manager && creditManager) request.creditManager = true;
-      onSubmit(request);
+      void renewal.send(request);
     } else if (freeByDays) {
-      onSubmit({ type: 'free', days: daysNum });
+      void renewal.send({ type: 'free', days: daysNum });
     } else {
-      onSubmit({ type: 'free', until });
+      void renewal.send({ type: 'free', until });
     }
   };
 
@@ -133,22 +150,49 @@ export default function ExtendModal({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={() => {
+        if (renewal.canClose()) onClose();
+      }}
       title="Продлить подписку"
       description={`Текущий срок: ${end ? format(end, 'd MMMM yyyy', { locale: ru }) : 'не указан'}`}
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={isPending}>
+          <Button variant="secondary" onClick={onClose} disabled={isPending || renewal.locked}>
             Отмена
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit} loading={isPending}>
-            {submitLabel}
+          <Button onClick={handleSubmit} disabled={!canSubmit} loading={isPending || renewal.sending}>
+            {renewal.uncertain ? 'Повторить тот же запрос' : submitLabel}
           </Button>
         </>
       }
     >
-      <div className="space-y-4">
+      {!!renewal.message && (
+        <p role="alert" className="mb-4 text-sm text-ink-2">
+          {renewal.message}
+        </p>
+      )}
+      {renewal.changed && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              void renewal.quoteQuery.refetch();
+            }}
+            loading={renewal.quoteQuery.isFetching}
+          >
+            Обновить расчёт
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!renewal.quoteQuery.data || renewal.quoteQuery.isError || renewal.quoteQuery.isFetching}
+            onClick={renewal.acknowledgeChange}
+          >
+            Расчёт проверен
+          </Button>
+        </div>
+      )}
+      <fieldset disabled={renewal.locked} className="space-y-4">
         {currentPeriodKind && <SubscriptionPeriodBadge kind={currentPeriodKind} until={subscriptionEnd} />}
 
         <Field
@@ -174,8 +218,45 @@ export default function ExtendModal({
         </Field>
 
         {kind === 'paid' && (
+          <>
+            <Field label="Период">
+              <SegmentedControl
+                aria-label="Период продления"
+                value={renewal.period}
+                onChange={renewal.setPeriod}
+                options={[
+                  { value: 'monthly', label: 'Месяц' },
+                  { value: 'yearly', label: 'Год · 12 за 10' },
+                  { value: 'custom', label: 'Своя дата' },
+                ]}
+              />
+            </Field>
+            {!!renewal.fallback && <p className="text-sm text-ink-2">{renewal.fallback}</p>}
+            {renewal.period !== 'custom' &&
+              (renewal.quoteQuery.isFetching ? (
+                <p role="status" className="text-sm text-ink-3">
+                  Загружаем расчёт…
+                </p>
+              ) : renewal.quoteQuery.isError ? (
+                <div className="space-y-2">
+                  <p className="text-sm text-ink-2">Расчёт недоступен. Повторите загрузку или выберите свою дату.</p>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      void renewal.quoteQuery.refetch();
+                    }}
+                  >
+                    Повторить расчёт
+                  </Button>
+                </div>
+              ) : renewal.quoteQuery.data ? (
+                <SubscriptionQuoteBreakdown preview={renewal.quoteQuery.data} />
+              ) : null)}
+          </>
+        )}
+        {kind === 'paid' && (
           <Field
-            label="Сумма платежа"
+            label="Фактически получено"
             htmlFor={`${uid}-ext-amount`}
             error={amount && !amountValid ? 'Введите сумму больше 0.' : undefined}
             hint={
@@ -244,7 +325,7 @@ export default function ExtendModal({
               ))}
             </div>
           </>
-        ) : (
+        ) : kind !== 'paid' || renewal.period === 'custom' ? (
           <>
             <Field
               label="Быстрое продление"
@@ -282,8 +363,8 @@ export default function ExtendModal({
               />
             </Field>
           </>
-        )}
-      </div>
+        ) : null}
+      </fieldset>
     </Modal>
   );
 }

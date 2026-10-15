@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
 import { gsap, useGSAP, EASE } from '../gsap';
 import { pricing, type PlanCellValue, type PricingPlan } from '../content';
+import type { SubscriptionBillingPeriod } from '../../../../../shared/utils/subscriptionPricing';
+import { formatPlanMoney } from './PricingCalculator';
 import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
 /**
@@ -62,7 +64,8 @@ function CompareCell({ value }: { value: PlanCellValue }) {
  * видимости: glow виден по CSS-дефолту; from:opacity ставится лишь в
  * no-preference; при reduced-motion / сбое остаётся видимым (clearProps).
  */
-export function PlanCard({ plan }: { plan: PricingPlan }) {
+export function PlanCard({ plan, period = 'monthly' }: { plan: PricingPlan; period?: SubscriptionBillingPeriod }) {
+  const chargedMonths = period === 'yearly' ? 10 : 1;
   const scope = useRef<HTMLDivElement>(null);
 
   useGSAP(
@@ -118,9 +121,24 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
         </span>
       )}
       <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
-      <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
+      <p className="mt-1 text-sm text-slate-500 md:min-h-[40px]">{plan.description}</p>
       <p className="mt-5 text-sm font-semibold text-slate-900">{plan.employees}</p>
-      <p className="mt-1 text-sm text-slate-500">Стоимость — индивидуально под размер команды</p>
+      <p className="mt-3 text-3xl font-bold tracking-tight tabular-nums text-slate-900">
+        {formatPlanMoney(plan.monthlyPrice * chargedMonths)}
+        <span className="ml-1 text-sm font-normal text-slate-500">/{period === 'yearly' ? 'год' : 'мес.'}</span>
+      </p>
+      {period === 'yearly' && <p className="mt-1 text-xs text-emerald-700">12 месяцев по цене 10</p>}
+      <p className="mt-3 text-xs leading-relaxed text-slate-600">
+        Сотрудник сверх включённых: {formatPlanMoney(plan.extraEmployeeMonthlyPrice * chargedMonths)}/
+        {period === 'yearly' ? 'год' : 'мес.'}
+        {plan.extraPointMonthlyPrice !== null && (
+          <>
+            {' '}
+            · Доп. филиал: {formatPlanMoney(plan.extraPointMonthlyPrice * chargedMonths)}/
+            {period === 'yearly' ? 'год' : 'мес.'}
+          </>
+        )}
+      </p>
       <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>
       <ul className="mt-3 space-y-2.5">
         {plan.includes.map((item) => (

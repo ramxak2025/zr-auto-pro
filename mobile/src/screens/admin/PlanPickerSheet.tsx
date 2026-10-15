@@ -1,3 +1,4 @@
+import { planCompositionLabel } from '../../utils/subscriptionPricingText';
 /**
  * PlanPickerSheet — выбор тарифа автосервиса (суперадмин и менеджер). Заменяет Alert.alert со
  * списком тарифов: на Android в нём видны только три кнопки, лишние тарифы пропадали бы, а
@@ -56,7 +57,8 @@ export default function PlanPickerSheet({
         <SheetOptionRow
           key={p.id}
           title={p.name}
-          subtitle={`${formatMoney(p.monthlyPrice)}/мес`}
+          subtitle={`${formatMoney(p.monthlyPrice)}/мес · база. ${planCompositionLabel(p)}`}
+          subtitleLines={0}
           selected={selected === p.id}
           onPress={() => setSelected(p.id)}
         />

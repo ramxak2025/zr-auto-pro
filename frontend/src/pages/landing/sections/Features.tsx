@@ -5,6 +5,7 @@ import type { LucideIcon } from 'lucide-react';
 import CarouselDots from './CarouselDots';
 import { GsapReveal, gsap, useGSAP, EASE, DUR } from '../gsap';
 import { features } from '../content';
+import { featureImages } from '../featureImages';
 import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS, type SectionTint } from '../icons';
 
 /**
@@ -29,7 +30,7 @@ function HighlightPhoto({ slug, icon: Icon, tint }: { slug: string; icon: Lucide
   }
   return (
     <img
-      src={`/img/landing/f-${slug}.webp`}
+      src={featureImages[slug]?.src ?? `/img/landing/f-${slug}.webp`}
       alt=""
       width={1200}
       height={900}
@@ -198,7 +199,7 @@ const MOCKS: Record<string, ReactNode> = {
  * из public/img/landing/f-<slug>.webp (1200×900). Порядок — воронка ценности:
  * касса → деньги → склад → голос → зарплата → рассрочка.
  */
-const MOBILE_HIGHLIGHTS = ['kassa', 'dengi', 'sklad', 'golos', 'zarplata', 'rassrochka'];
+const MOBILE_HIGHLIGHTS = ['kassa', 'zapisi', 'raspisanie', 'sklad', 'zarplata', 'postavshchiki'];
 
 /** «Все возможности» по направлениям — единый источник SECTION_GROUPS (icons.ts). */
 const GROUPED_FEATURES = groupBySections(features);
@@ -411,11 +412,22 @@ export default function Features() {
               >
                 {/* Карточкам без мокапа — большая полупрозрачная иконка раздела
                     в правом верхнем углу: глубина без шума */}
-                {!MOCKS[slug] && (
+                {!MOCKS[slug] && !featureImages[slug] && (
                   <Icon
                     aria-hidden
                     strokeWidth={1.5}
                     className={`pointer-events-none absolute -right-4 -top-4 h-24 w-24 rotate-6 ${tint.icon} opacity-[0.12]`}
+                  />
+                )}
+                {featureImages[slug] && (
+                  <img
+                    src={featureImages[slug].src}
+                    alt={featureImages[slug].alt}
+                    width={1448}
+                    height={1086}
+                    loading="lazy"
+                    decoding="async"
+                    className="-mx-6 -mt-6 mb-5 aspect-[16/9] w-[calc(100%+3rem)] max-w-none object-cover"
                   />
                 )}
                 <span

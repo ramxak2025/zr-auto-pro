@@ -7,6 +7,7 @@ import { GsapReveal } from './gsap';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import OptionalImage from './OptionalImage';
+import { featureImages } from './featureImages';
 import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from './icons';
 
 /**
@@ -218,8 +219,8 @@ export default function FeatureDetailPage() {
             {/* Иллюстрация раскрывается маской снизу вверх (когда владелец её положит) */}
             <GsapReveal type="clip" delay={0.1}>
               <OptionalImage
-                src={`/img/landing/f-${section.slug}.webp`}
-                alt={`${section.title} в Autexa`}
+                src={featureImages[section.slug]?.src ?? `/img/landing/f-${section.slug}.webp`}
+                alt={featureImages[section.slug]?.alt ?? `${section.title} в Autexa`}
                 width={800}
                 height={600}
                 className="w-full rounded-3xl border border-slate-200/60 object-cover shadow-sm"

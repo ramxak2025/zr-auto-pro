@@ -126,7 +126,7 @@ export default function SubscriptionBlockedScreen() {
               <Text style={[styles.priceValue, { color: palette.text.primary }]}>
                 {planPrice.toLocaleString('ru-RU')}
               </Text>
-              <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}>₽/мес</Text>
+              <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}>₽/мес · база</Text>
             </View>
           </View>
         ) : null}

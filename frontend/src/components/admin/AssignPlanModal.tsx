@@ -1,3 +1,4 @@
+import { planCompositionLabel } from '../../utils/subscriptionPricingText';
 import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
@@ -93,7 +94,7 @@ export default function AssignPlanModal({
           >
             {(plans ?? []).map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} — {formatMoney(p.monthlyPrice)}/мес · до {p.maxUsers} сотр.
+                {p.name} — {formatMoney(p.monthlyPrice)}/мес · база. {planCompositionLabel(p)}
               </option>
             ))}
           </Select>

@@ -190,8 +190,13 @@ export class ManagerCabinetService {
    *     на менеджера-актора. Флага `creditManager` в теле нет: менеджер не может «не
    *     заплатить» свою долю.
    */
+  getSubscriptionQuote(actor: CabinetActor, id: string, query: { period?: 'monthly' | 'yearly'; planId?: string }) {
+    return this.tenants.getSubscriptionQuote(id, query.period, actor.scope, query.planId);
+  }
+
   async extend(actor: CabinetActor, id: string, dto: ManagerExtendDto): Promise<TenantView> {
     if (dto.type === 'free') {
+      if (dto.period) throw new BadRequestException({ message: 'Бесплатное продление задаётся числом дней' });
       if (dto.until !== undefined) {
         throw new BadRequestException({ message: 'Бесплатное продление задаётся числом дней, а не датой' });
       }
@@ -216,6 +221,9 @@ export class ManagerCabinetService {
         amount: dto.type === 'paid' ? dto.amount : undefined,
         until: dto.type === 'paid' ? dto.until : undefined,
         note: dto.note,
+        ...(dto.period ? { period: dto.period } : {}),
+        ...(dto.quoteToken ? { quoteToken: dto.quoteToken } : {}),
+        ...(dto.requestId ? { requestId: dto.requestId } : {}),
       },
       auditActor,
       // Доля владельца — только за платные продления менеджера; суперадмин через кабинет
