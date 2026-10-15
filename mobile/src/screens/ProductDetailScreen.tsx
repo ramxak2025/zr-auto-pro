@@ -50,7 +50,7 @@ import {
 import Svg, { Defs, LinearGradient as SvgGrad, Path, Stop } from 'react-native-svg';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { useProductPhotoPicker } from '../hooks/useProductPhotoPicker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
@@ -183,6 +183,7 @@ export default function ProductDetailScreen() {
   const [editing, setEditing] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoUploadPending = useRef(false);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [costPrice, setCostPrice] = useState('');
@@ -199,6 +200,17 @@ export default function ProductDetailScreen() {
   const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
   const [warranty, setWarranty] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const {
+    pickImage,
+    isPicking: pickingPhoto,
+    invalidate: invalidatePhotoPicker,
+    captureContinuation: capturePhotoForm,
+  } = useProductPhotoPicker({
+    active: editing,
+    formKey: productId,
+    navigation,
+    onChange: setPhotoUri,
+  });
   // Ячейка хранения (2026-09-30). В режиме правки выбор меняет только это локальное
   // значение и уходит вместе с формой; из режима просмотра пикер сохраняет адрес сразу.
   // Форма здесь инлайновая (не RNModal), поэтому пикер — обычный сиблинг FolderPickerModal.
@@ -261,24 +273,28 @@ export default function ProductDetailScreen() {
   }, [queryClient, productId]);
 
   // Seed the edit fields from a product snapshot.
-  const seedFromProduct = useCallback((p: Product) => {
-    setConfirmStarterPrices(false);
-    setName(p.name);
-    setCategory(p.category || '');
-    setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
-    setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
-    setStock(p.stock != null ? String(p.stock) : '');
-    setMinStock(p.minStock != null ? String(p.minStock) : '');
-    // Нормализуем legacy-код ('pcs'→'шт') сразу в русскую метку — чипсы
-    // подсветят актуальное значение, а сохранение перезапишет legacy-код.
-    setUnit(unitLabel(p.unit));
-    setBarcode(p.barcode || '');
-    setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
-    setPhotoUri(p.photo || null);
-    setEditCell(
-      p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '', name: p.storageCellName } : null,
-    );
-  }, []);
+  const seedFromProduct = useCallback(
+    (p: Product) => {
+      invalidatePhotoPicker();
+      setConfirmStarterPrices(false);
+      setName(p.name);
+      setCategory(p.category || '');
+      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
+      setStock(p.stock != null ? String(p.stock) : '');
+      setMinStock(p.minStock != null ? String(p.minStock) : '');
+      // Нормализуем legacy-код ('pcs'→'шт') сразу в русскую метку — чипсы
+      // подсветят актуальное значение, а сохранение перезапишет legacy-код.
+      setUnit(unitLabel(p.unit));
+      setBarcode(p.barcode || '');
+      setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
+      setPhotoUri(p.photo || null);
+      setEditCell(
+        p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '', name: p.storageCellName } : null,
+      );
+    },
+    [invalidatePhotoPicker],
+  );
 
   // «Изменить» → enter inline edit mode (NOT the old modal). `product` can be
   // undefined while an id-only navigation is still loading — the affordance
@@ -291,10 +307,10 @@ export default function ProductDetailScreen() {
   }, [product, seedFromProduct]);
 
   const cancelEdit = useCallback(() => {
+    invalidatePhotoPicker();
     haptic('tap');
     setEditing(false);
-    setUploadingPhoto(false);
-  }, []);
+  }, [invalidatePhotoPicker]);
 
   // Deep-link: long-press → action sheet «Редактировать» pushes ProductDetail
   // with `edit: true` so we land straight in edit mode. Consume the param once.
@@ -377,16 +393,6 @@ export default function ProductDetailScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.name]);
 
-  const pickImage = useCallback(async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
-  }, []);
-
   const getDisplayPhotoUri = useCallback((photo: string | null): string | undefined => {
     if (!photo) return undefined;
     if (photo.startsWith('file://')) return photo;
@@ -394,6 +400,8 @@ export default function ProductDetailScreen() {
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (photoUploadPending.current || pickingPhoto || uploadingPhoto || saveMutation.isPending) return;
+    const continuation = capturePhotoForm();
     if (!name.trim()) {
       Alert.alert('Ошибка', 'Укажите название товара');
       return;
@@ -408,16 +416,20 @@ export default function ProductDetailScreen() {
       uploadedPhotoPath = null;
     } else if (photoUri.startsWith('file://')) {
       try {
+        photoUploadPending.current = true;
         setUploadingPhoto(true);
         const filename = photoUri.split('/').pop() || 'photo.jpg';
         const res = await uploadsApi.upload(photoUri, filename);
+        if (!continuation.isCurrent()) return;
         uploadedPhotoPath = res.data.url;
       } catch {
-        setUploadingPhoto(false);
+        if (!continuation.isCurrent()) return;
         Alert.alert('Ошибка', 'Не удалось загрузить фото');
         return;
+      } finally {
+        photoUploadPending.current = false;
+        setUploadingPhoto(false);
       }
-      setUploadingPhoto(false);
     } else {
       uploadedPhotoPath = photoUri;
     }
@@ -472,6 +484,9 @@ export default function ProductDetailScreen() {
     }
     saveMutation.mutate(payload);
   }, [
+    pickingPhoto,
+    uploadingPhoto,
+    capturePhotoForm,
     name,
     category,
     sellPrice,
@@ -609,7 +624,7 @@ export default function ProductDetailScreen() {
                 style={[styles.saveBtn, { backgroundColor: palette.accent.primary }]}
                 accessibilityRole="button"
                 accessibilityLabel="Сохранить изменения"
-                disabled={saveMutation.isPending || uploadingPhoto}
+                disabled={saveMutation.isPending || uploadingPhoto || pickingPhoto}
                 hitSlop={8}
               >
                 {saveMutation.isPending || uploadingPhoto ? (
@@ -650,6 +665,8 @@ export default function ProductDetailScreen() {
             <TouchableOpacity
               style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
               onPress={pickImage}
+              disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
+              accessibilityLabel={photoUri ? 'Заменить фото товара' : 'Добавить фото товара'}
               activeOpacity={0.85}
             >
               {photoUri ? (
@@ -665,13 +682,24 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
             {photoUri ? (
               <View style={styles.photoActions}>
-                <TouchableOpacity style={styles.photoActionBtn} onPress={pickImage}>
+                <TouchableOpacity
+                  style={styles.photoActionBtn}
+                  onPress={pickImage}
+                  disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
+                >
                   <Ionicons name="swap-horizontal" size={16} color={palette.accent.primary} />
                   <Text variant="footnote" color={palette.accent.primary}>
                     Заменить
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.photoActionBtn} onPress={() => setPhotoUri(null)}>
+                <TouchableOpacity
+                  style={styles.photoActionBtn}
+                  onPress={() => {
+                    invalidatePhotoPicker();
+                    setPhotoUri(null);
+                  }}
+                  disabled={pickingPhoto || uploadingPhoto || saveMutation.isPending}
+                >
                   <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
                   <Text variant="footnote" color={colors.red[500]}>
                     Удалить
@@ -899,7 +927,7 @@ export default function ProductDetailScreen() {
               <TouchableOpacity
                 style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
                 onPress={handleSave}
-                disabled={saveMutation.isPending || uploadingPhoto}
+                disabled={saveMutation.isPending || uploadingPhoto || pickingPhoto}
                 activeOpacity={0.85}
               >
                 {saveMutation.isPending || uploadingPhoto ? (
