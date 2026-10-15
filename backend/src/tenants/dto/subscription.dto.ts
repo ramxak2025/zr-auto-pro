@@ -13,6 +13,32 @@ import {
   Min,
 } from 'class-validator';
 
+/** Additive manual composition renewal. Legacy day/date extensions remain separate. */
+export class CompositionRenewalDto {
+  @IsOptional()
+  @IsIn(['monthly', 'yearly'])
+  period?: 'monthly' | 'yearly';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  quoteToken?: string;
+
+  @IsOptional()
+  @IsUUID()
+  requestId?: string;
+}
+
+export class SubscriptionQuoteQueryDto {
+  @IsOptional()
+  @IsIn(['monthly', 'yearly'])
+  period?: 'monthly' | 'yearly';
+
+  @IsOptional()
+  @IsUUID()
+  planId?: string;
+}
+
 /**
  * POST /tenants/:id/extend body — extend a subscription, PAID or FREE.
  *
@@ -21,7 +47,7 @@ import {
  * `until` or `days`; paid requires `amount > 0`; `until` must be in the future)
  * are enforced in TenantsService.extend so the error messages can be specific.
  */
-export class ExtendSubscriptionDto {
+export class ExtendSubscriptionDto extends CompositionRenewalDto {
   @IsOptional()
   @IsInt()
   @IsPositive()
