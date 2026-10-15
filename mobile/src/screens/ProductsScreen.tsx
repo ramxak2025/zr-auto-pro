@@ -1,5 +1,5 @@
 import { captureDataSession } from '../contexts/dataSession';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -41,6 +41,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import FolderPickerModal from '../components/FolderPickerModal';
+import NewCatalogFolderModal from '../components/NewCatalogFolderModal';
 import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
 import BulkPriceAdjustSheet from '../components/BulkPriceAdjustSheet';
 import TrashScreen from './TrashScreen';
@@ -460,6 +461,13 @@ export default function ProductsScreen() {
   // Корневой вход в таб не имеет params → activePath = [].
   const activePath: string[] = route.params?.activePath ?? [];
 
+  const [newFolder, setNewFolder] = useState<{
+    parentPath: string;
+    warehouseId: string;
+    warehouseName: string;
+    session: ReturnType<typeof captureDataSession>;
+  } | null>(null);
+
   // Product create/edit modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -660,6 +668,8 @@ export default function ProductsScreen() {
   }, [warehouses, selectedWarehouseId]);
 
   const activeWarehouseId = activeWarehouse?.id;
+  const folderWarehouseRef = useRef(activeWarehouseId);
+  folderWarehouseRef.current = activeWarehouseId;
   const isMainWarehouse = activeWarehouse?.kind === 'main';
 
   // Фильтр «товары одной ячейки» (2026-09-30). Приходит параметрами маршрута со
@@ -1328,7 +1338,7 @@ export default function ProductsScreen() {
   // фрейм в стеке — без него navigate с теми же params upsert-ит текущий
   // экран и swipe-back перестаёт работать.
   const enterFolder = (name: string) => {
-    navigation.push('ProductsHome', { activePath: [...activePath, name] });
+    navigation.push('ProductsHome', { activePath: [...activePath, name], warehouseId: activeWarehouseId });
   };
   // Возврат на уровень `level` через breadcrumb: popToTop при level=0,
   // в остальных случаях pop'аем разницу. popToTop безопасен на корне.
@@ -1686,6 +1696,7 @@ export default function ProductsScreen() {
     // leave defect/used stale.
     await queryClient.invalidateQueries({ queryKey: ['products'] });
     await queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+    await queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
     setRefreshing(false);
   };
 
@@ -2458,6 +2469,65 @@ export default function ProductsScreen() {
           placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
         />
       </View>
+
+      {canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Новая папка"
+          style={{
+            minHeight: 44,
+            paddingHorizontal: spacing[4],
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing[2],
+          }}
+          onPress={() =>
+            setNewFolder({
+              parentPath: activePath.join('/'),
+              warehouseId: activeWarehouseId,
+              warehouseName: activeWarehouse?.name ?? 'Склад',
+              session: captureDataSession(),
+            })
+          }
+        >
+          <Ionicons name="folder-open-outline" size={18} color={palette.accent.primaryText} />
+          <Text style={{ color: palette.accent.primaryText, fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>
+            Новая папка
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {newFolder && (
+        <NewCatalogFolderModal
+          parentPath={newFolder.parentPath}
+          rootLabel={newFolder.warehouseName}
+          onClose={() => setNewFolder(null)}
+          onCreate={async (path) => {
+            if (!newFolder.session.isCurrent() || newFolder.warehouseId !== folderWarehouseRef.current)
+              throw new Error('Склад или филиал изменился. Закройте форму и создайте папку в нужном месте.');
+            if (!canManageWarehouse) throw new Error('Нет права на управление складом.');
+            if (
+              (extraFolders ?? []).some((folder) => folder.path === path || folder.path.startsWith(`${path}/`)) ||
+              sortedFolders.some(([, folder]) => folder.fullPath === path)
+            ) {
+              void queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+              throw new Error('Папка с таким названием уже существует. Введите другое название.');
+            }
+            const res = await warehouseCategoriesApi.create(path, newFolder.warehouseId);
+            if (!newFolder.session.isCurrent() || newFolder.warehouseId !== folderWarehouseRef.current) return;
+            const key = ['warehouse-categories', { warehouseId: newFolder.warehouseId }];
+            queryClient.setQueryData<Array<{ id: string; path: string; sort_order: number }>>(key, (previous) => {
+              const folders = previous ?? [];
+              return folders.some((folder) => folder.id === res.data.id)
+                ? folders
+                : [...folders, { ...res.data, sort_order: 0 }];
+            });
+            void queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+            haptic('success');
+            setNewFolder(null);
+          }}
+        />
+      )}
 
       {/* \u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u0430\u044F \u043F\u043B\u0430\u0448\u043A\u0430 \u0434\u043B\u044F defect-\u0441\u043A\u043B\u0430\u0434\u0430. \u0422\u043E\u0432\u0430\u0440\u044B \u0442\u0443\u0434\u0430 \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442
           \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043D\u043E\u0441 / \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u2014 UI \u044D\u0442\u043E \u043E\u0431\u044A\u044F\u0441\u043D\u044F\u0435\u0442, \u0447\u0442\u043E\u0431\u044B

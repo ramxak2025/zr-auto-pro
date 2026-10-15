@@ -22,6 +22,8 @@ import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
+import NewCatalogFolderModal from '../components/NewCatalogFolderModal';
+import { captureDataSession } from '../contexts/dataSession';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
@@ -163,14 +165,17 @@ export default function ServicesScreen() {
   const [folderEditor, setFolderEditor] = useState<{ path: string | null; name: string; parentPath: string } | null>(
     null,
   );
+  const [newFolder, setNewFolder] = useState<{
+    parentPath: string;
+    session: ReturnType<typeof captureDataSession>;
+  } | null>(null);
   const [folderBusy, setFolderBusy] = useState(false);
   const saveFolder = async () => {
     if (!folderEditor || !folderEditor.name.trim() || folderBusy) return;
     setFolderBusy(true);
     try {
-      if (folderEditor.path)
-        await servicesApi.folders.rename(folderEditor.path, folderEditor.name.trim(), folderEditor.parentPath);
-      else await servicesApi.folders.create([...activePath, folderEditor.name.trim()].join('/'));
+      if (!folderEditor.path) return;
+      await servicesApi.folders.rename(folderEditor.path, folderEditor.name.trim(), folderEditor.parentPath);
       setFolderEditor(null);
       setActivePath([]);
       invalidateCatalog();
@@ -704,7 +709,8 @@ export default function ServicesScreen() {
           <TouchableOpacity
             accessibilityRole="button"
             style={{ minHeight: 44, justifyContent: 'center' }}
-            onPress={() => setFolderEditor({ path: null, name: '', parentPath: activePath.join('/') })}
+            accessibilityLabel="Новая папка"
+            onPress={() => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() })}
           >
             <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Новая папка</Text>
           </TouchableOpacity>
@@ -823,6 +829,37 @@ export default function ServicesScreen() {
         />
       )}
 
+      {newFolder && (
+        <NewCatalogFolderModal
+          parentPath={newFolder.parentPath}
+          rootLabel="Услуги"
+          onClose={() => setNewFolder(null)}
+          onCreate={async (path) => {
+            if (!newFolder.session.isCurrent())
+              throw new Error('Филиал или аккаунт изменился. Закройте форму и создайте папку в нужном месте.');
+            if (!canManageServices) throw new Error('Нет права на управление услугами.');
+            try {
+              const res = await servicesApi.folders.create(path);
+              if (!newFolder.session.isCurrent()) return;
+              queryClient.setQueryData<ServiceFolder[]>(['service-folders'], (previous) => {
+                const folders = previous ?? [];
+                return folders.some((folder) => folder.path === res.data.path) ? folders : [...folders, res.data];
+              });
+              invalidateCatalog();
+              void folderQuery.refetch();
+              haptic('success');
+              setNewFolder(null);
+            } catch (error) {
+              if (!newFolder.session.isCurrent()) return;
+              if ((error as { response?: { status?: number } })?.response?.status === 409) {
+                void folderQuery.refetch();
+                throw new Error('Папка с таким названием уже существует. Введите другое название.');
+              }
+              throw error;
+            }
+          }}
+        />
+      )}
       <Modal
         visible={!!folderEditor}
         onClose={() => setFolderEditor(null)}
