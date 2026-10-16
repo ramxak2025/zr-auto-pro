@@ -9,6 +9,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
+import { createHash } from 'crypto';
+import { isUUID, validateSync } from 'class-validator';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
@@ -21,6 +23,23 @@ import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
 import { BulkAssignCellDto } from './dto/bulk-assign-cell.dto';
 import { MAX_CELL_CODE_LENGTH, normalizeCellCode } from '../storage-cells/storage-cells.helpers';
+import { InventoryUpdateDto, StockUpdateDto, hasInventoryGuard, isStockNumber } from './dto/stock-update.dto';
+
+export interface StockUpdateResult {
+  stock: number;
+  linkedExpenseId: string | null;
+  requestId?: string;
+}
+
+function validatedStockUpdate(value: unknown, inventoryOnly = false): StockUpdateDto {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new BadRequestException({ message: 'Тип и количество обязательны' });
+  const dto = Object.assign(inventoryOnly ? new InventoryUpdateDto() : new StockUpdateDto(), value);
+  // Internal callers bypass the HTTP ValidationPipe; enforce the same contract.
+  if (validateSync(dto).length)
+    throw new BadRequestException({ message: 'Проверьте тип, количество и параметры сверки остатка' });
+  return dto;
+}
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor =
@@ -1624,32 +1643,62 @@ export class ProductsService {
     }
   }
 
-  /**
-   * 161 — `pointId` (текущий филиал автора) нужен ТОЛЬКО зеркальному расходу
-   * списания: сам склад общий на всю сеть (решение владельца), а вот деньги за
-   * списанный товар обязаны лечь в филиал того, кто списал, — иначе прибыль
-   * чужого филиала просядет на не свою потерю.
-   */
+  async updateInventory(
+    id: string,
+    tenantID: string,
+    dto: unknown,
+    userId: string,
+    pointId: string | null = null,
+  ): Promise<StockUpdateResult> {
+    return this.updateStock(id, tenantID, validatedStockUpdate(dto, true), userId, pointId);
+  }
+
+  // Both the product and any mirrored writeoff expense belong to the session
+  // point. Guarded inventory additionally verifies the counted stock/warehouse.
   async updateStock(
     id: string,
     tenantID: string,
-    dto: any,
+    dto: unknown,
     userId?: string,
     pointId: string | null = null,
     integrationGuard?: { expectedStock: number; expectedWarehouseId: string; requireSufficientStock?: boolean },
-  ) {
-    const { type, quantity, reason, recordAsExpense } = dto;
-    if (!type || quantity === undefined) {
-      throw new BadRequestException({ message: 'Тип и количество обязательны' });
-    }
+  ): Promise<StockUpdateResult> {
+    const input = validatedStockUpdate(dto);
+    const { type, quantity: qty, reason, recordAsExpense } = input;
     // Серверный страж поверх DTO (@Min(0)) — как в StockMovementsService.create:
     // отрицательное qty давало минусовой остаток (inventory), скрытый приход
     // через income с минусом и отрицательную сумму в expenses (writeoff).
     // inventory допускает 0 (полное обнуление остатка), остальные типы — только > 0.
-    const qty = parseFloat(String(quantity));
-    if (!isFinite(qty) || qty < 0 || (type !== 'inventory' && qty <= 0)) {
+    if (type !== 'inventory' && qty <= 0) {
       throw new BadRequestException({ message: 'Количество должно быть положительным' });
     }
+    if (
+      integrationGuard &&
+      (!isStockNumber(integrationGuard.expectedStock) || !isUUID(integrationGuard.expectedWarehouseId))
+    )
+      throw new BadRequestException({ message: 'Некорректные параметры сверки складского движения' });
+
+    const guarded = hasInventoryGuard(input);
+    if (guarded && (!isUUID(id) || !isUUID(tenantID) || !isUUID(userId) || (pointId !== null && !isUUID(pointId))))
+      throw new BadRequestException({ message: 'Некорректные идентификаторы инвентаризации' });
+    const requestId = guarded ? input.requestId!.toLowerCase() : undefined;
+    const fingerprint = guarded
+      ? createHash('sha256')
+          .update(
+            JSON.stringify({
+              operation: 'inventory',
+              productId: id.toLowerCase(),
+              actorId: userId!.toLowerCase(),
+              pointId: pointId?.toLowerCase() ?? null,
+              quantity: qty,
+              expectedStock: input.expectedStock,
+              expectedWarehouseId: input.expectedWarehouseId!.toLowerCase(),
+              reason: reason ?? null,
+              recordAsExpense: recordAsExpense ?? false,
+            }),
+          )
+          .digest('hex')
+      : undefined;
 
     // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА — филиал СЕССИИ того, кто списал (163).
     // Резолва здесь больше нет: филиал выбран при входе, и у сессии он всегда
@@ -1661,6 +1710,14 @@ export class ProductsService {
     try {
       await client.query('BEGIN');
 
+      // Before product locks: even requests naming DIFFERENT products must
+      // serialize when they reuse one tenant's UUID. A rollback releases the
+      // lock and leaves no receipt, so a valid retry can still be applied.
+      if (requestId)
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `inventory:${tenantID.toLowerCase()}:${requestId}`,
+        ]);
+
       // 169 — товар обязан лежать на складе филиала сессии (чужой — «не найден»).
       const { rows } = await client.query(
         `SELECT stock, warehouse_id, cost_price, cost_price_is_placeholder, deleted_at FROM products WHERE id=$1 AND tenant_id=$2
@@ -1670,12 +1727,41 @@ export class ProductsService {
         [id, tenantID, pointId],
       );
       if (rows.length === 0) {
-        await client.query('ROLLBACK');
         throw new NotFoundException({ message: 'Товар не найден' });
+      }
+
+      // Check current tenant/point scope BEFORE returning a stored response.
+      // An exact replay within that scope returns the original acknowledgement
+      // even after a sale, warehouse move or soft-delete; it performs no write.
+      if (requestId) {
+        const { rows: receipts } = await client.query<{ fingerprint: string; response: StockUpdateResult }>(
+          'SELECT fingerprint, response FROM inventory_requests WHERE tenant_id=$1 AND request_id=$2',
+          [tenantID, requestId],
+        );
+        if (receipts.length) {
+          if (receipts[0].fingerprint !== fingerprint)
+            throw new ConflictException({
+              code: 'INVENTORY_REQUEST_CONFLICT',
+              message:
+                'Этот запрос инвентаризации уже использован с другими данными. Обновите список и повторите пересчёт.',
+            });
+          await client.query('COMMIT');
+          return receipts[0].response;
+        }
       }
 
       const stockBefore = parseFloat(rows[0].stock) || 0;
       const productWarehouseId = (rows[0].warehouse_id as string | null) ?? null;
+      if (
+        guarded &&
+        (rows[0].deleted_at ||
+          stockBefore !== input.expectedStock ||
+          productWarehouseId !== input.expectedWarehouseId!.toLowerCase())
+      )
+        throw new ConflictException({
+          code: 'INVENTORY_STOCK_CONFLICT',
+          message: 'Остаток, склад или статус товара изменился. Обновите список и повторите пересчёт.',
+        });
       if (
         integrationGuard &&
         (rows[0].deleted_at ||
@@ -1705,7 +1791,6 @@ export class ProductsService {
           stockAfter = qty;
           break;
         default:
-          await client.query('ROLLBACK');
           throw new BadRequestException({ message: 'Неверный тип операции' });
       }
 
@@ -1759,8 +1844,15 @@ export class ProductsService {
         ],
       );
 
+      const result: StockUpdateResult = { stock: stockAfter, linkedExpenseId, ...(requestId ? { requestId } : {}) };
+      if (requestId)
+        await client.query(
+          'INSERT INTO inventory_requests (tenant_id, request_id, fingerprint, response) VALUES ($1,$2,$3,$4::jsonb)',
+          [tenantID, requestId, fingerprint, JSON.stringify(result)],
+        );
+
       await client.query('COMMIT');
-      return { stock: stockAfter, linkedExpenseId };
+      return result;
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof NotFoundException || err instanceof BadRequestException || err instanceof ConflictException)

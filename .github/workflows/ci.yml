@@ -69,6 +69,7 @@ jobs:
           OCT10_PRICING_APP_PASSWORD: oct8_app_fixture_only
           OCT12_CLIENT_HISTORY_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           OCT16_PRICING_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT16_INVENTORY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           OCT12_CLIENT_HISTORY_APP_PASSWORD: oct8_app_fixture_only
           RUN_BACKGROUND_JOBS: "false"
           SENTRY_DSN: ""
@@ -92,6 +93,7 @@ jobs:
           test/starter-catalogs.live.test.cjs
           test/journal-filters-live.test.cjs
           test/subscription-composition-live.test.cjs
+          test/inventory-integrity-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)
