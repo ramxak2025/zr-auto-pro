@@ -26,7 +26,8 @@ jest.mock('react', () => ({
     return [
       mockStates[index],
       (next: unknown) => {
-        mockStates[index] = next;
+        mockStates[index] =
+          typeof next === 'function' ? (next as (mockValue: unknown) => unknown)(mockStates[index]) : next;
       },
     ];
   },
@@ -54,19 +55,32 @@ jest.mock('../../../api/services', () => ({
   tenantsApi: { getSubscriptionQuote: (...args: unknown[]) => mockGetTenant(...args) },
 }));
 jest.mock('../../../utils/offlineCheckQueue', () => ({ generateClientRequestId: () => `request-${++mockSequence}` }));
+jest.mock('../renewalSession', () => ({
+  captureRenewalSession: () => {
+    const data = jest.requireActual('../../../contexts/dataSession').captureDataSession();
+    const epoch = mockAuthEpoch;
+    return { data, isCurrent: () => data.isCurrent() && epoch === mockAuthEpoch };
+  },
+}));
+let mockAuthEpoch = 0;
+import { setDataSession } from '../../../contexts/dataSession';
 import { useSubscriptionRenewal } from '../useSubscriptionRenewal';
 function preview(period: 'monthly' | 'yearly' = 'monthly', monthlyTotal = 20500) {
   return {
     planId: 'max',
-    pricing: { code: 'max' },
+    pricing: { code: 'max', includedEmployees: 50, includedPoints: 1 },
     usage: { employees: 51, activePoints: 2, billablePoints: 2 },
     quoteToken: `${monthlyTotal}-${period}`,
-    quote: { period, total: monthlyTotal * (period === 'yearly' ? 10 : 1), monthlyTotal },
+    quote: { period, employees: 51, points: 2, total: monthlyTotal * (period === 'yearly' ? 10 : 1), monthlyTotal },
   };
 }
-function mount(onSubmit: (request: unknown) => Promise<unknown>, mode: 'manager' | 'superadmin' = 'superadmin') {
+function mount(
+  onSubmit: (request: unknown) => Promise<unknown>,
+  mode: 'manager' | 'superadmin' = 'superadmin',
+  onConfirmed?: () => void,
+) {
   function NativeForm() {
-    return useSubscriptionRenewal({ open: true, tenantId: 'tenant', mode, legacyPrice: 15000, onSubmit });
+    return useSubscriptionRenewal({ open: true, tenantId: 'tenant', mode, legacyPrice: 15000, onSubmit, onConfirmed });
   }
   const render = () => {
     let state!: ReturnType<typeof useSubscriptionRenewal>;
@@ -80,6 +94,8 @@ function mount(onSubmit: (request: unknown) => Promise<unknown>, mode: 'manager'
   return render;
 }
 beforeEach(() => {
+  mockAuthEpoch = 0;
+  setDataSession({ userId: 'admin', tenantId: null, pointId: null });
   mockStates.length = 0;
   mockRefs.length = 0;
   mockEffects.length = 0;
@@ -101,7 +117,7 @@ it('prefills month/year with the full MAX staff/branch total and selects the man
   expect(render().amount).toBe('205000');
   mockGetManager.mockResolvedValue({ data: preview('yearly') });
   await mockOptions.queryFn();
-  expect(mockGetManager).toHaveBeenCalledWith('tenant', { period: 'yearly' });
+  expect(mockGetManager).toHaveBeenCalledWith('tenant', { period: 'yearly', employees: 51, points: 2 });
   expect(mockGetTenant).not.toHaveBeenCalled();
 });
 it('stale quote requires review and preserves the actual operator amount after refreshed composition', async () => {
@@ -165,7 +181,7 @@ it('locks a pending or uncertain intent and retries exactly the same amount/toke
   expect(render().period).toBe('monthly');
   await render().send({ type: 'paid', amount: 1 });
   expect(submit.mock.calls[1][0]).toBe(submit.mock.calls[0][0]);
-  expect(submit.mock.calls[1][0]).toEqual({ ...request, requestId: 'request-1' });
+  expect(submit.mock.calls[1][0]).toEqual({ ...request, employees: 51, points: 2, requestId: 'request-1' });
   expect(render().canClose()).toBe(true);
 });
 it.each(['LEGACY_PLAN', 'UNPRICED_POINTS'])(
@@ -174,14 +190,18 @@ it.each(['LEGACY_PLAN', 'UNPRICED_POINTS'])(
     mockQuote.data = undefined;
     mockQuote.isError = true;
     mockQuote.error = { response: { status: 400, data: { code } } };
-    const submit = jest.fn(async () => undefined);
+    const submit = jest.fn(async (request: unknown) => request);
     const render = mount(submit);
     expect(render().period).toBe('custom');
     expect(render().fallback).not.toBe('');
     await render().send({ type: 'free', days: 14 });
-    expect(submit).toHaveBeenLastCalledWith({ type: 'free', days: 14, requestId: 'request-1' });
+    expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
+      type: 'free',
+      days: 14,
+      requestId: 'request-1',
+    });
     await render().send({ type: 'paid', amount: 1234, until: '2027-01-01' });
-    expect(submit).toHaveBeenLastCalledWith({
+    expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
       type: 'paid',
       amount: 1234,
       until: '2027-01-01',
@@ -189,3 +209,130 @@ it.each(['LEGACY_PLAN', 'UNPRICED_POINTS'])(
     });
   },
 );
+
+it('normal period and composition changes replace a manual override with the full new invoice and explain it', () => {
+  const render = mount(async () => undefined);
+  render().changeAmount('123');
+  render().setPeriod('yearly');
+  mockQuote.data = preview('yearly');
+  expect(render().amount).toBe('205000');
+  expect(render().message).toBe('Сумма обновлена по расчёту');
+  render().changeAmount('999');
+  render().changeEmployees('52');
+  mockQuote.data = { ...preview('yearly', 21000), quote: { ...preview('yearly', 21000).quote, employees: 52 } };
+  expect(render().amount).toBe('210000');
+  expect(render().employees).toBe('52');
+});
+it('usage growth after a stale quote keeps the collected money and lets editable counts recover before explicit review', async () => {
+  const submit = jest.fn(async () => {
+    throw { response: { status: 409, data: { code: 'QUOTE_CHANGED' } } };
+  });
+  const render = mount(submit);
+  render().changeAmount('20000');
+  await render().send({ type: 'paid', amount: 20000, period: 'monthly', quoteToken: 'old' });
+  mockQuote.data = undefined;
+  mockQuote.isError = true;
+  mockQuote.error = {
+    response: { status: 400, data: { code: 'COUNT_BELOW_USAGE', minimumEmployees: 52, minimumPoints: 3 } },
+  };
+  expect(render().locked).toBe(false);
+  render().changeEmployees('52');
+  render().changePoints('3');
+  mockQuote.isError = false;
+  mockQuote.error = undefined;
+  mockQuote.data = {
+    ...preview('monthly', 26000),
+    usage: { employees: 52, activePoints: 3, billablePoints: 3 },
+    quote: { ...preview('monthly', 26000).quote, employees: 52, points: 3 },
+  };
+  expect(render().amount).toBe('20000');
+  expect(render().quoteReady).toBe(false);
+  render().acknowledgeChange();
+  expect(render().quoteReady).toBe(true);
+});
+it('ignores an old paid result and confirmation callback after an account/session change', async () => {
+  let resolve!: () => void;
+  const submit = jest.fn(
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  );
+  const confirmed = jest.fn();
+  const render = mount(submit, 'superadmin', confirmed);
+  const pending = render().send({ type: 'paid', amount: 20000, period: 'monthly' });
+  setDataSession({ userId: 'other', tenantId: null, pointId: null });
+  render();
+  resolve();
+  await pending;
+  expect(render().sending).toBe(false);
+  expect(render().uncertain).toBe(false);
+  expect(confirmed).not.toHaveBeenCalled();
+});
+it('bearer rotation releases only this form and retains the exact unknown request for a fresh-lease retry', async () => {
+  let resolve!: () => void;
+  const submit = jest
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    )
+    .mockResolvedValue(undefined);
+  const render = mount(submit);
+  const pending = render().send({ type: 'paid', amount: 20000, period: 'monthly' });
+  mockAuthEpoch++;
+  resolve();
+  await pending;
+  expect(render().sending).toBe(false);
+  expect(render().uncertain).toBe(true);
+  render().changeEmployees('999');
+  render().changePoints('999');
+  expect(render().employees).toBe('51');
+  expect(render().points).toBe('2');
+  await render().send({ type: 'paid', amount: 1 });
+  expect(submit.mock.calls[1][0]).toBe(submit.mock.calls[0][0]);
+});
+it.each([401, 403, 404, 429])(
+  'an unknown result remains frozen after a retry gets HTTP %s before a receipt',
+  async (status) => {
+    const submit = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockRejectedValueOnce({ response: { status, data: { message: 'Before receipt' } } })
+      .mockResolvedValue(undefined);
+    const render = mount(submit);
+    await render().send({ type: 'paid', amount: 20000, period: 'monthly', quoteToken: 'snapshot' });
+    await render().send({ type: 'paid', amount: 1 });
+    expect(render().uncertain).toBe(true);
+    expect(render().canClose()).toBe(false);
+    render().changeAmount('1');
+    render().changeEmployees('999');
+    render().changePoints('999');
+    expect(render().amount).toBe('20500');
+    expect(render().employees).toBe('51');
+    expect(render().points).toBe('2');
+    await render().send({ type: 'paid', amount: 1 });
+    expect(submit.mock.calls[2][0]).toBe(submit.mock.calls[0][0]);
+  },
+);
+it('REQUEST_ID_REUSED never generates a replacement UUID or unlocks payment parameters', async () => {
+  const submit = jest.fn().mockRejectedValue({ response: { status: 409, data: { code: 'REQUEST_ID_REUSED' } } });
+  const render = mount(submit);
+  await render().send({ type: 'paid', amount: 20000, period: 'monthly' });
+  expect(render().uncertain).toBe(true);
+  render().changeAmount('1');
+  await render().send({ type: 'paid', amount: 1 });
+  expect(submit.mock.calls[1][0]).toBe(submit.mock.calls[0][0]);
+});
+it('a failed stale-quote refresh preserves actual money and keeps review required without rejecting the handler', async () => {
+  const submit = jest.fn().mockRejectedValue({ response: { status: 409, data: { code: 'QUOTE_CHANGED' } } });
+  mockQuote.refetch.mockRejectedValueOnce(new Error('offline'));
+  const render = mount(submit);
+  render().changeAmount('12345');
+  await expect(render().send({ type: 'paid', amount: 12345, period: 'monthly' })).resolves.toBeUndefined();
+  expect(render().amount).toBe('12345');
+  expect(render().changed).toBe(true);
+  expect(render().message).toContain('сохранена');
+});

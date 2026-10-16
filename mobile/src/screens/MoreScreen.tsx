@@ -420,9 +420,9 @@ const menuSections: MenuSection[] = [
       },
       {
         label: 'Подписка',
-        description: 'Тариф и оплата',
+        description: 'Тариф и расчёт стоимости',
         screen: 'Subscription',
-        roles: ['director', 'superadmin'],
+        permission: 'company_manage',
         icon: 'card-outline',
         iconBg: colors.primary[50],
         iconColor: colors.primary[600],
@@ -597,10 +597,6 @@ export default function MoreScreen() {
   };
 
   const filterItem = (item: MenuItem): boolean => {
-    // App Store Guideline 3.1.1/3.1.3(c): на iOS приложение — чисто внутренний
-    // инструмент организации, никакой «покупаемой» подписки/тарифа в интерфейсе.
-    // Пункт «Подписка» (Subscription) скрыт на iOS целиком; на Android остаётся.
-    if (Platform.OS === 'ios' && item.screen === 'Subscription') return false;
     // ROLE-ONLY menu-hide: раздел без права СКРЫТ целиком (не «с замком»).
     // Матрица роли АВТОРИТЕТНА: /auth/me отдаёт эффективные права, admin живёт
     // по ним; superadmin/director байпасятся внутри самого hasPermission.

@@ -1,492 +1,221 @@
 import React from 'react';
-import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
-import { planCompositionLabel } from '../utils/subscriptionPricingText';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { subscriptionApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
-import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
+import SubscriptionCompositionFields from '../components/SubscriptionCompositionFields';
+import { planCompositionLabel, subscriptionContactText } from '../utils/subscriptionPricingText';
+import { useSubscriptionCalculator } from './subscription/useSubscriptionCalculator';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
-import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useAuth } from '../contexts/AuthContext';
+import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ALL_FEATURES } from '../../../shared/constants/features';
-import type { SubscriptionInfo, Plan, FeatureGroup } from '../../../shared/types';
+import type { SubscriptionInfo } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const WHATSAPP_PHONE = '79884444436';
-
-// Single source of truth: the shared feature registry (23 keys), grouped for a
-// readable plan comparison. Replaces the hand-copied 11-key list that had
-// drifted out of sync with shared/constants/features.ts.
-const FEATURE_GROUP_LABELS: Record<FeatureGroup, string> = {
-  core: 'Основные',
-  section: 'Разделы',
-  integration: 'Интеграции',
-};
-const FEATURE_GROUPS = (['core', 'section', 'integration'] as FeatureGroup[])
-  .map((group) => ({
-    group,
-    label: FEATURE_GROUP_LABELS[group],
-    items: ALL_FEATURES.filter((f) => f.group === group),
-  }))
-  .filter((g) => g.items.length > 0);
-
-function formatDate(d: string) {
-  return new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-}
-
 export default function SubscriptionScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, undefined>>>();
   const queryClient = useQueryClient();
-  const tabBarHeight = useTabBarHeight();
   const palette = useColors();
-  const [refreshing, setRefreshing] = React.useState(false);
-  const [quotePeriod, setQuotePeriod] = React.useState<'monthly' | 'yearly'>('monthly');
+  const { hasPermission } = useAuth();
+  const allowed = hasPermission('company_manage');
   const isIos = Platform.OS === 'ios';
-
-  const { data: sub, isLoading } = useQuery<SubscriptionInfo>({
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [showFeatures, setShowFeatures] = React.useState(false);
+  const {
+    data: sub,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => {
-      const res = await subscriptionApi.get();
-      return res.data;
-    },
+    queryFn: async () => (await subscriptionApi.get()).data,
+    enabled: allowed,
   });
-
-  const quoteQuery = useQuery({
-    queryKey: ['subscription-quote', quotePeriod],
-    queryFn: async () => (await subscriptionApi.quote({ period: quotePeriod })).data,
-    enabled: !isIos && !!sub?.planId,
-    retry: false,
-    placeholderData: () => undefined,
-  });
-  const currentPricing = sub?.plans?.find((plan) => plan.id === sub.planId)?.pricing;
-
-  const onRefresh = async () => {
+  const calc = useSubscriptionCalculator(sub, allowed);
+  const plans = sub?.plans ?? [];
+  const current = calc.planId === sub?.planId;
+  const choices =
+    plans.some((p) => p.id === sub?.planId) || !sub?.planId
+      ? plans.map((p) => ({ id: p.id, name: p.name }))
+      : [{ id: sub.planId, name: sub.planName ?? 'Текущий тариф' }, ...plans.map((p) => ({ id: p.id, name: p.name }))];
+  const refresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['subscription'] });
-    await queryClient.invalidateQueries({ queryKey: ['subscription-quote'] });
-    setRefreshing(false);
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['subscription'] });
+      await queryClient.invalidateQueries({ queryKey: ['subscription-quote'] });
+    } finally {
+      setRefreshing(false);
+    }
   };
-
-  const isExpired = sub?.subscriptionEnd ? new Date(sub.subscriptionEnd) < new Date() : false;
-
-  // App Store Guideline 3.1.1 — the iOS build must not present any call-to-
-  // action that directs users to purchase / upgrade a digital subscription
-  // outside Apple In-App Purchase. The «Связаться для оплаты» / «Подключить»
-  // WhatsApp CTAs do exactly that, so on iOS the screen is VIEW-ONLY: it shows
-  // the current plan + tariffs for information, but the purchasing path is
-  // replaced with a neutral «manage on the website» note. Android keeps the
-  // CTAs (Google Play permits it for this business-software category).
-  const openWhatsApp = () => {
-    const msg = encodeURIComponent('Здравствуйте! Хочу оплатить подписку.');
-    Linking.openURL(`https://wa.me/${WHATSAPP_PHONE}?text=${msg}`);
+  const contact = (planName?: string) => {
+    const message = subscriptionContactText(planName, calc.ready ? calc.quote.data : undefined);
+    void Linking.openURL(`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(message)}`);
   };
-
-  const openWhatsAppForPlan = (planName: string) => {
-    const msg = encodeURIComponent(`Здравствуйте! Хочу подключить тариф "${planName}".`);
-    Linking.openURL(`https://wa.me/${WHATSAPP_PHONE}?text=${msg}`);
-  };
-
+  const button = (label: string, action: () => void, selected = false) => (
+    <TouchableOpacity
+      key={label}
+      onPress={action}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={[styles.choice, { backgroundColor: selected ? palette.accent.primarySoft : palette.bg.muted }]}
+    >
+      <Text
+        style={{
+          color: selected ? palette.accent.primaryText : palette.text.primary,
+          fontWeight: selected ? '600' : '400',
+        }}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+  if (!allowed)
+    return (
+      <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
+        <Text style={[styles.message, { color: palette.text.secondary }]}>Нет доступа к настройкам компании.</Text>
+      </View>
+    );
   if (isLoading) return <LoadingSpinner />;
-
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+    <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
-
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent.primary} />
         }
       >
-        {/* Current plan info */}
-        <AnimatedCard index={0}>
-          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <View style={styles.planHeader}>
-              <View
-                style={[
-                  styles.planIconWrap,
-                  palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
-                ]}
-              >
-                <Ionicons name="card-outline" size={24} color={colors.primary[600]} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.planOrgName, { color: palette.text.primary }]}>
-                  {sub?.tenantName || 'Организация'}
-                </Text>
-                <Text style={[styles.planName, { color: palette.text.secondary }]}>
-                  Тариф: {sub?.planName || 'Не назначен'}
-                </Text>
-              </View>
-            </View>
-
-            {/* End date & price */}
-            <View style={styles.infoGrid}>
-              <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="calendar-outline" size={18} color={palette.text.tertiary} />
-                <View>
-                  <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Оплачено до</Text>
-                  {sub?.subscriptionEnd ? (
-                    <Text
-                      style={[
-                        styles.infoValue,
-                        { color: palette.text.primary },
-                        isExpired && { color: colors.red[600] },
-                      ]}
-                    >
-                      {formatDate(sub.subscriptionEnd)}
-                      {isExpired ? '  (истекла)' : ''}
-                    </Text>
-                  ) : (
-                    <Text style={[styles.infoValue, { color: palette.text.tertiary }]}>Не указано</Text>
-                  )}
-                </View>
-              </View>
-
-              {/* Price of the current plan — hidden on iOS (Guideline 3.1.1:
-                  keep the subscription surface free of purchasable pricing). */}
-              {!isIos && (
-                <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
-                  <Ionicons name="card-outline" size={18} color={palette.text.tertiary} />
-                  <View>
-                    <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Базовая стоимость</Text>
-                    <Text style={[styles.infoValue, { color: palette.text.primary }]}>
-                      {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
-                    </Text>
-                  </View>
-                </View>
-              )}
-            </View>
-
-            {/* Users */}
-            {sub && (
-              <View style={[styles.usersRow, { borderTopColor: palette.border.subtle }]}>
-                <View style={styles.usersLeft}>
-                  <Ionicons name="people-outline" size={16} color={palette.text.tertiary} />
-                  <Text style={[styles.usersLabel, { color: palette.text.secondary }]}>Сотрудников</Text>
-                </View>
-                <Text style={[styles.usersValue, { color: palette.text.primary }]}>
-                  {currentPricing
-                    ? `${sub.usage?.employees ?? sub.currentUsers} · включено ${currentPricing.includedEmployees}`
-                    : `${sub.currentUsers} / ${sub.maxUsers}`}
-                </Text>
-              </View>
-            )}
-
-            {currentPricing && isIos && (
-              <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
-                Сотрудники учитываются вместе с владельцем. Филиалов используется: {sub?.usage?.activePoints ?? 0}.
-              </Text>
-            )}
-            {!isIos && sub?.planId && (
-              <>
-                <View style={{ flexDirection: 'row', gap: spacing[3], marginTop: spacing[3] }}>
-                  {(['monthly', 'yearly'] as const).map((period) => (
-                    <TouchableOpacity
-                      key={period}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: quotePeriod === period }}
-                      onPress={() => setQuotePeriod(period)}
-                      style={{ minHeight: 44, justifyContent: 'center' }}
-                    >
-                      <Text
-                        style={{
-                          color: palette.accent.primaryText,
-                          fontWeight: quotePeriod === period ? '700' : '400',
-                        }}
-                      >
-                        {period === 'monthly' ? 'Месяц' : 'Год · 12 за 10'}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                {quoteQuery.isFetching ? (
-                  <Text style={{ color: palette.text.secondary }}>Загружаем расчёт…</Text>
-                ) : quoteQuery.data && !quoteQuery.isError ? (
-                  <SubscriptionQuoteBreakdown preview={quoteQuery.data} />
-                ) : (
-                  <>
-                    <Text style={{ color: palette.text.secondary }}>
-                      Расчёт по текущему составу недоступен. Для прежних тарифов и дополнительных филиалов стоимость
-                      уточняется отдельно.
-                    </Text>
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      onPress={() => {
-                        void quoteQuery.refetch();
-                      }}
-                      style={{ minHeight: 44, justifyContent: 'center' }}
-                    >
-                      <Text style={{ color: palette.accent.primaryText }}>Повторить расчёт</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </>
-            )}
-            {/* Note */}
-            {sub?.subscriptionNote && (
-              <View
-                style={[
-                  styles.noteBlock,
-                  palette.mode === 'dark' && { backgroundColor: softTint(colors.blue[600], 'dark') },
-                ]}
-              >
-                <Ionicons name="information-circle-outline" size={18} color={colors.blue[500]} />
-                <Text style={styles.noteText}>{sub.subscriptionNote}</Text>
-              </View>
-            )}
-
-            {/* Payment CTA (Android) / manage-on-website note (iOS, Guideline 3.1.1) */}
-            {isIos ? (
-              <View
-                style={[styles.manageBlock, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              >
-                <Ionicons name="information-circle-outline" size={18} color={palette.text.tertiary} />
-                <Text style={[styles.manageText, { color: palette.text.secondary }]}>
-                  Управление подпиской доступно в веб-версии Autexa.
-                </Text>
-              </View>
-            ) : (
-              <TouchableOpacity style={styles.whatsappBtn} onPress={openWhatsApp} activeOpacity={0.8}>
-                <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
-                <Text style={styles.whatsappText}>Связаться для оплаты</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </AnimatedCard>
-
-        {/* Available plans — HIDDEN on iOS (Guideline 3.1.1): a list of
-            purchasable tariffs with prices is a purchase surface. iOS shows only
-            the current-plan status above; Android keeps the full comparison. */}
-        {!isIos && sub?.plans && sub.plans.length > 0 && (
-          <>
-            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Доступные тарифы</Text>
-            {sub.plans.map((plan, idx) => {
-              const isCurrent = sub.planName === plan.name;
-              const features: string[] = Array.isArray(plan.features) ? plan.features : [];
-              return (
-                <AnimatedCard key={plan.id} index={idx + 1}>
-                  <View
-                    style={[
-                      styles.planCard,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                      isCurrent && styles.planCardCurrent,
-                    ]}
-                  >
-                    {isCurrent && (
-                      <LinearGradient colors={[colors.primary[500], colors.primary[600]]} style={styles.currentBanner}>
-                        <Text style={styles.currentBannerText}>Ваш тариф</Text>
-                      </LinearGradient>
-                    )}
-
-                    <View style={styles.planCardBody}>
-                      <Text style={[styles.planCardName, { color: palette.text.primary }]}>{plan.name}</Text>
-                      {plan.description && (
-                        <Text style={[styles.planCardDesc, { color: palette.text.secondary }]}>{plan.description}</Text>
-                      )}
-
-                      <View style={styles.priceRow}>
-                        <Text style={[styles.priceValue, { color: palette.text.primary }]}>
-                          {plan.monthlyPrice.toLocaleString('ru-RU')}
-                        </Text>
-                        <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}> ₽/мес · база</Text>
-                      </View>
-
-                      <View
-                        style={[
-                          styles.maxUsersRow,
-                          palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
-                        ]}
-                      >
-                        <Ionicons name="people" size={16} color={colors.primary[600]} />
-                        <Text style={[styles.maxUsersText, { flex: 1 }]}>{planCompositionLabel(plan)}</Text>
-                      </View>
-
-                      {/* Features list — grouped (core / section / integration). */}
-                      <View style={styles.featuresList}>
-                        {FEATURE_GROUPS.map((grp) => (
-                          <View key={grp.group} style={styles.featureGroup}>
-                            <Text style={[styles.featureGroupLabel, { color: palette.text.tertiary }]}>
-                              {grp.label}
-                            </Text>
-                            {grp.items.map((feat) => {
-                              const included = features.includes(feat.key);
-                              return (
-                                <View key={feat.key} style={styles.featureRow}>
-                                  <Ionicons
-                                    name={included ? 'checkmark-circle' : 'remove-circle-outline'}
-                                    size={18}
-                                    color={included ? colors.green[500] : palette.text.tertiary}
-                                  />
-                                  <Text
-                                    style={[
-                                      styles.featureText,
-                                      { color: palette.text.primary },
-                                      !included && { color: palette.text.tertiary, textDecorationLine: 'line-through' },
-                                    ]}
-                                  >
-                                    {feat.label}
-                                  </Text>
-                                </View>
-                              );
-                            })}
-                          </View>
-                        ))}
-                      </View>
-
-                      {/* Purchase CTA hidden on iOS (Guideline 3.1.1) — the plan
-                          card stays as read-only information there. */}
-                      {!isCurrent && !isIos && (
-                        <TouchableOpacity style={styles.connectBtn} onPress={() => openWhatsAppForPlan(plan.name)}>
-                          <Ionicons name="logo-whatsapp" size={16} color={colors.white} />
-                          <Text style={styles.connectBtnText}>Подключить</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  </View>
-                </AnimatedCard>
-              );
+        {isError ? (
+          <View>
+            <Text style={{ color: palette.text.secondary }}>Не удалось загрузить подписку.</Text>
+            {button('Повторить', () => {
+              void refetch();
             })}
-          </>
-        )}
+          </View>
+        ) : null}
+        <View style={[styles.card, { backgroundColor: palette.bg.card }]}>
+          <Text style={[styles.title, { color: palette.text.primary }]}>{sub?.tenantName ?? 'Организация'}</Text>
+          <Text style={{ color: palette.text.secondary }}>Текущий тариф: {sub?.planName ?? 'Не назначен'}</Text>
+          <Text style={{ color: palette.text.primary }}>
+            Оплачено до:{' '}
+            {sub?.subscriptionEnd ? new Date(sub.subscriptionEnd).toLocaleDateString('ru-RU') : 'не указано'}
+          </Text>
+          <Text style={{ color: palette.text.secondary }}>
+            Фактически: {sub?.usage?.employees ?? sub?.currentUsers ?? 0} сотрудников, включая владельца ·{' '}
+            {sub?.usage?.activePoints ?? 0} филиалов
+          </Text>
+          {sub?.subscriptionNote ? <Text style={{ color: palette.text.secondary }}>{sub.subscriptionNote}</Text> : null}
+          {!isIos ? (
+            <TouchableOpacity style={styles.payment} onPress={() => contact()} accessibilityRole="button">
+              <Text style={styles.paymentText}>Связаться для оплаты</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        {choices.length ? (
+          <View style={[styles.card, { backgroundColor: palette.bg.card }]}>
+            <Text style={[styles.title, { color: palette.text.primary }]}>Расчёт стоимости</Text>
+            <Text style={{ color: palette.text.secondary }}>
+              Выберите состав для сравнения тарифов. Расчёт не меняет подписку и число сотрудников.
+            </Text>
+            <View style={styles.choices}>
+              {choices.map((plan) => button(plan.name, () => calc.setPlan(plan.id), calc.planId === plan.id))}
+            </View>
+            <View style={styles.choices}>
+              {button('Месяц', () => calc.setPeriod('monthly'), calc.period === 'monthly')}
+              {button('Год · 12 за 10', () => calc.setPeriod('yearly'), calc.period === 'yearly')}
+            </View>
+            {calc.plan ? (
+              <Text style={{ color: palette.text.secondary }}>{planCompositionLabel(calc.plan)}</Text>
+            ) : calc.pricing ? (
+              <Text style={{ color: palette.text.secondary }}>
+                Включено сотрудников: {calc.pricing.includedEmployees}. Информация о текущем тарифе.
+              </Text>
+            ) : null}
+            <SubscriptionCompositionFields
+              employees={calc.employees}
+              points={calc.points}
+              onEmployees={calc.setEmployees}
+              onPoints={calc.setPoints}
+            />
+            {calc.message ? <Text style={{ color: palette.text.secondary }}>{calc.message}</Text> : null}
+            {calc.quote.isFetching ? (
+              <Text style={{ color: palette.text.secondary }}>Загружаем расчёт…</Text>
+            ) : calc.ready && calc.quote.data ? (
+              <SubscriptionQuoteBreakdown preview={calc.quote.data} />
+            ) : null}
+            {calc.quote.isError
+              ? button('Повторить расчёт', () => {
+                  void calc.quote.refetch();
+                })
+              : null}
+            <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
+              Фактически сейчас: {calc.actualEmployees} сотрудников · {calc.actualPoints} филиалов. Это нижняя граница
+              расчёта.
+            </Text>
+            {calc.plan ? (
+              <>
+                <TouchableOpacity
+                  style={styles.details}
+                  onPress={() => setShowFeatures((shown) => !shown)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: showFeatures }}
+                >
+                  <Text style={{ color: palette.accent.primaryText }}>Что входит в {calc.plan.name}</Text>
+                  <Ionicons
+                    name={showFeatures ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={palette.accent.primaryText}
+                  />
+                </TouchableOpacity>
+                {showFeatures
+                  ? ALL_FEATURES.filter((feature) => calc.plan?.features?.includes(feature.key)).map((feature) => (
+                      <Text key={feature.key} style={{ color: palette.text.secondary }}>
+                        {feature.label}
+                      </Text>
+                    ))
+                  : null}
+              </>
+            ) : null}
+            {!isIos && !current && calc.name ? (
+              <TouchableOpacity
+                style={styles.payment}
+                onPress={() => contact(calc.name ?? undefined)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.paymentText}>Подключить</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
 }
-
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.gray[50] },
-  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
-  // Main card
-  card: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[5],
-    gap: spacing[4],
-  },
-  planHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  planIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: borderRadius.xl,
-    backgroundColor: colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planOrgName: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  planName: { fontSize: fontSize.sm, color: colors.gray[500], marginTop: 2 },
-  // Info grid
-  infoGrid: { gap: spacing[3] },
-  infoBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[3],
-    backgroundColor: colors.gray[50],
-    padding: spacing[3.5],
-    borderRadius: borderRadius.xl,
-  },
-  infoLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
-  infoValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 2 },
-  // Users
-  usersRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: colors.gray[100],
-  },
-  usersLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  usersLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
-  usersValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  // Note
-  noteBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[2],
-    backgroundColor: colors.blue[50],
-    padding: spacing[3.5],
-    borderRadius: borderRadius.xl,
-  },
-  noteText: { fontSize: fontSize.sm, color: colors.blue[600], flex: 1 },
-  // WhatsApp
-  whatsappBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    backgroundColor: '#25D366',
-    paddingVertical: spacing[3.5],
-    borderRadius: borderRadius.xl,
-  },
-  whatsappText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
-  // iOS manage-on-website note (Guideline 3.1.1 — view-only state)
-  manageBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[2],
-    padding: spacing[3.5],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-  },
-  manageText: { flex: 1, fontSize: fontSize.sm, lineHeight: 20 },
-  // Section
-  sectionTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  // Plan cards
-  planCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    overflow: 'hidden',
-  },
-  planCardCurrent: { borderColor: colors.primary[500], borderWidth: 2 },
-  currentBanner: { paddingVertical: spacing[1.5], alignItems: 'center' },
-  currentBannerText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.white },
-  planCardBody: { padding: spacing[5], gap: spacing[3] },
-  planCardName: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  planCardDesc: { fontSize: fontSize.sm, color: colors.gray[500] },
-  priceRow: { flexDirection: 'row', alignItems: 'baseline' },
-  priceValue: { fontSize: 32, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  priceSuffix: { fontSize: fontSize.sm, color: colors.gray[500] },
-  maxUsersRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    backgroundColor: colors.primary[50],
-    padding: spacing[3],
-    borderRadius: borderRadius.xl,
-  },
-  maxUsersText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[700] },
-  // Features
-  featuresList: { gap: spacing[3] },
-  featureGroup: { gap: spacing[1.5] },
-  featureGroupLabel: {
-    fontSize: 11,
-    fontWeight: fontWeight.bold,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  featureText: { fontSize: fontSize.sm, color: colors.gray[700] },
-  featureTextDisabled: { color: colors.gray[400], textDecorationLine: 'line-through' },
-  // Connect
-  connectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
+  screen: { flex: 1 },
+  content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[4] },
+  card: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[3] },
+  title: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },
+  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  choice: { minHeight: 44, paddingHorizontal: spacing[3], justifyContent: 'center', borderRadius: borderRadius.md },
+  details: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  payment: {
+    minHeight: 48,
+    borderRadius: borderRadius.md,
     backgroundColor: colors.primary[600],
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.xl,
-    marginTop: spacing[1],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  connectBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  paymentText: { color: colors.white, fontWeight: fontWeight.semibold },
+  message: { padding: spacing[4] },
 });
