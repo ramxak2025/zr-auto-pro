@@ -70,6 +70,18 @@ export interface SubscriptionQuoteInput {
   points: number;
 }
 
+/** Display only: invoice and ledger amounts always use the exact quote.total. */
+export function getSubscriptionMonthlyDisplay(quote: Pick<SubscriptionQuote, 'total' | 'serviceMonths'>): {
+  amount: number;
+  approximate: boolean;
+} {
+  const totalKopecks = Math.round(quote.total * 100);
+  return {
+    amount: Math.round(totalKopecks / quote.serviceMonths) / 100,
+    approximate: totalKopecks % quote.serviceMonths !== 0,
+  };
+}
+
 export function calculateSubscriptionQuote(
   pricing: SubscriptionPlanPricing,
   input: SubscriptionQuoteInput,

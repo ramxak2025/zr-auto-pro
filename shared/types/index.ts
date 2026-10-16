@@ -27,6 +27,9 @@ export interface SubscriptionQuotePreview {
 export interface SubscriptionQuoteQuery {
   period?: SubscriptionBillingPeriod;
   planId?: string;
+  /** Chosen composition; omitted counts use actual active employees/branches. */
+  employees?: number;
+  points?: number;
 }
 
 export interface Plan {
