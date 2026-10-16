@@ -126,6 +126,7 @@ function mount() {
   });
   return {
     tree,
+    client,
     close() {
       Renderer.act(() => tree.unmount());
       client.clear();
@@ -222,6 +223,31 @@ test('tenant comparisons never expand actual composition to included allowances 
       );
     assert.ok(catalogue);
     assert.ok(!catalogue.props.open);
+  } finally {
+    form.close();
+  }
+});
+
+test('multiple branches offer an explicit MAX forecast while preserving composition, period and assigned plan', async () => {
+  const form = mount();
+  try {
+    await settle(() => calls.at(-1)?.employees === 2);
+    fill(form.tree, 'Всего сотрудников', '6');
+    const yearly = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Год · 12 за 10');
+    Renderer.act(() => yearly.props.onClick());
+    fill(form.tree, 'Всего филиалов', '2');
+    await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
+    assert.equal(form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length, 0);
+    assert.equal(input(form.tree, 'Тариф для расчёта').props.value, 'current');
+    const max = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Рассчитать MAX');
+    assert.ok(max, 'unsupported branch count must offer explicit MAX calculation');
+    Renderer.act(() => max.props.onClick());
+    await settle(() => calls.at(-1)?.planId === 'max' && contents(form.tree).includes('180000'));
+    assert.deepEqual(calls.at(-1), { period: 'yearly', planId: 'max', employees: 6, points: 2 });
+    assert.equal(input(form.tree, 'Всего сотрудников').props.value, '6');
+    assert.equal(input(form.tree, 'Всего филиалов').props.value, '2');
+    assert.equal(form.client.getQueryData(['subscription']).planId, 'current');
+    assert.ok(contents(form.tree).includes('15000'));
   } finally {
     form.close();
   }

@@ -82,6 +82,9 @@ export default function TariffPage() {
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
   const selectedQuote = countsValid && !quoteQuery.isError && !quoteQuery.isFetching ? quoteQuery.data : undefined;
+  const maxPlan = sub?.plans?.find((plan) => plan.isActive && plan.pricing?.code === 'max');
+  const canCalculateMax =
+    !!maxPlan && pointCount !== undefined && pointCount > 1 && selectedPlan?.pricing?.extraPointMonthlyPrice === null;
   const whatsappUrl = getWhatsAppChatUrl(
     selectedQuote
       ? `Здравствуйте! Хочу обсудить подписку ${selectedQuote.pricing.name}. Сотрудников: ${selectedQuote.quote.employees}, филиалов: ${selectedQuote.quote.points}, срок: ${quotePeriod === 'yearly' ? '12 месяцев' : 'месяц'}. Расчёт: ${formatSubscriptionMoney(selectedQuote.quote.total)}${quotePeriod === 'yearly' ? ' сразу за 12 месяцев' : ''}.`
@@ -236,10 +239,11 @@ export default function TariffPage() {
                         type="button"
                         className={buttonClasses({ variant: 'secondary' })}
                         onClick={() => {
-                          void quoteQuery.refetch();
+                          if (canCalculateMax && maxPlan) setSelectedPlanId(maxPlan.id);
+                          else void quoteQuery.refetch();
                         }}
                       >
-                        Повторить расчёт
+                        {canCalculateMax ? 'Рассчитать MAX' : 'Повторить расчёт'}
                       </button>
                     </div>
                   )}
