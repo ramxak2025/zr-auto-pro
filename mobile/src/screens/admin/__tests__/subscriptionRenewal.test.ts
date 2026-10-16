@@ -412,3 +412,21 @@ it('a background UNPRICED_POINTS error cannot block an exact retry of an unknown
   await render().send({ type: 'paid', amount: 1 });
   expect(submit.mock.calls[1][0]).toBe(submit.mock.calls[0][0]);
 });
+it.each<[string, number]>([
+  ['pro', 5],
+  ['max', 50],
+])('initial renewal counts use actual two employees on %s, not its allowance %s', (code, included) => {
+  mockQuote.data = {
+    ...preview(),
+    planId: code,
+    pricing: { code, includedEmployees: included, includedPoints: 1 },
+    usage: { employees: 2, activePoints: 1, billablePoints: 1 },
+    quote: { ...preview().quote, employees: 2, points: 1 },
+  };
+  const render = mount(async () => undefined);
+  expect(render().employees).toBe('2');
+  expect(render().points).toBe('1');
+  render().changeEmployees('003');
+  render().setPeriod('yearly');
+  expect(render().employees).toBe('003');
+});

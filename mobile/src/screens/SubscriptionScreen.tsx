@@ -19,7 +19,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
 import SubscriptionCompositionFields from '../components/SubscriptionCompositionFields';
-import { planCompositionLabel, subscriptionContactText } from '../utils/subscriptionPricingText';
+import { planCompositionLabel, planIncludedLabel, subscriptionContactText } from '../utils/subscriptionPricingText';
 import { useSubscriptionCalculator } from './subscription/useSubscriptionCalculator';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -51,10 +51,18 @@ export default function SubscriptionScreen() {
   const calc = useSubscriptionCalculator(sub, allowed);
   const plans = sub?.plans ?? [];
   const current = calc.planId === sub?.planId;
+  const features = calc.plan?.features ?? (current ? sub?.features : undefined);
   const choices =
     plans.some((p) => p.id === sub?.planId) || !sub?.planId
-      ? plans.map((p) => ({ id: p.id, name: p.name }))
-      : [{ id: sub.planId, name: sub.planName ?? 'Текущий тариф' }, ...plans.map((p) => ({ id: p.id, name: p.name }))];
+      ? plans.map((p) => ({ id: p.id, name: p.name, info: planIncludedLabel(p) }))
+      : [
+          {
+            id: sub.planId,
+            name: sub.planName ?? 'Текущий тариф',
+            info: current && calc.pricing ? planIncludedLabel({ pricing: calc.pricing }) : 'Текущий тариф',
+          },
+          ...plans.map((p) => ({ id: p.id, name: p.name, info: planIncludedLabel(p) })),
+        ];
   const refresh = async () => {
     setRefreshing(true);
     try {
@@ -112,97 +120,128 @@ export default function SubscriptionScreen() {
             })}
           </View>
         ) : null}
-        <View style={[styles.card, { backgroundColor: palette.bg.card }]}>
-          <Text style={[styles.title, { color: palette.text.primary }]}>{sub?.tenantName ?? 'Организация'}</Text>
-          <Text style={{ color: palette.text.secondary }}>Текущий тариф: {sub?.planName ?? 'Не назначен'}</Text>
-          <Text style={{ color: palette.text.primary }}>
+        <View style={styles.status}>
+          <Text style={[styles.statusTitle, { color: palette.text.primary }]}>
+            {sub?.tenantName ?? 'Организация'} · {sub?.planName ?? 'Тариф не назначен'}
+          </Text>
+          <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
             Оплачено до:{' '}
             {sub?.subscriptionEnd ? new Date(sub.subscriptionEnd).toLocaleDateString('ru-RU') : 'не указано'}
           </Text>
-          <Text style={{ color: palette.text.secondary }}>
+          <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
             Фактически: сотрудники — {sub?.usage?.employees ?? sub?.currentUsers ?? 0}, включая владельца · Филиалы —{' '}
             {sub?.usage?.activePoints ?? 0}
           </Text>
           {sub?.subscriptionNote ? <Text style={{ color: palette.text.secondary }}>{sub.subscriptionNote}</Text> : null}
-          {!isIos ? (
-            <TouchableOpacity style={styles.payment} onPress={() => contact()} accessibilityRole="button">
-              <Text style={styles.paymentText}>Связаться для оплаты</Text>
-            </TouchableOpacity>
-          ) : null}
         </View>
         {choices.length ? (
-          <View style={[styles.card, { backgroundColor: palette.bg.card }]}>
+          <View style={[styles.calculator, { backgroundColor: palette.bg.card }]}>
             <Text style={[styles.title, { color: palette.text.primary }]}>Расчёт стоимости</Text>
-            <Text style={{ color: palette.text.secondary }}>
-              Выберите состав для сравнения тарифов. Расчёт не меняет подписку и число сотрудников.
-            </Text>
-            <View style={styles.choices}>
-              {choices.map((plan) => button(plan.name, () => calc.setPlan(plan.id), calc.planId === plan.id))}
-            </View>
-            <View style={styles.choices}>
-              {button('Месяц', () => calc.setPeriod('monthly'), calc.period === 'monthly')}
-              {button('Год · 12 за 10', () => calc.setPeriod('yearly'), calc.period === 'yearly')}
-            </View>
-            {calc.plan ? (
-              <Text style={{ color: palette.text.secondary }}>{planCompositionLabel(calc.plan)}</Text>
-            ) : calc.pricing ? (
-              <Text style={{ color: palette.text.secondary }}>
-                Сотрудников включено: {calc.pricing.includedEmployees}. Информация о текущем тарифе.
-              </Text>
-            ) : null}
             <SubscriptionCompositionFields
               employees={calc.employees}
               points={calc.points}
               onEmployees={calc.setEmployees}
               onPoints={calc.setPoints}
+              employeePresets
+              minimumEmployees={calc.actualEmployees}
               inputAccessoryViewID={isIos ? 'subscription-calculator-done' : undefined}
             />
+            <View style={styles.choices}>
+              {choices.map((plan) => (
+                <TouchableOpacity
+                  key={plan.id}
+                  onPress={() => calc.setPlan(plan.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Тариф ${plan.name}: ${plan.info}`}
+                  accessibilityState={{ selected: calc.planId === plan.id }}
+                  style={[
+                    styles.planChoice,
+                    { backgroundColor: calc.planId === plan.id ? palette.accent.primarySoft : palette.bg.muted },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: calc.planId === plan.id ? palette.accent.primaryText : palette.text.primary,
+                      fontWeight: '600',
+                    }}
+                    numberOfLines={2}
+                  >
+                    {plan.name}
+                  </Text>
+                  <Text style={{ color: palette.text.secondary, fontSize: 12 }} numberOfLines={2}>
+                    {plan.info}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.choices}>
+              {button('Месяц', () => calc.setPeriod('monthly'), calc.period === 'monthly')}
+              {button('Год', () => calc.setPeriod('yearly'), calc.period === 'yearly')}
+            </View>
             {calc.message ? <Text style={{ color: palette.text.secondary }}>{calc.message}</Text> : null}
-            {calc.quote.isFetching ? (
-              <Text style={{ color: palette.text.secondary }}>Загружаем расчёт…</Text>
+            {calc.unsupportedPoints && calc.maxPlan
+              ? button('Рассчитать MAX', () => {
+                  if (calc.maxPlan) calc.setPlan(calc.maxPlan.id);
+                })
+              : null}
+            {calc.quote.isFetching && calc.valid ? (
+              <Text style={{ color: palette.text.secondary }}>Считаем стоимость…</Text>
             ) : calc.ready && calc.quote.data ? (
-              <SubscriptionQuoteBreakdown preview={calc.quote.data} />
+              <SubscriptionQuoteBreakdown preview={calc.quote.data} compact />
+            ) : !calc.message ? (
+              <Text style={{ color: palette.text.secondary }}>
+                {calc.planId ? 'Укажите состав для расчёта.' : 'Выберите тариф.'}
+              </Text>
             ) : null}
-            {calc.quote.isError
+            {calc.quote.isError && !calc.unsupportedPoints
               ? button('Повторить расчёт', () => {
                   void calc.quote.refetch();
                 })
               : null}
-            <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
-              Фактически сейчас: сотрудники — {calc.actualEmployees} · Филиалы — {calc.actualPoints}. Это нижняя граница
-              расчёта.
-            </Text>
-            {calc.plan ? (
-              <>
-                <TouchableOpacity
-                  style={styles.details}
-                  onPress={() => setShowFeatures((shown) => !shown)}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: showFeatures }}
-                >
-                  <Text style={{ color: palette.accent.primaryText }}>Что входит в {calc.plan.name}</Text>
-                  <Ionicons
-                    name={showFeatures ? 'chevron-up' : 'chevron-down'}
-                    size={18}
-                    color={palette.accent.primaryText}
-                  />
-                </TouchableOpacity>
-                {showFeatures
-                  ? ALL_FEATURES.filter((feature) => calc.plan?.features?.includes(feature.key)).map((feature) => (
-                      <Text key={feature.key} style={{ color: palette.text.secondary }}>
-                        {feature.label}
-                      </Text>
-                    ))
-                  : null}
-              </>
+            <TouchableOpacity
+              style={[styles.details, { borderTopColor: palette.border.subtle }]}
+              onPress={() => setShowFeatures((shown) => !shown)}
+              accessibilityRole="button"
+              accessibilityLabel="Условия и возможности тарифа"
+              accessibilityState={{ expanded: showFeatures }}
+            >
+              <Text style={{ color: palette.accent.primaryText }}>Условия и возможности</Text>
+              <Ionicons
+                name={showFeatures ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={palette.accent.primaryText}
+              />
+            </TouchableOpacity>
+            {showFeatures ? (
+              <View style={styles.conditions}>
+                {calc.plan ? (
+                  <Text style={{ color: palette.text.secondary }}>{planCompositionLabel(calc.plan)}</Text>
+                ) : calc.pricing ? (
+                  <Text style={{ color: palette.text.secondary }}>
+                    {planCompositionLabel({ pricing: calc.pricing })}
+                  </Text>
+                ) : null}
+                {features?.length ? (
+                  features.map((key) => (
+                    <Text key={key} style={{ color: palette.text.secondary }}>
+                      {ALL_FEATURES.find((feature) => feature.key === key)?.label ?? key}
+                    </Text>
+                  ))
+                ) : (
+                  <Text style={{ color: palette.text.secondary }}>Список возможностей не указан.</Text>
+                )}
+              </View>
             ) : null}
-            {!isIos && !current && calc.name ? (
+            <Text style={{ color: palette.text.secondary, fontSize: 12 }}>
+              Расчёт для сравнения. Подписка не меняется.
+            </Text>
+            {!isIos && (current || (calc.planId && calc.name)) ? (
               <TouchableOpacity
                 style={styles.payment}
-                onPress={() => contact(calc.name ?? undefined)}
+                onPress={() => contact(current ? undefined : (calc.name ?? undefined))}
                 accessibilityRole="button"
               >
-                <Text style={styles.paymentText}>Подключить</Text>
+                <Text style={styles.paymentText}>{current ? 'Связаться для оплаты' : 'Подключить'}</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -229,12 +268,38 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   keyboardAccessory: { alignItems: 'flex-end' },
   keyboardDone: { minHeight: 44, paddingHorizontal: spacing[4], justifyContent: 'center' },
-  content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[4] },
-  card: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[3] },
+  content: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[4] },
+  status: { gap: spacing[1] },
+  statusTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  calculator: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[2] },
   title: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  choice: { minHeight: 44, paddingHorizontal: spacing[3], justifyContent: 'center', borderRadius: borderRadius.md },
-  details: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  choice: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: spacing[3],
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: borderRadius.md,
+  },
+  planChoice: {
+    flex: 1,
+    minWidth: 80,
+    minHeight: 62,
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[2],
+    justifyContent: 'center',
+    borderRadius: borderRadius.md,
+    gap: 3,
+  },
+  details: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  conditions: { gap: spacing[2], paddingBottom: spacing[2] },
   payment: {
     minHeight: 48,
     borderRadius: borderRadius.md,
