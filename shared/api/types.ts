@@ -1022,6 +1022,9 @@ export interface ExtendSubscriptionRequest {
   /** Composition renewal: pass the server preview token, with no days/until. */
   period?: 'monthly' | 'yearly';
   quoteToken?: string;
+  /** Selected composition from the preview; omitted counts retain live-usage pricing. */
+  employees?: number;
+  points?: number;
   /** Reuse for retries of the same action; changing input returns 409. */
   requestId?: string;
   /** Legacy path — extend by N days, anchored on max(current end, now). */

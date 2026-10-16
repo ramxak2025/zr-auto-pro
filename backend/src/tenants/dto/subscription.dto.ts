@@ -1,4 +1,5 @@
 import {
+  Allow,
   IsBoolean,
   IsIn,
   IsInt,
@@ -12,9 +13,17 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 /** Additive manual composition renewal. Legacy day/date extensions remain separate. */
 export class CompositionRenewalDto {
+  // Validated in TenantsService so malformed counts consistently return INVALID_COUNT.
+  @Allow()
+  employees?: number;
+
+  @Allow()
+  points?: number;
+
   @IsOptional()
   @IsIn(['monthly', 'yearly'])
   period?: 'monthly' | 'yearly';
@@ -30,6 +39,14 @@ export class CompositionRenewalDto {
 }
 
 export class SubscriptionQuoteQueryDto {
+  @Allow()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? Number(value) : value))
+  employees?: number;
+
+  @Allow()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? Number(value) : value))
+  points?: number;
+
   @IsOptional()
   @IsIn(['monthly', 'yearly'])
   period?: 'monthly' | 'yearly';

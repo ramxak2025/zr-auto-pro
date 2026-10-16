@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { useSubscriptionRenewal } from './useSubscriptionRenewal';
 import SubscriptionQuoteBreakdown from '../SubscriptionQuoteBreakdown';
+import SubscriptionCompositionFields from '../SubscriptionCompositionFields';
 import { addDays, addYears, format, isPast, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { Gift, Wallet } from 'lucide-react';
@@ -108,6 +109,7 @@ export default function ExtendModal({
   // Менеджер бесплатно выдаёт срок днями, суперадмин — датой.
   const freeByDays = isManager && kind === 'free';
   const canSubmit =
+    !isPending &&
     !renewal.sending &&
     (renewal.uncertain ||
       (kind === 'paid'
@@ -128,7 +130,12 @@ export default function ExtendModal({
         amount: paidAmount,
         ...(renewal.period === 'custom'
           ? { until }
-          : { period: renewal.period, quoteToken: renewal.quoteQuery.data?.quoteToken }),
+          : {
+              period: renewal.period,
+              employees: renewal.employeesCount,
+              points: renewal.pointsCount,
+              quoteToken: renewal.quoteQuery.data?.quoteToken,
+            }),
       };
       // Менеджерские платные продления несут долю всегда — сервер флаг там игнорирует.
       if (!isManager && manager && creditManager) request.creditManager = true;
@@ -185,14 +192,19 @@ export default function ExtendModal({
           </Button>
           <Button
             variant="secondary"
-            disabled={!renewal.quoteQuery.data || renewal.quoteQuery.isError || renewal.quoteQuery.isFetching}
+            disabled={
+              !renewal.countsValid ||
+              !renewal.quoteQuery.data ||
+              renewal.quoteQuery.isError ||
+              renewal.quoteQuery.isFetching
+            }
             onClick={renewal.acknowledgeChange}
           >
             Расчёт проверен
           </Button>
         </div>
       )}
-      <fieldset disabled={renewal.locked} className="space-y-4">
+      <fieldset disabled={isPending || renewal.locked} className="space-y-4">
         {currentPeriodKind && <SubscriptionPeriodBadge kind={currentPeriodKind} until={subscriptionEnd} />}
 
         <Field
@@ -231,15 +243,37 @@ export default function ExtendModal({
                 ]}
               />
             </Field>
+            {renewal.period !== 'custom' && (!renewal.initializingCounts || renewal.quoteQuery.isError) && (
+              <SubscriptionCompositionFields
+                employees={renewal.employees}
+                points={renewal.points}
+                minimumEmployees={renewal.minimumEmployees}
+                minimumPoints={renewal.minimumPoints}
+                onEmployeesChange={renewal.changeEmployees}
+                onPointsChange={renewal.changePoints}
+              />
+            )}
+            {!!renewal.amountHint && (
+              <p role="status" className="text-sm text-ink-2">
+                {renewal.amountHint}
+              </p>
+            )}
             {!!renewal.fallback && <p className="text-sm text-ink-2">{renewal.fallback}</p>}
             {renewal.period !== 'custom' &&
-              (renewal.quoteQuery.isFetching ? (
+              (!renewal.countsValid ? (
+                <p role="status" className="text-sm text-bad">
+                  Проверьте количество сотрудников и филиалов.
+                </p>
+              ) : renewal.quoteQuery.isFetching ? (
                 <p role="status" className="text-sm text-ink-3">
                   Загружаем расчёт…
                 </p>
               ) : renewal.quoteQuery.isError ? (
                 <div className="space-y-2">
-                  <p className="text-sm text-ink-2">Расчёт недоступен. Повторите загрузку или выберите свою дату.</p>
+                  <p className="text-sm text-ink-2">
+                    Расчёт недоступен. Проверьте состав: для нескольких филиалов нужен MAX. Повторите загрузку или
+                    выберите свою дату.
+                  </p>
                   <Button
                     variant="secondary"
                     onClick={() => {

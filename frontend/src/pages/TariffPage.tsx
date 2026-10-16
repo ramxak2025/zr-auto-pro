@@ -1,4 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { createSubscriptionApi } from '../../../shared/api/createServices';
+import { createSessionBoundClient } from '../api/axios';
+import { parseSubscriptionCount } from '../utils/subscriptionPricingText';
+import SubscriptionCompositionFields from '../components/SubscriptionCompositionFields';
 import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
 import { planCompositionLabel } from '../utils/subscriptionPricingText';
 import { useQuery } from '@tanstack/react-query';
@@ -6,7 +11,8 @@ import { CalendarDays, Check, CreditCard, Info, MessageCircle, Users, X } from '
 import { format, isPast, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { subscriptionApi } from '../api/services';
+import type { SubscriptionPlanPricing } from '../../../shared/utils/subscriptionPricing';
+import { formatSubscriptionMoney } from '../utils/subscriptionPricingText';
 import type { SubscriptionInfo } from '../types';
 import {
   Badge,
@@ -27,6 +33,12 @@ import { FEATURE_GROUPS } from '../utils/featureGroups';
 import { getWhatsAppChatUrl } from '../config/contacts';
 
 export default function TariffPage() {
+  const { token } = useAuth();
+  const subscriptionApi = useMemo(() => createSubscriptionApi(createSessionBoundClient(token)), [token]);
+  const [selectedPlanId, setSelectedPlanId] = useState<string>();
+  const [employeeInput, setEmployeeInput] = useState<string>();
+  const [pointInput, setPointInput] = useState<string>();
+  const [serverPricing, setServerPricing] = useState<{ planId: string; pricing: SubscriptionPlanPricing }>();
   const [quotePeriod, setQuotePeriod] = useState<'monthly' | 'yearly'>('monthly');
   // В слоте ['subscription'] лежит САМ объект подписки — так его пишут оболочка,
   // FeatureGate и App. Раньше страница клала сюда ответ axios и читала `.data`
@@ -43,18 +55,53 @@ export default function TariffPage() {
     queryFn: async () => (await subscriptionApi.get()).data,
   });
 
+  const currentPlan = sub?.plans?.find((plan) => plan.id === sub.planId);
+  const selectedPlan = sub?.plans?.find((plan) => plan.id === (selectedPlanId ?? sub.planId));
+  const selectedPricing =
+    selectedPlan?.pricing ??
+    (serverPricing && serverPricing.planId === (selectedPlanId ?? sub?.planId) ? serverPricing.pricing : undefined);
+  const minimumEmployees = Math.max(1, sub?.usage?.employees ?? sub?.currentUsers ?? 1);
+  const minimumPoints = Math.max(1, sub?.usage?.billablePoints ?? 1);
+  const employees =
+    employeeInput ?? String(Math.max(selectedPricing?.includedEmployees ?? minimumEmployees, minimumEmployees));
+  const points = pointInput ?? String(Math.max(selectedPricing?.includedPoints ?? 1, minimumPoints));
+  const employeeCount = parseSubscriptionCount(employees),
+    pointCount = parseSubscriptionCount(points);
+  const countsValid =
+    employeeCount !== undefined &&
+    employeeCount >= minimumEmployees &&
+    pointCount !== undefined &&
+    pointCount >= minimumPoints;
   const quoteQuery = useQuery({
-    queryKey: ['subscription-quote', quotePeriod],
-    queryFn: async () => (await subscriptionApi.quote({ period: quotePeriod })).data,
-    enabled: !!sub?.planId,
+    queryKey: ['subscription-quote', token, selectedPlanId ?? sub?.planId, quotePeriod, employees, points],
+    queryFn: async () =>
+      (
+        await subscriptionApi.quote({
+          period: quotePeriod,
+          planId: selectedPlanId ?? sub?.planId ?? undefined,
+          employees: employeeCount,
+          points: pointCount,
+        })
+      ).data,
+    enabled: !!sub?.planId && countsValid,
     retry: false,
     placeholderData: () => undefined,
   });
-  const currentPricing = sub?.plans?.find((plan) => plan.id === sub.planId)?.pricing;
+  useEffect(() => {
+    if (quoteQuery.data && quoteQuery.data.planId === sub?.planId)
+      setServerPricing({ planId: quoteQuery.data.planId, pricing: quoteQuery.data.pricing });
+  }, [quoteQuery.data, sub?.planId]);
+  const currentPricing =
+    currentPlan?.pricing ?? (serverPricing && serverPricing.planId === sub?.planId ? serverPricing.pricing : undefined);
   const subscriptionEnd = sub?.subscriptionEnd ? parseISO(sub.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
-  const whatsappUrl = getWhatsAppChatUrl('Здравствуйте! Хочу оплатить подписку.');
+  const selectedQuote = countsValid && !quoteQuery.isError && !quoteQuery.isFetching ? quoteQuery.data : undefined;
+  const whatsappUrl = getWhatsAppChatUrl(
+    selectedQuote
+      ? `Здравствуйте! Хочу обсудить подписку ${selectedQuote.pricing.name}. Сотрудников: ${selectedQuote.quote.employees}, филиалов: ${selectedQuote.quote.points}, срок: ${quotePeriod === 'yearly' ? '12 месяцев' : 'месяц'}. Расчёт: ${formatSubscriptionMoney(selectedQuote.quote.total)}${quotePeriod === 'yearly' ? ' сразу за 12 месяцев' : ''}.`
+      : 'Здравствуйте! Хочу оплатить подписку.',
+  );
 
   return (
     <div className="space-y-5">
@@ -137,6 +184,38 @@ export default function TariffPage() {
 
               {sub?.planId && (
                 <div className="space-y-3">
+                  <h2 className="text-md font-semibold text-ink">Рассчитать стоимость команды</h2>
+                  <p className="text-sm text-ink-2">
+                    Сейчас сотрудников: {minimumEmployees}, включая владельца; филиалов:{' '}
+                    {sub.usage?.activePoints ?? minimumPoints}. Расчёт информационный: выбор не меняет ваш тариф и
+                    оплаченный срок.
+                  </p>
+                  <label className="block text-sm text-ink-2">
+                    Тариф для расчёта
+                    <select
+                      aria-label="Тариф для расчёта"
+                      className="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-ink"
+                      value={selectedPlanId ?? sub.planId}
+                      onChange={(event) => setSelectedPlanId(event.target.value)}
+                    >
+                      {!currentPlan && <option value={sub.planId}>Текущий тариф: {sub.planName}</option>}
+                      {sub.plans.map((plan) => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.name}
+                          {plan.id === sub.planId ? ' · текущий' : ''}
+                          {!plan.isActive ? ' · архивный' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <SubscriptionCompositionFields
+                    employees={employees}
+                    points={points}
+                    minimumEmployees={minimumEmployees}
+                    minimumPoints={minimumPoints}
+                    onEmployeesChange={setEmployeeInput}
+                    onPointsChange={setPointInput}
+                  />
                   <div role="group" aria-label="Период расчёта" className="flex flex-wrap gap-2">
                     {(['monthly', 'yearly'] as const).map((period) => (
                       <button
@@ -150,7 +229,11 @@ export default function TariffPage() {
                       </button>
                     ))}
                   </div>
-                  {quoteQuery.isFetching ? (
+                  {!countsValid ? (
+                    <p role="status" className="text-sm text-bad">
+                      Проверьте количество сотрудников и филиалов. Оно не может быть меньше фактического.
+                    </p>
+                  ) : quoteQuery.isFetching ? (
                     <p role="status" className="text-sm text-ink-3">
                       Загружаем расчёт…
                     </p>
@@ -159,8 +242,8 @@ export default function TariffPage() {
                   ) : (
                     <div className="space-y-2">
                       <p className="text-sm text-ink-2">
-                        Расчёт по текущему составу недоступен. Для прежних тарифов и дополнительных филиалов стоимость
-                        уточняется отдельно.
+                        Расчёт выбранного состава недоступен. Для нескольких филиалов выберите MAX. Условия прежних
+                        тарифов уточняются отдельно; годовая скидка к ним автоматически не применяется.
                       </p>
                       <button
                         type="button"

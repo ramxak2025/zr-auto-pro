@@ -15,11 +15,12 @@
  */
 import React from 'react';
 import { useSubscriptionRenewal } from './useSubscriptionRenewal';
+import SubscriptionCompositionFields from '../../components/SubscriptionCompositionFields';
 import SubscriptionQuoteBreakdown from '../../components/SubscriptionQuoteBreakdown';
 import { Alert, StyleSheet, View, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminManagersApi, managerApi, tenantsApi } from '../../api/services';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { adminManagersApi, managerApi } from '../../api/services';
 import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -152,26 +153,19 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
     [maxFree],
   );
 
-  const mutation = useMutation({
-    mutationFn: async (req: ExtendSubscriptionRequest) =>
-      mode === 'manager'
-        ? (await managerApi.extend(tenantId, req)).data
-        : (await tenantsApi.extend(tenantId, req)).data,
-    onSuccess: () => {
-      haptic('success');
-      invalidatePlatformQueries(queryClient, tenantId);
-      onClose();
-      onDone?.();
-    },
-    retry: false,
-  });
-
   const renewal = useSubscriptionRenewal({
     open: visible,
     tenantId,
     mode,
     legacyPrice: planPrice ?? tenant?.monthlyPrice ?? 0,
-    onSubmit: (request) => mutation.mutateAsync(request),
+    onSubmit: async (request, session) =>
+      (await (mode === 'manager' ? session.manager : session.tenants).extend(tenantId, request)).data,
+    onConfirmed: () => {
+      haptic('success');
+      invalidatePlatformQueries(queryClient, tenantId);
+      onClose();
+      onDone?.();
+    },
   });
   const { amount, changeAmount: setAmount } = renewal;
   const amountNum = parseAmount(amount) ?? Number.NaN;
@@ -184,6 +178,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
       : null;
 
   const applyPreset = (presetDays: number) => {
+    if (renewal.locked) return;
     haptic('select');
     setUntil(endOfDay(new Date(anchorFrom(subscriptionEnd).getTime() + presetDays * DAY_MS)));
   };
@@ -292,7 +287,9 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
           <SheetLabel>Тип продления</SheetLabel>
           <SheetSegmented
             value={type}
-            onChange={setType}
+            onChange={(next) => {
+              if (!renewal.locked) setType(next);
+            }}
             options={[
               { value: 'paid', label: 'Платно', icon: 'card-outline' },
               { value: 'free', label: 'Бесплатно', icon: 'gift-outline' },
@@ -318,6 +315,18 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
                 ]}
               />
               {!!renewal.fallback && <SheetHint icon="information-circle-outline">{renewal.fallback}</SheetHint>}
+              {renewal.period !== 'custom' && (
+                <>
+                  <SubscriptionCompositionFields
+                    employees={renewal.employees}
+                    points={renewal.points}
+                    onEmployees={renewal.changeEmployees}
+                    onPoints={renewal.changePoints}
+                    locked={renewal.locked}
+                  />
+                  <SheetHint icon="people-outline">{`Фактически: сотрудников не меньше ${renewal.minEmployees}, филиалов не меньше ${renewal.minPoints}. Выбор используется только для расчёта.`}</SheetHint>
+                </>
+              )}
               {renewal.period !== 'custom' && (
                 <>
                   {renewal.quoteQuery.isFetching ? (
@@ -363,7 +372,9 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
                 clientManager ? ` (доля ${formatPercent(clientManager.ownerSharePercent)})` : ''
               }`}
               value={creditManager}
-              onValueChange={setCreditManager}
+              onValueChange={(next) => {
+                if (!renewal.locked) setCreditManager(next);
+              }}
             />
           ) : null}
 
@@ -375,6 +386,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
                   label: `${d} дн.`,
                   active: days === String(d),
                   onPress: () => {
+                    if (renewal.locked) return;
                     haptic('select');
                     setDays(String(d));
                   },
@@ -383,7 +395,9 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
               <SheetInput
                 value={days}
                 editable={!renewal.locked}
-                onChangeText={(v) => setDays(v.replace(/[^0-9]/g, ''))}
+                onChangeText={(v) => {
+                  if (!renewal.locked) setDays(v.replace(/[^0-9]/g, ''));
+                }}
                 placeholder="Другое число дней"
                 keyboardType="number-pad"
               />
@@ -394,6 +408,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
               <SheetChips chips={PAID_PRESETS.map((p) => ({ label: p.label, onPress: () => applyPreset(p.days) }))} />
               <Pressable
                 onPress={() => {
+                  if (renewal.locked) return;
                   haptic('tap');
                   setDatePickerOpen(true);
                 }}
@@ -439,7 +454,7 @@ export default function ExtendSubscriptionSheet({ visible, onClose, tenant, plan
         value={until ?? anchorFrom(subscriptionEnd)}
         mode="date"
         onConfirm={(d) => {
-          setUntil(d);
+          if (!renewal.locked) setUntil(d);
           setDatePickerOpen(false);
         }}
         onCancel={() => setDatePickerOpen(false)}

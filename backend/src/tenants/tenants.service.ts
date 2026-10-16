@@ -64,13 +64,25 @@ export function computeSubscriptionStatusOf(row: {
   return 'active';
 }
 
-/**
- * Options for TenantsService.extend (122). Mirrors the shared
- * `ExtendSubscriptionRequest` — every field optional so the legacy `{ days }`
- * body still works. Business rules (must supply `until` or `days`; paid needs
- * `amount > 0`; `until` must be future) are enforced in the method.
- */
-export interface ExtendSubscriptionOptions {
+/** Optional selected composition; missing counts retain actual live usage. */
+export interface SubscriptionCompositionCounts {
+  employees?: number;
+  points?: number;
+}
+
+function validateCompositionCounts(counts: SubscriptionCompositionCounts) {
+  for (const count of [counts.employees, counts.points]) {
+    if (count !== undefined && (!Number.isSafeInteger(count) || count < 1)) {
+      throw new BadRequestException({
+        code: 'INVALID_COUNT',
+        message: 'Количество должно быть целым числом больше нуля',
+      });
+    }
+  }
+}
+
+/** Mirrors ExtendSubscriptionRequest; legacy day/date extensions remain supported. */
+export interface ExtendSubscriptionOptions extends SubscriptionCompositionCounts {
   period?: SubscriptionBillingPeriod;
   quoteToken?: string;
   requestId?: string;
@@ -735,10 +747,12 @@ export class TenantsService {
     period: SubscriptionBillingPeriod,
     scope: TenantScope = {},
     planId?: string,
+    selected: SubscriptionCompositionCounts = {},
   ) {
     if (period !== 'monthly' && period !== 'yearly') {
       throw new BadRequestException({ code: 'INVALID_PERIOD', message: 'Выберите месяц или год' });
     }
+    validateCompositionCounts(selected);
     // Plan, term and live composition must come from ONE statement snapshot.
     // A tenant row lock does not serialize price or employee/point updates.
     const { rows } = await db.query(
@@ -760,10 +774,21 @@ export class TenantsService {
       activePoints: Number(row.active_points),
       billablePoints: Math.max(1, Number(row.active_points)),
     };
+    if (
+      (selected.employees !== undefined && selected.employees < usage.employees) ||
+      (selected.points !== undefined && selected.points < usage.billablePoints)
+    ) {
+      throw new BadRequestException({
+        code: 'COUNT_BELOW_USAGE',
+        message: 'Количество не может быть меньше фактического состава',
+        minimumEmployees: usage.employees,
+        minimumPoints: usage.billablePoints,
+      });
+    }
     const result = calculateSubscriptionQuote(pricing, {
       period,
-      employees: usage.employees,
-      points: usage.billablePoints,
+      employees: selected.employees ?? usage.employees,
+      points: selected.points ?? usage.billablePoints,
     });
     if (!result.ok)
       throw new BadRequestException({
@@ -771,7 +796,9 @@ export class TenantsService {
         message:
           result.code === 'UNPRICED_POINTS'
             ? 'Стоимость дополнительных филиалов согласуется отдельно'
-            : 'Для расчёта нужен хотя бы один активный сотрудник',
+            : usage.employees < 1 && selected.employees === undefined
+              ? 'Для расчёта нужен хотя бы один активный сотрудник'
+              : 'Количество или сумма расчёта вне допустимого диапазона',
       });
     const snapshot = { planId: String(row.id), pricing, usage, quote: result.quote };
     const quoteToken = createHash('sha256')
@@ -780,6 +807,8 @@ export class TenantsService {
           tenantId,
           ...snapshot,
           subscriptionEnd: row.subscription_end ? new Date(row.subscription_end).toISOString() : null,
+          ...(selected.employees !== undefined ? { employees: selected.employees } : {}),
+          ...(selected.points !== undefined ? { points: selected.points } : {}),
         }),
       )
       .digest('hex');
@@ -791,8 +820,9 @@ export class TenantsService {
     period: SubscriptionBillingPeriod = 'monthly',
     scope: TenantScope = {},
     planId?: string,
+    selected: SubscriptionCompositionCounts = {},
   ) {
-    return this.subscriptionQuoteWithDb(this.pool, tenantId, period, scope, planId);
+    return this.subscriptionQuoteWithDb(this.pool, tenantId, period, scope, planId, selected);
   }
 
   /**
@@ -814,6 +844,7 @@ export class TenantsService {
    */
   async extend(id: string, opts: ExtendSubscriptionOptions, actor?: AuditActor, ctx: ExtendContext = {}) {
     const note = opts.note ?? null;
+    validateCompositionCounts(opts);
 
     // Paid iff explicitly type='paid', OR (no type given but a positive amount
     // was passed — a convenience for callers that send amount without type).
@@ -844,7 +875,9 @@ export class TenantsService {
         message: 'Для расчётного продления передайте period и quoteToken без days/until',
       });
     }
-    if (!opts.period && opts.quoteToken) throw new BadRequestException({ message: 'Укажите period' });
+    if (!opts.period && (opts.quoteToken || opts.employees !== undefined || opts.points !== undefined)) {
+      throw new BadRequestException({ message: 'Укажите period' });
+    }
     const requestFingerprint = createHash('sha256')
       .update(
         JSON.stringify({
@@ -857,6 +890,8 @@ export class TenantsService {
           period: opts.period ?? null,
           quoteToken: opts.quoteToken ?? null,
           credit: ctx.credit ?? null,
+          ...(opts.employees !== undefined ? { employees: opts.employees } : {}),
+          ...(opts.points !== undefined ? { points: opts.points } : {}),
         }),
       )
       .digest('hex');
@@ -902,7 +937,7 @@ export class TenantsService {
       let composition: Awaited<ReturnType<TenantsService['subscriptionQuoteWithDb']>> | null = null;
       if (opts.period) {
         try {
-          composition = await this.subscriptionQuoteWithDb(client, id, opts.period, ctx.scope);
+          composition = await this.subscriptionQuoteWithDb(client, id, opts.period, ctx.scope, undefined, opts);
         } catch (err) {
           if (err instanceof BadRequestException || err instanceof NotFoundException) {
             throw new ConflictException({

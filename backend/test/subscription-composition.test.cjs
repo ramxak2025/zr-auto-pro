@@ -13,6 +13,11 @@ const { PlansService } = require('../dist/plans/plans.service');
 const { TenantsController } = require('../dist/tenants/tenants.controller');
 const { ManagerCabinetController } = require('../dist/platform-managers/manager-cabinet.controller');
 const { ROLES_KEY } = require('../dist/common/guards/roles.guard');
+const { TenantsService } = require('../dist/tenants/tenants.service');
+const { ManagerCabinetService } = require('../dist/platform-managers/manager-cabinet.service');
+const { ValidationPipe } = require('@nestjs/common');
+const { SubscriptionQuoteQueryDto, ExtendSubscriptionDto } = require('../dist/tenants/dto/subscription.dto');
+const { ManagerExtendDto } = require('../dist/platform-managers/dto/manager-cabinet.dto');
 
 const input = (employees, points = 1, period = 'monthly') => ({ employees, points, period });
 test('pricing: base, included boundaries, extras and annual entire composition', () => {
@@ -47,6 +52,13 @@ test('pricing: undefined branches never become free; invalid runtime inputs neve
   assert.equal(quote(plans.max, input(1, 1, 'quarter')).ok, false);
   assert.equal(quote({ ...plans.max, monthlyPrice: Infinity }, input(1)).ok, false);
 });
+test('pricing: both billing periods stay inside the existing payable amount ceiling', () => {
+  const pricing = { ...plans.max, monthlyPrice: 99999999, extraEmployeeMonthlyPrice: 1 };
+  assert.equal(quote(pricing, input(50)).quote.total, 99999999);
+  assert.deepEqual(quote(pricing, input(51)), { ok: false, code: 'INVALID_COUNT' });
+  assert.deepEqual(quote(pricing, input(1, 1, 'yearly')), { ok: false, code: 'INVALID_COUNT' });
+  assert.equal(quote({ ...pricing, monthlyPrice: 9999999.9 }, input(1, 1, 'yearly')).quote.total, 99999999);
+});
 test('backend distribution and client helper compute identical quotes', () => {
   const exports = {};
   const source = readFileSync(join(__dirname, '../../shared/utils/subscriptionPricing.ts'), 'utf8');
@@ -54,7 +66,7 @@ test('backend distribution and client helper compute identical quotes', () => {
     exports,
   });
   for (const code of ['baza', 'pro', 'max'])
-    for (const employees of [1, 5, 50, 51, 99])
+    for (const employees of [1, 5, 50, 51, 99, 20000, 200000])
       for (const points of [1, 2, 5])
         for (const period of ['monthly', 'yearly']) {
           assert.equal(
@@ -68,6 +80,100 @@ test('backend distribution and client helper compute identical quotes', () => {
             JSON.stringify(quote(plans[code], { employees, points, period })),
           );
         }
+});
+test('monthly display divides the exact invoice by service months without changing the invoice', () => {
+  const exports = {};
+  const source = readFileSync(join(__dirname, '../../shared/utils/subscriptionPricing.ts'), 'utf8');
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
+    exports,
+  });
+  const display = exports.getSubscriptionMonthlyDisplay;
+  for (const [total, serviceMonths, amount, approximate] of [
+    [990, 1, 990, false],
+    [9900, 12, 825, false],
+    [49900, 12, 4158.33, true],
+    [150000, 12, 12500, false],
+    [265000, 12, 22083.33, true],
+    [100.01, 1, 100.01, false],
+    [0.1, 12, 0.01, true],
+  ]) {
+    const invoice = Object.freeze({ total, serviceMonths });
+    assert.equal(display(invoice).amount, amount);
+    assert.equal(display(invoice).approximate, approximate);
+    assert.equal(invoice.total, total);
+  }
+});
+
+test('HTTP DTO whitelist retains chosen counts; only GET query strings are converted to numbers', async () => {
+  const pipe = new ValidationPipe({ transform: true, whitelist: true });
+  const query = await pipe.transform(
+    { employees: '53', points: '3', ignored: 99 },
+    {
+      type: 'query',
+      metatype: SubscriptionQuoteQueryDto,
+    },
+  );
+  assert.equal(query.employees, 53);
+  assert.equal(query.points, 3);
+  assert.equal(query.ignored, undefined);
+  const service = new TenantsService({ query: () => assert.fail('invalid count must not query SQL') });
+  for (const metatype of [ExtendSubscriptionDto, ManagerExtendDto]) {
+    for (const count of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '2', null, true, [2], {}]) {
+      const body = await pipe.transform(
+        { type: 'paid', amount: 1, period: 'monthly', employees: count, points: 1 },
+        {
+          type: 'body',
+          metatype,
+        },
+      );
+      await assert.rejects(
+        () => service.extend('unused', body),
+        (e) => e.getStatus?.() === 400 && e.getResponse().code === 'INVALID_COUNT',
+      );
+    }
+  }
+  for (const value of ['', ' ', 'NaN', 'Infinity', '1.1', '0', '-1', ['2'], true, null]) {
+    const invalid = await pipe.transform({ employees: value }, { type: 'query', metatype: SubscriptionQuoteQueryDto });
+    await assert.rejects(
+      () => service.getSubscriptionQuote('unused', 'monthly', {}, undefined, invalid),
+      (e) => e.getStatus?.() === 400 && e.getResponse().code === 'INVALID_COUNT',
+    );
+  }
+});
+
+test('all quote paths and manager renewal preserve selected counts and tenant scope', async () => {
+  const query = { period: 'yearly', employees: 53, points: 3, planId: 'plan' };
+  const calls = [];
+  const tenants = {
+    getSubscriptionQuote: (...args) => calls.push(args),
+    extend: async (...args) => calls.push(args),
+    getAll: async () => [{ id: 'tenant' }],
+  };
+  const controller = new TenantsController(tenants);
+  controller.getSubscriptionQuote('tenant', query);
+  controller.getOwnSubscriptionQuote({ tenantID: 'tenant' }, query);
+  const cabinet = new ManagerCabinetService(undefined, tenants, { resolveActorName: async () => 'Manager' });
+  const actor = { userId: 'manager', isManager: true, scope: { managerId: 'manager' } };
+  cabinet.getSubscriptionQuote(actor, 'tenant', query);
+  assert.deepEqual(calls.splice(0), [
+    ['tenant', 'yearly', {}, 'plan', query],
+    ['tenant', 'yearly', {}, 'plan', query],
+    ['tenant', 'yearly', actor.scope, 'plan', query],
+  ]);
+  await cabinet.extend(actor, 'tenant', {
+    type: 'paid',
+    amount: 123,
+    period: 'yearly',
+    quoteToken: 'token',
+    requestId: 'request',
+    employees: 53,
+    points: 3,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1].employees, 53);
+  assert.equal(calls[0][1].points, 3);
+  assert.equal(calls[0][1].quoteToken, 'token');
+  assert.deepEqual(calls[0][3], { scope: actor.scope, credit: { managerId: 'manager' } });
 });
 test('legacy/custom names cannot opt into pricing; malformed plan rows fail closed', () => {
   assert.equal(pricingFromPlanRow({ name: 'MAX' }), null);

@@ -11,31 +11,49 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let sequence = 0;
 const apiCalls = [];
 let failQuote = null;
+let quoteResponder = null;
 let monthlyTotal = 5490;
-function preview(period) {
+let actualEmployees = 6;
+let authToken = 'session-A';
+function preview(period, params = {}) {
+  const employees = params.employees ?? actualEmployees,
+    points = params.points ?? 1;
+  const selectedTotal = monthlyTotal + (employees - actualEmployees) * 500;
   return {
     planId: 'pro',
-    pricing: { code: 'pro' },
-    usage: { employees: 6, activePoints: 1, billablePoints: 1 },
+    pricing: { code: 'pro', includedEmployees: 5, includedPoints: null },
+    usage: { employees: actualEmployees, activePoints: 1, billablePoints: 1 },
     quoteToken: `${monthlyTotal}-${period}`,
     quote: {
       period,
+      employees,
+      points,
+      serviceMonths: period === 'yearly' ? 12 : 1,
+      chargedMonths: period === 'yearly' ? 10 : 1,
       includedEmployees: 5,
       extraEmployees: 1,
       includedPoints: null,
       extraPoints: 0,
       baseMonthlyAmount: 4990,
-      employeesMonthlyAmount: monthlyTotal - 4990,
+      employeesMonthlyAmount: selectedTotal - 4990,
       pointsMonthlyAmount: 0,
-      monthlyTotal,
-      total: monthlyTotal * (period === 'yearly' ? 10 : 1),
+      monthlyTotal: selectedTotal,
+      total: selectedTotal * (period === 'yearly' ? 10 : 1),
     },
   };
 }
 const endpoint = (mode) => async (id, params) => {
   apiCalls.push({ mode, id, params });
+  if (quoteResponder) return quoteResponder(params);
   if (failQuote) throw failQuote;
-  return { data: preview(params.period) };
+  if (params.employees !== undefined && params.employees < actualEmployees)
+    throw {
+      response: {
+        status: 400,
+        data: { code: 'COUNT_BELOW_USAGE', minimumEmployees: actualEmployees, minimumPoints: 1 },
+      },
+    };
+  return { data: preview(params.period, params) };
 };
 const compiled = ts.transpileModule(
   fs.readFileSync(path.join(__dirname, '../src/components/admin/useSubscriptionRenewal.ts'), 'utf8'),
@@ -48,6 +66,19 @@ const sandbox = {
   require: (name) => {
     if (name === 'react') return React;
     if (name === '@tanstack/react-query') return Query;
+    if (name === '../../contexts/AuthContext') return { useAuth: () => ({ token: authToken }) };
+    if (name === '../../api/axios') return { createSessionBoundClient: (token) => ({ token }) };
+    if (name === '../../utils/sessionToken') return { readStoredToken: () => authToken };
+    if (name === '../../utils/subscriptionPricingText')
+      return {
+        parseSubscriptionCount: (value) =>
+          /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) >= 1 ? Number(value) : undefined,
+      };
+    if (name === '../../../../shared/api/createServices')
+      return {
+        createManagerCabinetApi: () => ({ getSubscriptionQuote: endpoint('manager') }),
+        createTenantsApi: () => ({ getSubscriptionQuote: endpoint('superadmin') }),
+      };
     if (name === '../../api/services')
       return {
         managerApi: { getSubscriptionQuote: endpoint('manager') },
@@ -91,12 +122,17 @@ const paid = (state) => ({
   amount: Number(state.amount),
   period: state.period,
   quoteToken: state.quoteQuery.data.quoteToken,
+  employees: state.employeesCount,
+  points: state.pointsCount,
 });
 test.beforeEach(() => {
   sequence = 0;
   apiCalls.length = 0;
   failQuote = null;
+  quoteResponder = null;
   monthlyTotal = 5490;
+  actualEmployees = 6;
+  authToken = 'session-A';
 });
 
 test('month/year prefill uses the full server composition; manager reads its scoped endpoint', async () => {
@@ -189,7 +225,11 @@ test('unknown response locks editing/close and retries identical body and ID; ra
     Renderer.act(() => {
       form.state().changeAmount('1');
       form.state().setPeriod('yearly');
+      form.state().changeEmployees('99');
+      form.state().changePoints('99');
     });
+    assert.equal(form.state().employees, '6');
+    assert.equal(form.state().points, '1');
     assert.equal(form.state().amount, oldAmount);
     assert.equal(form.state().period, 'monthly');
     assert.ok(form.state().message.includes('Результат продления пока неизвестен'));
@@ -201,8 +241,8 @@ test('unknown response locks editing/close and retries identical body and ID; ra
     form.close();
   }
 });
-test('legacy/unpriced plans offer manual date flow and preserve legacy/free request shape', async () => {
-  for (const code of ['LEGACY_PLAN', 'UNPRICED_POINTS']) {
+test('legacy plans offer manual date flow and preserve legacy/free request shape', async () => {
+  for (const code of ['LEGACY_PLAN']) {
     failQuote = { response: { status: 400, data: { code } } };
     const calls = [];
     const form = mount(async (request) => {
@@ -245,10 +285,22 @@ const money = compileLocal('components/admin/MoneyExact.tsx', {
   '../../../../shared/utils/formatters': { formatMoney: (value) => `${value} ₽` },
   '../../ui/cn': { cn: () => '' },
 });
-const Breakdown = compileLocal('components/SubscriptionQuoteBreakdown.tsx', {});
+const pricingHelper = compileLocal('../../shared/utils/subscriptionPricing.ts', {});
+const pricingText = compileLocal('utils/subscriptionPricingText.ts', {
+  '../../../shared/utils/subscriptionPricing': pricingHelper,
+});
+const Breakdown = compileLocal('components/SubscriptionQuoteBreakdown.tsx', {
+  '../utils/subscriptionPricingText': pricingText,
+});
+const Composition = compileLocal('components/SubscriptionCompositionFields.tsx', {
+  '../ui/Field': { Field: host('Field') },
+  '../ui/Input': { Input: host('Input') },
+  '../utils/subscriptionPricingText': pricingText,
+});
 const Form = compileLocal('components/admin/ExtendModal.tsx', {
   './useSubscriptionRenewal': { useSubscriptionRenewal },
   '../SubscriptionQuoteBreakdown': Breakdown,
+  '../SubscriptionCompositionFields': Composition,
   '../Modal': {
     default: (props) => React.createElement('Modal', props, props.children, props.footer),
     __esModule: true,
@@ -355,6 +407,147 @@ test('actual form disables confirmation during stale review and locks fields/can
     assert.equal(submitButton(form.tree).props.children, 'Повторить тот же запрос');
     await Renderer.act(async () => submitButton(form.tree).props.onClick());
     assert.equal(calls[1], calls[2]);
+  } finally {
+    form.close();
+  }
+});
+
+test('count forecast sends selected composition separately from actual usage; invalid input hides quote readiness', async () => {
+  const calls = [];
+  const form = mount(async (request) => calls.push(request));
+  try {
+    await settle(() => form.state().quoteReady);
+    Renderer.act(() => form.state().changeEmployees('8'));
+    await settle(() => form.state().quoteReady && form.state().amount === '6490');
+    assert.equal(form.state().quoteQuery.data.usage.employees, 6);
+    assert.equal(form.state().quoteQuery.data.quote.employees, 8);
+    assert.equal(apiCalls.at(-1).params.employees, 8);
+    Renderer.act(() => form.state().changeAmount('6000'));
+    Renderer.act(() => form.state().setPeriod('yearly'));
+    await settle(() => form.state().amount === '64900');
+    assert.equal(form.state().amountHint, 'Сумма обновлена по расчёту');
+    await Renderer.act(async () => form.state().send(paid(form.state())));
+    assert.equal(calls[0].employees, 8);
+    assert.equal(calls[0].points, 1);
+    assert.equal(calls[0].amount, 64900);
+    for (const invalid of ['', '0', '-1', '1.5', '9007199254740992', '5']) {
+      Renderer.act(() => form.state().changeEmployees(invalid));
+      assert.equal(form.state().quoteReady, false, invalid);
+    }
+  } finally {
+    form.close();
+  }
+});
+test('normal count change replaces manual received amount; stale usage growth recovers minima and preserves money', async () => {
+  const form = mount(async () => {
+    actualEmployees = 7;
+    monthlyTotal = 5990;
+    throw { response: { status: 409, data: { code: 'QUOTE_CHANGED' } } };
+  });
+  try {
+    await settle(() => form.state().quoteReady);
+    Renderer.act(() => form.state().changeAmount('5000'));
+    Renderer.act(() => form.state().changeEmployees('7'));
+    await settle(() => form.state().amount === '5990' && form.state().quoteReady);
+    Renderer.act(() => form.state().changeEmployees('6'));
+    await settle(() => form.state().amount === '5490' && form.state().quoteReady);
+    Renderer.act(() => form.state().changeAmount('5000'));
+    await Renderer.act(async () => form.state().send(paid(form.state())));
+    await settle(
+      () => form.state().employees === '7' && !form.state().quoteQuery.isFetching && !!form.state().quoteQuery.data,
+    );
+    assert.equal(form.state().amount, '5000');
+    assert.equal(form.state().changed, true);
+    assert.equal(form.state().minimumEmployees, 7);
+    Renderer.act(() => form.state().acknowledgeChange());
+    assert.equal(form.state().quoteReady, true);
+  } finally {
+    form.close();
+  }
+});
+test('UNPRICED_POINTS keeps editable counts and requires an explicit recovery choice', async () => {
+  failQuote = { response: { status: 400, data: { code: 'UNPRICED_POINTS' } } };
+  const form = mount(async () => {});
+  try {
+    await settle(() => form.state().quoteQuery.isError);
+    assert.equal(form.state().period, 'monthly');
+    assert.equal(form.state().locked, false);
+    Renderer.act(() => form.state().setPeriod('custom'));
+    assert.equal(form.state().period, 'custom');
+  } finally {
+    form.close();
+  }
+});
+
+test('late count forecast cannot replace a newer composition or its received amount', async () => {
+  const form = mount(async () => {});
+  try {
+    await settle(() => form.state().quoteReady);
+    const pending = new Map();
+    quoteResponder = (params) => new Promise((resolve) => pending.set(params.employees, { params, resolve }));
+    Renderer.act(() => form.state().changeEmployees('7'));
+    await settle(() => pending.has(7));
+    Renderer.act(() => form.state().changeEmployees('8'));
+    await settle(() => pending.has(8));
+    await Renderer.act(async () => pending.get(8).resolve({ data: preview('monthly', pending.get(8).params) }));
+    await settle(() => form.state().amount === '6490' && form.state().quoteReady);
+    await Renderer.act(async () => pending.get(7).resolve({ data: preview('monthly', pending.get(7).params) }));
+    assert.equal(form.state().employees, '8');
+    assert.equal(form.state().amount, '6490');
+    assert.equal(form.state().quoteQuery.data.quote.employees, 8);
+  } finally {
+    form.close();
+  }
+});
+
+test('timeout followed by access or rate-limit failure preserves the first financial intent and UUID', async () => {
+  for (const status of [403, 404, 429]) {
+    const calls = [];
+    const form = mount(async (request) => {
+      calls.push(request);
+      if (calls.length === 1) throw new Error('timeout');
+      if (calls.length === 2) throw { response: { status, data: { message: 'Access or rate limit' } } };
+    });
+    try {
+      await settle(() => form.state().quoteReady);
+      Renderer.act(() => form.state().changeAmount('5000'));
+      await Renderer.act(async () => form.state().send(paid(form.state())));
+      assert.equal(form.state().uncertain, true);
+      await Renderer.act(async () => form.state().send({ type: 'paid', amount: 1 }));
+      assert.equal(form.state().uncertain, true);
+      assert.equal(form.state().locked, true);
+      assert.equal(form.state().canClose(), false);
+      Renderer.act(() => {
+        form.state().changeAmount('1');
+        form.state().changeEmployees('99');
+        form.state().setPeriod('yearly');
+      });
+      assert.equal(form.state().amount, '5000');
+      assert.equal(form.state().employees, '6');
+      assert.equal(form.state().period, 'monthly');
+      await Renderer.act(async () => form.state().send({ type: 'paid', amount: 2 }));
+      assert.equal(calls.length, 3);
+      assert.equal(calls[0], calls[1]);
+      assert.equal(calls[1], calls[2]);
+      assert.equal(form.state().canClose(), true);
+    } finally {
+      form.close();
+    }
+  }
+});
+test('request ID reuse never creates a new financial intent automatically', async () => {
+  const calls = [];
+  const form = mount(async (request) => {
+    calls.push(request);
+    throw { response: { status: 409, data: { code: 'REQUEST_ID_REUSED' } } };
+  });
+  try {
+    await settle(() => form.state().quoteReady);
+    await Renderer.act(async () => form.state().send(paid(form.state())));
+    assert.equal(form.state().uncertain, true);
+    await Renderer.act(async () => form.state().send({ type: 'paid', amount: 1 }));
+    assert.equal(calls[0], calls[1]);
+    assert.equal(form.state().canClose(), false);
   } finally {
     form.close();
   }

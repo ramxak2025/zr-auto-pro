@@ -3881,6 +3881,8 @@ const EXTEND_BODY = {
   creditManager: true,
   period: 'monthly',
   quoteToken: '0'.repeat(64),
+  employees: 53,
+  points: 3,
   requestId: '16100000-0000-4000-a000-000000000099',
 };
 
