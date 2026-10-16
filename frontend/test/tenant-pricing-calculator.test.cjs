@@ -252,3 +252,57 @@ test('multiple branches offer an explicit MAX forecast while preserving composit
     form.close();
   }
 });
+
+test('archived current plan absent from catalogue can recover from server UNPRICED_POINTS, including zero MAX branch rate', async () => {
+  const originalPricing = plans[1].pricing;
+  try {
+    for (const rate of [3000, 0]) {
+      hideCurrent = true;
+      plans[1].pricing = { ...originalPricing, extraPointMonthlyPrice: rate };
+      const form = mount();
+      try {
+        await settle(() => calls.at(-1)?.planId === 'current');
+        fill(form.tree, 'Всего филиалов', '2');
+        await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
+        const button = form.tree.root
+          .findAllByType('button')
+          .find((node) => node.children.join('') === 'Рассчитать MAX');
+        assert.ok(button, 'server error supports recovery without a catalogue row for the assigned plan');
+        Renderer.act(() => button.props.onClick());
+        await settle(() => calls.at(-1)?.planId === 'max' && contents(form.tree).includes(String(15000 + rate)));
+        assert.equal(calls.at(-1).employees, 2);
+        assert.equal(calls.at(-1).points, 2);
+        assert.equal(form.client.getQueryData(['subscription']).planId, 'current');
+      } finally {
+        form.close();
+      }
+    }
+  } finally {
+    plans[1].pricing = originalPricing;
+  }
+});
+
+test('MAX with an individually unset branch rate retains Retry instead of offering a no-op MAX action', async () => {
+  const originalPricing = plans[1].pricing;
+  plans[1].pricing = { ...originalPricing, extraPointMonthlyPrice: null };
+  const form = mount();
+  try {
+    await settle(() => calls.at(-1)?.planId === 'current');
+    fill(form.tree, 'Тариф для расчёта', 'max');
+    fill(form.tree, 'Всего филиалов', '2');
+    await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
+    assert.equal(
+      form.tree.root.findAllByType('button').filter((node) => node.children.join('') === 'Рассчитать MAX').length,
+      0,
+    );
+    const retry = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Повторить расчёт');
+    assert.ok(retry);
+    const before = calls.length;
+    Renderer.act(() => retry.props.onClick());
+    await settle(() => calls.length > before);
+    assert.equal(calls.at(-1).planId, 'max');
+  } finally {
+    form.close();
+    plans[1].pricing = originalPricing;
+  }
+});
