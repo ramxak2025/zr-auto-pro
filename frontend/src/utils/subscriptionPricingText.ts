@@ -23,5 +23,5 @@ export const parseSubscriptionCount = (value: string): number | undefined => {
 export function planCompositionLabel(plan: Plan): string {
   const p = plan.pricing;
   if (!p) return `До ${plan.maxUsers} сотрудников. Условия оплаты уточняются отдельно.`;
-  return `Включено ${p.includedEmployees} сотрудников${p.code === 'max' ? ' на всех филиалах вместе' : ''}, включая владельца; +${formatSubscriptionMoney(p.extraEmployeeMonthlyPrice)}/мес. за каждого сверх включённых. ${p.includedPoints != null ? `Филиалов включено ${p.includedPoints}; +${formatSubscriptionMoney(p.extraPointMonthlyPrice ?? 0)}/мес. за каждый дополнительный.` : 'Один филиал. Для сети выберите MAX.'} Год: полная месячная стоимость × 10 за 12 месяцев.`;
+  return `Сотрудников включено: ${p.includedEmployees}${p.code === 'max' ? ' на всех филиалах вместе' : ''}, включая владельца. При оплате по месяцам: +${formatSubscriptionMoney(p.extraEmployeeMonthlyPrice)} за каждого сверх включённых. ${p.includedPoints != null ? `Филиалов включено: ${p.includedPoints}; +${formatSubscriptionMoney(p.extraPointMonthlyPrice ?? 0)}/мес. за каждый дополнительный.` : 'Один филиал. Для сети выберите MAX.'} За год — 12 месяцев по цене 10, включая доплаты.`;
 }

@@ -6,11 +6,10 @@ export default function SubscriptionQuoteBreakdown({ preview }: { preview: Subsc
   return (
     <div className="space-y-2 text-sm text-ink-2" aria-label="Расчёт выбранного состава" aria-live="polite">
       <p>
-        Сейчас используется: {preview.usage.employees} сотрудников, включая владельца; филиалов:{' '}
-        {preview.usage.activePoints}.
+        Сейчас сотрудников: {preview.usage.employees}, включая владельца; филиалов: {preview.usage.activePoints}.
       </p>
       <p>
-        В расчёте: {q.employees} сотрудников (включено {q.includedEmployees}, дополнительно {q.extraEmployees});
+        В расчёте сотрудников: {q.employees} (включено {q.includedEmployees}, дополнительно {q.extraEmployees});
         филиалов: {q.points}
         {q.includedPoints != null ? ` (включено ${q.includedPoints}, дополнительно ${q.extraPoints})` : ''}.
       </p>

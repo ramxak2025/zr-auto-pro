@@ -140,10 +140,12 @@ export function PlanCard({ plan, period = 'monthly' }: { plan: PricingPlan; peri
         </>
       )}
       <p className="mt-3 text-xs leading-relaxed text-slate-600">
-        Сотрудник сверх включённых: {formatPlanMoney(plan.extraEmployeeMonthlyPrice)}/ мес.
+        {period === 'yearly' ? 'При оплате по месяцам: сотрудник' : 'Сотрудник'} сверх включённых —{' '}
+        {formatPlanMoney(plan.extraEmployeeMonthlyPrice)}/мес.
         {plan.extraPointMonthlyPrice !== null && (
-          <> · Доп. филиал: {formatPlanMoney(plan.extraPointMonthlyPrice)}/ мес.</>
+          <> · Доп. филиал — {formatPlanMoney(plan.extraPointMonthlyPrice)}/мес.</>
         )}
+        {period === 'yearly' ? ' При оплате за год скидка действует и на доплаты.' : ''}
       </p>
       <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>
       <ul className="mt-3 space-y-2.5">

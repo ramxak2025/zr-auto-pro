@@ -99,7 +99,7 @@ export default function TariffPage() {
   const selectedQuote = countsValid && !quoteQuery.isError && !quoteQuery.isFetching ? quoteQuery.data : undefined;
   const whatsappUrl = getWhatsAppChatUrl(
     selectedQuote
-      ? `Здравствуйте! Хочу обсудить подписку ${selectedQuote.pricing.name}: ${selectedQuote.quote.employees} сотрудников, ${selectedQuote.quote.points} филиалов, ${quotePeriod === 'yearly' ? '12 месяцев' : 'месяц'}. Расчёт: ${formatSubscriptionMoney(selectedQuote.quote.total)}${quotePeriod === 'yearly' ? ' сразу за 12 месяцев' : ''}.`
+      ? `Здравствуйте! Хочу обсудить подписку ${selectedQuote.pricing.name}. Сотрудников: ${selectedQuote.quote.employees}, филиалов: ${selectedQuote.quote.points}, срок: ${quotePeriod === 'yearly' ? '12 месяцев' : 'месяц'}. Расчёт: ${formatSubscriptionMoney(selectedQuote.quote.total)}${quotePeriod === 'yearly' ? ' сразу за 12 месяцев' : ''}.`
       : 'Здравствуйте! Хочу оплатить подписку.',
   );
 
@@ -186,7 +186,7 @@ export default function TariffPage() {
                 <div className="space-y-3">
                   <h2 className="text-md font-semibold text-ink">Рассчитать стоимость команды</h2>
                   <p className="text-sm text-ink-2">
-                    Сейчас используется: {minimumEmployees} сотрудников, включая владельца; филиалов:{' '}
+                    Сейчас сотрудников: {minimumEmployees}, включая владельца; филиалов:{' '}
                     {sub.usage?.activePoints ?? minimumPoints}. Расчёт информационный: выбор не меняет ваш тариф и
                     оплаченный срок.
                   </p>

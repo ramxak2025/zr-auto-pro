@@ -145,7 +145,7 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
               label="Всего филиалов"
               value={points}
               onChange={setPoints}
-              note="50 включённых сотрудников — на все филиалы суммарно."
+              note="В MAX 50 сотрудников включено суммарно на все филиалы."
             />
           </div>
           {plan !== 'max' && (
