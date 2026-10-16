@@ -237,6 +237,43 @@ test(
 );
 
 test(
+  'PG16: PRO six selected employees and two actual employees keep annual invoice and actual receipt separate',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, manager, user, service, pool }) => {
+      await user();
+      await q('UPDATE tenants SET plan_id=$2,monthly_price=4990,max_users=5 WHERE id=$1', [
+        tenant,
+        '16100000-0000-4000-a000-000000000002',
+      ]);
+      const scope = { managerId: manager };
+      const selected = { employees: 6, points: 1 };
+      const preview = await service.getSubscriptionQuote(tenant, 'yearly', scope, undefined, selected);
+      assert.equal(preview.usage.employees, 2);
+      assert.equal(preview.quote.employees, 6);
+      assert.equal(preview.quote.monthlyTotal, 5490);
+      assert.equal(preview.quote.total, 54900);
+      const cabinet = new ManagerCabinetService(pool, service, { resolveActorName: async () => 'Manager fixture' });
+      await cabinet.extend({ userId: manager, isManager: true, scope }, tenant, {
+        type: 'paid',
+        amount: 50000,
+        period: 'yearly',
+        quoteToken: preview.quoteToken,
+        requestId: randomUUID(),
+        ...selected,
+      });
+      const rows = await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant]);
+      assert.equal(rows.length, 1);
+      assert.equal(Number(rows[0].amount), 50000);
+      assert.equal(Number(rows[0].owner_share_amount), 30000);
+      assert.deepEqual(rows[0].composition_snapshot, preview);
+      assert.equal(rows[0].composition_snapshot.quote.total, 54900);
+      assert.equal(rows[0].composition_snapshot.usage.employees, 2);
+      assert.equal(rows[0].composition_snapshot.quote.employees, 6);
+    }),
+);
+
+test(
   'PG16: omitted counts preserve pre-deployment SHA snapshots and UUID fingerprints byte for byte',
   { skip: !live },
   async () =>
