@@ -1394,10 +1394,12 @@ export default function ServicesScreen() {
             ))}
           </View>
         </View>
+        {/* При смене режима заменяем native редактор; при вводе его key остаётся постоянным. */}
         {masterPayMode === 'fixed' ? (
           <View style={styles.formField}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Фикс мастеру, ₽</Text>
             <TextInput
+              key="master-fixed-amount"
               value={masterFixedAmount}
               onChangeText={setMasterFixedAmount}
               keyboardType="decimal-pad"
@@ -1417,6 +1419,7 @@ export default function ServicesScreen() {
           <View style={styles.formField}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Особый % мастера</Text>
             <TextInput
+              key="master-percent"
               value={masterPercent}
               onChangeText={onChangeMasterPercent}
               style={[
