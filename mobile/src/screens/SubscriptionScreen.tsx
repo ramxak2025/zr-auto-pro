@@ -235,16 +235,16 @@ export default function SubscriptionScreen() {
             <Text style={{ color: palette.text.secondary, fontSize: 12 }}>
               Расчёт для сравнения. Подписка не меняется.
             </Text>
-            {!isIos && (current || (calc.planId && calc.name)) ? (
-              <TouchableOpacity
-                style={styles.payment}
-                onPress={() => contact(current ? undefined : (calc.name ?? undefined))}
-                accessibilityRole="button"
-              >
-                <Text style={styles.paymentText}>{current ? 'Связаться для оплаты' : 'Подключить'}</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
+        ) : null}
+        {!isIos ? (
+          <TouchableOpacity
+            style={styles.payment}
+            onPress={() => contact(calc.ready && !current ? (calc.name ?? undefined) : undefined)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.paymentText}>Связаться для оплаты</Text>
+          </TouchableOpacity>
         ) : null}
       </KeyboardAwareScroll>
       {isIos ? (

@@ -282,8 +282,8 @@ it.each(['ios', 'android'])(
     expect(employeePosition).toBeLessThan(planPosition);
     expect(list[employeePosition].props.employeePresets).toBe(true);
     expect(list.find((node) => node.type === 'SubscriptionQuoteBreakdown')?.props.compact).toBe(true);
-    expect(copy.includes('Подключить')).toBe(os === 'android');
-    expect(copy.includes('Связаться для оплаты')).toBe(false);
+    expect(copy.includes('Подключить')).toBe(false);
+    expect(copy.includes('Связаться для оплаты')).toBe(os === 'android');
     const scroll = list.find((node) => node.type === 'KeyboardAwareScroll');
     expect(scroll?.props.extraKeyboardBottomOffset).toBe(48);
     expect(scroll?.props.reserveTabBar).not.toBe(false);
@@ -408,4 +408,54 @@ it('uses server allowances and monthly addon rates in details without declaring 
   const copy = planCompositionLabel({ pricing: SUBSCRIPTION_PLAN_PRICING.baza });
   expect(copy).toContain('Сотрудников включено: 1');
   expect(copy).toContain('при помесячной оплате');
+});
+it.each<[string, string, boolean]>([
+  ['android', 'unassigned', false],
+  ['android', 'empty catalog', true],
+  ['ios', 'unassigned', false],
+  ['ios', 'empty catalog', true],
+])('contact remains available only via Linking on %s with %s', (os, _scenario, empty) => {
+  const h = screen(
+    os,
+    { planId: undefined, name: undefined, plan: undefined, ready: false },
+    { planId: null, planName: null, ...(empty ? { plans: [] } : {}) },
+  );
+  const tree = h.render();
+  const actions = nodes(tree).filter(
+    (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Связаться для оплаты',
+  );
+  expect(actions).toHaveLength(os === 'android' ? 1 : 0);
+  if (os === 'android') {
+    (actions[0].props.onPress as () => void)();
+    expect(h.link).toHaveBeenCalledTimes(1);
+    const target = new URL(h.link.mock.calls[0][0] as string);
+    expect(target.origin).toBe('https://wa.me');
+    expect(target.searchParams.get('text')).toBe('Здравствуйте! Хочу оплатить подписку.');
+    expect(h.choose).not.toHaveBeenCalled();
+    expect(h.calc.setPeriod).not.toHaveBeenCalled();
+    expect(h.calc.setEmployees).not.toHaveBeenCalled();
+    expect(h.calc.setPoints).not.toHaveBeenCalled();
+  } else {
+    expect(h.link).not.toHaveBeenCalled();
+    expect(text(tree)).not.toContain('Подключить');
+  }
+});
+
+it.each([true, false])('Android contact includes selected quote only when valid=%s', (ready) => {
+  const h = screen('android', { ready });
+  const actions = nodes(h.render()).filter(
+    (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Связаться для оплаты',
+  );
+  expect(actions).toHaveLength(1);
+  (actions[0].props.onPress as () => void)();
+  const copy = new URL(h.link.mock.calls[0][0] as string).searchParams.get('text')!;
+  if (ready) {
+    expect(copy).toContain('тариф "MAX"');
+    expect(copy).toContain('Сотрудники: 2');
+    expect(copy).toContain('К оплате:');
+  } else {
+    expect(copy).toBe('Здравствуйте! Хочу оплатить подписку.');
+  }
+  expect(h.choose).not.toHaveBeenCalled();
+  expect(h.calc.setPeriod).not.toHaveBeenCalled();
 });
