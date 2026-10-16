@@ -5,6 +5,7 @@ import { gsap, useGSAP, EASE } from '../gsap';
 import { pricing, type PlanCellValue, type PricingPlan } from '../content';
 import type { SubscriptionBillingPeriod } from '../../../../../shared/utils/subscriptionPricing';
 import { formatPlanMoney } from './PricingCalculator';
+import { subscriptionMonthlyLabel } from '../../../utils/subscriptionPricingText';
 import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
 /**
@@ -124,19 +125,24 @@ export function PlanCard({ plan, period = 'monthly' }: { plan: PricingPlan; peri
       <p className="mt-1 text-sm text-slate-500 md:min-h-[40px]">{plan.description}</p>
       <p className="mt-5 text-sm font-semibold text-slate-900">{plan.employees}</p>
       <p className="mt-3 text-3xl font-bold tracking-tight tabular-nums text-slate-900">
-        {formatPlanMoney(plan.monthlyPrice * chargedMonths)}
-        <span className="ml-1 text-sm font-normal text-slate-500">/{period === 'yearly' ? 'год' : 'мес.'}</span>
+        {subscriptionMonthlyLabel({
+          total: plan.monthlyPrice * chargedMonths,
+          serviceMonths: period === 'yearly' ? 12 : 1,
+        })}
+        <span className="ml-1 text-sm font-normal text-slate-500">/мес.</span>
       </p>
-      {period === 'yearly' && <p className="mt-1 text-xs text-emerald-700">12 месяцев по цене 10</p>}
+      {period === 'yearly' && (
+        <>
+          <p className="mt-1 text-xs text-slate-600">в месяц при оплате за год</p>
+          <p className="mt-2 text-sm text-slate-700">
+            К оплате сразу за 12 месяцев: <strong>{formatPlanMoney(plan.monthlyPrice * chargedMonths)}</strong>
+          </p>
+        </>
+      )}
       <p className="mt-3 text-xs leading-relaxed text-slate-600">
-        Сотрудник сверх включённых: {formatPlanMoney(plan.extraEmployeeMonthlyPrice * chargedMonths)}/
-        {period === 'yearly' ? 'год' : 'мес.'}
+        Сотрудник сверх включённых: {formatPlanMoney(plan.extraEmployeeMonthlyPrice)}/ мес.
         {plan.extraPointMonthlyPrice !== null && (
-          <>
-            {' '}
-            · Доп. филиал: {formatPlanMoney(plan.extraPointMonthlyPrice * chargedMonths)}/
-            {period === 'yearly' ? 'год' : 'мес.'}
-          </>
+          <> · Доп. филиал: {formatPlanMoney(plan.extraPointMonthlyPrice)}/ мес.</>
         )}
       </p>
       <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>

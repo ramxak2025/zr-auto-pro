@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import {
+  formatSubscriptionMoney,
+  parseSubscriptionCount,
+  subscriptionMonthlyLabel,
+} from '../../../utils/subscriptionPricingText';
+import {
   calculateSubscriptionQuote,
   SUBSCRIPTION_PLAN_PRICING,
   type SubscriptionBillingPeriod,
   type SubscriptionPlanCode,
 } from '../../../../../shared/utils/subscriptionPricing';
 
-export const formatPlanMoney = (amount: number) =>
-  new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(amount);
+export const formatPlanMoney = formatSubscriptionMoney;
 
 export function BillingPeriodSwitch({
   period,
@@ -92,11 +96,12 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
   const [plan, setPlan] = useState<SubscriptionPlanCode>('pro');
   const [employees, setEmployees] = useState('5');
   const [points, setPoints] = useState('1');
+  const [employeesEdited, setEmployeesEdited] = useState(false);
   const pricing = SUBSCRIPTION_PLAN_PRICING[plan];
   const result = calculateSubscriptionQuote(pricing, {
     period,
-    employees: /^\d+$/.test(employees) ? Number(employees) : 0,
-    points: plan === 'max' ? (/^\d+$/.test(points) ? Number(points) : 0) : 1,
+    employees: parseSubscriptionCount(employees) ?? 0,
+    points: parseSubscriptionCount(points) ?? 0,
   });
   const quote = result.ok ? result.quote : null;
   const multiplier = period === 'yearly' ? 10 : 1;
@@ -116,7 +121,10 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
                 key={code}
                 type="button"
                 aria-pressed={code === plan}
-                onClick={() => setPlan(code)}
+                onClick={() => {
+                  setPlan(code);
+                  if (!employeesEdited) setEmployees(String(SUBSCRIPTION_PLAN_PRICING[code].includedEmployees));
+                }}
                 className={`min-h-[44px] rounded-xl px-5 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 ${code === plan ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
               >
                 {SUBSCRIPTION_PLAN_PRICING[code].name}
@@ -127,17 +135,18 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
             <CountField
               label="Всего сотрудников"
               value={employees}
-              onChange={setEmployees}
+              onChange={(value) => {
+                setEmployeesEdited(true);
+                setEmployees(value);
+              }}
               note="Включая владельца. Человек в нескольких филиалах считается один раз."
             />
-            {plan === 'max' && (
-              <CountField
-                label="Всего филиалов"
-                value={points}
-                onChange={setPoints}
-                note="50 включённых сотрудников — на все филиалы суммарно."
-              />
-            )}
+            <CountField
+              label="Всего филиалов"
+              value={points}
+              onChange={setPoints}
+              note="50 включённых сотрудников — на все филиалы суммарно."
+            />
           </div>
           {plan !== 'max' && (
             <p className="mt-4 text-xs text-slate-500">Расчёт для одного филиала. Для сети выберите MAX.</p>
@@ -151,17 +160,25 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
           {quote ? (
             <>
               <p className="text-sm text-slate-600">
-                {period === 'yearly' ? 'За 12 месяцев' : 'В месяц'} · {pricing.name}
+                {period === 'yearly' ? 'в месяц при оплате за год' : 'В месяц'} · {pricing.name}
               </p>
               <p
                 className="mt-2 text-4xl font-bold tracking-tight tabular-nums text-slate-900"
                 data-testid="subscription-total"
               >
-                {formatPlanMoney(quote.total)}
+                {subscriptionMonthlyLabel(quote)}
               </p>
-              <dl className="mt-6 space-y-3 text-sm">
+              {period === 'yearly' && (
+                <p className="mt-2 text-sm text-slate-600">
+                  К оплате сразу за 12 месяцев: <strong>{formatPlanMoney(quote.total)}</strong>
+                </p>
+              )}
+              <dl
+                aria-label={period === 'yearly' ? 'Стоимость за 12 месяцев' : 'Стоимость за месяц'}
+                className="mt-6 space-y-3 text-sm"
+              >
                 <div className="flex justify-between gap-4">
-                  <dt className="text-slate-600">Базовая стоимость</dt>
+                  <dt className="text-slate-600">{period === 'yearly' ? 'База за 12 месяцев' : 'Базовая стоимость'}</dt>
                   <dd className="whitespace-nowrap font-medium tabular-nums text-slate-900">
                     {formatPlanMoney(quote.baseMonthlyAmount * multiplier)}
                   </dd>
@@ -199,7 +216,9 @@ export function PricingCalculator({ period }: { period: SubscriptionBillingPerio
             </>
           ) : (
             <p role="status" className="text-sm leading-relaxed text-red-700">
-              Укажите целое количество от 1. Проверьте число сотрудников{plan === 'max' ? ' и филиалов' : ''}.
+              {!result.ok && result.code === 'UNPRICED_POINTS'
+                ? 'Для нескольких филиалов выберите MAX. Количество филиалов сохранено.'
+                : 'Укажите целое количество сотрудников и филиалов от 1. Число слишком велико или указано неверно.'}
             </p>
           )}
         </div>

@@ -1,10 +1,13 @@
+import { useMemo, useRef } from 'react';
+import { createManagerCabinetApi, createTenantsApi } from '../../../../shared/api/createServices';
+import { createSessionBoundClient } from '../../api/axios';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
 import { managerApi, tenantsApi } from '../../api/services';
 import type { ExtendSubscriptionRequest } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
-import { writeSessionToken } from '../../utils/sessionToken';
+import { readStoredToken, sessionTakeoverError, writeSessionToken } from '../../utils/sessionToken';
 import { apiErrorMessage } from './apiError';
 import { adminManagerKeys, managerKeys } from './managerQueryKeys';
 
@@ -15,7 +18,18 @@ import { adminManagerKeys, managerKeys } from './managerQueryKeys';
  */
 export function useTenantSubscriptionActions(tenantId: string | undefined, mode: 'superadmin' | 'manager') {
   const queryClient = useQueryClient();
-  const { refreshUser } = useAuth();
+  const { refreshUser, token } = useAuth();
+  const renewalApi = useMemo(
+    () =>
+      mode === 'manager'
+        ? createManagerCabinetApi(createSessionBoundClient(token))
+        : createTenantsApi(createSessionBoundClient(token)),
+    [mode, token],
+  );
+  const owner = `${token}:${mode}:${tenantId}`;
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
+  const ownsRenewal = () => ownerRef.current === owner && readStoredToken() === token;
   const isManager = mode === 'manager';
   // Страницы вызывают действия только после загрузки карточки, пустой id — лишь страховка от `undefined`.
   const id = tenantId ?? '';
@@ -40,13 +54,19 @@ export function useTenantSubscriptionActions(tenantId: string | undefined, mode:
   };
 
   const extend = useMutation({
-    mutationFn: (request: ExtendSubscriptionRequest) =>
-      isManager ? managerApi.extend(id, request) : tenantsApi.extend(id, request),
+    mutationFn: async (request: ExtendSubscriptionRequest) => {
+      const response = await renewalApi.extend(id, request);
+      if (!ownsRenewal()) throw sessionTakeoverError();
+      return response;
+    },
     onSuccess: (_res, request) => {
+      if (!ownsRenewal()) return;
       invalidate();
       toast.success(request.type === 'paid' ? 'Подписка продлена (оплачено)' : 'Подписка продлена (бесплатно)');
     },
-    onError: (err) => toast.error(apiErrorMessage(err, 'Не удалось продлить подписку')),
+    onError: (err) => {
+      if (ownsRenewal()) toast.error(apiErrorMessage(err, 'Не удалось продлить подписку'));
+    },
   });
 
   const assignPlan = useMutation({
