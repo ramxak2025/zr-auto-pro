@@ -6,6 +6,7 @@ import { invalidateAuthUser } from '../common/auth-cache';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { AuditActor, AuditLogEntryRow, AuditService } from '../tenants/audit.service';
 import { SubscriptionStatus, TenantsService } from '../tenants/tenants.service';
+import { SubscriptionQuoteQueryDto } from '../tenants/dto/subscription.dto';
 import { CreateManagerTenantDto, ManagerExtendDto } from './dto/manager-cabinet.dto';
 import { emptyManagerStats, ManagerFinanceService } from './manager-finance.service';
 import { isPhoneUniqueViolation, normalizeLoginPhone, phoneTakenError } from './manager-phone';
@@ -190,8 +191,8 @@ export class ManagerCabinetService {
    *     на менеджера-актора. Флага `creditManager` в теле нет: менеджер не может «не
    *     заплатить» свою долю.
    */
-  getSubscriptionQuote(actor: CabinetActor, id: string, query: { period?: 'monthly' | 'yearly'; planId?: string }) {
-    return this.tenants.getSubscriptionQuote(id, query.period, actor.scope, query.planId);
+  getSubscriptionQuote(actor: CabinetActor, id: string, query: SubscriptionQuoteQueryDto) {
+    return this.tenants.getSubscriptionQuote(id, query.period, actor.scope, query.planId, query);
   }
 
   async extend(actor: CabinetActor, id: string, dto: ManagerExtendDto): Promise<TenantView> {
@@ -224,6 +225,8 @@ export class ManagerCabinetService {
         ...(dto.period ? { period: dto.period } : {}),
         ...(dto.quoteToken ? { quoteToken: dto.quoteToken } : {}),
         ...(dto.requestId ? { requestId: dto.requestId } : {}),
+        ...(dto.employees !== undefined ? { employees: dto.employees } : {}),
+        ...(dto.points !== undefined ? { points: dto.points } : {}),
       },
       auditActor,
       // Доля владельца — только за платные продления менеджера; суперадмин через кабинет

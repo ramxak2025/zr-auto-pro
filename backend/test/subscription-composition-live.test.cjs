@@ -1,7 +1,7 @@
 // Explicit isolated PostgreSQL16 fixture only; never DATABASE_URL or production fallback.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { Pool } = require('pg');
@@ -10,6 +10,7 @@ const { TenantsService } = require('../dist/tenants/tenants.service');
 const { PlansService } = require('../dist/plans/plans.service');
 const { TenantAwarePool } = require('../dist/common/tenant-pool');
 const { runWithTenant } = require('../dist/common/tenant-context');
+const { ManagerCabinetService } = require('../dist/platform-managers/manager-cabinet.service');
 Logger.overrideLogger(false);
 const live = process.env.OCT16_PRICING_LIVE_DB;
 const localUrl = 'postgresql://oct16_fixture@127.0.0.1:60984/autexa_oct16_pricing_test';
@@ -126,6 +127,196 @@ async function afterStatement(pool, matches, paused, work) {
 }
 const quoteStatement = (sql) => /SELECT t\.plan_id, t\.subscription_end, p\.\*/.test(sql);
 const tenantLockStatement = (sql) => /p\.name AS plan_name/.test(sql) && /FOR UPDATE OF t/.test(sql);
+
+test(
+  'PG16: chosen composition quotes preserve actual usage, live minima, payable range and existing tenant terms',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, foreign, manager, user, service }) => {
+      const before = (await q('SELECT * FROM tenants WHERE id=$1', [tenant]))[0];
+      const selected = { employees: 53, points: 3 };
+      const preview = await service.getSubscriptionQuote(tenant, 'yearly', { managerId: manager }, undefined, selected);
+      assert.deepEqual(preview.usage, { employees: 1, activePoints: 0, billablePoints: 1 });
+      assert.equal(preview.quote.employees, 53);
+      assert.equal(preview.quote.points, 3);
+      assert.equal(preview.quote.monthlyTotal, 26500);
+      assert.equal(preview.quote.total, 265000);
+      const included = await service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, {
+        employees: 1,
+        points: 1,
+      });
+      assert.equal(included.quote.total, 15000, 'included allowance is not a selected-count minimum');
+      const automatic = await service.getSubscriptionQuote(tenant);
+      assert.notEqual(included.quoteToken, automatic.quoteToken, 'explicit counts are bound even when equal to usage');
+      assert.equal(
+        (await service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, { employees: 53 })).quote.points,
+        1,
+      );
+      assert.equal(
+        (await service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, { points: 3 })).quote.employees,
+        1,
+      );
+      await assert.rejects(
+        () => service.getSubscriptionQuote(foreign, 'monthly', { managerId: manager }, undefined, selected),
+        status(404),
+      );
+      for (const plan of ['16100000-0000-4000-a000-000000000001', '16100000-0000-4000-a000-000000000002']) {
+        await assert.rejects(
+          () => service.getSubscriptionQuote(tenant, 'monthly', {}, plan, selected),
+          status(400, 'UNPRICED_POINTS'),
+        );
+      }
+      await assert.rejects(
+        () => service.getSubscriptionQuote(tenant, 'yearly', {}, undefined, { employees: 200000 }),
+        status(400, 'INVALID_COUNT'),
+      );
+      assert.deepEqual((await q('SELECT * FROM tenants WHERE id=$1', [tenant]))[0], before);
+      assert.equal((await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant])).length, 0);
+      await user();
+      for (let i = 0; i < 2; i++)
+        await q('INSERT INTO tenant_points(tenant_id,name) VALUES($1,$2)', [tenant, 'Fixture chosen ' + i]);
+      await assert.rejects(
+        () => service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, { employees: 1, points: 1 }),
+        (e) => {
+          assert.equal(e.getStatus(), 400);
+          assert.equal(e.getResponse().code, 'COUNT_BELOW_USAGE');
+          assert.equal(e.getResponse().minimumEmployees, 2);
+          assert.equal(e.getResponse().minimumPoints, 2);
+          return true;
+        },
+      );
+    }),
+);
+
+test(
+  'PG16: chosen renewal stores selected counts and separate actual paid amount; replay and changed-count UUID isolation',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, foreign, manager, user, service, pool }) => {
+      const selected = { employees: 53, points: 3 };
+      const scope = { managerId: manager };
+      const preview = await service.getSubscriptionQuote(tenant, 'yearly', scope, undefined, selected);
+      const request = {
+        type: 'paid',
+        amount: 1234.56,
+        period: 'yearly',
+        quoteToken: preview.quoteToken,
+        requestId: randomUUID(),
+        ...selected,
+      };
+      const actor = { userId: manager, isManager: true, scope };
+      const cabinet = new ManagerCabinetService(pool, service, { resolveActorName: async () => 'Manager fixture' });
+      const [a, b] = await Promise.all([
+        cabinet.extend(actor, tenant, request),
+        cabinet.extend(actor, tenant, request),
+      ]);
+      assert.equal(new Date(a.subscriptionEnd).toISOString(), '2031-01-31T12:00:00.000Z');
+      assert.equal(new Date(a.subscriptionEnd).getTime(), new Date(b.subscriptionEnd).getTime());
+      const [row] = await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant]);
+      assert.deepEqual(row.composition_snapshot, preview);
+      assert.equal(Number(row.amount), 1234.56);
+      assert.equal(Number(row.owner_share_amount), 740.74);
+      assert.equal(row.composition_snapshot.quote.total, 265000);
+      assert.equal(row.composition_snapshot.usage.employees, 1);
+      const [current] = await q('SELECT monthly_price,max_users FROM tenants WHERE id=$1', [tenant]);
+      assert.equal(Number(current.monthly_price), 15000);
+      assert.equal(current.max_users, 50);
+      for (const changed of [{ employees: 54 }, { points: 4 }, { employees: undefined }]) {
+        await assert.rejects(
+          () => cabinet.extend(actor, tenant, { ...request, ...changed }),
+          status(409, 'REQUEST_ID_REUSED'),
+        );
+      }
+      await assert.rejects(() => cabinet.extend(actor, foreign, request), status(404));
+      await user();
+      // A lost acknowledgement remains replayable after live usage and subscription term change.
+      const replay = await cabinet.extend(actor, tenant, request);
+      assert.equal(new Date(replay.subscriptionEnd).getTime(), new Date(a.subscriptionEnd).getTime());
+      assert.equal((await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant])).length, 1);
+    }),
+);
+
+test(
+  'PG16: omitted counts preserve pre-deployment SHA snapshots and UUID fingerprints byte for byte',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, owner, user, service }) => {
+      const preview = await service.getSubscriptionQuote(tenant, 'yearly');
+      const { quoteToken, ...snapshot } = preview;
+      const [before] = await q('SELECT subscription_end FROM tenants WHERE id=$1', [tenant]);
+      const oldToken = createHash('sha256')
+        .update(
+          JSON.stringify({
+            tenantId: tenant,
+            ...snapshot,
+            subscriptionEnd: new Date(before.subscription_end).toISOString(),
+          }),
+        )
+        .digest('hex');
+      assert.equal(quoteToken, oldToken);
+      const actor = { userId: owner, name: 'Owner fixture' };
+      const request = { type: 'paid', amount: 100, period: 'yearly', quoteToken: oldToken, requestId: randomUUID() };
+      const oldFingerprint = createHash('sha256')
+        .update(
+          JSON.stringify({
+            actorId: owner,
+            type: 'paid',
+            amount: 100,
+            days: null,
+            until: null,
+            note: null,
+            period: 'yearly',
+            quoteToken: oldToken,
+            credit: null,
+          }),
+        )
+        .digest('hex');
+      const first = await service.extend(tenant, request, actor);
+      const [ledger] = await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant]);
+      assert.equal(ledger.request_fingerprint, oldFingerprint);
+      await user();
+      await q('UPDATE tenants SET plan_id=NULL WHERE id=$1', [tenant]);
+      assert.equal(
+        new Date((await service.extend(tenant, request, actor)).subscriptionEnd).getTime(),
+        new Date(first.subscriptionEnd).getTime(),
+      );
+      assert.equal((await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant])).length, 1);
+    }),
+);
+
+test(
+  'PG16: changed chosen composition or live growth returns QUOTE_CHANGED before any financial write',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, owner, user, service }) => {
+      const selected = { employees: 2, points: 2 };
+      const preview = await service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, selected);
+      const request = {
+        type: 'paid',
+        amount: 20000,
+        period: 'monthly',
+        quoteToken: preview.quoteToken,
+        requestId: randomUUID(),
+        ...selected,
+      };
+      const before = (await q('SELECT * FROM tenants WHERE id=$1', [tenant]))[0];
+      const actor = { userId: owner, name: 'Owner fixture' };
+      for (const changed of [{ employees: 3 }, { points: 3 }, { employees: undefined }, { employees: 200000 }]) {
+        // Valid-shaped but changed/unpriceable POST selections retain the existing stale-quote 409 contract.
+        await assert.rejects(
+          () => service.extend(tenant, { ...request, ...changed }, actor),
+          status(409, 'QUOTE_CHANGED'),
+        );
+      }
+      await user();
+      await assert.rejects(() => service.extend(tenant, request, actor), status(409, 'QUOTE_CHANGED'));
+      await user();
+      // Usage now exceeds the chosen count: POST must refresh the quote rather than silently underbill.
+      await assert.rejects(() => service.extend(tenant, request, actor), status(409, 'QUOTE_CHANGED'));
+      assert.deepEqual((await q('SELECT * FROM tenants WHERE id=$1', [tenant]))[0], before);
+      assert.equal((await q('SELECT * FROM subscription_payments WHERE tenant_id=$1', [tenant])).length, 0);
+    }),
+);
 
 test('subscription fixture guard accepts only exact assigned local/CI identities', () => {
   assert.equal(approvedFixture(localUrl).database, 'autexa_oct16_pricing_test');

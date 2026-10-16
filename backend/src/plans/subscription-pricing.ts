@@ -103,6 +103,9 @@ export function calculateSubscriptionQuote(
     return { ok: false, code: 'INVALID_COUNT' };
   }
   const yearly = input.period === 'yearly';
+  const total = Math.round(monthlyTotal * (yearly ? 10 : 1) * 100) / 100;
+  // Match the existing payment DTO ceiling; a preview must be payable unchanged.
+  if (total > 99999999) return { ok: false, code: 'INVALID_COUNT' };
   return {
     ok: true,
     quote: {
@@ -118,7 +121,7 @@ export function calculateSubscriptionQuote(
       employeesMonthlyAmount,
       pointsMonthlyAmount,
       monthlyTotal,
-      total: Math.round(monthlyTotal * (yearly ? 10 : 1) * 100) / 100,
+      total,
       serviceMonths: yearly ? 12 : 1,
       chargedMonths: yearly ? 10 : 1,
       currency: 'RUB',

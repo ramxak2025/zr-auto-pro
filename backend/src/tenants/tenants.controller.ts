@@ -106,7 +106,7 @@ export class TenantsController {
   @Roles('superadmin')
   @Get('tenants/:id/subscription-quote')
   getSubscriptionQuote(@Param('id', ParseUuidParam) id: string, @Query() query: SubscriptionQuoteQueryDto) {
-    return this.tenantsService.getSubscriptionQuote(id, query.period, {}, query.planId);
+    return this.tenantsService.getSubscriptionQuote(id, query.period, {}, query.planId, query);
   }
 
   @Roles('superadmin')
@@ -174,7 +174,7 @@ export class TenantsController {
 
   @Get('subscription/quote')
   getOwnSubscriptionQuote(@CurrentUser() user: JwtPayload, @Query() query: SubscriptionQuoteQueryDto) {
-    return this.tenantsService.getSubscriptionQuote(user.tenantID, query.period, {}, query.planId);
+    return this.tenantsService.getSubscriptionQuote(user.tenantID, query.period, {}, query.planId, query);
   }
 
   @Get('subscription')
