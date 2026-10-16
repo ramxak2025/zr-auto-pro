@@ -75,8 +75,8 @@ export function useSubscriptionRenewal({
   }, [open, owner, legacyPrice]);
   const minEmployees = Math.max(info?.usage.employees ?? 1, minimums.employees);
   const minPoints = Math.max(info?.usage.billablePoints ?? 1, minimums.points);
-  const employees = employeeInput ?? (info ? String(Math.max(info.pricing.includedEmployees, minEmployees)) : '');
-  const points = pointInput ?? (info ? String(Math.max(info.pricing.includedPoints ?? 1, minPoints)) : '');
+  const employees = employeeInput ?? (info ? String(Math.max(1, minEmployees)) : '');
+  const points = pointInput ?? (info ? String(Math.max(1, minPoints)) : '');
   const employeeCount = subscriptionCount(employees),
     pointCount = subscriptionCount(points);
   const valid = !info || (!!employeeCount && !!pointCount && employeeCount >= minEmployees && pointCount >= minPoints);

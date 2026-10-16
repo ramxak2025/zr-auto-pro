@@ -129,18 +129,170 @@ const quoteStatement = (sql) => /SELECT t\.plan_id, t\.subscription_end, p\.\*/.
 const tenantLockStatement = (sql) => /p\.name AS plan_name/.test(sql) && /FOR UPDATE OF t/.test(sql);
 
 test(
+  'PG16: migration 194 changes only the canonical old MAX rate and preserves every override',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, owner, service, pool }) => {
+      await service.extend(tenant, { days: 1, type: 'paid', amount: 5000 }, { userId: owner, name: 'Fixture' });
+      const client = await pool.connect();
+      const plan = '16100000-0000-4000-a000-000000000003';
+      const custom = randomUUID();
+      const migration = readFileSync(join(__dirname, '../migrations/194_max_extra_point_price.sql'), 'utf8');
+      const rows = async (sql, values = []) => (await client.query(sql, values)).rows;
+      try {
+        await client.query('BEGIN');
+        await rows(
+          `UPDATE plans SET extra_point_monthly_price=5000,monthly_price=15123,
+        included_employees=51,max_users=51,extra_employee_monthly_price=600,included_points=2,
+        features='["reports_view"]',name='MAX operator fixture',voice_minutes=777,is_active=false,sort_order=99
+        WHERE id=$1`,
+          [plan],
+        );
+        await rows(
+          `INSERT INTO plans(id,name,monthly_price,max_users,extra_point_monthly_price)
+        VALUES($1,'Custom branch fixture',777,7,5000)`,
+          [custom],
+        );
+        const before = await rows('SELECT * FROM plans ORDER BY id');
+        const tenants = await rows('SELECT * FROM tenants WHERE id=$1', [tenant]);
+        const ledger = await rows('SELECT * FROM subscription_payments WHERE tenant_id=$1 ORDER BY id', [tenant]);
+        await client.query(migration);
+        const changed = before.map((row) => (row.id === plan ? { ...row, extra_point_monthly_price: '3000.00' } : row));
+        assert.deepEqual(await rows('SELECT * FROM plans ORDER BY id'), changed);
+        await client.query(migration);
+        assert.deepEqual(await rows('SELECT * FROM plans ORDER BY id'), changed, 'rerun is a no-op');
+        for (const rate of [null, 0, 7000]) {
+          await rows('UPDATE plans SET extra_point_monthly_price=$2 WHERE id=$1', [plan, rate]);
+          const overridden = await rows('SELECT * FROM plans ORDER BY id');
+          await client.query(migration);
+          assert.deepEqual(await rows('SELECT * FROM plans ORDER BY id'), overridden);
+        }
+        await rows("UPDATE plans SET extra_point_monthly_price=5000,code='max-operator-fixture' WHERE id=$1", [plan]);
+        const wrongCode = await rows('SELECT * FROM plans ORDER BY id');
+        await client.query(migration);
+        assert.deepEqual(await rows('SELECT * FROM plans ORDER BY id'), wrongCode);
+        await rows("UPDATE plans SET code='max' WHERE id=$1", [custom]);
+        const wrongId = await rows('SELECT * FROM plans ORDER BY id');
+        await client.query(migration);
+        assert.deepEqual(await rows('SELECT * FROM plans ORDER BY id'), wrongId);
+        assert.deepEqual(await rows('SELECT * FROM tenants WHERE id=$1', [tenant]), tenants);
+        assert.deepEqual(
+          await rows('SELECT * FROM subscription_payments WHERE tenant_id=$1 ORDER BY id', [tenant]),
+          ledger,
+        );
+        assert.equal(Number(ledger[0].amount), 5000, 'manual amounts are unrelated to the default branch rate');
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+    }),
+);
+
+test(
+  'PG16: migration 194 invalidates unused old quotes including one branch; executed UUID replays unchanged',
+  { skip: !live },
+  async () =>
+    fixture(async ({ q, tenant, manager, service }) => {
+      const plan = '16100000-0000-4000-a000-000000000003';
+      const [original] = await q('SELECT extra_point_monthly_price FROM plans WHERE id=$1', [plan]);
+      const migration = readFileSync(join(__dirname, '../migrations/194_max_extra_point_price.sql'), 'utf8');
+      const actor = { userId: manager, name: 'Fixture manager' };
+      const ctx = { scope: { managerId: manager }, credit: { managerId: manager } };
+      try {
+        await q('UPDATE plans SET extra_point_monthly_price=5000 WHERE id=$1', [plan]);
+        const selected = { employees: 53, points: 3 };
+        const preview = await service.getSubscriptionQuote(tenant, 'yearly', ctx.scope, undefined, selected);
+        assert.equal(preview.quote.total, 265000);
+        const request = {
+          type: 'paid',
+          amount: 5000,
+          period: 'yearly',
+          quoteToken: preview.quoteToken,
+          requestId: randomUUID(),
+          ...selected,
+        };
+        const response = await service.extend(tenant, request, actor, ctx);
+        const unused = [];
+        for (const points of [1, 2]) {
+          unused.push(
+            await service.getSubscriptionQuote(tenant, 'monthly', ctx.scope, undefined, { employees: 50, points }),
+          );
+        }
+        const tenants = await q('SELECT * FROM tenants WHERE id=$1', [tenant]);
+        const ledger = await q('SELECT * FROM subscription_payments WHERE tenant_id=$1 ORDER BY id', [tenant]);
+        assert.equal(ledger.length, 1);
+        assert.deepEqual(ledger[0].composition_snapshot, preview);
+        assert.equal(Number(ledger[0].amount), 5000);
+        assert.equal(Number(ledger[0].owner_share_amount), 3000);
+        await q(migration);
+        for (const old of unused) {
+          const fresh = await service.getSubscriptionQuote(tenant, 'monthly', ctx.scope, undefined, {
+            employees: old.quote.employees,
+            points: old.quote.points,
+          });
+          assert.notEqual(fresh.quoteToken, old.quoteToken);
+          assert.equal(fresh.quote.total, old.quote.points === 1 ? 15000 : 18000);
+          await assert.rejects(
+            () =>
+              service.extend(
+                tenant,
+                {
+                  type: 'paid',
+                  amount: old.quote.total,
+                  period: 'monthly',
+                  quoteToken: old.quoteToken,
+                  requestId: randomUUID(),
+                  employees: old.quote.employees,
+                  points: old.quote.points,
+                },
+                actor,
+                ctx,
+              ),
+            status(409, 'QUOTE_CHANGED'),
+          );
+        }
+        assert.deepEqual(await service.extend(tenant, request, actor, ctx), response);
+        assert.deepEqual(await q('SELECT * FROM tenants WHERE id=$1', [tenant]), tenants);
+        assert.deepEqual(
+          await q('SELECT * FROM subscription_payments WHERE tenant_id=$1 ORDER BY id', [tenant]),
+          ledger,
+        );
+      } finally {
+        await q('UPDATE plans SET extra_point_monthly_price=$2 WHERE id=$1', [
+          plan,
+          original.extra_point_monthly_price,
+        ]);
+      }
+    }),
+);
+
+test(
   'PG16: chosen composition quotes preserve actual usage, live minima, payable range and existing tenant terms',
   { skip: !live },
   async () =>
     fixture(async ({ q, tenant, foreign, manager, user, service }) => {
       const before = (await q('SELECT * FROM tenants WHERE id=$1', [tenant]))[0];
+      for (const [employees, points, monthly, annual] of [
+        [50, 2, 18000, 180000],
+        [51, 2, 18500, 185000],
+        [53, 3, 22500, 225000],
+      ]) {
+        for (const [period, total] of [
+          ['monthly', monthly],
+          ['yearly', annual],
+        ]) {
+          const result = await service.getSubscriptionQuote(tenant, period, {}, undefined, { employees, points });
+          assert.equal(result.quote.monthlyTotal, monthly);
+          assert.equal(result.quote.total, total);
+        }
+      }
       const selected = { employees: 53, points: 3 };
       const preview = await service.getSubscriptionQuote(tenant, 'yearly', { managerId: manager }, undefined, selected);
       assert.deepEqual(preview.usage, { employees: 1, activePoints: 0, billablePoints: 1 });
       assert.equal(preview.quote.employees, 53);
       assert.equal(preview.quote.points, 3);
-      assert.equal(preview.quote.monthlyTotal, 26500);
-      assert.equal(preview.quote.total, 265000);
+      assert.equal(preview.quote.monthlyTotal, 22500);
+      assert.equal(preview.quote.total, 225000);
       const included = await service.getSubscriptionQuote(tenant, 'monthly', {}, undefined, {
         employees: 1,
         points: 1,
@@ -216,7 +368,7 @@ test(
       assert.deepEqual(row.composition_snapshot, preview);
       assert.equal(Number(row.amount), 1234.56);
       assert.equal(Number(row.owner_share_amount), 740.74);
-      assert.equal(row.composition_snapshot.quote.total, 265000);
+      assert.equal(row.composition_snapshot.quote.total, 225000);
       assert.equal(row.composition_snapshot.usage.employees, 1);
       const [current] = await q('SELECT monthly_price,max_users FROM tenants WHERE id=$1', [tenant]);
       assert.equal(Number(current.monthly_price), 15000);
@@ -610,7 +762,7 @@ test(
           await q('INSERT INTO user_points(user_id,point_id,tenant_id) VALUES($1,$2,$3)', [person, point, tenant]);
       const current = await service.getSubscriptionQuote(tenant, 'yearly', { managerId: manager });
       assert.deepEqual(current.usage, { employees: 2, activePoints: 2, billablePoints: 2 });
-      assert.equal(current.quote.total, 200000);
+      assert.equal(current.quote.total, 180000);
       const sub = await runWithTenant(tenant, () => service.getSubscription(tenant));
       assert.equal(sub.currentUsers, 5, 'legacy all-users count preserved');
       assert.deepEqual(sub.usage, current.usage);

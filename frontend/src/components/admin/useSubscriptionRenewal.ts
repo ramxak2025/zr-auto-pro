@@ -112,10 +112,8 @@ export function useSubscriptionRenewal({
     setPlanId(preview.planId);
     setMinimumEmployees(Math.max(1, preview.usage.employees));
     setMinimumPoints(Math.max(1, preview.usage.billablePoints));
-    if (employees === undefined)
-      setEmployees(String(Math.max(preview.pricing.includedEmployees, preview.usage.employees)));
-    if (points === undefined)
-      setPoints(String(Math.max(preview.pricing.includedPoints ?? 1, preview.usage.billablePoints)));
+    if (employees === undefined) setEmployees(String(Math.max(1, preview.usage.employees)));
+    if (points === undefined) setPoints(String(Math.max(1, preview.usage.billablePoints)));
     if (matchesCounts && !dirtyAmount.current) {
       setAmountState(String(preview.quote.total));
       if (recalculate.current) {

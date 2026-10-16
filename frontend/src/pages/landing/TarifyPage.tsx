@@ -1,27 +1,15 @@
-import { useEffect, useState } from 'react';
-import type { SubscriptionBillingPeriod } from '../../../../shared/utils/subscriptionPricing';
-import { BillingPeriodSwitch, PricingCalculator } from './sections/PricingCalculator';
+import { useEffect } from 'react';
+import { PricingCalculator } from './sections/PricingCalculator';
 import { Link, useNavigationType } from 'react-router-dom';
-import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
-import { GsapReveal, useReveal } from './gsap';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { GsapReveal } from './gsap';
 import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
-import { ComparisonTable, ComparisonTableMobile, ImplementationCard, PlanCard } from './sections/pricingShared';
-import { pricing, pricingFaq, tarifyHero } from './content';
+import { ImplementationCard } from './sections/pricingShared';
+import { pricingFaq, tarifyHero } from './content';
 
-/**
- * Отдельная страница тарифов /tarify. Публичная — доступна и гостям,
- * и залогиненным (по образцу /f/:slug, без редиректа).
- *
- * Тарифы показывают цены, включённый состав и калькулятор дополнений; оплата за год
- * под размер команды при подключении. Единственный CTA карточек — «Оставить
- * заявку». Структура: мини-Header (лого + Войти) → крошки «Autexa → Тарифы» →
- * hero-строка → карточки планов (мобиле — вертикальная стопка, «Легенда»
- * первой с бейджем; desktop — 3 колонки) → «Внедрение под ключ» →
- * полное сравнение (desktop-таблица / mobile-details из pricingShared) →
- * mini-FAQ → CTA WhatsApp/Telegram → Footer + GlassTabBar.
- */
+/** Публичные тарифы: один калькулятор, внедрение и ответы на вопросы. */
 
 /** Мини-шапка страницы: только лого (→ главная) и «Войти». */
 function MiniHeader() {
@@ -70,12 +58,6 @@ function Breadcrumbs() {
 
 export default function TarifyPage() {
   const navigationType = useNavigationType();
-  const [period, setPeriod] = useState<SubscriptionBillingPeriod>('monthly');
-  // Карточки планов въезжают каскадом снизу (как ценовые блоки на главной).
-  // Стаггер по прямым детям сетки — обёрткам планов; их внутренний md:-translate-y-2
-  // (подъём «Легенды») живёт на самой карточке и не задевается transform reveal'а.
-  const plansRef = useReveal<HTMLDivElement>({ type: 'stagger', start: 'top 85%', stagger: 0.09 });
-
   // Заголовок вкладки с восстановлением при уходе
   useEffect(() => {
     const prevTitle = document.title;
@@ -135,50 +117,13 @@ export default function TarifyPage() {
           <p className="mt-3 text-lg text-slate-600">{tarifyHero.subtitle}</p>
         </GsapReveal>
 
-        {/* Плашка B2B-позиционирования: доступ — для организаций */}
-        <GsapReveal type="rise" delay={0.05}>
-          <div className="mt-6 flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-50">
-              <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
-            </span>
-            <p className="text-sm leading-relaxed text-slate-600">
-              Для автосервисов: ИП и организаций. Оставьте заявку — поможем с подключением и началом работы.
-            </p>
-          </div>
-        </GsapReveal>
-
-        <BillingPeriodSwitch period={period} onChange={setPeriod} />
-
-        {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки;
-            ref = стаггер-контейнер (каждая обёртка плана оседает по очереди) */}
-        <div ref={plansRef} className="mt-8 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
-          {pricing.plans.map((plan) => (
-            <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
-              <PlanCard plan={plan} period={period} />
-            </div>
-          ))}
+        <div className="mt-6">
+          <PricingCalculator />
         </div>
-
-        <PricingCalculator period={period} />
 
         {/* Внедрение под ключ */}
         <GsapReveal type="rise" delay={0.1} className="mt-10">
           <ImplementationCard />
-        </GsapReveal>
-
-        {/* Полное сравнение: desktop-таблица / mobile — свайп-таблица.
-            fade (без transform): не двигаем крупную листаемую таблицу на входе */}
-        <GsapReveal type="fade" delay={0.1} className="hidden md:block">
-          <h2 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
-            {pricing.comparisonTitle}
-          </h2>
-          <ComparisonTable />
-        </GsapReveal>
-        <GsapReveal type="fade" delay={0.1} className="md:hidden">
-          <h2 className="mt-14 text-xl font-extrabold tracking-tight text-slate-900 text-balance">
-            {pricing.comparisonTitle}
-          </h2>
-          <ComparisonTableMobile />
         </GsapReveal>
 
         {/* Mini-FAQ */}

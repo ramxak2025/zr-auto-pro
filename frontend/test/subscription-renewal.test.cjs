@@ -552,3 +552,18 @@ test('request ID reuse never creates a new financial intent automatically', asyn
     form.close();
   }
 });
+
+test('renewal starts from actual usage below included allowance without changing paid intent handling', async () => {
+  actualEmployees = 2;
+  monthlyTotal = 4990;
+  const form = mount(async () => {});
+  try {
+    await settle(() => form.state().quoteReady);
+    assert.equal(form.state().employees, '2');
+    assert.equal(form.state().points, '1');
+    assert.equal(form.state().amount, '4990');
+    assert.equal(apiCalls.at(-1).params.employees, 2);
+  } finally {
+    form.close();
+  }
+});

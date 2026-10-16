@@ -11,13 +11,13 @@ export function useSubscriptionCalculator(sub: SubscriptionInfo | undefined, ena
   const [period, setPeriod] = useState<'monthly' | 'yearly'>('monthly');
   const [manualEmployees, setEmployees] = useState<string | null>(null);
   const [manualPoints, setPoints] = useState<string | null>(null);
-  const planId = selectedId ?? sub?.planId ?? sub?.plans[0]?.id;
+  const planId = selectedId ?? sub?.planId ?? undefined;
   const plan = sub?.plans.find((p) => p.id === planId);
   const pricing = plan?.pricing ?? (planId ? metadata[planId]?.pricing : undefined);
   const actualEmployees = Math.max(sub?.usage?.employees ?? sub?.currentUsers ?? 1, minimums.employees);
   const actualPoints = Math.max(sub?.usage?.billablePoints ?? 1, minimums.points);
-  const employees = manualEmployees ?? String(Math.max(pricing?.includedEmployees ?? 1, actualEmployees));
-  const points = manualPoints ?? String(Math.max(pricing?.includedPoints ?? 1, actualPoints));
+  const employees = manualEmployees ?? String(Math.max(1, actualEmployees));
+  const points = manualPoints ?? String(Math.max(1, actualPoints));
   const employeeCount = subscriptionCount(employees),
     pointCount = subscriptionCount(points);
   const valid = !!employeeCount && !!pointCount && employeeCount >= actualEmployees && pointCount >= actualPoints;
@@ -52,12 +52,19 @@ export function useSubscriptionCalculator(sub: SubscriptionInfo | undefined, ena
       ? 'Для нескольких филиалов выберите MAX. Количество филиалов сохранено.'
       : failure?.data?.code === 'COUNT_BELOW_USAGE'
         ? `Состав вырос: сотрудников не меньше ${failure.data.minimumEmployees}, филиалов не меньше ${failure.data.minimumPoints}. Обновите фактический состав.`
-        : quote.isError
-          ? 'Не удалось рассчитать стоимость. Повторите расчёт.'
-          : '';
+        : failure?.data?.code === 'LEGACY_PLAN'
+          ? 'Для этого тарифа расчёт по составу недоступен. Выберите другой тариф для сравнения.'
+          : quote.isError
+            ? 'Не удалось рассчитать стоимость. Повторите расчёт.'
+            : '';
   return {
     planId,
     plan,
+    maxPlan: sub?.plans.find(
+      (candidate) =>
+        candidate.isActive && candidate.pricing?.code === 'max' && candidate.pricing.extraPointMonthlyPrice != null,
+    ),
+    unsupportedPoints: failure?.data?.code === 'UNPRICED_POINTS',
     pricing,
     name: plan?.name ?? (planId ? metadata[planId]?.pricing.name : undefined) ?? sub?.planName,
     setPlan,

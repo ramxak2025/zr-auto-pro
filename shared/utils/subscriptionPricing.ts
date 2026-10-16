@@ -37,7 +37,7 @@ export const SUBSCRIPTION_PLAN_PRICING: Readonly<Record<SubscriptionPlanCode, Su
     includedEmployees: 50,
     extraEmployeeMonthlyPrice: 500,
     includedPoints: 1,
-    extraPointMonthlyPrice: 5000,
+    extraPointMonthlyPrice: 3000,
   },
 };
 

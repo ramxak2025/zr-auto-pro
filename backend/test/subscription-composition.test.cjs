@@ -32,12 +32,38 @@ test('pricing: base, included boundaries, extras and annual entire composition',
     assert.equal(quote(plans[code], input(included + 1, 1, 'yearly')).quote.total, (base + extra) * 10);
   }
   const result = quote(plans.max, input(53, 3, 'yearly')).quote;
-  assert.equal(result.monthlyTotal, 26500);
-  assert.equal(result.total, 265000);
+  assert.equal(result.monthlyTotal, 22500);
+  assert.equal(result.total, 225000);
   assert.equal(result.extraEmployees, 3);
   assert.equal(result.extraPoints, 2);
   assert.equal(result.serviceMonths, 12);
   assert.equal(result.chargedMonths, 10);
+});
+test('MAX branch rate applies to the whole annual bundle and exact invoice display', () => {
+  const exports = {};
+  const source = readFileSync(join(__dirname, '../../shared/utils/subscriptionPricing.ts'), 'utf8');
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
+    exports,
+  });
+  for (const [employees, points, monthly, annual, displayed, approximate] of [
+    [50, 2, 18000, 180000, 15000, false],
+    [51, 2, 18500, 185000, 15416.67, true],
+    [53, 3, 22500, 225000, 18750, false],
+  ]) {
+    for (const pricing of [plans.max, exports.SUBSCRIPTION_PLAN_PRICING.max]) {
+      assert.equal(quote(pricing, input(employees, points)).quote.total, monthly);
+      const yearly = quote(pricing, input(employees, points, 'yearly')).quote;
+      assert.equal(yearly.monthlyTotal, monthly);
+      assert.equal(yearly.total, annual);
+      assert.equal(yearly.serviceMonths, 12);
+      assert.equal(yearly.chargedMonths, 10);
+      const display = exports.getSubscriptionMonthlyDisplay(yearly);
+      assert.equal(display.amount, displayed);
+      assert.equal(display.approximate, approximate);
+      assert.equal(yearly.total, annual, 'display must preserve the exact invoice');
+    }
+  }
+  assert.equal(quote({ ...plans.max, extraPointMonthlyPrice: 5000 }, input(50, 2)).quote.total, 20000);
 });
 test('pricing: undefined branches never become free; invalid runtime inputs never produce payable totals', () => {
   for (const code of ['baza', 'pro']) {
