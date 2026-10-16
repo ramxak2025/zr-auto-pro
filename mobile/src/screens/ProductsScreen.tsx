@@ -3071,7 +3071,7 @@ export default function ProductsScreen() {
             // The legacy inline-modal flow (openInventory) is retained in code
             // as a fallback but is no longer the active entry point.
             setShowOpsModal(false);
-            navigation.navigate('Inventory');
+            navigation.navigate('Inventory', { warehouseId: activeWarehouseId });
           }}
         >
           <View

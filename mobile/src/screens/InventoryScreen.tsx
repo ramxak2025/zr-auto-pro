@@ -1,741 +1,920 @@
-/**
- * InventoryScreen — full-screen инвентаризация (пересчёт остатков) with optional
- * barcode scanning.
- *
- * Flow:
- *   1. Pick a scope — warehouse (main / defect / used) and, optionally, a
- *      top-level category folder.
- *   2. For each product enter the ACTUAL counted quantity, OR scan its barcode
- *      to focus + increment that product's count by one.
- *   3. The discrepancy (actual − system) is shown per row and summarised
- *      (недостача / излишки in ₽ at cost).
- *   4. «Провести» → confirm → for every changed product call the EXISTING
- *      stock endpoint `productsApi.updateStock(id, { type: 'inventory', … })`,
- *      which writes an 'inventory'-type stock movement (same primitive the
- *      warehouse quick-inventory modal and corrections already use — no new
- *      stock math is invented here).
- *
- * Pushed inside the Products (Склад) tab-stack, so the floating tab bar stays
- * visible and iOS edge-swipe pops back to the warehouse list.
- *
- * Role-gated: write actions require `warehouse_access` (also enforced
- * server-side). Android-compatible — expo-camera + RN primitives only.
- */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
-import { type FlashListRef } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { randomUUID } from 'expo-crypto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
-import SearchInput from '../components/SearchInput';
 import BarcodeScanner from '../components/BarcodeScanner';
+import CachedImage from '../components/CachedImage';
 import StorageCellChip from '../components/StorageCellChip';
 import { Text } from '../platform/Typography';
-import { productsApi, warehousesApi, warehouseCategoriesApi } from '../api/services';
+import { warehousesApi, warehouseCategoriesApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
+import { captureDataSession } from '../contexts/dataSession';
 import { useColors } from '../contexts/ThemeContext';
-import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
-import { PRODUCT_LIST_FIELDS, PRODUCT_LIST_LIMIT } from '../constants/productFields';
-import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
-import type { Product, PaginatedResponse, Warehouse } from '../../../shared/types';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { colors, spacing, fontWeight, borderRadius } from '../theme';
+import { formatQty, unitLabel } from '../utils/units';
+import { productFolderParts } from '../../../shared/utils/productFolders';
+import type { Product, Warehouse } from '../../../shared/types';
+import { TabBarFlatList } from '../components/TabBarScrollable';
+import {
+  inventoryError,
+  inventoryRows,
+  inventorySummary,
+  reconcileInventoryDrafts,
+  parseInventoryQuantity,
+  type InventoryDrafts,
+  type InventoryRow,
+  type InventoryStockRequest,
+} from './inventory/model';
+import { captureInventorySession, type InventorySession } from './inventory/saveSession';
 
-// Тот же лимит, что у «Склада»: пересчёт по неполной номенклатуре «сходился»
-// на хвосте каталога, которого просто не было в выдаче, — и недостача с
-// излишком считались от неполного списка. Это уже деньги, а не косметика.
-const LIMIT = PRODUCT_LIST_LIMIT;
+interface Entry {
+  id: string;
+  body: Readonly<InventoryStockRequest>;
+}
+interface Operation {
+  session: InventorySession;
+  warehouseId: string;
+  isCurrent: () => boolean;
+  started: boolean;
+}
+type InventoryRoute = { Inventory: { warehouseId?: string } | undefined };
 
-function formatMoney(v: number): string {
-  return (
-    Math.round(v)
-      .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
-  );
+/** A data-session epoch owns the complete form, including suspended confirmations. */
+export default function InventoryScreen() {
+  useAuth();
+  return <InventoryWorkspace key={captureDataSession().generation} />;
 }
 
-const onlyDigits = (s: string) => s.replace(/[^0-9]/g, '');
-
-export default function InventoryScreen() {
-  const navigation = useNavigation<any>();
+function InventoryWorkspace() {
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, undefined>>>();
+  const route = useRoute<RouteProp<InventoryRoute, 'Inventory'>>();
   const queryClient = useQueryClient();
   const palette = useColors();
-  const tabBarHeight = useTabBarHeight();
   const { hasPermission } = useAuth();
-  // Проведение инвентаризации пишет остатки (POST /products/:id/stock) —
-  // сервер гейтит warehouse_manage; warehouse_access здесь недостаточно.
   const canWrite = hasPermission('warehouse_manage');
-
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(route.params?.warehouseId ?? null);
+  const [folderPath, setFolderPath] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  // productId -> actual counted quantity (as typed/scanned). Absent entries are
-  // "not counted" and excluded from the commit. Keyed across the whole session
-  // so switching category/warehouse view never loses an entered count.
-  const [counts, setCounts] = useState<Record<string, string>>({});
+  const [warehouseMenu, setWarehouseMenu] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
-  const [lastScan, setLastScan] = useState<{ name: string; count: number } | null>(null);
-  const [flashId, setFlashId] = useState<string | null>(null);
-  // Non-null while the sequential per-item commit runs — drives «N из M…» and
-  // blocks re-entry.
+  const [scanFeedback, setScanFeedback] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [draftsByWarehouse, setDraftsByWarehouse] = useState<Record<string, InventoryDrafts>>({});
+  const draftsRef = useRef(draftsByWarehouse);
+  const mountedRef = useRef(true);
+  const busyRef = useRef(false);
+  const canWriteRef = useRef(canWrite);
+  canWriteRef.current = canWrite;
+  const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const listRef = useRef<TabBarFlatList<InventoryRow>>(null);
+  const focusId = useRef<string | null>(null);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scannerScope = useRef<{ session: InventorySession; warehouseId: string } | null>(null);
 
-  const listRef = useRef<FlashListRef<Product>>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scanBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Warehouses (cache hit with ProductsScreen) ──────────────────────────
-  const { data: warehouses } = useQuery<Warehouse[]>({
-    queryKey: ['warehouses'],
-    queryFn: async () => {
-      const res = await warehousesApi.list();
-      return Array.isArray(res.data) ? res.data : [];
-    },
-    staleTime: 10 * 60_000,
-  });
-
-  const activeWarehouse = useMemo<Warehouse | null>(() => {
-    if (!warehouses || warehouses.length === 0) return null;
-    if (selectedWarehouseId) {
-      const found = warehouses.find((w) => w.id === selectedWarehouseId);
-      if (found) return found;
-    }
-    return warehouses.find((w) => w.kind === 'main') ?? warehouses[0];
-  }, [warehouses, selectedWarehouseId]);
-  const activeWarehouseId = activeWarehouse?.id;
-
-  // ── Products — SAME key + fields projection as ProductsScreen, so this is a
-  // cache HIT (instant) and carries `barcode` for scan-to-match. ────────────
-  const { data, isLoading, isError, refetch } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', { search: '', limit: LIMIT, warehouseId: activeWarehouseId ?? null }],
-    queryFn: async () => {
-      const res = await productsApi.getAll({
-        search: '',
-        page: 1,
-        limit: LIMIT,
-        fields: PRODUCT_LIST_FIELDS,
-        ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
-      } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
-      return res.data;
-    },
-    placeholderData: (prev) => prev,
-  });
-
-  // ── Folders for the scope chips (cache hit with ProductsScreen) ──────────
-  const { data: extraFolders } = useQuery({
-    queryKey: activeWarehouseId
-      ? ['warehouse-categories', { warehouseId: activeWarehouseId }]
-      : ['warehouse-categories'],
-    queryFn: async () => {
-      const res = await warehouseCategoriesApi.getAll(activeWarehouseId || undefined);
-      return res.data;
-    },
-    enabled: !!activeWarehouseId,
-  });
-
-  const allProducts = useMemo(() => (Array.isArray(data?.data) ? data.data : []), [data]);
-
-  const productById = useMemo(() => {
-    const map = new Map<string, Product>();
-    for (const p of allProducts) map.set(p.id, p);
-    return map;
-  }, [allProducts]);
-
-  // Top-level category folders (from products + API folder rows).
-  const topFolders = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of allProducts) {
-      const top = (p.category || '').split('/')[0];
-      if (top) set.add(top);
-    }
-    if (Array.isArray(extraFolders)) {
-      for (const ef of extraFolders) {
-        const top = ((ef.path || (ef as any).name || '') as string).split('/')[0];
-        if (top) set.add(top);
-      }
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [allProducts, extraFolders]);
-
-  // Products visible in the current scope (category folder + search filter).
-  const scopedProducts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allProducts.filter((p) => {
-      if (categoryFilter) {
-        const cat = p.category || '';
-        if (cat !== categoryFilter && !cat.startsWith(categoryFilter + '/')) return false;
-      }
-      // Код ячейки ищется так же, как хранится: регистр и пробелы не важны.
-      if (q && !p.name.toLowerCase().includes(q) && !cellCodeMatchesQuery(p.storageCellCode, q)) return false;
-      return true;
-    });
-  }, [allProducts, categoryFilter, search]);
-
-  // Session-wide summary (every touched product, not just current scope).
-  const summary = useMemo(() => {
-    let countedCount = 0;
-    let changedCount = 0;
-    let shortage = 0;
-    let excess = 0;
-    for (const [id, raw] of Object.entries(counts)) {
-      if (raw === '' || raw == null) continue;
-      const product = productById.get(id);
-      if (!product) continue;
-      countedCount++;
-      const actual = Number(raw) || 0;
-      const diff = actual - product.stock;
-      if (diff === 0) continue;
-      changedCount++;
-      const cost = product.costPrice || 0;
-      if (diff < 0) shortage += Math.abs(diff) * cost;
-      else excess += diff * cost;
-    }
-    return { countedCount, changedCount, shortage, excess };
-  }, [counts, productById]);
-
-  // ── Mutators ────────────────────────────────────────────────────────────
-  const setCount = useCallback((id: string, value: string) => {
-    setCounts((prev) => ({ ...prev, [id]: onlyDigits(value) }));
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    };
   }, []);
 
-  const flashRow = useCallback(
-    (id: string) => {
-      setFlashId(id);
-      if (flashTimer.current) clearTimeout(flashTimer.current);
-      flashTimer.current = setTimeout(() => setFlashId(null), 1400);
-      const idx = scopedProducts.findIndex((p) => p.id === id);
-      if (idx >= 0) {
-        try {
-          listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
-        } catch {
-          // scrollToIndex can throw if the list isn't laid out yet — ignore.
-        }
-      }
+  const warehouseQuery = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => {
+      const result = await warehousesApi.list();
+      return Array.isArray(result.data) ? result.data : [];
     },
-    [scopedProducts],
+    enabled: canWrite,
+    staleTime: 10 * 60_000,
+  });
+  const warehouses = warehouseQuery.data ?? [];
+  const activeWarehouse =
+    warehouses.find((w) => w.id === selectedWarehouseId) ?? warehouses.find((w) => w.kind === 'main') ?? warehouses[0];
+  const warehouseId = activeWarehouse?.id;
+  const warehouseRef = useRef(warehouseId);
+  warehouseRef.current = warehouseId;
+  const catalogKey = useMemo(() => ['all-products-check', { warehouseId }], [warehouseId]);
+  const catalog = useQuery<Product[]>({
+    queryKey: catalogKey,
+    queryFn: () => captureInventorySession().loadProducts(warehouseId!),
+    enabled: canWrite && !!warehouseId,
+    staleTime: 0,
+    placeholderData: undefined,
+  });
+  const folders = useQuery({
+    queryKey: ['warehouse-categories', { warehouseId }],
+    queryFn: async () => (await warehouseCategoriesApi.getAll(warehouseId)).data,
+    enabled: canWrite && !!warehouseId,
+    placeholderData: undefined,
+  });
+  const allProducts = useMemo(() => catalog.data ?? [], [catalog.data]);
+  const drafts = (warehouseId && draftsByWarehouse[warehouseId]) || {};
+  const rows = useMemo(
+    () => inventoryRows(allProducts, folderPath, search, folders.data ?? []),
+    [allProducts, folderPath, search, folders.data],
   );
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const pendingCount = Object.values(drafts).filter((draft) => draft.pending).length;
+  const missingDrafts = Object.entries(drafts).filter(
+    ([id, draft]) => (draft.pending || draft.needsReview) && !allProducts.some((product) => product.id === id),
+  );
+  const displayNotice =
+    notice ??
+    (pendingCount ? `Не подтверждено: ${pendingCount}. Повторите проведение, чтобы получить подтверждение.` : null);
+  const summary = useMemo(() => inventorySummary(drafts, allProducts), [drafts, allProducts]);
+
+  // Synchronous ref prevents stale increments when multiple scans/taps precede a render.
+  const updateDrafts = useCallback((scope: string, update: (previous: InventoryDrafts) => InventoryDrafts) => {
+    const next = { ...draftsRef.current, [scope]: update(draftsRef.current[scope] ?? {}) };
+    draftsRef.current = next;
+    setDraftsByWarehouse(next);
+  }, []);
+  const setCount = useCallback(
+    (product: Product, raw: string) => {
+      const scope = warehouseRef.current;
+      if (!scope || busyRef.current || !canWriteRef.current || (product.warehouseId && product.warehouseId !== scope))
+        return;
+      setNotice(null);
+      setScanFeedback(null);
+      updateDrafts(scope, (previous) => {
+        const old = previous[product.id];
+        if (old?.pending || (old?.needsReview && !old.reviewReady)) return previous;
+        return {
+          ...previous,
+          [product.id]: {
+            raw,
+            name: product.name,
+            expectedStock: old?.expectedStock ?? product.stock,
+            needsReview: old?.needsReview,
+            reviewReady: old?.reviewReady,
+          },
+        };
+      });
+    },
+    [updateDrafts],
+  );
+
+  const scrollToFocused = useCallback(() => {
+    const index = rowsRef.current.findIndex((row) => row.type === 'product' && row.product.id === focusId.current);
+    if (index >= 0) listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.25 });
+  }, []);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+      scrollTimer.current = setTimeout(scrollToFocused, 100);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [scrollToFocused]);
+
+  const chooseWarehouse = useCallback((id: string) => {
+    if (busyRef.current) return;
+    Keyboard.dismiss();
+    warehouseRef.current = id;
+    setSelectedWarehouseId(id);
+    setFolderPath([]);
+    setSearch('');
+    setNotice(null);
+    setScanFeedback(null);
+    setWarehouseMenu(false);
+  }, []);
 
   const handleScanned = useCallback(
     (code: string) => {
+      const scope = scannerScope.current;
+      scannerScope.current = null;
+      if (
+        !scope ||
+        !scope.session.isCurrent() ||
+        !mountedRef.current ||
+        scope.warehouseId !== warehouseRef.current ||
+        busyRef.current ||
+        !canWriteRef.current
+      )
+        return;
       setShowScanner(false);
-      const needle = code.trim();
-      const product = allProducts.find((p) => String(p.barcode || '').trim() === needle);
+      const product = allProducts.find((p) => String(p.barcode ?? '').trim() === code.trim());
       if (!product) {
         haptic('warning');
-        Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`);
+        Alert.alert('Товар не найден', 'Штрих-код не привязан к товару выбранного склада.');
         return;
       }
-      // Count one physical unit. If a hidden category filter would hide the
-      // matched product, drop the filter so the user sees it update.
-      const cat = product.category || '';
-      if (categoryFilter && cat !== categoryFilter && !cat.startsWith(categoryFilter + '/')) {
-        setCategoryFilter(null);
+      const old = draftsRef.current[scope.warehouseId]?.[product.id];
+      if (old?.pending || old?.needsReview || (old?.raw && parseInventoryQuantity(old.raw) === null)) {
+        Alert.alert('Проверьте факт', 'Сначала завершите проверку введённого количества этого товара.');
+        return;
       }
-      const next = (Number(counts[product.id]) || 0) + 1;
-      setCounts((prev) => ({ ...prev, [product.id]: String(next) }));
-      setLastScan({ name: product.name, count: next });
-      if (scanBannerTimer.current) clearTimeout(scanBannerTimer.current);
-      scanBannerTimer.current = setTimeout(() => setLastScan(null), 2500);
-      flashRow(product.id);
+      const next = (Math.round((parseInventoryQuantity(old?.raw ?? '') ?? 0) * 1000) + 1000) / 1000;
+      setCount(product, String(next));
+      setFolderPath(productFolderParts(product.category));
+      setSearch('');
+      focusId.current = product.id;
+      setScanFeedback(`${product.name}: факт ${formatQty(next)} ${unitLabel(product.unit)}`);
+      scrollTimer.current = setTimeout(scrollToFocused, 150);
+      haptic('success');
     },
-    [allProducts, categoryFilter, counts, flashRow],
+    [allProducts, scrollToFocused, setCount],
   );
 
-  // ── Commit (sequential, resumable on partial failure) ───────────────────
-  const commit = useCallback(
-    async (entries: { id: string; name: string; actual: number }[], reason: string) => {
-      setProgress({ done: 0, total: entries.length });
-      const failed: typeof entries = [];
-      let firstError = '';
-      try {
-        for (let i = 0; i < entries.length; i++) {
-          const e = entries[i];
-          try {
-            await productsApi.updateStock(e.id, { type: 'inventory', quantity: e.actual, reason: reason || undefined });
-            // Reflect the server truth so a retry pass won't re-send this row:
-            // the count now equals system stock → no longer "changed".
-            setCounts((prev) => ({ ...prev, [e.id]: String(e.actual) }));
-          } catch (err: any) {
-            failed.push(e);
-            if (!firstError) firstError = err?.response?.data?.message || '';
-          }
-          setProgress({ done: i + 1, total: entries.length });
-        }
-      } finally {
-        setProgress(null);
-        queryClient.invalidateQueries({ queryKey: ['products'] });
-        queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-        queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
-      }
+  const finish = useCallback((operation: Operation) => {
+    if (!operation.isCurrent()) return;
+    busyRef.current = false;
+    setBusy(false);
+    setProgress(null);
+  }, []);
 
-      if (failed.length === 0) {
-        haptic('success');
-        Alert.alert('Готово', `Инвентаризация проведена. Обновлено товаров: ${entries.length}.`, [
-          { text: 'OK', onPress: () => navigation.goBack() },
-        ]);
-        return;
+  const commit = useCallback(
+    async (entries: Entry[], operation: Operation) => {
+      if (!operation.isCurrent()) return;
+      setProgress({ done: 0, total: entries.length });
+      let completed = 0;
+      for (const entry of entries) {
+        if (!operation.isCurrent()) return;
+        updateDrafts(operation.warehouseId, (previous) => ({
+          ...previous,
+          [entry.id]: { ...previous[entry.id], pending: entry.body },
+        }));
+        try {
+          const response = await operation.session.updateStock(entry.id, entry.body);
+          if (!operation.isCurrent()) return;
+          if (response.data.requestId !== entry.body.requestId || response.data.stock !== entry.body.quantity) {
+            throw new Error('Нет подтверждения проведения');
+          }
+          updateDrafts(operation.warehouseId, (previous) => {
+            const next = { ...previous };
+            delete next[entry.id];
+            return next;
+          });
+          completed++;
+          setProgress({ done: completed, total: entries.length });
+        } catch (error: unknown) {
+          if (!operation.isCurrent()) return;
+          const failure = inventoryError(error);
+          if (failure.conflict) {
+            updateDrafts(operation.warehouseId, (previous) => ({
+              ...previous,
+              [entry.id]: {
+                ...previous[entry.id],
+                pending: undefined,
+                needsReview: true,
+                reviewReady: false,
+              },
+            }));
+            setNotice('Учёт изменился. Обновите список и сверьте факт перед проведением.');
+            try {
+              const fresh = await operation.session.loadProducts(operation.warehouseId);
+              if (!operation.isCurrent()) return;
+              queryClient.setQueryData(['all-products-check', { warehouseId: operation.warehouseId }], fresh);
+              updateDrafts(operation.warehouseId, (previous) => reconcileInventoryDrafts(previous, fresh));
+            } catch {
+              if (!operation.isCurrent()) return;
+              setNotice('Не удалось обновить учёт. Обновите список перед сверкой.');
+            }
+          } else {
+            setNotice(
+              `Проведено ${completed} из ${entries.length}. ${failure.message} Введённый факт сохранён; повтор использует тот же запрос.`,
+            );
+          }
+          finish(operation);
+          if (!operation.isCurrent()) return;
+          void queryClient.invalidateQueries({ queryKey: ['products'], refetchType: 'none' });
+          void queryClient.invalidateQueries({ queryKey: ['inventory-movements'], refetchType: 'none' });
+          return;
+        }
       }
-      haptic('error');
-      Alert.alert(
-        'Инвентаризация не завершена',
-        `Проведено ${entries.length - failed.length} из ${entries.length}. Не удалось обновить:\n` +
-          failed.map((f) => `• ${f.name}`).join('\n') +
-          (firstError ? `\n\n${firstError}` : ''),
-        [
-          { text: 'Отмена', style: 'cancel' },
-          { text: 'Повторить незавершённые', onPress: () => commit(failed, reason) },
-        ],
-      );
+      if (!operation.isCurrent()) return;
+      finish(operation);
+      setNotice(`Инвентаризация проведена. Обновлено товаров: ${completed}.`);
+      haptic('success');
+      // A replay receipt describes the ORIGINAL result, possibly before later movements.
+      // Refresh current truth; never overwrite the cache from the original receipt.
+      void queryClient.invalidateQueries({ queryKey: ['products'] });
+      void queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
+      void queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
     },
-    [navigation, queryClient],
+    [finish, queryClient, updateDrafts],
   );
 
   const handleApply = useCallback(() => {
-    if (progress) return;
-    if (!canWrite) {
-      Alert.alert('Недостаточно прав', 'Проведение инвентаризации доступно сотрудникам с правом управления складом.');
+    const scope = warehouseRef.current;
+    if (
+      !scope ||
+      busyRef.current ||
+      !canWriteRef.current ||
+      catalog.isFetching ||
+      catalog.isError ||
+      warehouseQuery.isError ||
+      allProducts.some((product) => product.warehouseId && product.warehouseId !== scope)
+    )
       return;
+    const current = draftsRef.current[scope] ?? {};
+    const state = inventorySummary(current, allProducts);
+    if (!state.counted || state.invalid || state.review) return;
+    busyRef.current = true;
+    setBusy(true);
+    Keyboard.dismiss();
+    const session = captureInventorySession();
+    const operation: Operation = {
+      session,
+      warehouseId: scope,
+      started: false,
+      isCurrent: () =>
+        mountedRef.current && session.isCurrent() && warehouseRef.current === scope && canWriteRef.current,
+    };
+    const entries: Entry[] = [];
+    for (const [id, draft] of Object.entries(current)) {
+      const actual = parseInventoryQuantity(draft.raw);
+      if (actual === null) continue;
+      entries.push({
+        id,
+        body:
+          draft.pending ??
+          Object.freeze({
+            type: 'inventory',
+            quantity: actual,
+            reason: 'Инвентаризация',
+            requestId: randomUUID(),
+            expectedStock: draft.expectedStock,
+            expectedWarehouseId: scope,
+          }),
+      });
     }
-    const entries: { id: string; name: string; actual: number }[] = [];
-    let shortage = 0;
-    let excess = 0;
-    for (const [id, raw] of Object.entries(counts)) {
-      if (raw === '' || raw == null) continue;
-      const product = productById.get(id);
-      if (!product) continue;
-      const actual = Number(raw) || 0;
-      const diff = actual - product.stock;
-      if (diff === 0) continue;
-      entries.push({ id, name: product.name, actual });
-      const cost = product.costPrice || 0;
-      if (diff < 0) shortage += Math.abs(diff) * cost;
-      else excess += diff * cost;
-    }
-    if (entries.length === 0) {
-      Alert.alert('Инвентаризация', 'Нет изменений в остатках — пересчитайте или отсканируйте товары.');
-      return;
-    }
-    haptic('warning');
     Alert.alert(
       'Провести инвентаризацию?',
-      `Будет обновлено товаров: ${entries.length}.\n` +
-        (shortage > 0 ? `Недостача: ${formatMoney(shortage)}\n` : '') +
-        (excess > 0 ? `Излишки: ${formatMoney(excess)}\n` : '') +
-        'Остатки заменятся на введённые значения.',
+      `Будет пересчитано товаров: ${entries.length}. Остатки заменятся на введённый факт.`,
       [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Провести', style: 'destructive', onPress: () => commit(entries, 'Инвентаризация') },
+        { text: 'Отмена', style: 'cancel', onPress: () => finish(operation) },
+        {
+          text: 'Провести',
+          style: 'destructive',
+          onPress: () => {
+            if (operation.isCurrent() && !operation.started) {
+              operation.started = true;
+              void commit(entries, operation);
+            }
+          },
+        },
       ],
+      {
+        cancelable: true,
+        onDismiss: () => {
+          if (!operation.started) finish(operation);
+        },
+      },
     );
-  }, [progress, canWrite, counts, productById, commit]);
+  }, [allProducts, catalog.isFetching, catalog.isError, warehouseQuery.isError, commit, finish]);
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  const refresh = useCallback(async () => {
+    const scope = warehouseRef.current;
+    if (!scope || busyRef.current) return;
+    const session = captureInventorySession();
+    const current = () => mountedRef.current && session.isCurrent() && warehouseRef.current === scope;
+    try {
+      const fresh = await session.loadProducts(scope);
+      if (!current()) return;
+      queryClient.setQueryData(['all-products-check', { warehouseId: scope }], fresh);
+      updateDrafts(scope, (previous) => reconcileInventoryDrafts(previous, fresh));
+    } catch {
+      if (current()) setNotice('Не удалось обновить список. Проверьте соединение и повторите.');
+    }
+  }, [queryClient, updateDrafts]);
+
   const renderItem = useCallback(
-    ({ item }: { item: Product }) => {
-      const raw = counts[item.id];
-      const touched = raw !== undefined && raw !== '';
-      const actual = touched ? Number(raw) || 0 : item.stock;
-      const diff = actual - item.stock;
-      const isFlash = flashId === item.id;
+    ({ item }: { item: InventoryRow }) => {
+      if (item.type === 'folder')
+        return (
+          <TouchableOpacity
+            onPress={() => {
+              Keyboard.dismiss();
+              setFolderPath((path) => [...path, item.name]);
+            }}
+            style={[styles.folderRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Открыть папку ${item.name}`}
+          >
+            <View style={[styles.folderIcon, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="folder-open-outline" size={21} color={palette.accent.primaryText} />
+            </View>
+            <View style={styles.rowInfo}>
+              <Text variant="bodyEmph" numberOfLines={1} color={palette.text.primary}>
+                {item.name}
+              </Text>
+              <Text variant="caption" color={palette.text.secondary}>
+                {item.count} товаров
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
+          </TouchableOpacity>
+        );
+      const product = item.product;
+      const draft = drafts[product.id];
+      const actual = parseInventoryQuantity(draft?.raw ?? '');
+      const invalid = !!draft?.raw && actual === null;
+      const baseline = draft?.expectedStock ?? product.stock;
+      const diff = actual === null ? null : Math.round((actual - baseline) * 1000) / 1000;
+      const photo = getImageUrl(product.photo);
+      const locked = !!draft?.pending || !!(draft?.needsReview && !draft.reviewReady);
       return (
         <View
-          style={[
-            styles.row,
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            isFlash && { borderColor: colors.primary[400], backgroundColor: palette.accent.primarySoft },
-          ]}
+          style={[styles.productRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
         >
-          <View style={styles.rowInfo}>
-            <Text variant="callout" color={palette.text.primary} numberOfLines={2}>
-              {item.name}
-            </Text>
-            {item.storageCellCode ? (
-              <View style={styles.rowMeta}>
-                {item.category ? (
-                  <Text variant="caption" color={palette.text.tertiary} numberOfLines={1} style={styles.rowMetaText}>
-                    {item.category.split('/').pop()}
-                  </Text>
-                ) : null}
-                <StorageCellChip code={item.storageCellCode} />
-              </View>
-            ) : item.category ? (
-              <Text variant="caption" color={palette.text.tertiary} numberOfLines={1}>
-                {item.category.split('/').pop()}
-              </Text>
+          <View style={styles.productTop}>
+            {photo ? (
+              <CachedImage
+                source={{ uri: photo }}
+                style={styles.photo}
+                resizeMode="cover"
+                variant="thumb"
+                recyclingKey={product.id}
+              />
             ) : null}
-          </View>
-          <View style={styles.rowSystem}>
-            <Text variant="caption" color={palette.text.tertiary}>
-              Сист.
-            </Text>
-            <Text variant="bodyEmph" color={palette.text.secondary}>
-              {item.stock}
-            </Text>
-          </View>
-          <TextInput
-            value={touched ? raw : ''}
-            onChangeText={(v) => setCount(item.id, v)}
-            placeholder={String(item.stock)}
-            placeholderTextColor={palette.text.tertiary}
-            keyboardType="number-pad"
-            style={[
-              styles.input,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-              touched && diff > 0 && { borderColor: colors.green[400] },
-              touched && diff < 0 && { borderColor: colors.red[400] },
-            ]}
-            accessibilityLabel={`Фактический остаток: ${item.name}`}
-          />
-          {touched && diff !== 0 ? (
-            <View
-              style={[
-                styles.diffBadge,
-                {
-                  backgroundColor:
-                    palette.mode === 'dark'
-                      ? softTint(diff > 0 ? colors.green[600] : colors.red[600], 'dark')
-                      : diff > 0
-                        ? colors.green[50]
-                        : colors.red[50],
-                },
-              ]}
-            >
+            <View style={styles.rowInfo}>
+              <Text variant="callout" color={palette.text.primary} numberOfLines={2}>
+                {product.name}
+              </Text>
+              <View style={styles.meta}>
+                <Text variant="caption" color={palette.text.secondary}>
+                  Учёт: {formatQty(baseline)} {unitLabel(product.unit)}
+                </Text>
+                <StorageCellChip code={product.storageCellCode} />
+              </View>
               <Text
                 variant="caption"
                 color={
-                  palette.mode === 'dark'
-                    ? diff > 0
-                      ? colors.green[400]
-                      : colors.red[400]
-                    : diff > 0
-                      ? colors.green[700]
+                  invalid || draft?.needsReview
+                    ? palette.mode === 'dark'
+                      ? colors.red[400]
                       : colors.red[700]
+                    : palette.text.secondary
                 }
-                style={styles.diffText}
               >
-                {diff > 0 ? '+' : ''}
-                {diff}
+                {invalid
+                  ? 'Число от 0, до 3 знаков после запятой'
+                  : draft?.needsReview
+                    ? 'Учёт изменился — сверьте факт'
+                    : draft?.pending
+                      ? 'Ожидает подтверждения · повторите'
+                      : diff === null
+                        ? 'Ещё не пересчитан'
+                        : `Разница: ${diff > 0 ? '+' : ''}${formatQty(diff)} ${unitLabel(product.unit)}`}
               </Text>
             </View>
-          ) : (
-            <View style={styles.diffBadgePlaceholder} />
-          )}
+            <View style={styles.fact}>
+              <Text variant="caption" color={palette.text.secondary}>
+                Факт
+              </Text>
+              <TextInput
+                value={draft?.raw ?? ''}
+                onChangeText={(value) => setCount(product, value)}
+                editable={!busy && !locked}
+                placeholder="—"
+                placeholderTextColor={palette.text.secondary}
+                keyboardType="decimal-pad"
+                returnKeyType="done"
+                onSubmitEditing={Keyboard.dismiss}
+                onFocus={() => {
+                  focusId.current = product.id;
+                  if (keyboardVisible) scrollToFocused();
+                }}
+                style={[
+                  styles.input,
+                  {
+                    color: palette.text.primary,
+                    backgroundColor: palette.bg.muted,
+                    borderColor:
+                      invalid || draft?.needsReview
+                        ? palette.mode === 'dark'
+                          ? colors.red[400]
+                          : colors.red[700]
+                        : palette.border.subtle,
+                  },
+                ]}
+                accessibilityLabel={`Факт: ${product.name}, ${unitLabel(product.unit)}`}
+              />
+            </View>
+          </View>
+          {draft?.needsReview && draft.reviewReady && actual !== null ? (
+            <TouchableOpacity
+              style={styles.reviewButton}
+              accessibilityRole="button"
+              accessibilityLabel={`Подтвердить сверенный факт: ${product.name}`}
+              onPress={() => {
+                if (!warehouseId || busyRef.current) return;
+                updateDrafts(warehouseId, (previous) => ({
+                  ...previous,
+                  [product.id]: { ...previous[product.id], needsReview: false },
+                }));
+              }}
+            >
+              <Text variant="callout" color={palette.accent.primaryText}>
+                Факт сверен: {formatQty(actual)} {unitLabel(product.unit)}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       );
     },
-    [counts, flashId, palette, setCount],
+    [busy, drafts, keyboardVisible, palette, scrollToFocused, setCount, updateDrafts, warehouseId],
   );
 
-  if (!canWrite) {
-    return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-        <IosScreenHeader title="Инвентаризация" onBack={() => navigation.goBack()} />
-        <EmptyState
-          icon="lock"
-          title="Недостаточно прав"
-          description="Инвентаризация доступна сотрудникам с доступом к складу."
-        />
-      </SafeAreaView>
-    );
-  }
+  const missingContent = (
+    <View style={styles.notice}>
+      {missingDrafts.map(([id, draft]) => (
+        <View key={id}>
+          <Text variant="caption" color={palette.text.secondary}>
+            {draft.name ?? 'Товар'} ·{' '}
+            {draft.pending ? 'Проведение не подтверждено' : 'Больше не доступен на этом складе'}
+          </Text>
+          {draft.unavailable && draft.needsReview && !draft.pending ? (
+            <TouchableOpacity
+              style={styles.reviewButton}
+              accessibilityRole="button"
+              accessibilityLabel={`Убрать из пересчёта: ${draft.name ?? 'товар'}`}
+              onPress={() => {
+                if (!warehouseId || busyRef.current) return;
+                updateDrafts(warehouseId, (previous) => {
+                  const next = { ...previous };
+                  delete next[id];
+                  return next;
+                });
+                setNotice('Недоступный товар убран из пересчёта. Его остаток не изменён.');
+              }}
+            >
+              <Text variant="callout" color={palette.accent.primaryText}>
+                Убрать из пересчёта
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
 
+  const applyDisabled =
+    busy ||
+    !summary.counted ||
+    !!summary.invalid ||
+    !!summary.review ||
+    catalog.isFetching ||
+    catalog.isError ||
+    warehouseQuery.isError;
+  const loading = warehouseQuery.isLoading || (!!warehouseId && (catalog.isLoading || folders.isLoading));
+  const loadError = warehouseQuery.isError || catalog.isError || folders.isError;
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+    <KeyboardAvoidingView
+      style={[styles.screen, { backgroundColor: palette.bg.canvas }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <IosScreenHeader
         title="Инвентаризация"
-        subtitle={activeWarehouse?.name}
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity
-            onPress={handleApply}
-            disabled={!!progress}
-            style={[styles.applyBtn, progress ? { opacity: 0.6 } : null]}
-            accessibilityLabel="Провести инвентаризацию"
-          >
-            <Text variant="callout" color={colors.white} style={styles.applyBtnText}>
-              {progress ? `${progress.done} из ${progress.total}…` : 'Провести'}
-            </Text>
-          </TouchableOpacity>
+          canWrite ? (
+            <TouchableOpacity
+              onPress={handleApply}
+              disabled={applyDisabled}
+              accessibilityRole="button"
+              accessibilityLabel="Провести инвентаризацию"
+              accessibilityState={{ disabled: applyDisabled }}
+              style={[styles.apply, { opacity: applyDisabled ? 0.45 : 1 }]}
+            >
+              <Text variant="callout" color={palette.accent.primaryText} style={styles.semibold}>
+                {progress ? `${progress.done}/${progress.total}` : 'Провести'}
+              </Text>
+            </TouchableOpacity>
+          ) : undefined
         }
       />
-      {/* Автосервис (169): остатки — склада филиала сессии. Только подпись. */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
-
-      {/* Scope: warehouse chips + scan button */}
-      <View style={styles.scopeRow}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsScroll}>
-          {(warehouses ?? []).map((w) => {
-            const active = w.id === activeWarehouseId;
-            return (
-              <TouchableOpacity
-                key={w.id}
-                onPress={() => {
-                  setSelectedWarehouseId(w.id);
-                  setCategoryFilter(null);
-                }}
-                style={[
-                  styles.chip,
-                  {
-                    backgroundColor: active ? colors.primary[600] : palette.bg.muted,
-                    borderColor: palette.border.subtle,
-                  },
-                ]}
-              >
-                <Text variant="caption" color={active ? colors.white : palette.text.secondary} style={styles.chipText}>
-                  {w.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        <TouchableOpacity
-          onPress={() => {
-            haptic('tap');
-            setShowScanner(true);
-          }}
-          style={styles.scanBtn}
-          accessibilityLabel="Сканировать штрих-код"
-        >
-          <Ionicons name="barcode-outline" size={20} color={colors.white} />
-          <Text variant="caption" color={colors.white} style={styles.scanBtnText}>
-            Скан
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Category folder chips */}
-      {topFolders.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.catScroll}
-          contentContainerStyle={styles.chipsScroll}
-        >
-          <TouchableOpacity
-            onPress={() => setCategoryFilter(null)}
-            style={[
-              styles.chip,
-              {
-                backgroundColor: !categoryFilter ? palette.accent.primarySoft : palette.bg.muted,
-                borderColor: palette.border.subtle,
-              },
-            ]}
-          >
-            <Text
-              variant="caption"
-              color={!categoryFilter ? palette.accent.primaryText : palette.text.secondary}
-              style={styles.chipText}
-            >
-              Все
-            </Text>
-          </TouchableOpacity>
-          {topFolders.map((f) => {
-            const active = categoryFilter === f;
-            return (
-              <TouchableOpacity
-                key={f}
-                onPress={() => setCategoryFilter(active ? null : f)}
-                style={[
-                  styles.chip,
-                  {
-                    backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
-                    borderColor: palette.border.subtle,
-                  },
-                ]}
-              >
-                <Text
-                  variant="caption"
-                  color={active ? palette.accent.primaryText : palette.text.secondary}
-                  style={styles.chipText}
-                >
-                  {f}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      )}
-
-      {/* Search */}
-      <View style={styles.searchWrap}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск товара или ячейки..." />
-      </View>
-
-      {/* Last-scan banner */}
-      {lastScan && (
-        <View style={[styles.scanBanner, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
-          <Ionicons name="checkmark-circle" size={16} color={colors.green[600] as string} />
-          <Text variant="caption" color={colors.green[800] as string} numberOfLines={1} style={{ flex: 1 }}>
-            {lastScan.name} — учтено: {lastScan.count}
-          </Text>
-        </View>
-      )}
-
-      {/* Summary */}
-      <View style={[styles.summaryBar, { borderColor: palette.border.subtle }]}>
-        <View style={styles.summaryItem}>
-          <Text variant="caption" color={palette.text.tertiary}>
-            Посчитано
-          </Text>
-          <Text variant="bodyEmph" color={palette.text.primary}>
-            {summary.countedCount}
-          </Text>
-        </View>
-        <View style={styles.summaryItem}>
-          <Text variant="caption" color={palette.text.tertiary}>
-            Изменено
-          </Text>
-          <Text variant="bodyEmph" color={summary.changedCount > 0 ? colors.orange[600] : palette.text.primary}>
-            {summary.changedCount}
-          </Text>
-        </View>
-        {summary.shortage > 0 && (
-          <View style={styles.summaryItem}>
-            <Text variant="caption" color={palette.text.tertiary}>
-              Недостача
-            </Text>
-            <Text variant="bodyEmph" color={colors.red[600]}>
-              {formatMoney(summary.shortage)}
-            </Text>
-          </View>
-        )}
-        {summary.excess > 0 && (
-          <View style={styles.summaryItem}>
-            <Text variant="caption" color={palette.text.tertiary}>
-              Излишки
-            </Text>
-            <Text variant="bodyEmph" color={colors.green[600]}>
-              {formatMoney(summary.excess)}
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* List */}
-      {isLoading && allProducts.length === 0 ? (
-        <ListSkeleton />
-      ) : isError && allProducts.length === 0 ? (
-        <EmptyState
-          icon="warning"
-          title="Не удалось загрузить"
-          description="Проверьте соединение и повторите."
-          action={{ label: 'Повторить', onPress: () => refetch() }}
-        />
-      ) : scopedProducts.length === 0 ? (
-        <EmptyState icon="cube" title="Нет товаров" description="В этой области склада нет товаров для пересчёта." />
+      {!canWrite ? (
+        <EmptyState icon="lock" title="Недостаточно прав" description="Нужно право управления складом." />
       ) : (
-        <FlashList
-          ref={listRef}
-          data={scopedProducts}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{
-            paddingHorizontal: spacing[4],
-            paddingTop: spacing[2],
-            paddingBottom: tabBarHeight + spacing[4],
-          }}
-          ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
-        />
+        <>
+          <View style={styles.scope}>
+            <TouchableOpacity
+              style={styles.warehouseButton}
+              disabled={busy || warehouses.length < 2}
+              onPress={() => {
+                Keyboard.dismiss();
+                setWarehouseMenu((open) => !open);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Склад: ${activeWarehouse?.name ?? 'Загрузка'}`}
+              accessibilityState={{ expanded: warehouseMenu, disabled: busy || warehouses.length < 2 }}
+            >
+              <Ionicons name="cube-outline" size={18} color={palette.accent.primaryText} />
+              <Text variant="callout" color={palette.text.primary} numberOfLines={1} style={styles.warehouseName}>
+                {activeWarehouse?.name ?? 'Склад'}
+              </Text>
+              {warehouses.length > 1 ? (
+                <Ionicons
+                  name={warehouseMenu ? 'chevron-up' : 'chevron-down'}
+                  size={15}
+                  color={palette.text.secondary}
+                />
+              ) : null}
+            </TouchableOpacity>
+            <PointIndicator style={styles.point} />
+            <TouchableOpacity
+              style={styles.iconButton}
+              disabled={busy || !warehouseId || loading}
+              accessibilityRole="button"
+              accessibilityLabel="Сканировать штрих-код"
+              onPress={() => {
+                if (!warehouseId || busyRef.current) return;
+                scannerScope.current = { session: captureInventorySession(), warehouseId };
+                setShowScanner(true);
+              }}
+            >
+              <Ionicons name="barcode-outline" size={25} color={palette.accent.primaryText} />
+            </TouchableOpacity>
+          </View>
+          {warehouseMenu ? (
+            <View
+              style={[styles.warehouseMenu, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              {warehouses.map((warehouse) => (
+                <TouchableOpacity
+                  key={warehouse.id}
+                  style={styles.menuRow}
+                  onPress={() => chooseWarehouse(warehouse.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={warehouse.name}
+                >
+                  <Text variant="callout" color={palette.text.primary} style={styles.rowInfo}>
+                    {warehouse.name}
+                  </Text>
+                  {warehouse.id === warehouseId ? (
+                    <Ionicons name="checkmark" size={20} color={palette.accent.primaryText} />
+                  ) : null}
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+          <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="search" size={18} color={palette.text.secondary} />
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              style={[styles.searchInput, { color: palette.text.primary }]}
+              placeholder="Название, штрих-код или ячейка"
+              placeholderTextColor={palette.text.secondary}
+              accessibilityLabel="Поиск по всем товарам склада"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {search ? (
+              <TouchableOpacity
+                onPress={() => setSearch('')}
+                style={styles.clearButton}
+                accessibilityRole="button"
+                accessibilityLabel="Очистить поиск"
+              >
+                <Ionicons name="close-circle" size={20} color={palette.text.secondary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <View style={[styles.statusRow, { borderBottomColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              style={styles.breadcrumb}
+              disabled={!folderPath.length && !search.trim()}
+              onPress={() => {
+                setSearch('');
+                if (!search.trim()) setFolderPath((path) => path.slice(0, -1));
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Назад к папкам"
+            >
+              {folderPath.length || search.trim() ? (
+                <Ionicons name="chevron-back" size={16} color={palette.accent.primaryText} />
+              ) : null}
+              <Text variant="caption" color={palette.accent.primaryText} numberOfLines={1}>
+                {search.trim() ? 'По всему складу' : (folderPath[folderPath.length - 1] ?? 'Все папки')}
+              </Text>
+            </TouchableOpacity>
+            <Text variant="caption" color={palette.text.secondary}>
+              Посчитано {summary.counted} · Изменено {summary.changed}
+            </Text>
+          </View>
+          {scanFeedback ? (
+            <Text variant="caption" color={palette.accent.primaryText} numberOfLines={2} style={styles.notice}>
+              {scanFeedback}
+            </Text>
+          ) : null}
+          {displayNotice || summary.invalid || summary.review || missingDrafts.length ? (
+            <View style={styles.notice}>
+              <Text variant="caption" color={palette.text.secondary}>
+                {displayNotice ??
+                  (summary.review
+                    ? 'Сверьте изменившийся учёт перед проведением.'
+                    : 'Исправьте неверные значения факта.')}
+              </Text>
+              {summary.review ? (
+                <TouchableOpacity
+                  style={styles.reviewButton}
+                  onPress={() => void refresh()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Обновить учёт"
+                >
+                  <Text variant="callout" color={palette.accent.primaryText}>
+                    Обновить учёт
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+          <View style={styles.viewport}>
+            {loading ? (
+              <ListSkeleton />
+            ) : loadError ? (
+              <EmptyState
+                icon="warning"
+                title="Не удалось загрузить склад"
+                description="Обновите список, чтобы пересчитать все товары."
+                action={{
+                  label: 'Повторить',
+                  onPress: () => {
+                    void warehouseQuery.refetch();
+                    if (warehouseId) {
+                      void catalog.refetch();
+                      void folders.refetch();
+                    }
+                  },
+                }}
+              />
+            ) : !warehouseId ? (
+              <EmptyState icon="cube" title="Нет складов" description="Сначала создайте склад в разделе «Склад»." />
+            ) : (
+              <TabBarFlatList
+                ref={listRef}
+                data={rows}
+                keyExtractor={(row) => row.key}
+                renderItem={renderItem}
+                extraData={drafts}
+                style={styles.viewport}
+                contentContainerStyle={styles.listContent}
+                reserveBottomNavigation={!keyboardVisible}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                onScrollToIndexFailed={({ index, averageItemLength }) => {
+                  listRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: true });
+                  if (scrollTimer.current) clearTimeout(scrollTimer.current);
+                  scrollTimer.current = setTimeout(scrollToFocused, 180);
+                }}
+                refreshing={catalog.isFetching && !catalog.isLoading}
+                onRefresh={() => void refresh()}
+                ListHeaderComponent={missingDrafts.length ? missingContent : null}
+                ListEmptyComponent={
+                  <EmptyState
+                    icon="cube"
+                    title={search.trim() ? 'Товары не найдены' : 'Папка пуста'}
+                    description={
+                      search.trim()
+                        ? 'Попробуйте другое название, штрих-код или ячейку.'
+                        : 'В этой папке пока нет товаров.'
+                    }
+                  />
+                }
+              />
+            )}
+          </View>
+          {keyboardVisible ? (
+            <View
+              style={[styles.keyboardBar, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}
+            >
+              <Text variant="caption" color={palette.text.secondary}>
+                Пусто — не пересчитан · 0 — нет товара
+              </Text>
+              <TouchableOpacity
+                onPress={Keyboard.dismiss}
+                style={styles.doneButton}
+                accessibilityRole="button"
+                accessibilityLabel="Скрыть клавиатуру"
+              >
+                <Text variant="callout" color={palette.accent.primaryText} style={styles.semibold}>
+                  Готово
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </>
       )}
-
       <BarcodeScanner
         visible={showScanner}
-        onClose={() => setShowScanner(false)}
+        onClose={() => {
+          scannerScope.current = null;
+          setShowScanner(false);
+        }}
         onScanned={handleScanned}
-        hint="Наведите камеру на штрих-код товара для пересчёта"
+        hint="Скан добавит одну единицу к факту товара"
       />
-    </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
-  safe: { flex: 1 },
-  scopeRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], gap: spacing[2] },
-  chipsScroll: { gap: spacing[2], paddingVertical: spacing[1], paddingRight: spacing[2], alignItems: 'center' },
-  catScroll: { flexGrow: 0, flexShrink: 0, marginTop: spacing[2], paddingHorizontal: spacing[4] },
-  chip: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
-    borderRadius: borderRadius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  chipText: { fontWeight: fontWeight.medium },
-  scanBtn: {
+  screen: { flex: 1 },
+  viewport: { flex: 1 },
+  apply: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing[1] },
+  semibold: { fontWeight: fontWeight.semibold },
+  scope: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4] },
+  warehouseButton: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  warehouseName: { flexShrink: 1 },
+  point: { maxWidth: 112, flexShrink: 1 },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  warehouseMenu: { marginHorizontal: spacing[4], borderRadius: borderRadius.lg, borderWidth: StyleSheet.hairlineWidth },
+  menuRow: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1],
-    backgroundColor: colors.primary[600],
+    gap: spacing[2],
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.full,
   },
-  scanBtnText: { fontWeight: fontWeight.semibold },
-  searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[2], paddingBottom: spacing[1] },
-  scanBanner: {
+  search: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
     marginHorizontal: spacing[4],
-    marginTop: spacing[1],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
     borderRadius: borderRadius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingLeft: spacing[3],
   },
-  summaryBar: {
+  searchInput: { flex: 1, minWidth: 0, minHeight: 44, fontSize: 15, paddingVertical: spacing[2] },
+  clearButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  statusRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing[4],
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  breadcrumb: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  notice: { marginHorizontal: spacing[4], paddingVertical: spacing[2] },
+  listContent: { paddingBottom: spacing[4] },
+  folderRow: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  summaryItem: { gap: 1 },
-  applyBtn: {
-    backgroundColor: colors.primary[600],
+  folderIcon: { width: 38, height: 38, borderRadius: borderRadius.md, alignItems: 'center', justifyContent: 'center' },
+  rowInfo: { flex: 1, minWidth: 0, gap: 3 },
+  productRow: {
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.full,
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  applyBtnText: { fontWeight: fontWeight.bold },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    padding: spacing[3],
-    borderRadius: borderRadius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  rowInfo: { flex: 1, minWidth: 0 },
-  // Категория + код ячейки в одну строку: категория ужимается вместе с плашкой, остаток справа не двигается.
-  rowMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  rowMetaText: { flexShrink: 1 },
-  rowSystem: { alignItems: 'center', minWidth: 44 },
+  productTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  photo: { width: 40, height: 40, borderRadius: borderRadius.md },
+  meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing[1] },
+  fact: { width: 86, alignItems: 'center', gap: spacing[1] },
   input: {
-    width: 64,
-    height: 40,
+    width: 86,
+    minHeight: 48,
+    paddingHorizontal: spacing[1],
+    paddingVertical: spacing[2],
     borderWidth: 1,
     borderRadius: borderRadius.md,
     textAlign: 'center',
-    fontSize: fontSize.base,
+    fontSize: 17,
     fontWeight: fontWeight.semibold,
-    paddingVertical: 0,
   },
-  diffBadge: {
-    minWidth: 38,
+  reviewButton: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
+  keyboardBar: {
+    paddingLeft: spacing[4],
+    paddingRight: spacing[2],
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing[1.5],
-    paddingVertical: 2,
-    borderRadius: borderRadius.md,
+    justifyContent: 'space-between',
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  diffText: { fontWeight: fontWeight.bold },
-  diffBadgePlaceholder: { width: 38 },
+  doneButton: { minHeight: 44, paddingHorizontal: spacing[2], justifyContent: 'center' },
 });
