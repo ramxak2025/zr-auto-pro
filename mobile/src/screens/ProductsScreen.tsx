@@ -24,7 +24,7 @@ import { BlurView } from 'expo-blur';
 import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
+import { useProductPhotoPicker } from '../hooks/useProductPhotoPicker';
 import { productsApi, warehouseCategoriesApi, uploadsApi, warehousesApi, stockMovementsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
@@ -493,6 +493,7 @@ export default function ProductsScreen() {
   const [cellPickerOpen, setCellPickerOpen] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoUploadPending = useRef(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showOpsModal, setShowOpsModal] = useState(false);
   // «Массовая корректировка цен» — bulk sell-price tool. Opened from the
@@ -668,6 +669,17 @@ export default function ProductsScreen() {
   }, [warehouses, selectedWarehouseId]);
 
   const activeWarehouseId = activeWarehouse?.id;
+  const {
+    pickImage,
+    isPicking: pickingPhoto,
+    invalidate: invalidatePhotoPicker,
+    captureContinuation: capturePhotoForm,
+  } = useProductPhotoPicker({
+    active: modalOpen,
+    formKey: `${activeWarehouseId ?? ''}:${editingProduct?.id ?? 'new'}`,
+    navigation,
+    onChange: setPhotoUri,
+  });
   const folderWarehouseRef = useRef(activeWarehouseId);
   folderWarehouseRef.current = activeWarehouseId;
   const isMainWarehouse = activeWarehouse?.kind === 'main';
@@ -1484,20 +1496,8 @@ export default function ProductsScreen() {
     bulkDeleteMutation.mutate({ deleteAll: true, ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}) });
   }, [bulkDeleteMutation, activeWarehouseId]);
 
-  // --- Image picking ---
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setPhotoUri(result.assets[0].uri);
-    }
-  };
-
   const openCreate = () => {
+    invalidatePhotoPicker();
     setEditingProduct(null);
     setName('');
     setCategory(activePath.join('/') || '');
@@ -1514,26 +1514,29 @@ export default function ProductsScreen() {
 
   // useCallback so the row's onPress identity is stable across SWR
   // refetches; otherwise React.memo on ProductRow can't short-circuit
-  // re-renders. Setters from useState are already stable so the deps
-  // array is intentionally empty.
-  const openEdit = useCallback((p: Product) => {
-    setConfirmStarterPrices(false);
-    setEditingProduct(p);
-    setName(p.name);
-    setCategory(p.category || '');
-    // null-безопасно: у товара б/у-склада цена продажи может прийти пустой,
-    // а String(null) = 'null' сделал бы поле невалидным при сохранении.
-    setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
-    setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
-    setStock(p.stock != null ? String(p.stock) : '');
-    setMinStock(p.minStock != null ? String(p.minStock) : '');
-    // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
-    setUnit(unitLabel(p.unit));
-    setFormBarcode(p.barcode || '');
-    setFormCell(p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '' } : null);
-    setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
-    setModalOpen(true);
-  }, []);
+  // re-renders. The picker invalidation callback is stable as well.
+  const openEdit = useCallback(
+    (p: Product) => {
+      invalidatePhotoPicker();
+      setConfirmStarterPrices(false);
+      setEditingProduct(p);
+      setName(p.name);
+      setCategory(p.category || '');
+      // null-безопасно: у товара б/у-склада цена продажи может прийти пустой,
+      // а String(null) = 'null' сделал бы поле невалидным при сохранении.
+      setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+      setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
+      setStock(p.stock != null ? String(p.stock) : '');
+      setMinStock(p.minStock != null ? String(p.minStock) : '');
+      // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
+      setUnit(unitLabel(p.unit));
+      setFormBarcode(p.barcode || '');
+      setFormCell(p.storageCellId ? { id: p.storageCellId, code: p.storageCellCode ?? '' } : null);
+      setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
+      setModalOpen(true);
+    },
+    [invalidatePhotoPicker],
+  );
 
   // Row tap → dedicated detail screen (pushed onto THIS Products tab-stack so
   // the floating tab bar stays visible and edge-swipe pops back to the list).
@@ -1595,6 +1598,7 @@ export default function ProductsScreen() {
   }, [editProductParam, openEdit, navigation]);
 
   const closeModal = () => {
+    invalidatePhotoPicker();
     setModalOpen(false);
     setEditingProduct(null);
     setPhotoUri(null);
@@ -1602,6 +1606,15 @@ export default function ProductsScreen() {
   };
 
   const handleSubmit = async () => {
+    if (
+      photoUploadPending.current ||
+      pickingPhoto ||
+      uploadingPhoto ||
+      createMutation.isPending ||
+      updateMutation.isPending
+    )
+      return;
+    const continuation = capturePhotoForm();
     // #63 — тип допускает null: убранное фото у существующего товара шлём как
     // null (иначе поле просто не отправится и старое фото останется на сервере).
     let uploadedPhotoPath: string | null | undefined = editingProduct?.photo || undefined;
@@ -1609,19 +1622,23 @@ export default function ProductsScreen() {
     // Upload new photo if it's a local file URI
     if (photoUri && photoUri.startsWith('file://')) {
       try {
+        photoUploadPending.current = true;
         setUploadingPhoto(true);
         const filename = photoUri.split('/').pop() || 'photo.jpg';
         const res = await uploadsApi.upload(photoUri, filename);
+        if (!continuation.isCurrent()) return;
         uploadedPhotoPath = res.data.url;
       } catch {
+        if (!continuation.isCurrent()) return;
         Alert.alert(
           '\u041E\u0448\u0438\u0431\u043A\u0430',
           '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0444\u043E\u0442\u043E',
         );
-        setUploadingPhoto(false);
         return;
+      } finally {
+        photoUploadPending.current = false;
+        setUploadingPhoto(false);
       }
-      setUploadingPhoto(false);
     } else if (!photoUri) {
       // #63 — фото убрали: у существующего товара шлём null (бэкенд очистит),
       // у нового — undefined (поля просто нет в payload).
@@ -2702,6 +2719,8 @@ export default function ProductsScreen() {
           <TouchableOpacity
             style={[styles.photoPickerWrap, { borderColor: palette.border.subtle }]}
             onPress={pickImage}
+            disabled={pickingPhoto || uploadingPhoto}
+            accessibilityLabel={photoUri ? 'Заменить фото товара' : 'Добавить фото товара'}
           >
             {photoUri ? (
               <CachedImage
@@ -2720,7 +2739,11 @@ export default function ProductsScreen() {
           </TouchableOpacity>
           {photoUri && (
             <View style={styles.photoActions}>
-              <TouchableOpacity style={styles.photoActionBtn} onPress={pickImage}>
+              <TouchableOpacity
+                style={styles.photoActionBtn}
+                onPress={pickImage}
+                disabled={pickingPhoto || uploadingPhoto}
+              >
                 <Ionicons name="swap-horizontal" size={16} color={colors.primary[600]} />
                 <Text style={styles.photoActionText}>{'\u0417\u0430\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
               </TouchableOpacity>
@@ -2731,7 +2754,14 @@ export default function ProductsScreen() {
                 <Ionicons name="expand-outline" size={16} color={colors.primary[600]} />
                 <Text style={styles.photoActionText}>{'\u041F\u0440\u043E\u0441\u043C\u043E\u0442\u0440'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.photoActionBtn} onPress={() => setPhotoUri(null)}>
+              <TouchableOpacity
+                style={styles.photoActionBtn}
+                onPress={() => {
+                  invalidatePhotoPicker();
+                  setPhotoUri(null);
+                }}
+                disabled={pickingPhoto || uploadingPhoto}
+              >
                 <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
                 <Text style={[styles.photoActionText, { color: colors.red[500] }]}>
                   {'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}
@@ -3005,7 +3035,11 @@ export default function ProductsScreen() {
               <Ionicons name="trash-outline" size={16} color={colors.red[600]} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
+          <TouchableOpacity
+            style={styles.submitBtn}
+            onPress={handleSubmit}
+            disabled={pickingPhoto || uploadingPhoto || createMutation.isPending || updateMutation.isPending}
+          >
             {createMutation.isPending || updateMutation.isPending || uploadingPhoto ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
