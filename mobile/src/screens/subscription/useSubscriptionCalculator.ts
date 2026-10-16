@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { captureDataSession } from '../../contexts/dataSession';
 import { useQuery } from '@tanstack/react-query';
 import { subscriptionApi } from '../../api/services';
 import type { SubscriptionInfo, SubscriptionQuotePreview } from '../../../../shared/types';
@@ -20,8 +21,16 @@ export function useSubscriptionCalculator(sub: SubscriptionInfo | undefined, ena
   const employeeCount = subscriptionCount(employees),
     pointCount = subscriptionCount(points);
   const valid = !!employeeCount && !!pointCount && employeeCount >= actualEmployees && pointCount >= actualPoints;
+  const session = captureDataSession();
   const quote = useQuery({
-    queryKey: ['subscription-quote', planId, period, employeeCount, pointCount],
+    queryKey: [
+      'subscription-quote',
+      { owner: session.key, generation: session.generation },
+      planId,
+      period,
+      employeeCount,
+      pointCount,
+    ],
     queryFn: async () =>
       (await subscriptionApi.quote({ planId: planId!, period, employees: employeeCount, points: pointCount })).data,
     enabled: enabled && !!planId && valid,

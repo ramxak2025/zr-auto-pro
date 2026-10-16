@@ -45,6 +45,7 @@ jest.mock('@tanstack/react-query', () => ({
 jest.mock('../../../api/services', () => ({
   subscriptionApi: { quote: (...args: unknown[]) => mockQuoteApi(...args) },
 }));
+import { captureDataSession, setDataSession } from '../../../contexts/dataSession';
 import { useSubscriptionCalculator } from '../useSubscriptionCalculator';
 import { SUBSCRIPTION_PLAN_PRICING } from '../../../../../shared/utils/subscriptionPricing';
 import type { Plan, SubscriptionInfo, SubscriptionQuotePreview } from '../../../../../shared/types';
@@ -76,6 +77,7 @@ const render = (sub = subscription()) => {
   return result;
 };
 beforeEach(() => {
+  setDataSession({ tenantId: 'tenant', userId: 'owner-A', pointId: 'point' });
   mockStates.length = 0;
   mockEffects.length = 0;
   mockPending.length = 0;
@@ -100,7 +102,14 @@ it('uses server presets and actual minima, then preserves explicit selections be
   render();
   await mockOptions.queryFn();
   expect(mockQuoteApi).toHaveBeenCalledWith({ planId: 'baza', period: 'yearly', employees: 3, points: 2 });
-  expect(mockOptions.queryKey).toEqual(['subscription-quote', 'baza', 'yearly', 3, 2]);
+  expect(mockOptions.queryKey).toEqual([
+    'subscription-quote',
+    { owner: captureDataSession().key, generation: captureDataSession().generation },
+    'baza',
+    'yearly',
+    3,
+    2,
+  ]);
 });
 it('never resets two actual branches to one and gives the MAX explanation', () => {
   const sub = subscription(2, 2);
@@ -139,4 +148,22 @@ it('obtains inactive current-plan metadata from its quote without inventing feat
   expect(render(sub).name).toBe('Прежний MAX');
   expect(render(sub).plan).toBeUndefined();
   expect(render(sub).ready).toBe(false);
+});
+
+it('separates calculator keys by current data owner and generation without changing quote selection', () => {
+  render();
+  const first = [...mockOptions.queryKey];
+  const owner = captureDataSession().owner;
+  setDataSession(owner);
+  render();
+  const renewed = [...mockOptions.queryKey];
+  expect(renewed).not.toEqual(first);
+  expect(renewed.slice(2)).toEqual(first.slice(2));
+  setDataSession({ tenantId: 'other', userId: 'owner-B', pointId: 'other' });
+  render();
+  expect(mockOptions.queryKey[1]).toEqual({
+    owner: captureDataSession().key,
+    generation: captureDataSession().generation,
+  });
+  expect(mockOptions.queryKey).not.toEqual(renewed);
 });

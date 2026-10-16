@@ -26,6 +26,9 @@ export default function SubscriptionQuoteBreakdown({
             {money(display.amount)}/мес
           </Text>
           {annual ? (
+            <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>в месяц при оплате за год</Text>
+          ) : null}
+          {annual ? (
             <Text style={{ fontSize: fontSize.base, fontWeight: '600', color: palette.text.primary }}>
               К оплате сразу за 12 месяцев: {money(q.total)}
             </Text>
@@ -33,7 +36,7 @@ export default function SubscriptionQuoteBreakdown({
         </>
       )}
       <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>
-        В расчёте: {q.employees} сотрудников · {q.points} филиалов. Включено сотрудников: {q.includedEmployees}; сверх
+        В расчёте: сотрудники — {q.employees} · Филиалы — {q.points}. Сотрудников включено: {q.includedEmployees}; сверх
         включённых: {q.extraEmployees}.
       </Text>
       {!hideMoney && (

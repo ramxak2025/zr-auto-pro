@@ -8,12 +8,14 @@ export default function SubscriptionCompositionFields({
   onEmployees,
   onPoints,
   locked = false,
+  inputAccessoryViewID,
 }: {
   employees: string;
   points: string;
   onEmployees: (raw: string) => void;
   onPoints: (raw: string) => void;
   locked?: boolean;
+  inputAccessoryViewID?: string;
 }) {
   const palette = useColors();
   return (
@@ -29,6 +31,7 @@ export default function SubscriptionCompositionFields({
             onChangeText={field.change}
             editable={!locked}
             keyboardType="number-pad"
+            inputAccessoryViewID={inputAccessoryViewID}
             accessibilityLabel={field.label}
             style={[
               styles.input,

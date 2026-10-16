@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import ts from 'typescript';
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
 const mockEffects: { deps?: unknown[] }[] = [];
@@ -184,31 +187,28 @@ it('locks a pending or uncertain intent and retries exactly the same amount/toke
   expect(submit.mock.calls[1][0]).toEqual({ ...request, employees: 51, points: 2, requestId: 'request-1' });
   expect(render().canClose()).toBe(true);
 });
-it.each(['LEGACY_PLAN', 'UNPRICED_POINTS'])(
-  'supports manual date and free days when %s has no composition quote',
-  async (code) => {
-    mockQuote.data = undefined;
-    mockQuote.isError = true;
-    mockQuote.error = { response: { status: 400, data: { code } } };
-    const submit = jest.fn(async (request: unknown) => request);
-    const render = mount(submit);
-    expect(render().period).toBe('custom');
-    expect(render().fallback).not.toBe('');
-    await render().send({ type: 'free', days: 14 });
-    expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
-      type: 'free',
-      days: 14,
-      requestId: 'request-1',
-    });
-    await render().send({ type: 'paid', amount: 1234, until: '2027-01-01' });
-    expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
-      type: 'paid',
-      amount: 1234,
-      until: '2027-01-01',
-      requestId: 'request-2',
-    });
-  },
-);
+it.each(['LEGACY_PLAN'])('supports manual date and free days when %s has no composition quote', async (code) => {
+  mockQuote.data = undefined;
+  mockQuote.isError = true;
+  mockQuote.error = { response: { status: 400, data: { code } } };
+  const submit = jest.fn(async (request: unknown) => request);
+  const render = mount(submit);
+  expect(render().period).toBe('custom');
+  expect(render().fallback).not.toBe('');
+  await render().send({ type: 'free', days: 14 });
+  expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
+    type: 'free',
+    days: 14,
+    requestId: 'request-1',
+  });
+  await render().send({ type: 'paid', amount: 1234, until: '2027-01-01' });
+  expect(submit.mock.calls[submit.mock.calls.length - 1]?.[0]).toEqual({
+    type: 'paid',
+    amount: 1234,
+    until: '2027-01-01',
+    requestId: 'request-2',
+  });
+});
 
 it('normal period and composition changes replace a manual override with the full new invoice and explain it', () => {
   const render = mount(async () => undefined);
@@ -335,4 +335,80 @@ it('a failed stale-quote refresh preserves actual money and keeps review require
   expect(render().amount).toBe('12345');
   expect(render().changed).toBe(true);
   expect(render().message).toContain('сохранена');
+});
+
+function sheetSubmit(scope: Record<string, unknown>) {
+  const source = ts.createSourceFile(
+    'ExtendSubscriptionSheet.tsx',
+    fs.readFileSync(path.join(__dirname, '../ExtendSubscriptionSheet.tsx'), 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let expression = '';
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'submit' && node.initializer)
+      expression = node.initializer.getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  if (!expression) throw new Error('Missing actual sheet submit');
+  const js = ts.transpileModule(`const submit = ${expression};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return Function(...Object.keys(scope), `${js}; return submit;`)(...Object.values(scope)) as () => void;
+}
+it('UNPRICED_POINTS cannot revive the previous custom date or submit it without explicit manual selection', async () => {
+  const submit = jest.fn(async (request: unknown) => request);
+  mockQuote.data = {
+    ...preview(),
+    planId: 'pro',
+    pricing: { code: 'pro', includedEmployees: 5, includedPoints: 1 },
+    usage: { employees: 5, activePoints: 1, billablePoints: 1 },
+    quote: { ...preview().quote, employees: 5, points: 1 },
+  };
+  const render = mount(submit);
+  render().setPeriod('custom');
+  const previousUntil = new Date('2027-06-01');
+  render().changeAmount('12345');
+  render().setPeriod('monthly');
+  render().changePoints('2');
+  mockQuote.data = undefined;
+  mockQuote.isError = true;
+  mockQuote.error = { response: { status: 400, data: { code: 'UNPRICED_POINTS' } } };
+  const renewal = render();
+  sheetSubmit({
+    tenant: { id: 'tenant' },
+    renewal,
+    paid: true,
+    amountNum: 12345,
+    hasManager: false,
+    creditManager: false,
+    mode: 'superadmin',
+    until: previousUntil,
+    endOfDay: (date: Date) => date,
+    haptic: jest.fn(),
+    Alert: { alert: jest.fn() },
+  })();
+  await Promise.resolve();
+  expect(submit).not.toHaveBeenCalled();
+  expect(renewal.period).toBe('monthly');
+  expect(renewal.points).toBe('2');
+  expect(renewal.quoteReady).toBe(false);
+  expect(renewal.locked).toBe(false);
+  expect(renewal.fallback).toContain('MAX');
+  await renewal.send({ type: 'paid', amount: 12345, until: previousUntil.toISOString() });
+  expect(submit).not.toHaveBeenCalled();
+  renewal.setPeriod('custom');
+  await render().send({ type: 'paid', amount: 12345, until: previousUntil.toISOString() });
+  expect(submit).toHaveBeenCalledTimes(1);
+});
+it('a background UNPRICED_POINTS error cannot block an exact retry of an unknown renewal receipt', async () => {
+  const submit = jest.fn().mockRejectedValueOnce(new Error('lost ACK')).mockResolvedValue(undefined);
+  const render = mount(submit);
+  await render().send({ type: 'paid', amount: 20000, period: 'monthly', quoteToken: 'original' });
+  mockQuote.isError = true;
+  mockQuote.error = { response: { status: 400, data: { code: 'UNPRICED_POINTS' } } };
+  await render().send({ type: 'paid', amount: 1 });
+  expect(submit.mock.calls[1][0]).toBe(submit.mock.calls[0][0]);
 });

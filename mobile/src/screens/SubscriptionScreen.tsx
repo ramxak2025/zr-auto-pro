@@ -1,5 +1,15 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  RefreshControl,
+  Linking,
+  Platform,
+  InputAccessoryView,
+  Keyboard,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -16,7 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ALL_FEATURES } from '../../../shared/constants/features';
 import type { SubscriptionInfo } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 
 const WHATSAPP_PHONE = '79884444436';
 export default function SubscriptionScreen() {
@@ -87,10 +97,9 @@ export default function SubscriptionScreen() {
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
-      <ScrollView
+      <KeyboardAwareScroll
         contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        extraKeyboardBottomOffset={48}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent.primary} />
         }
@@ -111,8 +120,8 @@ export default function SubscriptionScreen() {
             {sub?.subscriptionEnd ? new Date(sub.subscriptionEnd).toLocaleDateString('ru-RU') : 'не указано'}
           </Text>
           <Text style={{ color: palette.text.secondary }}>
-            Фактически: {sub?.usage?.employees ?? sub?.currentUsers ?? 0} сотрудников, включая владельца ·{' '}
-            {sub?.usage?.activePoints ?? 0} филиалов
+            Фактически: сотрудники — {sub?.usage?.employees ?? sub?.currentUsers ?? 0}, включая владельца · Филиалы —{' '}
+            {sub?.usage?.activePoints ?? 0}
           </Text>
           {sub?.subscriptionNote ? <Text style={{ color: palette.text.secondary }}>{sub.subscriptionNote}</Text> : null}
           {!isIos ? (
@@ -138,7 +147,7 @@ export default function SubscriptionScreen() {
               <Text style={{ color: palette.text.secondary }}>{planCompositionLabel(calc.plan)}</Text>
             ) : calc.pricing ? (
               <Text style={{ color: palette.text.secondary }}>
-                Включено сотрудников: {calc.pricing.includedEmployees}. Информация о текущем тарифе.
+                Сотрудников включено: {calc.pricing.includedEmployees}. Информация о текущем тарифе.
               </Text>
             ) : null}
             <SubscriptionCompositionFields
@@ -146,6 +155,7 @@ export default function SubscriptionScreen() {
               points={calc.points}
               onEmployees={calc.setEmployees}
               onPoints={calc.setPoints}
+              inputAccessoryViewID={isIos ? 'subscription-calculator-done' : undefined}
             />
             {calc.message ? <Text style={{ color: palette.text.secondary }}>{calc.message}</Text> : null}
             {calc.quote.isFetching ? (
@@ -159,7 +169,7 @@ export default function SubscriptionScreen() {
                 })
               : null}
             <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
-              Фактически сейчас: {calc.actualEmployees} сотрудников · {calc.actualPoints} филиалов. Это нижняя граница
+              Фактически сейчас: сотрудники — {calc.actualEmployees} · Филиалы — {calc.actualPoints}. Это нижняя граница
               расчёта.
             </Text>
             {calc.plan ? (
@@ -197,12 +207,28 @@ export default function SubscriptionScreen() {
             ) : null}
           </View>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScroll>
+      {isIos ? (
+        <InputAccessoryView nativeID="subscription-calculator-done" backgroundColor={palette.bg.card}>
+          <View style={styles.keyboardAccessory}>
+            <TouchableOpacity
+              onPress={Keyboard.dismiss}
+              style={styles.keyboardDone}
+              accessibilityRole="button"
+              accessibilityLabel="Скрыть клавиатуру"
+            >
+              <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Готово</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      ) : null}
     </View>
   );
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  keyboardAccessory: { alignItems: 'flex-end' },
+  keyboardDone: { minHeight: 44, paddingHorizontal: spacing[4], justifyContent: 'center' },
   content: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[4] },
   card: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[3] },
   title: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },

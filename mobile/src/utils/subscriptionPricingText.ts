@@ -3,8 +3,8 @@ export const subscriptionMoney = (value: number) => `${value.toLocaleString('ru-
 /** Public plan metadata; totals always come from the server quote. */
 export function planCompositionLabel(plan: Plan): string {
   const p = plan.pricing;
-  if (!p) return `До ${plan.maxUsers} сотрудников`;
-  return `Включено ${p.includedEmployees} сотрудников${p.code === 'max' ? ' на всех филиалах вместе' : ''}, включая владельца. Каждый сверх включённых: ${subscriptionMoney(p.extraEmployeeMonthlyPrice)}/мес. ${p.includedPoints != null ? `Филиалов включено ${p.includedPoints}; каждый дополнительный: ${subscriptionMoney(p.extraPointMonthlyPrice ?? 0)}/мес.` : 'Для нескольких филиалов выберите MAX.'}`;
+  if (!p) return `Лимит сотрудников: ${plan.maxUsers}`;
+  return `Сотрудников включено: ${p.includedEmployees}${p.code === 'max' ? ' на всех филиалах вместе' : ''}, включая владельца. Каждый сверх включённых при помесячной оплате: ${subscriptionMoney(p.extraEmployeeMonthlyPrice)}/мес. ${p.includedPoints != null ? `Филиалов включено ${p.includedPoints}; каждый дополнительный при помесячной оплате: ${subscriptionMoney(p.extraPointMonthlyPrice ?? 0)}/мес.` : 'Для нескольких филиалов выберите MAX.'} При оплате за год скидка действует и на доплаты.`;
 }
 export function subscriptionCount(raw: string): number | undefined {
   if (!/^\d+$/.test(raw)) return undefined;
@@ -28,5 +28,5 @@ export function subscriptionContactText(planName?: string, preview?: Subscriptio
     : 'Здравствуйте! Хочу оплатить подписку.';
   if (!preview) return intro;
   const q = preview.quote;
-  return `${intro} Расчёт: ${preview.pricing.name}, ${q.employees} сотрудников, ${q.points} филиалов, ${q.period === 'yearly' ? '12 месяцев' : 'месяц'}. К оплате: ${subscriptionMoney(q.total)}.`;
+  return `${intro} Расчёт: ${preview.pricing.name}. Сотрудники: ${q.employees} · Филиалы: ${q.points}. Период: ${q.period === 'yearly' ? '12 месяцев' : 'месяц'}. К оплате: ${subscriptionMoney(q.total)}.`;
 }

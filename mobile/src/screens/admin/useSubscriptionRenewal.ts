@@ -104,6 +104,7 @@ export function useSubscriptionRenewal({
   useEffect(() => {
     if (open && quoteQuery.data && !quoteQuery.isFetching && !quoteQuery.isError) {
       setInfo(quoteQuery.data);
+      if (matches) setFallback('');
       if (matches && !dirtyAmount.current && !intent.current) {
         setAmountState(String(quoteQuery.data.quote.total));
         if (reprice.current) {
@@ -112,7 +113,7 @@ export function useSubscriptionRenewal({
         }
       }
     }
-  }, [open, quoteQuery.data, quoteQuery.isFetching, quoteQuery.isError, matches]);
+  }, [open, quoteQuery.data, quoteQuery.isFetching, quoteQuery.isError, matches, period]);
   useEffect(() => {
     const response = errorBody(quoteQuery.error);
     if (!open || intent.current) return;
@@ -122,12 +123,12 @@ export function useSubscriptionRenewal({
         `Фактический состав вырос. Укажите сотрудников не меньше ${response.data.minimumEmployees}, филиалов не меньше ${response.data.minimumPoints}.`,
       );
     }
-    if (['LEGACY_PLAN', 'UNPRICED_POINTS'].includes(response?.data?.code ?? '')) {
+    if (response?.data?.code === 'LEGACY_PLAN') {
       setPeriodState('custom');
+      setFallback('Для прежнего тарифа укажите фактическую сумму и дату.');
+    } else if (response?.data?.code === 'UNPRICED_POINTS') {
       setFallback(
-        response?.data?.code === 'LEGACY_PLAN'
-          ? 'Для прежнего тарифа укажите фактическую сумму и дату.'
-          : 'Для нескольких филиалов нужен MAX либо ручное согласованное продление. Состав сохранён.',
+        'Для нескольких филиалов нужен MAX. Чтобы продлить вручную по согласованию, явно выберите «Своя дата». Состав сохранён.',
       );
     }
   }, [open, quoteQuery.error]);
@@ -158,6 +159,13 @@ export function useSubscriptionRenewal({
   };
   const send = async (request: ExtendSubscriptionRequest) => {
     if (busy.current) return;
+    if (
+      !intent.current &&
+      request.type === 'paid' &&
+      period !== 'custom' &&
+      errorBody(quoteQuery.error)?.data?.code === 'UNPRICED_POINTS'
+    )
+      return;
     if (intent.current && intent.current.owner !== owner) return;
     const session = captureRenewalSession();
     if (!session.isCurrent()) return;
