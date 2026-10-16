@@ -160,7 +160,7 @@ test('tenant forecast uses server pricing, inactive current plan, selected count
     fill(form.tree, 'Всего сотрудников', '6');
     await settle(() => calls.at(-1)?.employees === 6 && contents(form.tree).includes('7600'));
     assert.ok(contents(form.tree).includes('Сейчассотрудников:2'));
-    assert.ok(contents(form.tree).includes('Врасчёте:6'));
+    assert.ok(contents(form.tree).includes('Врасчётесотрудников:6'));
     assert.ok(contents(form.tree).includes('архивный'));
     const yearly = form.tree.root.findAllByType('button').find((n) => n.children.join('') === 'Год · 12 за 10');
     Renderer.act(() => yearly.props.onClick());
