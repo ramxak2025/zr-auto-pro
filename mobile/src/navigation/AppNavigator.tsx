@@ -344,7 +344,7 @@ export type ProductsStackParamList = {
   // Инвентаризация (scan-driven recount). Pushed from the warehouse ops sheet;
   // lives in THIS stack so the floating tab bar stays visible and edge-swipe
   // pops back to the warehouse list.
-  Inventory: undefined;
+  Inventory: { warehouseId?: string } | undefined;
   // Ячейки хранения (2026-09-30): справочник адресов склада. `warehouseId` — склад, с
   // которого открыли меню; без него экран берёт основной склад.
   StorageCells: { warehouseId?: string } | undefined;

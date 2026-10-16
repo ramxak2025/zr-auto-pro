@@ -7,7 +7,7 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { StockUpdateDto } from './dto/stock-update.dto';
+import { InventoryUpdateDto, StockUpdateDto } from './dto/stock-update.dto';
 import { actorPointId } from '../common/point-scope';
 import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
@@ -199,5 +199,13 @@ export class ProductsController {
   updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: StockUpdateDto) {
     // Филиал автора — для зеркального расхода списания (161).
     return this.productsService.updateStock(id, user.tenantID, dto, user.userID, actorPointId(user));
+  }
+
+  // New clients use this path exclusively: an older server returns 404 without
+  // silently stripping the guard and applying an unconditional stock overwrite.
+  @RequirePermission('warehouse_manage')
+  @Post(':id/inventory')
+  updateInventory(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: InventoryUpdateDto) {
+    return this.productsService.updateInventory(id, user.tenantID, dto, user.userID, actorPointId(user));
   }
 }
