@@ -31,6 +31,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
 import { colors, spacing, fontWeight, borderRadius } from '../theme';
 import { formatQty, unitLabel } from '../utils/units';
+import { productsCountText } from '../utils/storageCellsUi';
 import { productFolderParts } from '../../../shared/utils/productFolders';
 import type { Product, Warehouse } from '../../../shared/types';
 import { TabBarFlatList } from '../components/TabBarScrollable';
@@ -54,6 +55,7 @@ interface Operation {
   session: InventorySession;
   warehouseId: string;
   isCurrent: () => boolean;
+  ownsForm: () => boolean;
   started: boolean;
 }
 type InventoryRoute = { Inventory: { warehouseId?: string } | undefined };
@@ -82,6 +84,7 @@ function InventoryWorkspace() {
   const draftsRef = useRef(draftsByWarehouse);
   const mountedRef = useRef(true);
   const busyRef = useRef(false);
+  const activeOperationRef = useRef<Operation | null>(null);
   const canWriteRef = useRef(canWrite);
   canWriteRef.current = canWrite;
   const [busy, setBusy] = useState(false);
@@ -139,7 +142,8 @@ function InventoryWorkspace() {
   rowsRef.current = rows;
   const pendingCount = Object.values(drafts).filter((draft) => draft.pending).length;
   const missingDrafts = Object.entries(drafts).filter(
-    ([id, draft]) => (draft.pending || draft.needsReview) && !allProducts.some((product) => product.id === id),
+    ([id, draft]) =>
+      (draft.raw || draft.pending || draft.needsReview) && !allProducts.some((product) => product.id === id),
   );
   const displayNotice =
     notice ??
@@ -243,7 +247,8 @@ function InventoryWorkspace() {
   );
 
   const finish = useCallback((operation: Operation) => {
-    if (!operation.isCurrent()) return;
+    if (!operation.ownsForm()) return;
+    activeOperationRef.current = null;
     busyRef.current = false;
     setBusy(false);
     setProgress(null);
@@ -251,18 +256,27 @@ function InventoryWorkspace() {
 
   const commit = useCallback(
     async (entries: Entry[], operation: Operation) => {
-      if (!operation.isCurrent()) return;
+      if (!operation.isCurrent()) {
+        finish(operation);
+        return;
+      }
       setProgress({ done: 0, total: entries.length });
       let completed = 0;
       for (const entry of entries) {
-        if (!operation.isCurrent()) return;
+        if (!operation.isCurrent()) {
+          finish(operation);
+          return;
+        }
         updateDrafts(operation.warehouseId, (previous) => ({
           ...previous,
           [entry.id]: { ...previous[entry.id], pending: entry.body },
         }));
         try {
           const response = await operation.session.updateStock(entry.id, entry.body);
-          if (!operation.isCurrent()) return;
+          if (!operation.isCurrent()) {
+            finish(operation);
+            return;
+          }
           if (response.data.requestId !== entry.body.requestId || response.data.stock !== entry.body.quantity) {
             throw new Error('Нет подтверждения проведения');
           }
@@ -274,7 +288,10 @@ function InventoryWorkspace() {
           completed++;
           setProgress({ done: completed, total: entries.length });
         } catch (error: unknown) {
-          if (!operation.isCurrent()) return;
+          if (!operation.isCurrent()) {
+            finish(operation);
+            return;
+          }
           const failure = inventoryError(error);
           if (failure.conflict) {
             updateDrafts(operation.warehouseId, (previous) => ({
@@ -289,11 +306,17 @@ function InventoryWorkspace() {
             setNotice('Учёт изменился. Обновите список и сверьте факт перед проведением.');
             try {
               const fresh = await operation.session.loadProducts(operation.warehouseId);
-              if (!operation.isCurrent()) return;
+              if (!operation.isCurrent()) {
+                finish(operation);
+                return;
+              }
               queryClient.setQueryData(['all-products-check', { warehouseId: operation.warehouseId }], fresh);
               updateDrafts(operation.warehouseId, (previous) => reconcileInventoryDrafts(previous, fresh));
             } catch {
-              if (!operation.isCurrent()) return;
+              if (!operation.isCurrent()) {
+                finish(operation);
+                return;
+              }
               setNotice('Не удалось обновить учёт. Обновите список перед сверкой.');
             }
           } else {
@@ -301,15 +324,16 @@ function InventoryWorkspace() {
               `Проведено ${completed} из ${entries.length}. ${failure.message} Введённый факт сохранён; повтор использует тот же запрос.`,
             );
           }
-          finish(operation);
-          if (!operation.isCurrent()) return;
           void queryClient.invalidateQueries({ queryKey: ['products'], refetchType: 'none' });
           void queryClient.invalidateQueries({ queryKey: ['inventory-movements'], refetchType: 'none' });
+          finish(operation);
           return;
         }
       }
-      if (!operation.isCurrent()) return;
-      finish(operation);
+      if (!operation.isCurrent()) {
+        finish(operation);
+        return;
+      }
       setNotice(`Инвентаризация проведена. Обновлено товаров: ${completed}.`);
       haptic('success');
       // A replay receipt describes the ORIGINAL result, possibly before later movements.
@@ -317,6 +341,7 @@ function InventoryWorkspace() {
       void queryClient.invalidateQueries({ queryKey: ['products'] });
       void queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       void queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      finish(operation);
     },
     [finish, queryClient, updateDrafts],
   );
@@ -344,9 +369,14 @@ function InventoryWorkspace() {
       session,
       warehouseId: scope,
       started: false,
-      isCurrent: () =>
-        mountedRef.current && session.isCurrent() && warehouseRef.current === scope && canWriteRef.current,
+      ownsForm: () =>
+        mountedRef.current &&
+        session.data.isCurrent() &&
+        warehouseRef.current === scope &&
+        activeOperationRef.current === operation,
+      isCurrent: () => operation.ownsForm() && session.isCurrent() && canWriteRef.current,
     };
+    activeOperationRef.current = operation;
     const entries: Entry[] = [];
     for (const [id, draft] of Object.entries(current)) {
       const actual = parseInventoryQuantity(draft.raw);
@@ -369,12 +399,22 @@ function InventoryWorkspace() {
       'Провести инвентаризацию?',
       `Будет пересчитано товаров: ${entries.length}. Остатки заменятся на введённый факт.`,
       [
-        { text: 'Отмена', style: 'cancel', onPress: () => finish(operation) },
+        {
+          text: 'Отмена',
+          style: 'cancel',
+          onPress: () => {
+            if (!operation.started) finish(operation);
+          },
+        },
         {
           text: 'Провести',
           style: 'destructive',
           onPress: () => {
-            if (operation.isCurrent() && !operation.started) {
+            if (!operation.isCurrent()) {
+              finish(operation);
+              return;
+            }
+            if (!operation.started) {
               operation.started = true;
               void commit(entries, operation);
             }
@@ -426,7 +466,7 @@ function InventoryWorkspace() {
                 {item.name}
               </Text>
               <Text variant="caption" color={palette.text.secondary}>
-                {item.count} товаров
+                {productsCountText(item.count)}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
@@ -551,7 +591,7 @@ function InventoryWorkspace() {
             {draft.name ?? 'Товар'} ·{' '}
             {draft.pending ? 'Проведение не подтверждено' : 'Больше не доступен на этом складе'}
           </Text>
-          {draft.unavailable && draft.needsReview && !draft.pending ? (
+          {!draft.pending && (!draft.needsReview || draft.unavailable) ? (
             <TouchableOpacity
               style={styles.reviewButton}
               accessibilityRole="button"

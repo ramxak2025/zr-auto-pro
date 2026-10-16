@@ -59,6 +59,7 @@ interface Operation {
 }
 function harness(products = [a, b]) {
   let epoch = 0,
+    dataEpoch = 0,
     sequence = 0;
   let buttons: { text: string; onPress: () => void }[] = [];
   const requests: Entry[] = [];
@@ -67,6 +68,7 @@ function harness(products = [a, b]) {
     warehouseRef: { current: 'A' },
     mountedRef: { current: true },
     busyRef: { current: false },
+    activeOperationRef: { current: null },
     canWriteRef: { current: true },
     setDraftsByWarehouse: jest.fn(),
     setBusy: jest.fn(),
@@ -109,8 +111,14 @@ function harness(products = [a, b]) {
   });
   const loadProducts = jest.fn(async () => products);
   scope.captureInventorySession = () => {
-    const captured = epoch;
-    return { isCurrent: () => captured === epoch, updateStock: transport, loadProducts };
+    const captured = epoch,
+      capturedData = dataEpoch;
+    return {
+      data: { isCurrent: () => capturedData === dataEpoch },
+      isCurrent: () => captured === epoch && capturedData === dataEpoch,
+      updateStock: transport,
+      loadProducts,
+    };
   };
   for (const name of [
     'updateDrafts',
@@ -141,6 +149,10 @@ function harness(products = [a, b]) {
       return buttons;
     },
     newEpoch: () => {
+      epoch++;
+      dataEpoch++;
+    },
+    refreshBearer: () => {
       epoch++;
     },
     session: () => (scope.captureInventorySession as () => Operation['session'] & { isCurrent: () => boolean })(),
@@ -459,3 +471,121 @@ it('late row input from a previous warehouse cannot create a draft in the next w
   h.count(a, '4');
   expect(h.drafts.B).toBeUndefined();
 });
+
+type NativeElement = {
+  type: string;
+  props: { children?: unknown[]; accessibilityLabel?: string; onPress?: () => void };
+};
+function missingDraftElements(h: ReturnType<typeof harness>, products: Product[]) {
+  const missingDrafts = callback<[string, import('../model').InventoryDraft][]>('missingDrafts', {
+    drafts: h.drafts.A,
+    allProducts: products,
+  });
+  const element = callback<NativeElement>('missingContent', {
+    ...h.scope,
+    missingDrafts,
+    warehouseId: 'A',
+    React: {
+      createElement: (type: string, props: object | null, ...children: unknown[]) => ({
+        type,
+        props: { ...props, children },
+      }),
+    },
+    View: 'View',
+    Text: 'Text',
+    TouchableOpacity: 'TouchableOpacity',
+    styles: {},
+    palette: { text: { secondary: 'gray' }, accent: { primaryText: 'blue' } },
+  });
+  function find(value: unknown): NativeElement[] {
+    if (Array.isArray(value)) return value.flatMap(find);
+    if (!value || typeof value !== 'object' || !('props' in value)) return [];
+    const node = value as NativeElement;
+    return [node, ...find(node.props.children)];
+  }
+  return { missingDrafts, elements: find(element) };
+}
+it('actual refresh exposes a removed unsent draft, whose explicit removal lets the remaining product post', async () => {
+  const h = harness();
+  h.count(a, '0.5');
+  h.count(b, '4');
+  h.loadProducts.mockResolvedValueOnce([b]);
+  await (h.scope.refresh as () => Promise<void>)();
+  const rendered = missingDraftElements(h, [b]);
+  expect(rendered.missingDrafts.map(([id]) => id)).toEqual(['a']);
+  expect(inventorySummary(h.drafts.A, [b]).invalid).toBe(1);
+  const remove = rendered.elements.find((node) => node.props.accessibilityLabel === `Убрать из пересчёта: ${a.name}`);
+  expect(remove?.props.onPress).toBeDefined();
+  remove?.props.onPress?.();
+  const apply = callback<() => void>('handleApply', { ...h.scope, allProducts: [b] });
+  apply();
+  h.buttons[1].onPress();
+  await settle();
+  expect(h.transport.mock.calls.map(([id]) => id)).toEqual(['b']);
+});
+it('actual refresh never exposes a removal action for a missing draft with an unknown ACK', async () => {
+  const h = harness();
+  h.count(a, '0.5');
+  h.transport.mockRejectedValueOnce(new Error('lost ACK'));
+  h.apply();
+  h.buttons[1].onPress();
+  await settle();
+  const original = h.drafts.A.a.pending;
+  h.loadProducts.mockResolvedValueOnce([b]);
+  await (h.scope.refresh as () => Promise<void>)();
+  const rendered = missingDraftElements(h, [b]);
+  expect(rendered.missingDrafts.map(([id]) => id)).toEqual(['a']);
+  expect(rendered.elements.some((node) => node.props.accessibilityLabel?.startsWith('Убрать из пересчёта'))).toBe(
+    false,
+  );
+  expect(h.drafts.A.a.pending).toBe(original);
+});
+it('ordinary bearer refresh before confirmation unlocks only this data-owner form without sending the old request', async () => {
+  const h = harness();
+  h.count(a, '0.5');
+  h.apply();
+  const oldConfirm = h.buttons[1].onPress;
+  h.refreshBearer();
+  oldConfirm();
+  await settle();
+  expect(h.transport).not.toHaveBeenCalled();
+  expect((h.scope.busyRef as { current: boolean }).current).toBe(false);
+  expect(h.drafts.A.a.raw).toBe('0.5');
+  h.apply();
+  // Replaying an old alert cannot release the new operation's lock.
+  oldConfirm();
+  expect((h.scope.busyRef as { current: boolean }).current).toBe(true);
+  h.buttons[1].onPress();
+  await settle();
+  expect(h.transport).toHaveBeenCalledTimes(1);
+});
+it.each(['resolved', 'rejected'])(
+  'ordinary bearer refresh during %s ACK stops the batch, releases this form lock, and retains the exact body for a fresh lease',
+  async (completion) => {
+    const h = harness();
+    h.count(a, '0.5');
+    h.count(b, '4');
+    const waiting = gate();
+    h.transport.mockImplementationOnce(async (_id, body) => {
+      await waiting.promise;
+      if (completion === 'rejected') throw Object.assign(new Error('stale auth lease'), { code: 'ERR_CANCELED' });
+      return { data: { requestId: body.requestId, stock: body.quantity } };
+    });
+    h.apply();
+    h.buttons[1].onPress();
+    const original = h.drafts.A.a.pending;
+    h.refreshBearer();
+    waiting.resolve();
+    await settle();
+    expect(h.transport).toHaveBeenCalledTimes(1);
+    expect((h.scope.busyRef as { current: boolean }).current).toBe(false);
+    expect(h.drafts.A.a.pending).toBe(original);
+    expect((h.scope.queryClient as { setQueryData: jest.Mock }).setQueryData).not.toHaveBeenCalled();
+    expect((h.scope.queryClient as { invalidateQueries: jest.Mock }).invalidateQueries).not.toHaveBeenCalled();
+    h.apply();
+    h.buttons[1].onPress();
+    await settle();
+    expect(h.transport.mock.calls.map(([id]) => id)).toEqual(['a', 'a', 'b']);
+    expect(h.transport.mock.calls[1][1]).toBe(original);
+  },
+);
