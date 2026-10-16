@@ -7,25 +7,14 @@ import SubscriptionCompositionFields from '../components/SubscriptionComposition
 import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
 import { planCompositionLabel } from '../utils/subscriptionPricingText';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarDays, Check, CreditCard, Info, MessageCircle, Users, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, CreditCard, Info, MessageCircle, Users, X } from 'lucide-react';
 import { format, isPast, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import type { SubscriptionPlanPricing } from '../../../shared/utils/subscriptionPricing';
 import { formatSubscriptionMoney } from '../utils/subscriptionPricingText';
 import type { SubscriptionInfo } from '../types';
-import {
-  Badge,
-  Card,
-  CardBody,
-  CardHeader,
-  Money,
-  PageHeader,
-  QueryState,
-  SkeletonCard,
-  buttonClasses,
-  cn,
-} from '../ui';
+import { Badge, Card, CardBody, CardHeader, Money, PageHeader, QueryState, SkeletonCard, buttonClasses } from '../ui';
 import { MiniStat } from '../components/dashboard/shared';
 // Возможности тарифа сгруппированы (core / section / integration), чтобы каждая
 // карточка тарифа перечисляла 23 ключа под заголовками разделов.
@@ -57,14 +46,10 @@ export default function TariffPage() {
 
   const currentPlan = sub?.plans?.find((plan) => plan.id === sub.planId);
   const selectedPlan = sub?.plans?.find((plan) => plan.id === (selectedPlanId ?? sub.planId));
-  const selectedPricing =
-    selectedPlan?.pricing ??
-    (serverPricing && serverPricing.planId === (selectedPlanId ?? sub?.planId) ? serverPricing.pricing : undefined);
   const minimumEmployees = Math.max(1, sub?.usage?.employees ?? sub?.currentUsers ?? 1);
   const minimumPoints = Math.max(1, sub?.usage?.billablePoints ?? 1);
-  const employees =
-    employeeInput ?? String(Math.max(selectedPricing?.includedEmployees ?? minimumEmployees, minimumEmployees));
-  const points = pointInput ?? String(Math.max(selectedPricing?.includedPoints ?? 1, minimumPoints));
+  const employees = employeeInput ?? String(minimumEmployees);
+  const points = pointInput ?? String(minimumPoints);
   const employeeCount = parseSubscriptionCount(employees),
     pointCount = parseSubscriptionCount(points);
   const countsValid =
@@ -190,6 +175,15 @@ export default function TariffPage() {
                     {sub.usage?.activePoints ?? minimumPoints}. Расчёт информационный: выбор не меняет ваш тариф и
                     оплаченный срок.
                   </p>
+                  <SubscriptionCompositionFields
+                    employeePresets
+                    employees={employees}
+                    points={points}
+                    minimumEmployees={minimumEmployees}
+                    minimumPoints={minimumPoints}
+                    onEmployeesChange={setEmployeeInput}
+                    onPointsChange={setPointInput}
+                  />
                   <label className="block text-sm text-ink-2">
                     Тариф для расчёта
                     <select
@@ -208,14 +202,7 @@ export default function TariffPage() {
                       ))}
                     </select>
                   </label>
-                  <SubscriptionCompositionFields
-                    employees={employees}
-                    points={points}
-                    minimumEmployees={minimumEmployees}
-                    minimumPoints={minimumPoints}
-                    onEmployeesChange={setEmployeeInput}
-                    onPointsChange={setPointInput}
-                  />
+                  {selectedPlan?.description && <p className="text-sm text-ink-3">{selectedPlan.description}</p>}
                   <div role="group" aria-label="Период расчёта" className="flex flex-wrap gap-2">
                     {(['monthly', 'yearly'] as const).map((period) => (
                       <button
@@ -238,7 +225,7 @@ export default function TariffPage() {
                       Загружаем расчёт…
                     </p>
                   ) : quoteQuery.data && !quoteQuery.isError ? (
-                    <SubscriptionQuoteBreakdown preview={quoteQuery.data} />
+                    <SubscriptionQuoteBreakdown preview={quoteQuery.data} compact />
                   ) : (
                     <div className="space-y-2">
                       <p className="text-sm text-ink-2">
@@ -280,93 +267,67 @@ export default function TariffPage() {
             </CardBody>
           </Card>
 
-          {/* Доступные тарифы */}
           {sub?.plans && sub.plans.length > 0 && (
-            <section aria-labelledby="tariff-plans" className="space-y-3">
-              <h2 id="tariff-plans" className="text-md font-semibold text-ink">
-                Доступные тарифы
-              </h2>
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {sub.plans.map((plan) => {
-                  const isCurrent = sub.planId ? sub.planId === plan.id : sub.planName === plan.name;
-                  const features: string[] = Array.isArray(plan.features) ? plan.features : [];
-
-                  return (
-                    <Card
-                      key={plan.id}
-                      as="article"
-                      padding="none"
-                      aria-label={`Тариф ${plan.name}`}
-                      className={cn('flex flex-col', isCurrent && 'border-accent/50 ring-1 ring-accent/30')}
-                    >
-                      <div className="px-5 pt-5">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h3 className="text-md font-semibold text-ink">{plan.name}</h3>
-                            {plan.description && <p className="mt-1 text-sm text-ink-3">{plan.description}</p>}
-                          </div>
-                          {isCurrent && (
-                            <Badge tone="accent" icon={Check}>
-                              Ваш тариф
-                            </Badge>
-                          )}
-                        </div>
-
-                        <p className="mt-4 flex items-baseline gap-1">
-                          <Money value={plan.monthlyPrice} className="text-2xl font-semibold tracking-tight text-ink" />
-                          <span className="text-sm text-ink-3">/ мес · база</span>
-                        </p>
-
-                        <p className="mt-3 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm text-ink-2">
-                          <Users className="h-4 w-4 flex-shrink-0 text-ink-3" aria-hidden="true" />
+            <details className="max-w-5xl border-t border-line">
+              <summary className="flex min-h-[52px] cursor-pointer items-center justify-between gap-3 text-sm font-semibold text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+                Сравнить все возможности тарифов
+                <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
+              </summary>
+              <div className="overflow-x-auto pb-4">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-line">
+                      <th scope="col" className="p-3">
+                        Возможность
+                      </th>
+                      {sub.plans.map((plan) => (
+                        <th key={plan.id} scope="col" className="min-w-[180px] p-3 align-top">
+                          <span className="block font-semibold text-ink">
+                            {plan.name}
+                            {plan.id === sub.planId ? ' · ваш тариф' : ''}
+                          </span>
+                          {!plan.isActive && <span className="text-xs font-normal text-ink-3">Архивный тариф</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-line">
+                      <th scope="row" className="p-3 align-top font-medium">
+                        Состав и условия
+                      </th>
+                      {sub.plans.map((plan) => (
+                        <td key={plan.id} className="p-3 align-top text-ink-2">
                           {planCompositionLabel(plan)}
-                        </p>
-                      </div>
-
-                      <div className="flex-1 space-y-4 px-5 py-4">
-                        {FEATURE_GROUPS.map((grp) => (
-                          <div key={grp.group}>
-                            <p className="mb-1.5 text-xs font-semibold text-ink-3">{grp.label}</p>
-                            <ul className="space-y-1.5">
-                              {grp.items.map((feat) => {
-                                const included = features.includes(feat.key);
-                                return (
-                                  <li key={feat.key} className="flex items-center gap-2 text-sm">
-                                    {included ? (
-                                      <Check className="h-4 w-4 flex-shrink-0 text-ok" aria-hidden="true" />
-                                    ) : (
-                                      <X className="h-4 w-4 flex-shrink-0 text-ink-4" aria-hidden="true" />
-                                    )}
-                                    <span className={included ? 'text-ink-2' : 'text-ink-3 line-through'}>
-                                      {feat.label}
-                                    </span>
-                                    <span className="sr-only">{included ? ' — входит' : ' — не входит'}</span>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                    {FEATURE_GROUPS.flatMap((group) => group.items).map((feature) => (
+                      <tr key={feature.key} className="border-b border-line">
+                        <th scope="row" className="p-3 font-medium text-ink-2">
+                          {feature.label}
+                        </th>
+                        {sub.plans.map((plan) => (
+                          <td key={plan.id} className="p-3">
+                            {plan.features?.includes(feature.key) ? (
+                              <>
+                                <Check className="h-4 w-4 text-ok" aria-hidden />
+                                <span className="sr-only">Входит</span>
+                              </>
+                            ) : (
+                              <>
+                                <X className="h-4 w-4 text-ink-3" aria-hidden />
+                                <span className="sr-only">Не входит</span>
+                              </>
+                            )}
+                          </td>
                         ))}
-                      </div>
-
-                      {!isCurrent && (
-                        <div className="border-t border-line px-5 py-4">
-                          <a
-                            href={whatsappUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={buttonClasses({ variant: 'secondary', fullWidth: true })}
-                          >
-                            <MessageCircle className="h-4 w-4" aria-hidden="true" />
-                            Подключить «{plan.name}»
-                          </a>
-                        </div>
-                      )}
-                    </Card>
-                  );
-                })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            </section>
+            </details>
           )}
         </div>
       </QueryState>

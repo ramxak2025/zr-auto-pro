@@ -9,6 +9,7 @@ export default function SubscriptionCompositionFields({
   minimumPoints,
   onEmployeesChange,
   onPointsChange,
+  employeePresets = false,
 }: {
   employees: string;
   points: string;
@@ -16,6 +17,7 @@ export default function SubscriptionCompositionFields({
   minimumPoints: number;
   onEmployeesChange: (value: string) => void;
   onPointsChange: (value: string) => void;
+  employeePresets?: boolean;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -32,7 +34,7 @@ export default function SubscriptionCompositionFields({
           value: points,
           minimum: minimumPoints,
           onChange: onPointsChange,
-          note: '50 сотрудников MAX включены суммарно на все филиалы.',
+          note: 'Команда учитывается суммарно по филиалам.',
         },
       ].map(({ label, value, minimum, onChange, note }) => {
         const count = parseSubscriptionCount(value);
@@ -52,6 +54,23 @@ export default function SubscriptionCompositionFields({
               invalid={!!error}
               aria-invalid={!!error}
             />
+            {employeePresets && label === 'Всего сотрудников' && (
+              <div role="group" aria-label="Быстрый выбор сотрудников" className="mt-2 flex flex-wrap gap-1.5">
+                {[1, 2, 3, 5, 10].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    aria-label={`${preset} сотрудников`}
+                    aria-pressed={value === String(preset)}
+                    disabled={preset < minimum}
+                    onClick={() => onChange(String(preset))}
+                    className={`min-h-[44px] min-w-[44px] rounded-lg px-2 text-sm font-medium tabular-nums disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${value === String(preset) ? 'bg-accent text-white' : 'bg-surface-2 text-ink-2 hover:bg-surface-3'}`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
           </Field>
         );
       })}

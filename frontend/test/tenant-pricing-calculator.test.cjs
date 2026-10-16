@@ -156,7 +156,7 @@ test('tenant forecast uses server pricing, inactive current plan, selected count
   const form = mount();
   try {
     await settle(() => contents(form.tree).includes('7000'));
-    assert.equal(input(form.tree, 'Всего сотрудников')?.props.value, '5');
+    assert.equal(input(form.tree, 'Всего сотрудников')?.props.value, '2');
     fill(form.tree, 'Всего сотрудников', '6');
     await settle(() => calls.at(-1)?.employees === 6 && contents(form.tree).includes('7600'));
     assert.ok(contents(form.tree).includes('Сейчассотрудников:2'));
@@ -181,13 +181,13 @@ test('tenant forecast uses server pricing, inactive current plan, selected count
     form.close();
   }
 });
-test('current plan missing from active list receives its included default from server quote metadata', async () => {
+test('current plan missing from active list keeps actual usage default from server quote metadata', async () => {
   hideCurrent = true;
   const form = mount();
   try {
-    await settle(() => input(form.tree, 'Всего сотрудников')?.props.value === '5');
+    await settle(() => input(form.tree, 'Всего сотрудников')?.props.value === '2');
     assert.ok(contents(form.tree).includes('PROособый'));
-    assert.equal(calls.at(-1).employees, 5);
+    assert.equal(calls.at(-1).employees, 2);
   } finally {
     form.close();
   }
@@ -199,6 +199,29 @@ test('legacy plan selection retains manual terms without an annual discount quot
     fill(form.tree, 'Тариф для расчёта', 'legacy');
     await settle(() => contents(form.tree).includes('годоваяскидкакнимавтоматическинеприменяется'));
     assert.equal(form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length, 0);
+  } finally {
+    form.close();
+  }
+});
+
+test('tenant comparisons never expand actual composition to included allowances and keep catalogue collapsed', async () => {
+  const form = mount();
+  try {
+    await settle(() => calls.at(-1)?.employees === 2);
+    fill(form.tree, 'Тариф для расчёта', 'max');
+    await settle(() => calls.at(-1)?.planId === 'max');
+    assert.equal(input(form.tree, 'Всего сотрудников').props.value, '2');
+    assert.equal(calls.at(-1).employees, 2);
+    assert.ok(!contents(form.tree).includes('50сотрудниковMAX'));
+    const catalogue = form.tree.root
+      .findAllByType('details')
+      .find((node) =>
+        node
+          .findAllByType('summary')
+          .some((summary) => summary.children.some((child) => child === 'Сравнить все возможности тарифов')),
+      );
+    assert.ok(catalogue);
+    assert.ok(!catalogue.props.open);
   } finally {
     form.close();
   }

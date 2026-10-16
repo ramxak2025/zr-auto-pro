@@ -1,37 +1,9 @@
 import { useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
-import { gsap, useGSAP, EASE } from '../gsap';
-import { pricing, type PlanCellValue, type PricingPlan } from '../content';
-import type { SubscriptionBillingPeriod } from '../../../../../shared/utils/subscriptionPricing';
-import { formatPlanMoney } from './PricingCalculator';
-import { subscriptionMonthlyLabel } from '../../../utils/subscriptionPricingText';
+import { pricing, type PlanCellValue } from '../content';
 import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
-/**
- * Общие «тяжёлые» куски тарифов: карточка плана (только возможности, без цен —
- * стоимость подбирается индивидуально при подключении), карта «Внедрение под
- * ключ», полное сравнение (desktop-таблица + mobile — горизонтально листаемая
- * таблица со «липкой» первой колонкой). Используются страницей /tarify; главная
- * показывает компактный тизер (Pricing.tsx).
- */
-
-const CTA_BASE =
-  'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
-
-/** CTA «Оставить заявку» → B2B-заявка на подключение автосервиса (/register). */
-function PlanCta({ plan }: { plan: PricingPlan }) {
-  const cls = `${CTA_BASE} ${
-    plan.highlighted
-      ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/25 hover:bg-primary-500 active:bg-primary-700'
-      : 'border border-slate-200 bg-white text-slate-900 shadow-sm hover:border-primary-300 hover:text-primary-600'
-  }`;
-  return (
-    <Link to="/register" className={cls}>
-      Оставить заявку
-    </Link>
-  );
-}
+/** Внедрение и полное сравнение возможностей, раскрываемое в калькуляторе. */
 
 /** Ячейка сравнения: ✓ emerald / — slate-300 / текст («до 10», «1000 мин/мес»). */
 function CompareCell({ value }: { value: PlanCellValue }) {
@@ -52,116 +24,6 @@ function CompareCell({ value }: { value: PlanCellValue }) {
     );
   }
   return <span className="text-sm font-semibold text-slate-900">{value}</span>;
-}
-
-/**
- * Карточка тарифа; «Легенда» — primary-бордер, бейдж и подъём на desktop.
- *
- * Рекомендованный (highlighted) план дополнительно акцентирован мягким
- * primary-glow'ом (без фиолетового), который «распускается» при въезде карточки
- * в вьюпорт — декоративный слой (aria-hidden, прозрачный центр, ореол через
- * box-shadow) с собственным ScrollTrigger'ом. Он анимирует ОТДЕЛЬНЫЙ элемент,
- * а не саму карточку, — не конфликтует с reveal'ом обёртки страницы. Контракт
- * видимости: glow виден по CSS-дефолту; from:opacity ставится лишь в
- * no-preference; при reduced-motion / сбое остаётся видимым (clearProps).
- */
-export function PlanCard({ plan, period = 'monthly' }: { plan: PricingPlan; period?: SubscriptionBillingPeriod }) {
-  const chargedMonths = period === 'yearly' ? 10 : 1;
-  const scope = useRef<HTMLDivElement>(null);
-
-  useGSAP(
-    () => {
-      const root = scope.current;
-      if (!root) return;
-      const glow = root.querySelector<HTMLElement>('[data-plancard-glow]');
-      if (!glow) return; // только у highlighted-карточки
-
-      const mm = gsap.matchMedia();
-      mm.add(
-        { reduce: '(prefers-reduced-motion: reduce)', ok: '(prefers-reduced-motion: no-preference)' },
-        (ctx: gsap.Context) => {
-          if (ctx.conditions?.reduce) return; // reduced-motion → glow остаётся видимым
-          try {
-            gsap.set(glow, { autoAlpha: 0, scale: 0.9, transformOrigin: '50% 50%', willChange: 'transform, opacity' });
-            gsap.to(glow, {
-              autoAlpha: 1,
-              scale: 1,
-              duration: 0.9,
-              ease: EASE.out,
-              scrollTrigger: { trigger: root, start: 'top 85%', once: true },
-              onComplete: () => gsap.set(glow, { clearProps: 'all' }),
-            });
-          } catch {
-            gsap.set(glow, { clearProps: 'all' });
-          }
-        },
-      );
-    },
-    { scope },
-  );
-
-  return (
-    <div
-      ref={scope}
-      className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
-        plan.highlighted
-          ? 'border border-primary-300 shadow-md ring-1 ring-primary-200/60 md:-translate-y-2'
-          : 'border border-slate-200/60 shadow-sm'
-      }`}
-    >
-      {plan.highlighted && (
-        <span
-          data-plancard-glow
-          aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-3xl shadow-[0_16px_50px_-14px_rgba(37,99,235,0.4)]"
-        />
-      )}
-      {plan.badge && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md shadow-primary-600/25">
-          {plan.badge}
-        </span>
-      )}
-      <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
-      <p className="mt-1 text-sm text-slate-500 md:min-h-[40px]">{plan.description}</p>
-      <p className="mt-5 text-sm font-semibold text-slate-900">{plan.employees}</p>
-      <p className="mt-3 text-3xl font-bold tracking-tight tabular-nums text-slate-900">
-        {subscriptionMonthlyLabel({
-          total: plan.monthlyPrice * chargedMonths,
-          serviceMonths: period === 'yearly' ? 12 : 1,
-        })}
-        <span className="ml-1 text-sm font-normal text-slate-500">/мес.</span>
-      </p>
-      {period === 'yearly' && (
-        <>
-          <p className="mt-1 text-xs text-slate-600">в месяц при оплате за год</p>
-          <p className="mt-2 text-sm text-slate-700">
-            К оплате сразу за 12 месяцев: <strong>{formatPlanMoney(plan.monthlyPrice * chargedMonths)}</strong>
-          </p>
-        </>
-      )}
-      <p className="mt-3 text-xs leading-relaxed text-slate-600">
-        {period === 'yearly' ? 'При оплате по месяцам: сотрудник' : 'Сотрудник'} сверх включённых —{' '}
-        {formatPlanMoney(plan.extraEmployeeMonthlyPrice)}/мес.
-        {plan.extraPointMonthlyPrice !== null && (
-          <> · Доп. филиал — {formatPlanMoney(plan.extraPointMonthlyPrice)}/мес.</>
-        )}
-        {period === 'yearly' ? ' При оплате за год скидка действует и на доплаты.' : ''}
-      </p>
-      <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>
-      <ul className="mt-3 space-y-2.5">
-        {plan.includes.map((item) => (
-          <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-            <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-            {item}
-          </li>
-        ))}
-      </ul>
-      <div className="mt-auto pt-6">
-        <PlanCta plan={plan} />
-        <p className="mt-2 text-center text-xs text-slate-400">Для организаций — юрлиц и ИП · менеджер подключит</p>
-      </div>
-    </div>
-  );
 }
 
 /** Широкая карта «Внедрение под ключ». */
@@ -226,7 +88,7 @@ function comparisonRows(): { section?: string; feature: string; values: PlanCell
 export function ComparisonTable() {
   const highlightIdx = pricing.plans.findIndex((p) => p.highlighted);
   return (
-    <div className="mt-8 overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm">
+    <div className="overflow-hidden">
       <table className="w-full border-collapse text-left">
         <thead>
           <tr className="border-b border-slate-200/60">
@@ -302,7 +164,7 @@ export function ComparisonTableMobile() {
   const rows = comparisonRows();
 
   return (
-    <div className="mt-8">
+    <div className="">
       <p
         className={`mb-2 text-right text-xs text-slate-400 transition-opacity duration-300 ${
           scrolled ? 'opacity-0' : 'opacity-100'
@@ -316,7 +178,7 @@ export function ComparisonTableMobile() {
           onScroll={(e) => {
             if (!scrolled && e.currentTarget.scrollLeft > 8) setScrolled(true);
           }}
-          className="no-scrollbar overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm [overscroll-behavior-x:contain]"
+          className="overflow-x-auto [overscroll-behavior-x:contain]"
         >
           <table className="w-full border-collapse text-left">
             <thead>
