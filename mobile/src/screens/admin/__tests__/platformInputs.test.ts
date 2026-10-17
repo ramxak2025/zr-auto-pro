@@ -1,3 +1,4 @@
+import { isPersisted } from '../../../utils/persistentCache.helpers';
 import { parseReminderDays } from '../reminderSettingsValidation';
 import { prepareNoteRequest } from '../noteRequest';
 it('validates configurable expiry boundaries without silently dropping invalid values', () => {
@@ -16,4 +17,10 @@ it('rejects empty, oversized and NUL notes before dispatch', () => {
   for (const value of ['  ', 'x'.repeat(4001), 'a\0b'])
     expect(() => prepareNoteRequest(value, null, () => 'unused')).toThrow();
   expect(prepareNoteRequest('x'.repeat(4000), null, () => 'id').text).toHaveLength(4000);
+});
+
+it('keeps internal CRM, reminders and operator finance outside the disk persistence whitelist', () => {
+  expect(isPersisted('manager')).toBe(false);
+  expect(isPersisted('tenant-notes')).toBe(false);
+  expect(isPersisted('owner-password')).toBe(false);
 });
