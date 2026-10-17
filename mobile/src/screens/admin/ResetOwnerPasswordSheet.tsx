@@ -1,99 +1,90 @@
-/**
- * ResetOwnerPasswordSheet — менеджер сбрасывает пароль владельца СВОЕГО автосервиса
- * (POST /manager/tenants/:id/reset-owner-password; у суперадмина такого маршрута нет, он
- * правит пароль сотрудника в карточке). Пароль хранится только bcrypt-хэшем и позже не
- * восстановим, поэтому после успеха сразу показываем логин/пароль и даём «Поделиться».
- */
 import React from 'react';
 import { Alert, Share } from 'react-native';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { managerApi } from '../../api/services';
-import { haptic } from '../../platform/haptics';
-import { extractApiErrorMessage } from '../../utils/apiError';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatPhone } from '../../../../shared/validation/phone';
 import { invalidatePlatformQueries } from './adminShared';
 import { AdminSheet, SheetHint, SheetPasswordField } from './adminSheet';
-
-const MIN_PASSWORD = 6;
-
+import { usePlatformSession } from './usePlatformData';
+import { assertPlatformSession } from './platformSession';
 export interface ResetOwnerTarget {
   id: string;
   name: string;
-  /** Владелец автосервиса (старший директор), если известен — попадёт в текст «Поделиться». */
   owner?: { fullName: string; phone: string } | null;
 }
-
-interface ResetOwnerPasswordSheetProps {
+interface ResetProps {
   visible: boolean;
   tenant: ResetOwnerTarget | null;
   onClose: () => void;
 }
-
-export default function ResetOwnerPasswordSheet({ visible, tenant, onClose }: ResetOwnerPasswordSheetProps) {
-  const queryClient = useQueryClient();
-  const [password, setPassword] = React.useState('');
-
-  const wasVisible = React.useRef(false);
+export default function ResetOwnerPasswordSheet(props: ResetProps) {
+  const { session } = usePlatformSession();
+  return (
+    <ResetPasswordContent key={`${props.tenant?.id}:${session.data.generation}:${session.authEpoch}`} {...props} />
+  );
+}
+function ResetPasswordContent({ visible, tenant, onClose }: ResetProps) {
+  const client = useQueryClient(),
+    { session, allowed } = usePlatformSession();
+  const [password, setPassword] = React.useState(''),
+    [saving, setSaving] = React.useState(false);
+  const scope = React.useRef({ visible, id: tenant?.id });
+  scope.current = { visible, id: tenant?.id };
   React.useEffect(() => {
-    if (visible && !wasVisible.current) setPassword('');
-    wasVisible.current = visible;
-  }, [visible]);
-
-  const mutation = useMutation({
-    mutationFn: async (next: string) => (await managerApi.resetOwnerPassword(tenant!.id, { password: next })).data,
-    onSuccess: (_res, next) => {
-      haptic('success');
-      invalidatePlatformQueries(queryClient, tenant?.id);
+    setPassword('');
+  }, [visible, tenant?.id]);
+  if (!tenant) return null;
+  const submit = async () => {
+    if (!allowed || saving || !visible) return;
+    if (password.length < 6) {
+      Alert.alert('Слишком короткий пароль', 'Введите не менее 6 символов.');
+      return;
+    }
+    const target = tenant,
+      next = password;
+    setSaving(true);
+    try {
+      assertPlatformSession(session);
+      await session.manager.resetOwnerPassword(target.id, { password: next });
+      assertPlatformSession(session);
+      if (!scope.current.visible || scope.current.id !== target.id) return;
+      setPassword('');
+      invalidatePlatformQueries(client, target.id);
       onClose();
-      const phone = tenant?.owner?.phone ? formatPhone(tenant.owner.phone) : '';
-      const creds = `Автосервис «${tenant?.name ?? ''}»${
-        tenant?.owner?.fullName ? `\n${tenant.owner.fullName}` : ''
-      }${phone ? `\nТелефон: ${phone}` : ''}\nНовый пароль: ${next}`;
-      Alert.alert('Пароль владельца изменён', creds, [
+      const message = `Autexa · ${target.name}${target.owner?.phone ? `\nТелефон: ${formatPhone(target.owner.phone)}` : ''}\nНовый пароль: ${next}`;
+      Alert.alert('Новый пароль · покажем один раз', message, [
         {
           text: 'Поделиться',
           onPress: () => {
-            // expo-clipboard в проекте нет — «Скопировать» доступно в системном share-листе.
-            Share.share({ message: `Autexa — вход\n${creds}` }).catch(() => {});
+            if (session.isCurrent()) void Share.share({ message }).catch(() => {});
           },
         },
         { text: 'Готово', style: 'cancel' },
       ]);
-    },
-    onError: (err) => {
-      haptic('error');
-      Alert.alert('Не удалось сбросить пароль', extractApiErrorMessage(err, 'Попробуйте ещё раз'));
-    },
-  });
-
-  if (!tenant) return null;
-
-  const submit = () => {
-    if (password.length < MIN_PASSWORD) {
-      haptic('error');
-      Alert.alert('Слишком короткий пароль', `Пароль — не короче ${MIN_PASSWORD} символов.`);
-      return;
+    } catch {
+      if (session.isCurrent() && scope.current.visible && scope.current.id === target.id)
+        Alert.alert('Не удалось подтвердить смену пароля', 'Повторите запрос с тем же паролем.');
+    } finally {
+      if (session.isCurrent()) setSaving(false);
     }
-    mutation.mutate(password);
   };
-
   return (
     <AdminSheet
       visible={visible}
       title="Пароль владельца"
       saveLabel="Сбросить"
-      saving={mutation.isPending}
+      saving={saving}
       onClose={onClose}
-      onSave={submit}
+      onSave={() => void submit()}
     >
       <SheetPasswordField
-        label={`Новый пароль владельца «${tenant.name}»`}
+        label={`Новый пароль · ${tenant.name}`}
         value={password}
         onChangeText={setPassword}
-        placeholder={`Не короче ${MIN_PASSWORD} символов`}
+        placeholder="Не менее 6 символов"
       />
       <SheetHint icon="information-circle-outline">
-        Владелец войдёт по этому паролю. Прежний пароль перестанет работать; сообщите новый владельцу.
+        Текущий пароль восстановить нельзя: он хранится в защищённом виде. Сброс необратим, прежний пароль перестанет
+        работать. Новый пароль покажем один раз после успешного сброса.
       </SheetHint>
     </AdminSheet>
   );

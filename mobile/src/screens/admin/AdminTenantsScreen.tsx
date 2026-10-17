@@ -398,7 +398,7 @@ export default function AdminTenantsScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title={isManager ? 'Автосервисы' : 'Тенанты'}
+        title="Клиенты"
         subtitle={`${tenants.length} организаций`}
         trailing={
           <Pressable

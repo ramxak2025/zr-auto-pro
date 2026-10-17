@@ -13,7 +13,7 @@
  *         gate on every tenant device, mirrored by the status chip here
  *       – Войти как владелец (impersonate → AuthContext.beginImpersonation)
  *   • Только суперадмин: «Менеджер · Передать», филиалы и сотрудники автосервиса.
- *   • Только менеджер: «Сбросить пароль владельца». Удаления, реквизитов, сотрудников и
+ *   • Обе роли: «Сбросить пароль владельца». Удаления, реквизитов, сотрудников и
  *     филиалов у менеджера нет — сервер их ему не отдаёт.
  */
 import React from 'react';
@@ -57,6 +57,7 @@ import {
   InitialAvatar,
 } from './adminShared';
 import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
+import TenantNotes from './TenantNotes';
 import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
@@ -729,18 +730,16 @@ export default function AdminTenantDetailScreen() {
             palette={palette}
             surfaceCard={surface.card}
           />
-          {isManager ? (
-            <ActionButton
-              icon="lock-closed-outline"
-              label="Сбросить пароль владельца"
-              onPress={() => {
-                haptic('tap');
-                setResetPasswordOpen(true);
-              }}
-              palette={palette}
-              surfaceCard={surface.card}
-            />
-          ) : null}
+          <ActionButton
+            icon="lock-closed-outline"
+            label="Сбросить пароль владельца"
+            onPress={() => {
+              haptic('tap');
+              setResetPasswordOpen(true);
+            }}
+            palette={palette}
+            surfaceCard={surface.card}
+          />
           {/* Impersonation — primary destructive accent. */}
           <Pressable
             onPress={handleImpersonate}
@@ -758,6 +757,7 @@ export default function AdminTenantDetailScreen() {
           </Pressable>
         </View>
 
+        <TenantNotes key={tenant.id} tenantId={tenant.id} />
         {/* Филиалы и сотрудники — только у суперадмина: менеджеру сервер их не отдаёт. */}
         {!isManager ? (
           <>
@@ -951,17 +951,16 @@ export default function AdminTenantDetailScreen() {
             managerName: tenant.managerName ?? null,
           }}
         />
-      ) : (
-        <ResetOwnerPasswordSheet
-          visible={resetPasswordOpen}
-          onClose={() => setResetPasswordOpen(false)}
-          tenant={{
-            id: tenant.id,
-            name: tenant.name,
-            owner: ownerUser ? { fullName: ownerUser.fullName, phone: ownerUser.phone } : null,
-          }}
-        />
-      )}
+      ) : null}
+      <ResetOwnerPasswordSheet
+        visible={resetPasswordOpen}
+        onClose={() => setResetPasswordOpen(false)}
+        tenant={{
+          id: tenant.id,
+          name: tenant.name,
+          owner: ownerUser ? { fullName: ownerUser.fullName, phone: ownerUser.phone } : null,
+        }}
+      />
 
       <AdminSheet
         visible={suspendOpen}

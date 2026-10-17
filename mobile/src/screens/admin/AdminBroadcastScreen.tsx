@@ -1,3 +1,4 @@
+import { useNavigation } from '@react-navigation/native';
 /**
  * AdminBroadcastScreen — compose + send a platform-wide announcement
  * («объявление от поддержки») to every tenant owner.
@@ -119,6 +120,7 @@ function extractServerMessage(error: unknown): string {
 }
 
 export default function AdminBroadcastScreen() {
+  const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
@@ -390,6 +392,7 @@ export default function AdminBroadcastScreen() {
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Рассылка"
+        onBack={() => navigation.goBack()}
         subtitle="Объявление владельцам"
         trailing={
           <Pressable
