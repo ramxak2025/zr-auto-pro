@@ -387,3 +387,51 @@ test('admin pages with editable fields use the common keyboard and tab-bar reser
   assert.ok(scroller.props.extraKeyboardBottomOffset > 0);
   assert.equal(scroller.props.reserveTabBar, undefined, 'common navigation reservation remains enabled by default');
 });
+
+test('native capability reads actual registration metadata before accepting an Expo wrapper', () => {
+  const filename = path.join(__dirname, '../modules/autexa-liquid-glass/src/AutexaLiquidGlassTabBar.tsx');
+  for (const item of [
+    { metadata: undefined, expected: false },
+    { metadata: {}, expected: false },
+    { metadata: { AutexaLiquidGlass: {} }, expected: false },
+    { metadata: { AutexaLiquidGlassTabBar: {} }, expected: true },
+    { metadata: { AutexaLiquidGlassTabBar: {} }, throws: true, expected: false },
+  ]) {
+    const result = { exports: {} };
+    let calls = 0;
+    vm.runInNewContext(
+      ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2020,
+          esModuleInterop: true,
+        },
+      }).outputText,
+      {
+        ...result,
+        require(name) {
+          if (name === 'react') return React;
+          if (name === 'react-native')
+            return {
+              Platform: { OS: 'ios' },
+              NativeModules: { NativeUnimoduleProxy: { viewManagersMetadata: item.metadata } },
+            };
+          if (name === 'expo-blur') return { BlurView: 'BlurView' };
+          if (name === 'expo-modules-core')
+            return {
+              requireNativeViewManager() {
+                calls++;
+                if (item.throws) throw new Error('missing native manager');
+                // Matches Expo 54: missing native registration need not throw here.
+                return function NativeComponent() {};
+              },
+            };
+          throw new Error('Unexpected native capability test dependency');
+        },
+      },
+    );
+    assert.equal(result.exports.isAutexaNativeTabBarAvailable(), item.expected);
+    if (!item.metadata?.AutexaLiquidGlassTabBar) assert.equal(calls, 0);
+  }
+});
