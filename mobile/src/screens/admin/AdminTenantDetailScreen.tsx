@@ -13,7 +13,7 @@
  *         gate on every tenant device, mirrored by the status chip here
  *       – Войти как владелец (impersonate → AuthContext.beginImpersonation)
  *   • Только суперадмин: «Менеджер · Передать», филиалы и сотрудники автосервиса.
- *   • Только менеджер: «Сбросить пароль владельца». Удаления, реквизитов, сотрудников и
+ *   • Обе роли: «Сбросить пароль владельца». Удаления, реквизитов, сотрудников и
  *     филиалов у менеджера нет — сервер их ему не отдаёт.
  */
 import React from 'react';
@@ -57,11 +57,12 @@ import {
   InitialAvatar,
 } from './adminShared';
 import ExtendSubscriptionSheet from './ExtendSubscriptionSheet';
+import TenantNotes from './TenantNotes';
 import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
-import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -142,7 +143,7 @@ export default function AdminTenantDetailScreen() {
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
-  const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const { contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { beginImpersonation } = useAuth();
   const isManager = useAdminMode() === 'manager';
 
@@ -602,8 +603,8 @@ export default function AdminTenantDetailScreen() {
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={tenant.name} onBack={() => navigation.goBack()} />
 
-      <ScrollView
-        contentInset={contentInset}
+      <KeyboardAwareScroll
+        extraKeyboardBottomOffset={48}
         contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
       >
@@ -729,18 +730,16 @@ export default function AdminTenantDetailScreen() {
             palette={palette}
             surfaceCard={surface.card}
           />
-          {isManager ? (
-            <ActionButton
-              icon="lock-closed-outline"
-              label="Сбросить пароль владельца"
-              onPress={() => {
-                haptic('tap');
-                setResetPasswordOpen(true);
-              }}
-              palette={palette}
-              surfaceCard={surface.card}
-            />
-          ) : null}
+          <ActionButton
+            icon="lock-closed-outline"
+            label="Сбросить пароль владельца"
+            onPress={() => {
+              haptic('tap');
+              setResetPasswordOpen(true);
+            }}
+            palette={palette}
+            surfaceCard={surface.card}
+          />
           {/* Impersonation — primary destructive accent. */}
           <Pressable
             onPress={handleImpersonate}
@@ -758,6 +757,7 @@ export default function AdminTenantDetailScreen() {
           </Pressable>
         </View>
 
+        <TenantNotes key={tenant.id} tenantId={tenant.id} />
         {/* Филиалы и сотрудники — только у суперадмина: менеджеру сервер их не отдаёт. */}
         {!isManager ? (
           <>
@@ -912,7 +912,7 @@ export default function AdminTenantDetailScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
         </Pressable>
-      </ScrollView>
+      </KeyboardAwareScroll>
 
       {/* Продление — общая шторка суперадмина и менеджера (сумма, срок, доля владельца). */}
       <ExtendSubscriptionSheet
@@ -951,17 +951,16 @@ export default function AdminTenantDetailScreen() {
             managerName: tenant.managerName ?? null,
           }}
         />
-      ) : (
-        <ResetOwnerPasswordSheet
-          visible={resetPasswordOpen}
-          onClose={() => setResetPasswordOpen(false)}
-          tenant={{
-            id: tenant.id,
-            name: tenant.name,
-            owner: ownerUser ? { fullName: ownerUser.fullName, phone: ownerUser.phone } : null,
-          }}
-        />
-      )}
+      ) : null}
+      <ResetOwnerPasswordSheet
+        visible={resetPasswordOpen}
+        onClose={() => setResetPasswordOpen(false)}
+        tenant={{
+          id: tenant.id,
+          name: tenant.name,
+          owner: ownerUser ? { fullName: ownerUser.fullName, phone: ownerUser.phone } : null,
+        }}
+      />
 
       <AdminSheet
         visible={suspendOpen}

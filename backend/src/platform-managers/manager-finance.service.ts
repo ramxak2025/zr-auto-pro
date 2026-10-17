@@ -5,6 +5,7 @@ import { TenantsService } from '../tenants/tenants.service';
 import { DEFAULT_OWNER_SHARE_PERCENT } from './owner-share';
 import type {
   ManagerLedger,
+  ManagerPlatformAnalytics,
   ManagerMoney,
   ManagerSettlement,
   ManagerStats,
@@ -220,6 +221,36 @@ export class ManagerFinanceService {
       balance: money.balance,
       ownerSharePercent,
       maxFreeDays,
+    };
+  }
+
+  /** Six complete calendar buckets, aggregated from immutable payment snapshots. */
+  async analytics(managerId: string): Promise<ManagerPlatformAnalytics> {
+    const { rows } = await this.pool.query(
+      `WITH months AS (
+         SELECT generate_series(date_trunc('month', now()) - interval '5 months',
+                                date_trunc('month', now()), interval '1 month') AS month
+       ), totals AS (
+         SELECT date_trunc('month', created_at) AS month,
+                SUM(amount) AS paid, SUM(COALESCE(owner_share_amount, 0)) AS owner_share
+           FROM subscription_payments
+          WHERE manager_id = $1 AND is_free = false
+            AND created_at >= date_trunc('month', now()) - interval '5 months'
+            AND created_at < date_trunc('month', now()) + interval '1 month'
+          GROUP BY 1
+       )
+       SELECT to_char(m.month, 'YYYY-MM') AS month,
+              COALESCE(t.paid, 0) AS paid, COALESCE(t.owner_share, 0) AS owner_share
+         FROM months m LEFT JOIN totals t ON t.month = m.month ORDER BY m.month`,
+      [managerId],
+    );
+    return {
+      monthly: rows.map((row) => ({
+        month: row.month,
+        paidRevenue: toMoney(row.paid),
+        myShare: subtractMoney(toMoney(row.paid), toMoney(row.owner_share)),
+        ownerShare: toMoney(row.owner_share),
+      })),
     };
   }
 

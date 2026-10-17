@@ -30,6 +30,7 @@ import type { ManagerSummary, RegistrationRequest } from '../../../../shared/typ
 import { balanceCaption, balanceColor, useAdminMode } from './adminShared';
 import AccountPickerSheet from '../AccountPickerSheet';
 import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import { AdminGroup, AdminRow } from './AdminUI';
 
 export default function AdminMoreScreen() {
   const navigation = useNavigation<any>();
@@ -172,9 +173,7 @@ export default function AdminMoreScreen() {
             <Pressable
               onPress={() => {
                 haptic('tap');
-                // Nested navigate — the review screen lives in the Overview tab's
-                // stack (AdminShellNavigator). This switches to it and pushes the list.
-                navigation.navigate('AdminOverview', { screen: 'AdminRegistrationRequests' });
+                navigation.navigate('AdminRegistrationRequests');
               }}
               style={[styles.card, surface.card, styles.navRow]}
             >
@@ -192,6 +191,26 @@ export default function AdminMoreScreen() {
           </>
         )}
 
+        <AdminGroup>
+          <AdminRow
+            label="Напоминания"
+            detail="Подписки и контакты"
+            icon="bell"
+            onPress={() => navigation.navigate('AdminReminders')}
+          />
+          <AdminRow
+            label="Настройки напоминаний"
+            icon="gear"
+            onPress={() => navigation.navigate('AdminReminderSettings')}
+          />
+          <AdminRow label="Журнал действий" icon="journal" onPress={() => navigation.navigate('AdminActivity')} />
+          {!isManager ? (
+            <>
+              <AdminRow label="Тарифы" icon="card" onPress={() => navigation.navigate('AdminPlans')} />
+              <AdminRow label="Рассылка" icon="megaphone" onPress={() => navigation.navigate('AdminBroadcast')} />
+            </>
+          ) : null}
+        </AdminGroup>
         {/* Logout */}
         <Pressable onPress={handleLogout} style={[styles.logoutBtn, surface.card]}>
           <Ionicons name="log-out-outline" size={20} color={colors.red[600]} />

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View, NativeSyntheticEvent } from 'react-native';
+import { Platform, View, NativeSyntheticEvent, NativeModules } from 'react-native';
 import { requireNativeViewManager } from 'expo-modules-core';
 import { BlurView } from 'expo-blur';
 
@@ -16,9 +16,18 @@ try {
   // Same module name as the View definition in AutexaLiquidGlassModule.swift
   // ExpoModulesCore registers a separate native component per `View()` block
   // by class name; the name here is the View class.
-  NativeTabBar = requireNativeViewManager('AutexaLiquidGlassTabBar');
+  // Expo 54 can return a wrapper even for an unregistered native view. Its
+  // adapter uses this metadata; requireNativeViewManager alone is not a probe.
+  if (Platform.OS === 'ios' && NativeModules.NativeUnimoduleProxy?.viewManagersMetadata?.AutexaLiquidGlassTabBar) {
+    NativeTabBar = requireNativeViewManager('AutexaLiquidGlassTabBar');
+  }
 } catch {
   NativeTabBar = null;
+}
+
+/** A functional standard bar is preferable to an inert surface on older clients. */
+export function isAutexaNativeTabBarAvailable(): boolean {
+  return Platform.OS === 'ios' && NativeTabBar !== null;
 }
 
 /**

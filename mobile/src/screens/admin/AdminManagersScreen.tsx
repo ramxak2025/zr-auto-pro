@@ -116,9 +116,9 @@ export default function AdminManagersScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title="Менеджеры"
+        title="Команда"
         subtitle={`${managers.length} ${pluralRu(managers.length, 'менеджер', 'менеджера', 'менеджеров')}`}
-        onBack={() => navigation.goBack()}
+        onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
         trailing={
           <Pressable
             onPress={() => {

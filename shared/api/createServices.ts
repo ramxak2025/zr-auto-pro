@@ -327,6 +327,12 @@ import type {
   ManagerSummary,
   ManagerSettlement,
   ManagerLedger,
+  PlatformTenantNote,
+  PlatformTenantNotesPage,
+  PlatformTenantFollowUp,
+  PlatformReminderSettings,
+  PlatformReminderFeed,
+  ManagerPlatformAnalytics,
 } from '../types';
 import type {
   ProductsQuery,
@@ -346,6 +352,8 @@ import type {
   ResetOwnerPasswordRequest,
   ManagerTenantsQuery,
   ManagerLedgerQuery,
+  CreatePlatformTenantNoteRequest,
+  SetPlatformTenantFollowUpRequest,
   CreateExpenseRequest,
   UpdateExpenseRequest,
   CheckTemplateServiceInput,
@@ -3074,6 +3082,17 @@ export function createManagerCabinetApi(api: HttpClient) {
   return {
     /** Сводка: клиенты по статусам, оплаты за месяц, моя доля, долг владельцу, лимит пробного. */
     summary: () => api.get<ManagerSummary>('/manager/summary'),
+    analytics: () => api.get<ManagerPlatformAnalytics>('/manager/analytics'),
+    notes: (id: string, params?: { limit?: number; offset?: number }) =>
+      api.get<PlatformTenantNotesPage>(`/manager/tenants/${id}/notes`, { params }),
+    addNote: (id: string, data: CreatePlatformTenantNoteRequest) =>
+      api.post<PlatformTenantNote>(`/manager/tenants/${id}/notes`, data),
+    setFollowUp: (id: string, data: SetPlatformTenantFollowUpRequest) =>
+      api.patch<PlatformTenantFollowUp>(`/manager/tenants/${id}/follow-up`, data),
+    reminderSettings: () => api.get<PlatformReminderSettings>('/manager/reminder-settings'),
+    updateReminderSettings: (data: PlatformReminderSettings) =>
+      api.put<PlatformReminderSettings>('/manager/reminder-settings', data),
+    reminders: () => api.get<PlatformReminderFeed>('/manager/reminders'),
     /**
      * Свои автосервисы в форме `Tenant` (со `lastPayment`, `currentPeriodKind`,
      * `userCount`). `status` — фильтр по состоянию подписки, без него — все.

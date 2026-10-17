@@ -1,3 +1,4 @@
+import { getRandomBytes } from 'expo-crypto';
 /**
  * adminShared — formatting + status helpers + small UI primitives shared by
  * the superadmin platform-operator screens (Overview / Tenants / Plans /
@@ -95,7 +96,12 @@ export function invalidatePlatformQueries(queryClient: QueryClient, tenantId?: s
 const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export function genPassword(len = 10): string {
   let out = '';
-  for (let i = 0; i < len; i++) out += PW_ALPHABET[Math.floor(Math.random() * PW_ALPHABET.length)];
+  const ceiling = Math.floor(256 / PW_ALPHABET.length) * PW_ALPHABET.length;
+  while (out.length < len) {
+    for (const byte of getRandomBytes(Math.max(16, len))) {
+      if (byte < ceiling && out.length < len) out += PW_ALPHABET[byte % PW_ALPHABET.length];
+    }
+  }
   return out;
 }
 

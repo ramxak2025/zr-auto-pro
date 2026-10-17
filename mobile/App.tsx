@@ -15,6 +15,7 @@ import { ThemeProvider, useThemeMode } from './src/contexts/ThemeContext';
 import { SalaryNotificationProvider } from './src/contexts/SalaryNotificationContext';
 import { BroadcastNotificationProvider } from './src/contexts/BroadcastNotificationContext';
 import AppNavigator from './src/navigation/AppNavigator';
+import PlatformReminderNotificationRouter from './src/navigation/PlatformReminderNotificationRouter';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
 import OfflineBanner from './src/components/OfflineBanner';
@@ -343,6 +344,16 @@ function alertQueuedCheckRejected(entry: QueuedCheck, message: string): void {
 // stack (ChecksStack), so we navigate Main → Checks → CheckDetail; the tab
 // bar stays visible, exactly like opening a check from Журнал by hand.
 const navigationRef = createNavigationContainerRef();
+
+function openPlatformTenantFromPush(id: string) {
+  if (!navigationRef.isReady()) return;
+  navigationRef.dispatch(
+    CommonActions.navigate('Main', {
+      screen: 'AdminOverview',
+      params: { screen: 'AdminTenantDetail', params: { id }, initial: false },
+    }),
+  );
+}
 
 function NfcDeepLinkRouter({ navigationReady }: { navigationReady: boolean }) {
   const { user, token, loading, recoveringSession } = useAuth();
@@ -799,6 +810,7 @@ function ThemedRoot({
                   }}
                 >
                   <NfcDeepLinkRouter navigationReady={navigationReady} />
+                  <PlatformReminderNotificationRouter ready={navigationReady} openTenant={openPlatformTenantFromPush} />
                   <StatusBar
                     barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
                     backgroundColor="transparent"

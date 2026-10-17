@@ -1,3 +1,4 @@
+import { useNavigation } from '@react-navigation/native';
 import { planCompositionLabel } from '../../utils/subscriptionPricingText';
 /**
  * AdminPlansScreen — in-app tariff editor (full CRUD via plansApi).
@@ -64,6 +65,7 @@ function toDraft(plan?: Plan): PlanDraft {
 }
 
 export default function AdminPlansScreen() {
+  const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
@@ -249,6 +251,7 @@ export default function AdminPlansScreen() {
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Тарифы"
+        onBack={() => navigation.goBack()}
         subtitle={`${plans.length} планов`}
         trailing={
           <Pressable
