@@ -933,6 +933,56 @@ export interface ManagerLedger {
   balance: number;
 }
 
+/** Internal platform CRM; never included in tenant/user/subscription responses. */
+export interface PlatformTenantNote {
+  id: string;
+  tenantId: string;
+  text: string;
+  authorName: string | null;
+  createdAt: string;
+}
+
+export interface PlatformTenantNotesPage {
+  items: PlatformTenantNote[];
+  total: number;
+  nextContactAt: string | null;
+}
+
+export interface PlatformTenantFollowUp {
+  nextContactAt: string | null;
+}
+
+/** Personal operator settings; push is opt-in (false by default). */
+export interface PlatformReminderSettings {
+  expiryEnabled: boolean;
+  daysBefore: number[];
+  pushEnabled: boolean;
+}
+
+interface PlatformReminderBase {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  dueAt: string;
+  /** Calendar day difference in the tenant's timezone; overdue values are negative. */
+  daysRemaining: number;
+}
+
+export type PlatformReminder =
+  | (PlatformReminderBase & { kind: 'subscription_expiry'; subscriptionStatus: 'active' | 'expired' })
+  | (PlatformReminderBase & { kind: 'follow_up' });
+
+export interface PlatformReminderFeed {
+  items: PlatformReminder[];
+  generatedAt: string;
+  /** Full matching count; items contains the first 200 ordered by urgency. */
+  total: number;
+}
+
+export interface ManagerPlatformAnalytics {
+  monthly: { month: string; paidRevenue: number; myShare: number; ownerShare: number }[];
+}
+
 /**
  * Карточка менеджера для суперадмина: `GET /admin/managers/:id`.
  * `tenants` — его автосервисы в той же форме {@link Tenant}, что отдаёт

@@ -1176,6 +1176,17 @@ export interface ResetOwnerPasswordRequest {
   password: string;
 }
 
+/** Append-only internal note. Reusing requestId with different text/tenant returns 409. */
+export interface CreatePlatformTenantNoteRequest {
+  text: string;
+  requestId: string;
+}
+
+export interface SetPlatformTenantFollowUpRequest {
+  /** ISO datetime with timezone; null clears the reminder. */
+  nextContactAt: string | null;
+}
+
 /** Query of GET /manager/tenants. */
 export interface ManagerTenantsQuery {
   /**
