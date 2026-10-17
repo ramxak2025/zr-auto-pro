@@ -7,6 +7,8 @@ import { AdminManagersService } from './admin-managers.service';
 import { ManagerCabinetController } from './manager-cabinet.controller';
 import { ManagerCabinetService } from './manager-cabinet.service';
 import { ManagerFinanceService } from './manager-finance.service';
+import { PlatformCrmService } from './platform-crm.service';
+import { PlatformReminderService } from './platform-reminder.service';
 
 /**
  * Менеджеры платформы (173): сотрудники владельца Autexa без тенанта, которые заводят
@@ -20,6 +22,12 @@ import { ManagerFinanceService } from './manager-finance.service';
 @Module({
   imports: [TenantsModule, AuthModule, SettingsModule],
   controllers: [AdminManagersController, AdminTenantManagerController, ManagerCabinetController],
-  providers: [ManagerFinanceService, AdminManagersService, ManagerCabinetService],
+  providers: [
+    ManagerFinanceService,
+    AdminManagersService,
+    ManagerCabinetService,
+    PlatformCrmService,
+    PlatformReminderService,
+  ],
 })
 export class PlatformManagersModule {}

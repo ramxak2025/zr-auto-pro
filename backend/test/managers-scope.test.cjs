@@ -329,6 +329,13 @@ function guardContext(Controller, handlerName, user) {
 
 const EXPECTED_CABINET_ROUTES = [
   'GET /manager/summary',
+  'GET /manager/analytics',
+  'GET /manager/tenants/:id/notes',
+  'POST /manager/tenants/:id/notes',
+  'PATCH /manager/tenants/:id/follow-up',
+  'GET /manager/reminder-settings',
+  'PUT /manager/reminder-settings',
+  'GET /manager/reminders',
   'GET /manager/tenants',
   'POST /manager/tenants',
   'GET /manager/tenants/:id',
@@ -359,7 +366,7 @@ const EXPECTED_ADMIN_ROUTES = [
 const routeKeys = (controllers) =>
   controllers.flatMap((Controller) => routesOf(Controller).map((r) => methodKey(r.verb, r.path))).sort();
 
-test('кабинет менеджера: ровно 15 маршрутов, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
+test('кабинет менеджера: ровно 22 маршрута, и КАЖДЫЙ закрыт @Roles(manager, superadmin)', () => {
   const routes = routesOf(ManagerCabinetController);
   assert.deepEqual(routeKeys([ManagerCabinetController]), [...EXPECTED_CABINET_ROUTES].sort());
   for (const route of routes) {
@@ -427,7 +434,7 @@ test('маршруты контроллеров 1:1 совпадают с кон
     AdminTenantManagerController,
   ]).map((key) => key.replace(/:\w+/g, ':p'));
   const fromContract = contractManagerRoutes();
-  assert.equal(fromContract.length, 23, `в контракте ожидалось 23 маршрута (15 + 8), найдено ${fromContract.length}`);
+  assert.equal(fromContract.length, 30, `в контракте ожидалось 30 маршрутов (22 + 8), найдено ${fromContract.length}`);
   assert.deepEqual([...fromController].sort(), fromContract);
 });
 
@@ -2500,7 +2507,7 @@ test('действие над чужим клиентом: 404 из TenantsServi
 function resetPool({ ownedBy = MANAGER_ID, owners = [{ id: DIRECTOR_ID, full_name: 'Пётр Директоров' }] } = {}) {
   return fakePool([
     [
-      /^SELECT id, name FROM tenants WHERE id = \$1::uuid AND \(\$2::uuid IS NULL OR manager_id = \$2::uuid\)$/,
+      /^SELECT id, name FROM tenants WHERE id = \$1::uuid AND \(\$2::uuid IS NULL OR manager_id = \$2::uuid\) FOR UPDATE$/,
       (p) =>
         p[0] === TENANT_ID && (p[1] === null || p[1] === ownedBy)
           ? [{ id: TENANT_ID, name: 'Автосервис «Восток»' }]
@@ -2508,8 +2515,8 @@ function resetPool({ ownedBy = MANAGER_ID, owners = [{ id: DIRECTOR_ID, full_nam
     ],
     [/FROM users WHERE tenant_id = \$1 AND role = 'director'/, owners],
     [
-      /^UPDATE users SET password = \$1, sessions_valid_from = now\(\), updated_at = now\(\) WHERE id = \$2$/,
-      { rows: [], rowCount: 1 },
+      /^UPDATE users SET password = \$1, sessions_valid_from = clock_timestamp\(\)/,
+      { rows: [{ id: DIRECTOR_ID }], rowCount: 1 },
     ],
   ]);
 }
@@ -2526,13 +2533,17 @@ test('сброс пароля владельца своего клиента: х
   try {
     assert.deepEqual(await service.resetOwnerPassword(managerActor(), TENANT_ID, 'NewPass123'), { ok: true });
 
-    assert.deepEqual(pool.calls[0].params, [TENANT_ID, MANAGER_ID], 'область менеджера — в запросе тенанта');
+    assert.equal(pool.connects, 1);
+    assert.equal(pool.released, 1);
+    assert.deepEqual([pool.calls[0].text, pool.calls.at(-1).text], ['BEGIN', 'COMMIT']);
+    assert.deepEqual(pool.calls[1].params, [TENANT_ID, MANAGER_ID], 'область менеджера — в запросе тенанта');
     assert.match(
-      pool.calls[1].text,
-      /WHERE tenant_id = \$1 AND role = 'director' AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL ORDER BY created_at ASC LIMIT 1$/,
+      pool.calls[2].text,
+      /WHERE tenant_id = \$1 AND role = 'director' AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL ORDER BY created_at ASC, id ASC LIMIT 1 FOR UPDATE$/,
     );
-    const update = pool.calls[2];
-    assert.deepEqual([update.params.length, update.params[1]], [2, DIRECTOR_ID]);
+    const update = pool.calls[3];
+    assert.deepEqual(update.params.slice(1), [DIRECTOR_ID, TENANT_ID, MANAGER_ID]);
+    assert.match(update.text, /AND EXISTS.*manager_id = \$4::uuid/);
     assert.notEqual(update.params[0], 'NewPass123');
     assert.equal(bcrypt.compareSync('NewPass123', update.params[0]), true);
 
@@ -2570,7 +2581,10 @@ test('сброс пароля: чужой клиент — 404 после одн
       404,
       'Тенант не найден',
     );
-    assert.equal(foreign.calls.length, 1, 'владельца чужого клиента не ищем и пароль не трогаем');
+    assert.deepEqual(
+      foreign.calls.map((call) => call.text.split(' ')[0]),
+      ['BEGIN', 'SELECT', 'ROLLBACK'],
+    );
     assert.equal(isAuthCached(DIRECTOR_ID), true, 'кэш чужого владельца не сброшен');
     assert.equal(foreignService.audit.entries.length, 0);
 
@@ -2597,7 +2611,7 @@ test('сброс пароля: чужой клиент — 404 после одн
     const anyTenant = resetPool({ ownedBy: OTHER_MANAGER_ID });
     const asOwner = makeCabinet({ pool: anyTenant });
     assert.deepEqual(await asOwner.service.resetOwnerPassword(superActor(), TENANT_ID, 'NewPass123'), { ok: true });
-    assert.equal(anyTenant.calls[0].params[1], null, 'у суперадмина область не задана');
+    assert.equal(anyTenant.calls[1].params[1], null, 'у суперадмина область не задана');
     assert.equal(asOwner.audit.entries[0].actor.userId, SUPERADMIN_ID);
   } finally {
     ttlCache.invalidate(authCacheKey(DIRECTOR_ID, 'jti-managers-test'));
@@ -5365,16 +5379,20 @@ test('кабинет менеджера: каждый запрос к tenants н
   );
   for (const query of tenantQueries) {
     const sql = flat(query.text);
-    assert.match(sql, /manager_id\s*=\s*\$2::uuid/, `запрос к tenants без manager_id: ${sql}`);
+    const update = sql.startsWith('UPDATE users');
+    const scopeParam = update ? '4' : '2';
     assert.match(
       sql,
-      /\$2::uuid IS NULL OR/,
-      'область «без ограничения» — только у суперадмина (NULL), и это видно в запросе',
+      new RegExp(`manager_id\\s*=\\s*\\$${scopeParam}::uuid`),
+      `запрос к tenants без manager_id: ${sql}`,
     );
+    assert.ok(sql.includes(`$${scopeParam}::uuid IS NULL OR`), 'без ограничения только при NULL');
     assert.match(
       source.slice(query.end, query.end + 160),
-      /^\s*,\s*\[\s*id\s*,\s*actor\.scope\.managerId \?\? null\s*\]/,
-      `параметры запроса к tenants: [id, actor.scope.managerId ?? null] — ${sql}`,
+      update
+        ? /^\s*,\s*\[\s*hash\s*,\s*owner\.id\s*,\s*id\s*,\s*actor\.scope\.managerId \?\? null\s*\]/
+        : /^\s*,\s*\[\s*id\s*,\s*actor\.scope\.managerId \?\? null\s*\]/,
+      `область актёра передана в SQL: ${sql}`,
     );
   }
 

@@ -270,42 +270,61 @@ export class ManagerCabinetService {
    * Пароль в журнал не попадает.
    */
   async resetOwnerPassword(actor: CabinetActor, id: string, password: string): Promise<{ ok: true }> {
-    const { rows: tenantRows } = await this.pool.query(
-      `SELECT id, name FROM tenants WHERE id = $1::uuid AND ($2::uuid IS NULL OR manager_id = $2::uuid)`,
-      [id, actor.scope.managerId ?? null],
-    );
-    if (tenantRows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
-
-    const { rows: owners } = await this.pool.query(
-      `SELECT id, full_name
-         FROM users
-        WHERE tenant_id = $1
-          AND role = 'director'
-          AND is_active = true
-          AND dismissed_at IS NULL
-          AND purged_at IS NULL
-        ORDER BY created_at ASC
-        LIMIT 1`,
-      [id],
-    );
-    if (owners.length === 0) throw new NotFoundException({ message: 'У тенанта нет активного владельца' });
-    const owner = owners[0];
-
+    // Hash before acquiring locks: assignment can change during bcrypt, and is
+    // checked AFTER it finishes. Tenant -> owner lock order serializes transfers.
     const hash = await bcrypt.hash(password, 10);
-    // Граница сессий (165): токены владельца, выданные до сброса, перестают действовать.
-    await this.pool.query(
-      `UPDATE users SET password = $1, sessions_valid_from = now(), updated_at = now() WHERE id = $2`,
-      [hash, owner.id],
-    );
+    const client = await this.pool.connect();
+    let owner: { id: string; full_name: string };
+    let tenantName: string;
+    try {
+      await client.query('BEGIN');
+      const { rows: tenantRows } = await client.query(
+        `SELECT id, name FROM tenants
+          WHERE id = $1::uuid AND ($2::uuid IS NULL OR manager_id = $2::uuid)
+          FOR UPDATE`,
+        [id, actor.scope.managerId ?? null],
+      );
+      if (tenantRows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+      tenantName = tenantRows[0].name;
+      const { rows: owners } = await client.query(
+        `SELECT id, full_name FROM users
+          WHERE tenant_id = $1 AND role = 'director' AND is_active = true
+            AND dismissed_at IS NULL AND purged_at IS NULL
+          ORDER BY created_at ASC, id ASC LIMIT 1 FOR UPDATE`,
+        [id],
+      );
+      if (owners.length === 0) throw new NotFoundException({ message: 'У тенанта нет активного владельца' });
+      owner = owners[0];
+      const updated = await client.query(
+        `UPDATE users SET password = $1, sessions_valid_from = clock_timestamp(), updated_at = now()
+          WHERE id = $2 AND tenant_id = $3 AND role = 'director' AND is_active = true
+            AND dismissed_at IS NULL AND purged_at IS NULL
+            AND EXISTS (SELECT 1 FROM tenants WHERE id = $3
+              AND ($4::uuid IS NULL OR manager_id = $4::uuid))
+          RETURNING id`,
+        [hash, owner.id, id, actor.scope.managerId ?? null],
+      );
+      if (updated.rows.length === 0) throw new NotFoundException({ message: 'У тенанта нет активного владельца' });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    // Never invalidate on rollback, and never put the hash/password in audit.
     invalidateAuthUser(owner.id);
-
     await this.audit.log(await this.auditActorOf(actor), 'owner_password_reset', {
       targetType: 'user',
       targetId: owner.id,
       targetName: owner.full_name,
-      detail: { tenantId: id, tenantName: tenantRows[0].name },
+      detail: { tenantId: id, tenantName },
     });
     return { ok: true };
+  }
+
+  analytics(actor: CabinetActor) {
+    return this.finance.analytics(actor.userId);
   }
 
   /** GET /manager/ledger?months= — платежи и расчёты ЭТОГО актора; баланс — за всё время. */

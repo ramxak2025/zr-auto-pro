@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -13,6 +13,12 @@ import {
 } from './dto/manager-cabinet.dto';
 import { ManagerCabinetService } from './manager-cabinet.service';
 import { cabinetActor } from './manager-scope';
+import { PlatformCrmService } from './platform-crm.service';
+import {
+  CreatePlatformTenantNoteDto,
+  SetPlatformTenantFollowUpDto,
+  PlatformReminderSettingsDto,
+} from './dto/platform-crm.dto';
 
 /**
  * Кабинет МЕНЕДЖЕРА платформы: только его клиенты, его деньги, его журнал.
@@ -33,13 +39,71 @@ import { cabinetActor } from './manager-scope';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('manager')
 export class ManagerCabinetController {
-  constructor(private cabinet: ManagerCabinetService) {}
+  constructor(
+    private cabinet: ManagerCabinetService,
+    private crm: PlatformCrmService,
+  ) {}
 
   /** Клиенты по статусам, оплаты месяца, моя доля, долг владельцу, потолок бесплатных дней. */
   @Roles('manager', 'superadmin')
   @Get('summary')
   summary(@CurrentUser() user: JwtPayload) {
     return this.cabinet.summary(cabinetActor(user));
+  }
+
+  @Roles('manager', 'superadmin')
+  @Get('analytics')
+  analytics(@CurrentUser() user: JwtPayload) {
+    return this.cabinet.analytics(cabinetActor(user));
+  }
+
+  @Roles('manager', 'superadmin')
+  @Get('tenants/:id/notes')
+  notes(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUuidParam) id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.crm.notes(cabinetActor(user), id, limit, offset);
+  }
+
+  @Roles('manager', 'superadmin')
+  @Post('tenants/:id/notes')
+  addNote(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUuidParam) id: string,
+    @Body() dto: CreatePlatformTenantNoteDto,
+  ) {
+    return this.crm.addNote(cabinetActor(user), id, dto);
+  }
+
+  @Roles('manager', 'superadmin')
+  @Patch('tenants/:id/follow-up')
+  setFollowUp(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUuidParam) id: string,
+    @Body() dto: SetPlatformTenantFollowUpDto,
+  ) {
+    return this.crm.setFollowUp(cabinetActor(user), id, dto);
+  }
+
+  @Roles('manager', 'superadmin')
+  @Get('reminder-settings')
+  reminderSettings(@CurrentUser() user: JwtPayload) {
+    return this.crm.reminderSettings(cabinetActor(user));
+  }
+
+  @Roles('manager', 'superadmin')
+  @Put('reminder-settings')
+  updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: PlatformReminderSettingsDto) {
+    return this.crm.updateReminderSettings(cabinetActor(user), dto);
+  }
+
+  @Roles('manager', 'superadmin')
+  @Get('reminders')
+  reminders(@CurrentUser() user: JwtPayload) {
+    return this.crm.reminders(cabinetActor(user));
   }
 
   /** Свои клиенты; `status` — active | expired | suspended. */

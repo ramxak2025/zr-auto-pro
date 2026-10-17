@@ -356,6 +356,12 @@ export class PushService {
    *
    * Best-effort: any failure is swallowed (push is never the source of truth).
    */
+  /** Read-only preflight for durable background claims; delivery repeats the gate. */
+  async canSendToUserCategory(userId: string, category: string): Promise<boolean> {
+    const gate = await this.loadGateState(userId);
+    return this.isCategoryAllowed(gate, category) && (await this.loadUserTokens(userId, null)).length > 0;
+  }
+
   async sendToUserCategory(
     userId: string,
     category: string,
