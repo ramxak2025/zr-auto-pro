@@ -24,9 +24,11 @@ let currentSession = true,
   appStateListener,
   refetchCount = 0;
 let os = 'ios',
+  nativeAvailable = true,
   role = 'superadmin',
   calls = [],
   queries = [];
+const navigationCalls = [];
 const all = (node) =>
   node && typeof node === 'object' && node.props
     ? [node, ...React.Children.toArray(node.props.children).flatMap(all)]
@@ -92,14 +94,45 @@ function load(relative) {
     if (name === '@react-navigation/native-stack')
       return { createNativeStackNavigator: () => ({ Navigator: 'StackNavigator', Screen: 'StackScreen' }) };
     if (name === '@react-navigation/native')
-      return { useNavigation: () => ({ navigate() {} }), useFocusEffect: (fn) => fn() };
-    if (name === 'autexa-liquid-glass') return { AutexaLiquidGlassTabBar: 'NativeGlassBar' };
+      return {
+        useNavigation: () => ({ navigate: (...args) => navigationCalls.push(args), goBack() {}, setParams() {} }),
+        useRoute: () => ({ params: {} }),
+        useFocusEffect: (fn) => fn(),
+      };
+    if (name === 'autexa-liquid-glass')
+      return {
+        AutexaLiquidGlassTabBar: 'NativeGlassBar',
+        isAutexaNativeTabBarAvailable: () => nativeAvailable,
+      };
+    if (name.endsWith('/theme'))
+      return {
+        spacing: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [i / 2, i * 2])),
+        borderRadius: { lg: 12, xl: 16, '2xl': 24 },
+        colors: { white: '#fff', primary: { 600: '#00f' }, red: { 50: '#fee', 600: '#d00' } },
+      };
+    if (name.endsWith('/AuthContext'))
+      return {
+        useAuth: () => ({ user: { id: 'operator-A', role }, token: 'test-only', savedAccounts: [], logout() {} }),
+      };
     if (name.endsWith('/Typography')) return { Text: 'Text' };
     if (name.endsWith('/Icon')) return { Icon: 'Icon' };
     if (name.endsWith('/haptics')) return { haptic: () => {} };
-    if (name.endsWith('/ThemeContext')) return { useColors: () => palette };
+    if (name.endsWith('/ThemeContext'))
+      return {
+        useColors: () => palette,
+        useThemeMode: () => ({ mode: 'light', toggle() {} }),
+      };
+    if (name.endsWith('/iosSurface')) return { useIosSurface: () => ({ card: {}, cardCompact: {} }) };
+    if (name.endsWith('/KeyboardAware')) return { KeyboardAwareScroll: 'KeyboardAwareScroll' };
+    if (name.endsWith('/TabBarScrollable')) return { TabBarScrollView: 'TabBarScrollView' };
     if (name.endsWith('/useAdminTabBarHeight'))
-      return { ADMIN_BAR_HEIGHT: 60, ADMIN_BAR_TOP_LIFT: 6, ADMIN_BAR_BOTTOM_LIFT: 8, ADMIN_BAR_HORIZONTAL_MARGIN: 14 };
+      return {
+        ADMIN_BAR_HEIGHT: 60,
+        ADMIN_BAR_TOP_LIFT: 6,
+        ADMIN_BAR_BOTTOM_LIFT: 8,
+        ADMIN_BAR_HORIZONTAL_MARGIN: 14,
+        useAdminTabBarScrollInsets: () => ({ contentContainerPaddingBottom: 100 }),
+      };
     if (name === './adminTabs') return load('navigation/adminTabs.ts');
     if (name === './accountPickerNavigation') return load('navigation/accountPickerNavigation.ts');
     if (name.endsWith('/adminShared'))
@@ -319,4 +352,38 @@ test('unauthorized analytics and income routes never dispatch their queries, inc
     for (const query of queries) await assert.rejects(query.queryFn(), /stale/);
     assert.deepEqual(calls, []);
   }
+});
+
+test('an unavailable native bridge retains functional standard role navigation', () => {
+  os = 'ios';
+  nativeAvailable = false;
+  try {
+    const b = bar('superadmin');
+    assert.equal(b.tree.type, 'BottomTabBar');
+    assert.equal(b.tree.props.descriptors['AdminAnalytics-key'].options.tabBarLabel, 'Аналитика');
+  } finally {
+    nativeAvailable = true;
+  }
+});
+
+test('registration requests opened from More stay in the same navigation stack', () => {
+  role = 'superadmin';
+  navigationCalls.length = 0;
+  const tree = load('screens/admin/AdminMoreScreen.tsx').default();
+  const button = all(tree).find(
+    (node) =>
+      node.type === 'Pressable' &&
+      all(node).some((child) => child.type === 'Text' && child.props.children === 'Заявки на регистрацию'),
+  );
+  assert.ok(button, 'registration requests action must remain available');
+  button.props.onPress();
+  assert.deepEqual(navigationCalls, [['AdminRegistrationRequests']]);
+});
+
+test('admin pages with editable fields use the common keyboard and tab-bar reservation host', () => {
+  const tree = load('screens/admin/AdminUI.tsx').AdminPage({ title: 'Настройки', children: 'fields' });
+  const scroller = all(tree).find((node) => node.type === 'KeyboardAwareScroll');
+  assert.ok(scroller, 'inputs must be lifted above the keyboard');
+  assert.ok(scroller.props.extraKeyboardBottomOffset > 0);
+  assert.equal(scroller.props.reserveTabBar, undefined, 'common navigation reservation remains enabled by default');
 });

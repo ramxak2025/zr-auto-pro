@@ -1,6 +1,6 @@
 import React from 'react';
 import { BottomTabBar, type BottomTabBarProps, type BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
-import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
+import { AutexaLiquidGlassTabBar, isAutexaNativeTabBarAvailable } from 'autexa-liquid-glass';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../platform/Typography';
@@ -63,7 +63,7 @@ export default function AdminTabBar(props: BottomTabBarProps & { mode?: AdminShe
     }
   };
   const accounts = () => openAccountPicker(navigation, 'AdminMore', 'AdminMoreHome');
-  if (Platform.OS !== 'ios') {
+  if (Platform.OS !== 'ios' || !isAutexaNativeTabBarAvailable()) {
     const descriptors = Object.fromEntries(
       state.routes.map((route, index) => [
         route.key,

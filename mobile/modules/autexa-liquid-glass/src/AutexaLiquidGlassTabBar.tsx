@@ -21,6 +21,11 @@ try {
   NativeTabBar = null;
 }
 
+/** A functional standard bar is preferable to an inert surface on older clients. */
+export function isAutexaNativeTabBarAvailable(): boolean {
+  return Platform.OS === 'ios' && NativeTabBar !== null;
+}
+
 /**
  * AutexaLiquidGlassTabBar — JS bridge to the native bar with the
  * "droplet" indicator. iOS-only; on Android we fall back to a plain

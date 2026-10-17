@@ -6,7 +6,7 @@ import { Icon, type IconName } from '../../platform/Icon';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { TabBarScrollView } from '../../components/TabBarScrollable';
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 export function AdminPage({
   title,
@@ -36,8 +36,8 @@ export function AdminPage({
         onBack={back ? () => navigation.goBack() : undefined}
         trailing={trailing}
       />
-      <TabBarScrollView
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAwareScroll
+        extraKeyboardBottomOffset={16}
         contentContainerStyle={[styles.content, { paddingBottom: contentContainerPaddingBottom }]}
         refreshControl={
           onRefresh ? (
@@ -46,7 +46,7 @@ export function AdminPage({
         }
       >
         {children}
-      </TabBarScrollView>
+      </KeyboardAwareScroll>
     </View>
   );
 }

@@ -173,9 +173,7 @@ export default function AdminMoreScreen() {
             <Pressable
               onPress={() => {
                 haptic('tap');
-                // Nested navigate — the review screen lives in the Overview tab's
-                // stack (AdminShellNavigator). This switches to it and pushes the list.
-                navigation.navigate('AdminOverview', { screen: 'AdminRegistrationRequests' });
+                navigation.navigate('AdminRegistrationRequests');
               }}
               style={[styles.card, surface.card, styles.navRow]}
             >

@@ -62,7 +62,7 @@ import PlanPickerSheet from './PlanPickerSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
-import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -143,7 +143,7 @@ export default function AdminTenantDetailScreen() {
   const palette = useColors();
   const surface = useIosSurface();
   const queryClient = useQueryClient();
-  const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const { contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { beginImpersonation } = useAuth();
   const isManager = useAdminMode() === 'manager';
 
@@ -603,8 +603,8 @@ export default function AdminTenantDetailScreen() {
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={tenant.name} onBack={() => navigation.goBack()} />
 
-      <ScrollView
-        contentInset={contentInset}
+      <KeyboardAwareScroll
+        extraKeyboardBottomOffset={48}
         contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
       >
@@ -912,7 +912,7 @@ export default function AdminTenantDetailScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
         </Pressable>
-      </ScrollView>
+      </KeyboardAwareScroll>
 
       {/* Продление — общая шторка суперадмина и менеджера (сумма, срок, доля владельца). */}
       <ExtendSubscriptionSheet
