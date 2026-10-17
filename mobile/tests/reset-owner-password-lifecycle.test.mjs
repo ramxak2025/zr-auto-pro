@@ -60,8 +60,13 @@ function fixture() {
     },
   };
   hooks.useLayoutEffect = hooks.useEffect;
+  hooks.useCallback = (fn) => fn;
+  hooks.useSyncExternalStore = (subscribe, getSnapshot) => {
+    hooks.useEffect(() => subscribe(() => {}), [subscribe]);
+    return getSnapshot();
+  };
   const session = {
-    data: { generation: 1 },
+    data: { generation: 1, owner: { userId: 'operator-A' } },
     authEpoch: 1,
     isCurrent: () => current,
     manager: {
@@ -125,7 +130,7 @@ function fixture() {
   const render = (next = {}) => {
     props = { ...props, ...next };
     const content = outer(props);
-    if (!instance || key !== content.key) {
+    if (!instance || !instance.mounted || key !== content.key) {
       unmount();
       key = content.key;
       instance = { slots: [], cursor: 0, effects: [], mounted: true, postUnmountWrites: 0 };
@@ -182,9 +187,14 @@ function fixture() {
     switchSession: () => {
       current = false;
     },
+    sameOperatorLogin: () => {
+      current = true;
+      session.data.generation++;
+      session.authEpoch++;
+    },
   };
 }
-test('deferred reset cannot reveal or close a reopened form of the same tenant', async () => {
+test('deferred reset serializes same-tenant reopen and prevents reversed completion from replacing its secret', async () => {
   const f = fixture();
   f.fill();
   f.save();
@@ -194,7 +204,10 @@ test('deferred reset cannot reveal or close a reopened form of the same tenant',
   f.render({ visible: true });
   f.fill('new-secret-B');
   f.save();
-  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests.length, 1);
+  assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saving, true);
+  assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saveDisabled, true);
+  assert.ok(text(f.tree).includes('Сброс пароля ещё выполняется'));
   const closedBefore = f.closed;
   f.requests[0].resolve({ data: { ok: true } });
   await tick();
@@ -203,7 +216,9 @@ test('deferred reset cannot reveal or close a reopened form of the same tenant',
   assert.equal(f.closed, closedBefore);
   assert.equal(f.revealCount(), 0);
   assert.equal(children(f.tree).find((node) => node.type === 'PasswordField').props.value, 'new-secret-B');
-  assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saving, true);
+  assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saving, false);
+  f.save();
+  assert.equal(f.requests.length, 2);
   f.requests[1].resolve({ data: { ok: true } });
   await tick();
   f.render();
@@ -327,5 +342,32 @@ test('callbacks retained from a success cannot share or close after unmount or t
     assert.equal(f.shares.length, 0);
     assert.equal(f.closed, closedBefore);
     if (change === 'unmount') assert.equal(f.postUnmountWrites, 0);
+  }
+});
+
+test('unmount and same-operator login cannot bypass an unsettled reset; a rejected transport releases it', async () => {
+  for (const change of ['remount', 'same-operator-login']) {
+    const f = fixture();
+    f.fill();
+    f.save();
+    f.unmount();
+    if (change === 'same-operator-login') f.sameOperatorLogin();
+    f.render();
+    f.fill('secret-next-B');
+    f.save();
+    assert.equal(f.requests.length, 1);
+    assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saving, true);
+    f.requests[0].reject(new Error('network timeout'));
+    await tick();
+    f.render();
+    assert.equal(f.alerts.length, 0);
+    assert.equal(f.revealCount(), 0);
+    assert.equal(children(f.tree).find((node) => node.type === 'AdminSheet').props.saving, false);
+    f.save();
+    assert.equal(f.requests.length, 2);
+    f.requests[1].resolve({ data: { ok: true } });
+    await tick();
+    f.render();
+    assert.equal(f.revealCount('secret-next-B'), 1);
   }
 });

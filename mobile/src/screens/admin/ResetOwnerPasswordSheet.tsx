@@ -7,6 +7,33 @@ import { invalidatePlatformQueries } from './adminShared';
 import { AdminSheet, SheetHint, SheetPasswordField } from './adminSheet';
 import { usePlatformSession } from './usePlatformData';
 import { assertPlatformSession } from './platformSession';
+// Runtime-only coordination: identifiers, pending flags and subscriptions only.
+// Keep it outside the sheet lifetime and independent of auth generations so a
+// same-operator relogin cannot race a still-settling password transport.
+const pendingOwnerResets = new Set<string>();
+const ownerResetListeners = new Map<string, Set<() => void>>();
+function notifyOwnerReset(key: string) {
+  ownerResetListeners.get(key)?.forEach((listener) => listener());
+}
+function subscribeOwnerReset(key: string | null, listener: () => void) {
+  if (!key) return () => {};
+  const listeners = ownerResetListeners.get(key) ?? new Set<() => void>();
+  listeners.add(listener);
+  ownerResetListeners.set(key, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) ownerResetListeners.delete(key);
+  };
+}
+function acquireOwnerReset(key: string) {
+  if (pendingOwnerResets.has(key)) return null;
+  pendingOwnerResets.add(key);
+  notifyOwnerReset(key);
+  return () => {
+    pendingOwnerResets.delete(key);
+    notifyOwnerReset(key);
+  };
+}
 export interface ResetOwnerTarget {
   id: string;
   name: string;
@@ -27,6 +54,12 @@ function ResetPasswordContent({ visible, tenant, onClose }: ResetProps) {
   const client = useQueryClient(),
     palette = useColors(),
     { session, allowed } = usePlatformSession();
+  const operatorId = session.data.owner?.userId;
+  const resetKey = operatorId && tenant?.id ? JSON.stringify([operatorId, tenant.id]) : null;
+  const transportPending = React.useSyncExternalStore(
+    React.useCallback((listener) => subscribeOwnerReset(resetKey, listener), [resetKey]),
+    React.useCallback(() => !!resetKey && pendingOwnerResets.has(resetKey), [resetKey]),
+  );
   const [password, setPassword] = React.useState(''),
     [saving, setSaving] = React.useState(false),
     [success, setSuccess] = React.useState<{ message: string; generation: number } | null>(null);
@@ -71,11 +104,20 @@ function ResetPasswordContent({ visible, tenant, onClose }: ResetProps) {
     onClose();
   };
   const submit = async () => {
-    if (!allowed || scope.current.pending || !isCurrentOpen(generation)) return;
+    if (
+      !allowed ||
+      !resetKey ||
+      scope.current.pending ||
+      pendingOwnerResets.has(resetKey) ||
+      !isCurrentOpen(generation)
+    )
+      return;
     if (password.length < 6) {
       Alert.alert('Слишком короткий пароль', 'Введите не менее 6 символов.');
       return;
     }
+    const releaseTransport = acquireOwnerReset(resetKey);
+    if (!releaseTransport) return;
     const target = tenant,
       next = password;
     scope.current.pending = true;
@@ -93,6 +135,7 @@ function ResetPasswordContent({ visible, tenant, onClose }: ResetProps) {
       if (isCurrentOpen(generation))
         Alert.alert('Не удалось подтвердить смену пароля', 'Повторите запрос с тем же паролем.');
     } finally {
+      releaseTransport();
       if (isCurrentOpen(generation)) {
         scope.current.pending = false;
         setSaving(false);
@@ -105,10 +148,16 @@ function ResetPasswordContent({ visible, tenant, onClose }: ResetProps) {
       visible={visible}
       title="Пароль владельца"
       saveLabel={currentSuccess ? 'Готово' : 'Сбросить'}
-      saving={saving}
+      saving={saving || transportPending}
+      saveDisabled={transportPending || !resetKey}
       onClose={close}
       onSave={currentSuccess ? close : () => void submit()}
     >
+      {transportPending ? (
+        <SheetHint icon="information-circle-outline">
+          Сброс пароля ещё выполняется. Дождитесь завершения запроса перед новым сбросом.
+        </SheetHint>
+      ) : null}
       {currentSuccess ? (
         <>
           <Text variant="title3" color={palette.text.primary}>
