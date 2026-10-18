@@ -98,7 +98,6 @@ function safeLink(value: string | undefined) {
 export default function PublicBookingExperience(props: Props) {
   const { landing, selected, date, selectedSlot, resourceKey, busy } = props;
   const [step, updateStep] = useState(0);
-  const [path, setPath] = useState<'service' | 'master'>('service');
   const [choosingMaster, updateChoosingMaster] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
   const [coverFailed, setCoverFailed] = useState(false);
@@ -114,7 +113,7 @@ export default function PublicBookingExperience(props: Props) {
           bookingSlug: landing.slug,
           bookingStep: next,
           bookingMaster: false,
-          bookingPath: path,
+          bookingPath: 'service',
         },
         '',
       );
@@ -128,7 +127,7 @@ export default function PublicBookingExperience(props: Props) {
           bookingSlug: landing.slug,
           bookingStep: 0,
           bookingMaster: next,
-          bookingPath: next ? 'master' : path,
+          bookingPath: next ? 'master' : 'service',
         },
         '',
       );
@@ -150,7 +149,6 @@ export default function PublicBookingExperience(props: Props) {
       if (event.state?.bookingSlug !== landing.slug) return;
       updateStep(Math.max(0, Math.min(allowedStep.current, event.state.bookingStep ?? 0)));
       updateChoosingMaster(event.state.bookingMaster === true);
-      setPath(event.state.bookingPath === 'master' ? 'master' : 'service');
     };
     window.addEventListener('popstate', back);
     const viewport = window.visualViewport;
@@ -172,7 +170,7 @@ export default function PublicBookingExperience(props: Props) {
   const [contactsOpen, setContactsOpen] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const contacts = useRef<HTMLDivElement>(null);
-  const previousStep = useRef(0);
+  const previousView = useRef('0:false');
   const hadReceipt = useRef(false);
   const week = monday(date || props.minDate);
   const categories = useMemo(
@@ -207,11 +205,12 @@ export default function PublicBookingExperience(props: Props) {
   });
 
   useEffect(() => {
-    if (previousStep.current === step) return;
-    previousStep.current = step;
+    const view = `${step}:${choosingMaster}`;
+    if (previousView.current === view) return;
+    previousView.current = view;
     heading.current?.focus({ preventScroll: true });
-    heading.current?.closest('.pb-content')?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [step]);
+    heading.current?.closest('section')?.scrollTo({ top: 0, behavior: 'auto' });
+  }, [step, choosingMaster]);
 
   useEffect(() => {
     if (hadReceipt.current && !props.receipt) updateStep(0);
@@ -246,7 +245,14 @@ export default function PublicBookingExperience(props: Props) {
               {landing.logoUrl && !logoFailed ? (
                 <img src={landing.logoUrl} alt="" onError={() => setLogoFailed(true)} />
               ) : (
-                <MapPin size={26} />
+                <span>
+                  {landing.displayName
+                    .trim()
+                    .split(/\s+/)
+                    .slice(0, 2)
+                    .map((part) => part[0])
+                    .join('')}
+                </span>
               )}
             </div>
             <h1>{landing.displayName}</h1>
@@ -262,7 +268,7 @@ export default function PublicBookingExperience(props: Props) {
               aria-controls="pb-business-contacts"
             >
               <Phone size={14} aria-hidden="true" />
-              Контакты сервиса
+              <span className="pb-contact-label">Контакты сервиса</span>
               <ChevronDown size={13} aria-hidden="true" />
             </button>
             {contactsOpen && (
@@ -304,42 +310,43 @@ export default function PublicBookingExperience(props: Props) {
                   <h2 id="pb-heading" ref={heading} tabIndex={-1}>
                     {choosingMaster ? 'Выберите мастера' : 'Выберите услуги'}
                   </h2>
+                  <p className="pb-description">
+                    {choosingMaster
+                      ? 'Выберите специалиста или доверьте выбор сервису.'
+                      : selectedMaster
+                        ? `Мастер: ${selectedMaster.name}`
+                        : 'Можно выбрать несколько.'}
+                  </p>
                   <div className="pb-paths" role="group" aria-label="С чего начать запись">
                     <button
                       type="button"
-                      aria-pressed={path === 'service'}
+                      aria-pressed={!choosingMaster}
                       onClick={() => {
-                        setPath('service');
                         setChoosingMaster(false);
-                        props.onResource('');
                       }}
                     >
-                      Выбрать услугу
+                      Услуги
                     </button>
                     <button
                       type="button"
-                      aria-pressed={path === 'master'}
+                      aria-pressed={choosingMaster}
                       onClick={() => {
-                        setPath('master');
                         setChoosingMaster(true);
                       }}
                     >
-                      Выбрать мастера
+                      Мастера
                     </button>
                   </div>
                   {choosingMaster ? (
-                    <MasterChoices landing={landing} resourceKey={resourceKey} onResource={props.onResource} />
+                    <MasterChoices landing={landing} resourceKey={resourceKey} onResource={props.onResource} allowAny />
                   ) : (
                     <>
-                      {path === 'master' && selectedMaster && (
-                        <p className="pb-description">Мастер: {selectedMaster.name}</p>
-                      )}
                       <label className="pb-search">
                         <Search size={17} aria-hidden="true" />
                         <input
                           type="search"
                           aria-label="Поиск по всем услугам"
-                          placeholder="Название услуги"
+                          placeholder="Найти услугу"
                           value={query}
                           onChange={(event) => {
                             setQuery(event.target.value);
@@ -375,31 +382,22 @@ export default function PublicBookingExperience(props: Props) {
                             key={service.id}
                             className={`pb-service${selected.includes(service.id) ? ' is-selected' : ''}`}
                           >
-                            <span className="pb-service-top">
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(service.id)}
+                              onChange={(event) =>
+                                props.onSelected(
+                                  event.target.checked
+                                    ? [...selected, service.id]
+                                    : selected.filter((id) => id !== service.id),
+                                )
+                              }
+                            />
+                            <span className="pb-service-copy">
                               <span className="pb-service-name">{service.name}</span>
-                              <input
-                                type="checkbox"
-                                checked={selected.includes(service.id)}
-                                onChange={(event) =>
-                                  props.onSelected(
-                                    event.target.checked
-                                      ? [...selected, service.id]
-                                      : selected.filter((id) => id !== service.id),
-                                  )
-                                }
-                              />
+                              <span className="pb-duration">{service.durationMinutes} мин</span>
                             </span>
-                            <span className="pb-service-bottom">
-                              {landing.showPrices ? (
-                                <span className="pb-service-price">{servicePrice(service)}</span>
-                              ) : (
-                                <span className="pb-muted">{service.category}</span>
-                              )}
-                              <span className="pb-duration">
-                                <Clock size={12} aria-hidden="true" />
-                                {service.durationMinutes} мин
-                              </span>
-                            </span>
+                            {landing.showPrices && <span className="pb-service-price">{servicePrice(service)}</span>}
                           </label>
                         ))}
                       </div>
@@ -479,7 +477,7 @@ export default function PublicBookingExperience(props: Props) {
                           aria-pressed={date === value}
                           aria-label={dateText(value, true)}
                           disabled={value < props.minDate || value > props.maxDate}
-                          onClick={() => props.onDate(value)}
+                          onClick={() => value !== date && props.onDate(value)}
                         >
                           <span>{label}</span>
                           <strong>{Number(value.slice(8))}</strong>
@@ -612,10 +610,10 @@ export default function PublicBookingExperience(props: Props) {
                   <button
                     type="button"
                     className="pb-primary"
-                    disabled={step === 0 ? (choosingMaster ? !resourceKey : !selected.length) : !selectedSlot || busy}
+                    disabled={step === 0 ? !choosingMaster && !selected.length : !selectedSlot || busy}
                     onClick={() => (choosingMaster ? setChoosingMaster(false) : setStep(step + 1))}
                   >
-                    {step === 0 ? (choosingMaster ? 'Выбрать услуги' : 'Выбрать время') : 'Указать контакты'}
+                    {step === 0 ? (choosingMaster ? 'Выбрать услуги' : 'Продолжить') : 'Указать контакты'}
                     <ArrowRight size={16} aria-hidden="true" />
                   </button>
                 ) : (
@@ -696,8 +694,8 @@ export default function PublicBookingExperience(props: Props) {
         </div>
         <footer className="pb-footer">
           <a href="https://autexa.pw" target="_blank" rel="noopener noreferrer">
-            Работает на <strong>Autexa</strong>
-            <ArrowRight size={12} aria-hidden="true" />
+            <span>Работает на</span>
+            <img src="/logo.png" alt="Autexa" width="90" height="30" />
           </a>
         </footer>
       </div>
@@ -719,7 +717,12 @@ function MasterChoices({
   return (
     <div className="pb-resources" role="group" aria-label="Выбор мастера">
       {allowAny && (
-        <button type="button" aria-pressed={!resourceKey} onClick={() => onResource('')} className="pb-any-master">
+        <button
+          type="button"
+          aria-pressed={!resourceKey}
+          onClick={() => resourceKey && onResource('')}
+          className="pb-any-master"
+        >
           Любой свободный мастер
         </button>
       )}
@@ -728,7 +731,7 @@ function MasterChoices({
           key={resource.resourceKey}
           type="button"
           aria-pressed={resourceKey === resource.resourceKey}
-          onClick={() => onResource(resource.resourceKey)}
+          onClick={() => resource.resourceKey !== resourceKey && onResource(resource.resourceKey)}
           className="pb-master"
         >
           <MasterAvatar name={resource.name} avatar={resource.avatar} />
