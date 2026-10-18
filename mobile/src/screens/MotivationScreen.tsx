@@ -22,7 +22,7 @@
  * Premium Autexa UX: IosScreenHeader, iosCard surfaces, dark-theme palette,
  * safe-area + useTabBarHeight bottom inset, haptics, Russian throughout.
  */
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -132,6 +132,19 @@ interface EditorTarget {
   isExisting: boolean;
 }
 
+function editorForPromo(promo: MotivationPromo): EditorTarget {
+  return {
+    productId: promo.productId,
+    productName: promo.productName,
+    photo: promo.photo,
+    sellPrice: promo.sellPrice || 0,
+    costPrice: promo.costPrice || 0,
+    percent: String(promo.percent),
+    active: promo.active,
+    isExisting: true,
+  };
+}
+
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function MotivationScreen() {
@@ -147,6 +160,10 @@ export default function MotivationScreen() {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
+  // Keep a native modal owned until its dismissal completes. Ref guards also
+  // reject a second tap before React commits the visibility update.
+  const modalPhase = useRef<'picker' | 'pickerClosing' | 'editor' | 'editorClosing' | null>(null);
+  const pendingEditor = useRef<EditorTarget | null>(null);
 
   // Accruals filters.
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
@@ -193,8 +210,55 @@ export default function MotivationScreen() {
   // ── Mutations ────────────────────────────────────────────────────────────────
 
   const closeEditor = useCallback(() => {
+    pendingEditor.current = null;
+    if (modalPhase.current === 'editor') {
+      modalPhase.current = Platform.OS === 'ios' ? 'editorClosing' : null;
+    }
     setEditorVisible(false);
     setEditor(null);
+  }, []);
+
+  const closePicker = useCallback(() => {
+    pendingEditor.current = null;
+    if (modalPhase.current === 'picker') {
+      modalPhase.current = Platform.OS === 'ios' ? 'pickerClosing' : null;
+    }
+    setPickerVisible(false);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('blur', () => {
+      closePicker();
+      closeEditor();
+    });
+    return () => {
+      unsubscribe();
+      pendingEditor.current = null;
+      modalPhase.current = null;
+    };
+  }, [navigation, closePicker, closeEditor]);
+
+  const onPickerDismiss = useCallback(() => {
+    if (modalPhase.current !== 'pickerClosing') return;
+    const target = pendingEditor.current;
+    pendingEditor.current = null;
+    modalPhase.current = target ? 'editor' : null;
+    if (target) {
+      setEditor(target);
+      setEditorVisible(true);
+    }
+  }, []);
+
+  const onEditorDismiss = useCallback(() => {
+    if (modalPhase.current === 'editorClosing') modalPhase.current = null;
+  }, []);
+
+  const openPicker = useCallback(() => {
+    if (modalPhase.current !== null) return;
+    modalPhase.current = 'picker';
+    pendingEditor.current = null;
+    haptic('tap');
+    setPickerVisible(true);
   }, []);
 
   const setPromoMutation = useMutation({
@@ -238,36 +302,42 @@ export default function MotivationScreen() {
     setRefreshing(false);
   }, [queryClient]);
 
-  // Opening the editor right after the picker closes: iOS cannot present two
-  // RNModals stacked (the second renders invisible), so drop the picker first
-  // and mount the editor on the next tick — the same idiom SalaryScreen uses.
-  const openEditorForProduct = useCallback((product: Product) => {
-    setPickerVisible(false);
-    setEditor({
-      productId: product.id,
-      productName: product.name,
-      photo: (product as { photo?: string }).photo,
-      sellPrice: product.sellPrice || 0,
-      costPrice: product.costPrice || 0,
-      percent: '10',
-      active: true,
-      isExisting: false,
-    });
-    setTimeout(() => setEditorVisible(true), Platform.OS === 'ios' ? 320 : 0);
-  }, []);
+  // iOS hands off only after native onDismiss; elapsed time is not evidence
+  // that UIKit has finished dismissing the picker. Android has no onDismiss.
+  const openEditorForProduct = useCallback(
+    (product: Product) => {
+      if (modalPhase.current !== 'picker') return;
+      const existing = promos?.find((promo) => promo.productId === product.id);
+      const target: EditorTarget = existing
+        ? editorForPromo(existing)
+        : {
+            productId: product.id,
+            productName: product.name,
+            photo: (product as { photo?: string }).photo,
+            sellPrice: product.sellPrice || 0,
+            costPrice: product.costPrice || 0,
+            percent: '10',
+            active: true,
+            isExisting: false,
+          };
+      setPickerVisible(false);
+      if (Platform.OS === 'ios') {
+        modalPhase.current = 'pickerClosing';
+        pendingEditor.current = target;
+      } else {
+        modalPhase.current = 'editor';
+        setEditor(target);
+        setEditorVisible(true);
+      }
+    },
+    [promos],
+  );
 
   const openEditorForPromo = useCallback((promo: MotivationPromo) => {
+    if (modalPhase.current !== null) return;
+    modalPhase.current = 'editor';
     haptic('tap');
-    setEditor({
-      productId: promo.productId,
-      productName: promo.productName,
-      photo: promo.photo,
-      sellPrice: promo.sellPrice || 0,
-      costPrice: promo.costPrice || 0,
-      percent: String(promo.percent),
-      active: promo.active,
-      isExisting: true,
-    });
+    setEditor(editorForPromo(promo));
     setEditorVisible(true);
   }, []);
 
@@ -349,14 +419,7 @@ export default function MotivationScreen() {
         contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
       >
         {/* Add CTA */}
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => {
-            haptic('tap');
-            setPickerVisible(true);
-          }}
-          style={styles.addCta}
-        >
+        <TouchableOpacity activeOpacity={0.85} onPress={openPicker} style={styles.addCta}>
           <LinearGradient
             colors={[colors.green[500], colors.green[700]] as [string, string]}
             style={styles.addCtaGradient}
@@ -565,7 +628,8 @@ export default function MotivationScreen() {
       {/* Warehouse product picker — reused, identical look/speed to Склад. */}
       <ProductPickerModal
         visible={pickerVisible}
-        onClose={() => setPickerVisible(false)}
+        onClose={closePicker}
+        onDismiss={onPickerDismiss}
         onSelectProduct={openEditorForProduct}
         title="Выберите товар"
         showCostPrice
@@ -575,6 +639,7 @@ export default function MotivationScreen() {
       <Modal
         visible={editorVisible}
         onClose={closeEditor}
+        onDismiss={onEditorDismiss}
         title={editor?.isExisting ? 'Акционный товар' : 'Новая акция'}
       >
         {editor ? (

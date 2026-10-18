@@ -84,6 +84,8 @@ export interface WarehouseSwitcherInline {
 interface ProductPickerModalProps {
   visible: boolean;
   onClose: () => void;
+  /** iOS native dismissal completion, for presenting a subsequent modal. */
+  onDismiss?: () => void;
   onSelectProduct: (product: Product) => void;
   getCartQty?: (productId: string) => number;
   title?: string;
@@ -215,6 +217,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
 export default function ProductPickerModal({
   visible,
   onClose,
+  onDismiss,
   onSelectProduct,
   getCartQty,
   title = 'Товары',
@@ -629,7 +632,7 @@ export default function ProductPickerModal({
     // пустому месту списка (keyboardShouldPersistTaps="handled" стоит на
     // FlashList и внутренних ScrollView). Кнопка «Готово» в нижнем баре — это
     // commit/закрытие, а не dismiss клавиатуры.
-    <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose} onDismiss={onDismiss}>
       <KeyboardProvider>
         <View style={styles.overlay}>
           {/* Premium frosted blur backdrop (#6/#7) — replaces the old flat

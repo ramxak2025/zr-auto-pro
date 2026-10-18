@@ -11,6 +11,8 @@ import ModalBlurBackdrop from './ModalBlurBackdrop';
 interface ModalProps {
   visible: boolean;
   onClose: () => void;
+  /** iOS native dismissal completion, for presenting a subsequent modal. */
+  onDismiss?: () => void;
   title: string;
   children: ReactNode;
 }
@@ -45,11 +47,18 @@ interface ModalProps {
  * warning, в prod — просто no-op, поле снова прячется под клавиатурой). Поэтому
  * оборачиваем содержимое модалки в собственный `KeyboardProvider`.
  */
-export default function Modal({ visible, onClose, title, children }: ModalProps) {
+export default function Modal({ visible, onClose, onDismiss, title, children }: ModalProps) {
   const palette = useColors();
   const insets = useSafeAreaInsets();
   return (
-    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
+    <RNModal
+      visible={visible}
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}
+      onDismiss={onDismiss}
+      statusBarTranslucent
+    >
       <BottomTabBarHeightContext.Provider value={0}>
         <KeyboardProvider>
           <ModalBlurBackdrop onPress={onClose} />
