@@ -101,6 +101,8 @@ export default function PublicBookingExperience(props: Props) {
   const [choosingMaster, updateChoosingMaster] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
   const [coverFailed, setCoverFailed] = useState(false);
+  const [timeMasterOpen, setTimeMasterOpen] = useState(false);
+  const masterToggle = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLElement>(null);
   const allowedStep = useRef(0);
   allowedStep.current = selectedSlot ? 2 : selected.length ? 1 : 0;
@@ -211,6 +213,10 @@ export default function PublicBookingExperience(props: Props) {
     heading.current?.focus({ preventScroll: true });
     heading.current?.closest('section')?.scrollTo({ top: 0, behavior: 'auto' });
   }, [step, choosingMaster]);
+
+  useEffect(() => {
+    setTimeMasterOpen(false);
+  }, [step]);
 
   useEffect(() => {
     if (hadReceipt.current && !props.receipt) updateStep(0);
@@ -434,15 +440,39 @@ export default function PublicBookingExperience(props: Props) {
                     {selectedServices.map((service) => service.name).join(', ')} · {duration} мин
                   </p>
                   {!!landing.resources?.length && (
-                    <>
-                      <h3 className="pb-section-title">Мастер</h3>
-                      <MasterChoices
-                        landing={landing}
-                        resourceKey={resourceKey}
-                        onResource={props.onResource}
-                        allowAny
-                      />
-                    </>
+                    <div className="pb-time-master">
+                      <div className="pb-master-summary">
+                        <div>
+                          <span>Мастер</span>
+                          <strong>{selectedMaster?.name || 'Любой свободный мастер'}</strong>
+                        </div>
+                        <button
+                          ref={masterToggle}
+                          type="button"
+                          className="pb-link"
+                          aria-label="Изменить мастера"
+                          aria-expanded={timeMasterOpen}
+                          aria-controls="pb-time-master-choices"
+                          onClick={() => setTimeMasterOpen((open) => !open)}
+                        >
+                          Изменить
+                        </button>
+                      </div>
+                      {timeMasterOpen && (
+                        <div id="pb-time-master-choices">
+                          <MasterChoices
+                            landing={landing}
+                            resourceKey={resourceKey}
+                            onResource={props.onResource}
+                            onChoose={() => {
+                              setTimeMasterOpen(false);
+                              masterToggle.current?.focus({ preventScroll: true });
+                            }}
+                            allowAny
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
                   <div className="pb-week-title">
                     <h3>
@@ -708,21 +738,22 @@ function MasterChoices({
   resourceKey,
   onResource,
   allowAny = false,
+  onChoose,
 }: {
   landing: PublicBookingLanding;
   resourceKey: string;
   onResource: (value: string) => void;
   allowAny?: boolean;
+  onChoose?: () => void;
 }) {
+  const choose = (value: string) => {
+    if (value !== resourceKey) onResource(value);
+    onChoose?.();
+  };
   return (
     <div className="pb-resources" role="group" aria-label="Выбор мастера">
       {allowAny && (
-        <button
-          type="button"
-          aria-pressed={!resourceKey}
-          onClick={() => resourceKey && onResource('')}
-          className="pb-any-master"
-        >
+        <button type="button" aria-pressed={!resourceKey} onClick={() => choose('')} className="pb-any-master">
           Любой свободный мастер
         </button>
       )}
@@ -731,7 +762,7 @@ function MasterChoices({
           key={resource.resourceKey}
           type="button"
           aria-pressed={resourceKey === resource.resourceKey}
-          onClick={() => resource.resourceKey !== resourceKey && onResource(resource.resourceKey)}
+          onClick={() => choose(resource.resourceKey)}
           className="pb-master"
         >
           <MasterAvatar name={resource.name} avatar={resource.avatar} />
