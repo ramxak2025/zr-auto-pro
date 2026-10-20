@@ -768,6 +768,8 @@ export interface CreateCheckRequest {
     quantity?: number;
   }>;
   products: Array<{
+    /** Existing saved check-product-line UUID on edit; omit for a new line. */
+    id?: string;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
@@ -834,6 +836,8 @@ export interface UpdateCheckRequest {
     quantity?: number;
   }>;
   products?: Array<{
+    /** Stable identity returned as CheckProductLine.id; verified against this check. */
+    id?: string;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
