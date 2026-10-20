@@ -188,6 +188,12 @@ const navGroups: NavGroup[] = [
       },
       { label: 'Сотрудники', path: '/employees', icon: UserCircle },
       {
+        label: 'Мотивация',
+        path: '/motivation',
+        icon: Coins,
+        anyPermission: ['motivation_manage', 'salary_view', 'salary_view_all'],
+      },
+      {
         label: 'Пользователи',
         path: '/users',
         icon: Shield,
@@ -232,6 +238,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
       '/reports',
       '/users',
       '/employees',
+      '/motivation',
       '/cashflow',
       '/cash-shift',
       '/installments',

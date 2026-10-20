@@ -93,6 +93,7 @@ const CashShiftPage = lazyWithRetry(() => import('./pages/CashShiftPage'));
 const InstallmentsPage = lazyWithRetry(() => import('./pages/InstallmentsPage'));
 const UsersPage = lazyWithRetry(() => import('./pages/UsersPage'));
 const EmployeesPage = lazyWithRetry(() => import('./pages/EmployeesPage'));
+const MotivationPage = lazyWithRetry(() => import('./pages/MotivationPage'));
 const EmployeeDetailPage = lazyWithRetry(() => import('./pages/EmployeeDetailPage'));
 const SchedulePage = lazyWithRetry(() => import('./pages/SchedulePage'));
 const MorePage = lazyWithRetry(() => import('./pages/MorePage'));
@@ -343,6 +344,7 @@ export default function App() {
                       <Route path="/planning" element={<PlanningPage />} />
                       <Route path="/users" element={gated('users_manage', <UsersPage />)} />
                       <Route path="/employees" element={<EmployeesPage />} />
+                      <Route path="/motivation" element={<MotivationPage />} />
                       <Route path="/employees/:id" element={<EmployeeDetailPage />} />
                       <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
                       <Route path="/more" element={<MorePage />} />

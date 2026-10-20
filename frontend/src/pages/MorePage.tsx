@@ -65,6 +65,13 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { label: 'Сотрудники', description: 'Карточки персонала, статус, рейтинги', path: '/employees', icon: UserCircle },
   {
+    label: 'Мотивация сотрудников',
+    description: 'Правила бонусов за товары и начисления',
+    path: '/motivation',
+    icon: Coins,
+    anyPermission: ['motivation_manage', 'salary_view', 'salary_view_all'],
+  },
+  {
     label: 'Расписание',
     description: 'График работы и смены',
     path: '/schedule',
