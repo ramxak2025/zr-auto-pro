@@ -393,8 +393,11 @@ export default function App() {
               )}
             </>
           ) : (
-            /* Not logged in: redirect everything to login */
-            <Route path="*" element={<Navigate to="/login" replace />} />
+            <>
+              {/* The exact private path must beat /:publicCode after logout. */}
+              <Route path="/motivation" element={<Navigate to="/login" replace />} />
+              <Route path="*" element={<Navigate to="/login" replace />} />
+            </>
           )}
         </Routes>
       </Suspense>
