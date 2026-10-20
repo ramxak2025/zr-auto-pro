@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MotivationController } from './motivation.controller';
 import { MotivationService } from './motivation.service';
+import { MotivationRulesService } from './motivation-rules.service';
 
 /**
  * «Мотивация сотрудников» v1 — акционные товары (employee motivation: promo
@@ -12,6 +13,6 @@ import { MotivationService } from './motivation.service';
  */
 @Module({
   controllers: [MotivationController],
-  providers: [MotivationService],
+  providers: [MotivationService, MotivationRulesService],
 })
 export class MotivationModule {}

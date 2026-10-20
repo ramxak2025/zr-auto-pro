@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { MotivationRulesService } from './motivation-rules.service';
 import { MotivationService } from './motivation.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
@@ -18,7 +19,48 @@ import { SetPromoDto } from './dto/set-promo.dto';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('motivation')
 export class MotivationController {
-  constructor(private motivation: MotivationService) {}
+  constructor(
+    private motivation: MotivationService,
+    private rules: MotivationRulesService,
+  ) {}
+
+  @RequirePermission('motivation_manage')
+  @Get('rules')
+  listRules(@CurrentUser() user: JwtPayload) {
+    return this.rules.list(user.tenantID);
+  }
+
+  @RequirePermission('motivation_manage')
+  @Post('rules/bulk')
+  bulkRules(@CurrentUser() user: JwtPayload, @Body() body: unknown) {
+    return this.rules.bulk(user.tenantID, body);
+  }
+
+  @RequirePermission('motivation_manage')
+  @Patch('rules/:id')
+  patchRule(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: unknown) {
+    return this.rules.change(user.tenantID, id, body);
+  }
+
+  @RequirePermission('motivation_manage')
+  @Delete('rules/:id')
+  deleteRule(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Query('expectedRevision') expectedRevision: string,
+  ) {
+    return this.rules.change(user.tenantID, id, { expectedRevision }, true);
+  }
+
+  @Get('accruals-v2')
+  listMixedAccruals(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: { userId?: string; dateFrom?: string; dateTo?: string },
+  ) {
+    const q = { ...(query || {}) };
+    if (!userHasPermission(user, 'salary_view_all')) q.userId = user.userID;
+    return this.motivation.listAccruals(user.tenantID, q, true);
+  }
 
   // ── Promo products ('motivation_manage') ───────────────────────────────────
 
