@@ -23,6 +23,75 @@ const live = process.env.AUTEXA_MOTIVATION_LIVE_DB;
 const options = { skip: !live, timeout: 60000 };
 
 test(
+  'actual PG: preview binds its selection/rate; mid-batch database failure rolls all effects back',
+  options,
+  async () => {
+    await fixture(async ({ product, run, tenant, rules, q }) => {
+      const a = await product('First'),
+        b = await product('Second');
+      const input = { targets: [{ kind: 'product', productId: a.productId }], percent: 8, requestId: randomUUID() };
+      const preview = await run(() => rules.bulk(tenant, { ...input, dryRun: true }));
+      for (const patch of [
+        { percent: 9 },
+        { targets: [{ kind: 'product', productId: b.productId }] },
+        { active: false },
+      ]) {
+        await assert.rejects(
+          run(() => rules.bulk(tenant, { ...input, ...patch, previewRevision: preview.previewRevision })),
+          (e) => e.getStatus() === 409,
+        );
+      }
+      const both = {
+        ...input,
+        targets: [
+          { kind: 'product', productId: a.productId },
+          { kind: 'product', productId: b.productId },
+        ],
+      };
+      const bothPreview = await run(() => rules.bulk(tenant, { ...both, dryRun: true }));
+      const functionName = `motivation_fail_${randomUUID().replace(/-/g, '')}`;
+      const triggerName = functionName + '_trigger';
+      const failProduct = [a.productId, b.productId].sort()[1];
+      try {
+        await q(`CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.tenant_id='${tenant}'::uuid AND NEW.product_id='${failProduct}'::uuid THEN RAISE EXCEPTION 'injected test failure'; END IF;
+        RETURN NEW; END $$`);
+        await q(
+          `CREATE TRIGGER ${triggerName} BEFORE INSERT ON motivation_rules FOR EACH ROW EXECUTE FUNCTION ${functionName}()`,
+        );
+        await assert.rejects(
+          run(() => rules.bulk(tenant, { ...both, previewRevision: bothPreview.previewRevision })),
+          /injected test failure/,
+        );
+        assert.equal((await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant])).length, 0);
+        assert.equal((await q('SELECT * FROM motivation_bulk_receipts WHERE tenant_id=$1', [tenant])).length, 0);
+      } finally {
+        await q(`DROP TRIGGER IF EXISTS ${triggerName} ON motivation_rules`);
+        await q(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      }
+      const success = await run(() => rules.bulk(tenant, { ...both, previewRevision: bothPreview.previewRevision }));
+      assert.equal(success.rules.length, 2, 'the same request can retry safely after a fully rolled-back failure');
+    });
+  },
+);
+
+test('actual PG: large and overlapping selections count unique products once', options, async () => {
+  await fixture(async ({ product, bulk, wh }) => {
+    const rows = [];
+    for (let index = 0; index < 30; index++) rows.push(await product(`Large ${index}`, 100, 80, wh.id, 'Large/Child'));
+    const result = await bulk([
+      { kind: 'folder', warehouseId: wh.id, path: 'Large' },
+      { kind: 'folder', warehouseId: wh.id, path: 'Large/Child' },
+      { kind: 'product', productId: rows[0].productId },
+      { kind: 'product', productId: rows[0].productId },
+    ]);
+    assert.equal(result.preview.coveredProductCount, 30);
+    assert.equal(result.result.affectedProductCount, 30);
+    assert.equal(result.result.rules.length, 3);
+  });
+});
+
+test(
   'actual PG: self master earns; none/margin-only assignments keep ordinary board permissions',
   options,
   async () => {

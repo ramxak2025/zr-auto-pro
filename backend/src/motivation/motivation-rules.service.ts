@@ -219,7 +219,15 @@ export class MotivationRulesService {
         }
       }
       const state = await this.state(client, tenant);
-      if (!input.dryRun && (!input.previewRevision || input.previewRevision !== state.revision)) {
+      const selection = {
+        targets: input.targets.map((t) => ({ ...t })),
+        percent: input.percent,
+        active,
+        replaceLegacyPromos: input.replaceLegacyPromos,
+      };
+      const previewForState = (revision: string) => digest({ revision, selection });
+      const expectedPreview = previewForState(state.revision);
+      if (!input.dryRun && (!input.previewRevision || input.previewRevision !== expectedPreview)) {
         conflict(
           'MOTIVATION_PREVIEW_STALE',
           'Список товаров или правила изменились. Обновите предварительный просмотр',
@@ -369,7 +377,7 @@ export class MotivationRulesService {
         coveredProductCount: covered.length,
         affectedProductCount,
         legacyExceptions: exceptions,
-        previewRevision: input.dryRun ? state.revision : (await this.state(client, tenant)).revision,
+        previewRevision: input.dryRun ? expectedPreview : previewForState((await this.state(client, tenant)).revision),
         requestId: input.requestId,
         dryRun: input.dryRun === true,
       };
