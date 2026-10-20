@@ -1,27 +1,4 @@
-/**
- * MotivationScreen — «Мотивация сотрудников» v1 (акционные товары).
- *
- * Owner-facing management screen (director / superadmin). Two tabs:
- *
- *   • «Акционные товары» — the current promo programme. Each row shows the
- *     product (photo / name), the bonus percent and the estimated bonus per
- *     unit. The owner adds a product (reusing the warehouse ProductPickerModal),
- *     edits its percent, pauses it, or removes it from the programme.
- *       getPromos / setPromo / clearPromo  (motivationApi)
- *
- *   • «Начисления» — the accrual ledger (transparency). Who earned what, on
- *     which check, for which product, how much. Filterable by month and by
- *     employee. Backend force-scopes non-privileged callers to their OWN rows;
- *     the owner sees the whole tenant.
- *       getAccruals  (motivationApi)
- *
- * Rule (explained in-UI): сотрудник получает % от МАРЖИ проданного акционного
- * товара; бонус начисляется при ОПЛАТЕ чека и попадает в зарплату
- * (MasterSalary.motivationAmount, см. SalaryScreen → «Мотивация (акции)»).
- *
- * Premium Autexa UX: IosScreenHeader, iosCard surfaces, dark-theme palette,
- * safe-area + useTabBarHeight bottom inset, haptics, Russian throughout.
- */
+/** Motivation: sales-based bulk rules, preserved legacy margin rules and mixed ledger. */
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View,
@@ -44,7 +21,8 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import CachedImage from '../components/CachedImage';
-import ProductPickerModal from '../components/ProductPickerModal';
+import MotivationBulkComposer from '../components/motivation/MotivationBulkComposer';
+import { motivationError, parseMotivationPercent } from '../components/motivation/selection';
 import { motivationApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import EmployeeAvatar from '../components/EmployeeAvatar';
@@ -54,7 +32,12 @@ import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
-import type { MotivationPromo, MotivationAccrual, Product } from '../../../shared/types';
+import type {
+  MotivationPromo,
+  MotivationAccrualV2,
+  MotivationRule,
+  MotivationRulesResponse,
+} from '../../../shared/types';
 import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -81,9 +64,7 @@ const MONTH_NAMES_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'ию
 function formatMoney(v: number): string {
   if (!Number.isFinite(v)) v = 0;
   return (
-    Math.round(v)
-      .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') +
+    v.toLocaleString('ru-RU', { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 }) +
     ' ' +
     RUBLE
   );
@@ -156,14 +137,18 @@ export default function MotivationScreen() {
   const [tab, setTab] = useState<Tab>('promos');
   const [refreshing, setRefreshing] = useState(false);
 
-  // Product picker (reused warehouse ProductPickerModal) + promo editor modal.
-  const [pickerVisible, setPickerVisible] = useState(false);
+  const [bulkVisible, setBulkVisible] = useState(false);
+  const [bulkSession, setBulkSession] = useState(0);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
-  // Keep a native modal owned until its dismissal completes. Ref guards also
-  // reject a second tap before React commits the visibility update.
-  const modalPhase = useRef<'picker' | 'pickerClosing' | 'editor' | 'editorClosing' | null>(null);
-  const pendingEditor = useRef<EditorTarget | null>(null);
+  const [ruleEditor, setRuleEditor] = useState<MotivationRule | null>(null);
+  const [rulePercent, setRulePercent] = useState('');
+  const [ruleActive, setRuleActive] = useState(true);
+  const [ruleVisible, setRuleVisible] = useState(false);
+  const [ruleError, setRuleError] = useState('');
+  const [ruleConflict, setRuleConflict] = useState(false);
+  // UIKit owns the presentation until actual onDismiss; no timer handoff.
+  const modalPhase = useRef<'bulk' | 'legacy' | 'rule' | 'closing' | null>(null);
 
   // Accruals filters.
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
@@ -177,28 +162,26 @@ export default function MotivationScreen() {
   // ── Data ───────────────────────────────────────────────────────────────────
 
   const {
-    data: promos,
+    data: configuration,
     isLoading: promosLoading,
     isError: promosError,
     refetch: refetchPromos,
-  } = useQuery<MotivationPromo[]>({
-    queryKey: ['motivation', 'promos'],
-    queryFn: async () => {
-      const res = await motivationApi.getPromos();
-      return Array.isArray(res.data) ? res.data : [];
-    },
-    placeholderData: (prev) => prev,
+  } = useQuery<MotivationRulesResponse>({
+    queryKey: ['motivation', 'rules'],
+    queryFn: async () => (await motivationApi.getRules()).data,
   });
+  const promos = configuration?.legacyPromos;
+  const rules = configuration?.rules ?? [];
 
   const {
     data: accruals,
     isLoading: accrualsLoading,
     isError: accrualsError,
     refetch: refetchAccruals,
-  } = useQuery<MotivationAccrual[]>({
+  } = useQuery<MotivationAccrualV2[]>({
     queryKey: ['motivation', 'accruals', dateFrom, dateTo],
     queryFn: async () => {
-      const res = await motivationApi.getAccruals({ dateFrom, dateTo });
+      const res = await motivationApi.getAccrualsV2({ dateFrom, dateTo });
       return Array.isArray(res.data) ? res.data : [];
     },
     // Fetch only once the user opens the «Начисления» tab — the owner may only
@@ -209,57 +192,59 @@ export default function MotivationScreen() {
 
   // ── Mutations ────────────────────────────────────────────────────────────────
 
-  const closeEditor = useCallback(() => {
-    pendingEditor.current = null;
-    if (modalPhase.current === 'editor') {
-      modalPhase.current = Platform.OS === 'ios' ? 'editorClosing' : null;
+  const closePresentation = useCallback(() => {
+    if (modalPhase.current && modalPhase.current !== 'closing') {
+      modalPhase.current = Platform.OS === 'ios' ? 'closing' : null;
     }
+    setBulkVisible(false);
     setEditorVisible(false);
-    setEditor(null);
+    setRuleVisible(false);
   }, []);
-
-  const closePicker = useCallback(() => {
-    pendingEditor.current = null;
-    if (modalPhase.current === 'picker') {
-      modalPhase.current = Platform.OS === 'ios' ? 'pickerClosing' : null;
-    }
-    setPickerVisible(false);
+  const onPresentationDismiss = useCallback(() => {
+    if (modalPhase.current === 'closing') modalPhase.current = null;
   }, []);
-
+  const closeEditor = closePresentation;
   useEffect(() => {
-    const unsubscribe = navigation.addListener('blur', () => {
-      closePicker();
-      closeEditor();
-    });
+    const unsubscribe = navigation.addListener('blur', closePresentation);
     return () => {
       unsubscribe();
-      pendingEditor.current = null;
       modalPhase.current = null;
     };
-  }, [navigation, closePicker, closeEditor]);
-
-  const onPickerDismiss = useCallback(() => {
-    if (modalPhase.current !== 'pickerClosing') return;
-    const target = pendingEditor.current;
-    pendingEditor.current = null;
-    modalPhase.current = target ? 'editor' : null;
-    if (target) {
-      setEditor(target);
-      setEditorVisible(true);
-    }
-  }, []);
-
-  const onEditorDismiss = useCallback(() => {
-    if (modalPhase.current === 'editorClosing') modalPhase.current = null;
-  }, []);
-
-  const openPicker = useCallback(() => {
+  }, [navigation, closePresentation]);
+  const openBulk = useCallback(() => {
     if (modalPhase.current !== null) return;
-    modalPhase.current = 'picker';
-    pendingEditor.current = null;
+    modalPhase.current = 'bulk';
     haptic('tap');
-    setPickerVisible(true);
+    setBulkSession((value) => value + 1);
+    setBulkVisible(true);
   }, []);
+  const refreshConfiguration = () => {
+    queryClient.invalidateQueries({ queryKey: ['motivation'] });
+    queryClient.invalidateQueries({ queryKey: ['salary'] });
+  };
+  const ruleMutation = useMutation({
+    mutationFn: async (remove: boolean) => {
+      if (!ruleEditor) return;
+      if (remove) return motivationApi.deleteRule(ruleEditor.id, ruleEditor.revision);
+      const percent = parseMotivationPercent(rulePercent);
+      if (percent === null) throw new Error('Введите процент больше 0 и не больше 100');
+      return motivationApi.patchRule(ruleEditor.id, {
+        expectedRevision: ruleEditor.revision,
+        percent,
+        active: ruleActive,
+      });
+    },
+    onSuccess: () => {
+      closePresentation();
+      refreshConfiguration();
+    },
+    onError: (cause: unknown) => {
+      const failure = motivationError(cause, 'Не удалось изменить правило');
+      setRuleError(failure.message);
+      setRuleConflict(failure.stale);
+      refreshConfiguration();
+    },
+  });
 
   const setPromoMutation = useMutation({
     mutationFn: (data: { productId: string; percent: number; active?: boolean }) => motivationApi.setPromo(data),
@@ -296,46 +281,15 @@ export default function MotivationScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['motivation', 'promos'] }),
+      queryClient.invalidateQueries({ queryKey: ['motivation', 'rules'] }),
       queryClient.invalidateQueries({ queryKey: ['motivation', 'accruals'] }),
     ]);
     setRefreshing(false);
   }, [queryClient]);
 
-  // iOS hands off only after native onDismiss; elapsed time is not evidence
-  // that UIKit has finished dismissing the picker. Android has no onDismiss.
-  const openEditorForProduct = useCallback(
-    (product: Product) => {
-      if (modalPhase.current !== 'picker') return;
-      const existing = promos?.find((promo) => promo.productId === product.id);
-      const target: EditorTarget = existing
-        ? editorForPromo(existing)
-        : {
-            productId: product.id,
-            productName: product.name,
-            photo: (product as { photo?: string }).photo,
-            sellPrice: product.sellPrice || 0,
-            costPrice: product.costPrice || 0,
-            percent: '10',
-            active: true,
-            isExisting: false,
-          };
-      setPickerVisible(false);
-      if (Platform.OS === 'ios') {
-        modalPhase.current = 'pickerClosing';
-        pendingEditor.current = target;
-      } else {
-        modalPhase.current = 'editor';
-        setEditor(target);
-        setEditorVisible(true);
-      }
-    },
-    [promos],
-  );
-
   const openEditorForPromo = useCallback((promo: MotivationPromo) => {
     if (modalPhase.current !== null) return;
-    modalPhase.current = 'editor';
+    modalPhase.current = 'legacy';
     haptic('tap');
     setEditor(editorForPromo(promo));
     setEditorVisible(true);
@@ -400,11 +354,11 @@ export default function MotivationScreen() {
   const activeCount = promoList.filter((p) => p.active).length;
 
   const renderPromosTab = () => {
-    if (promos === undefined && promosLoading) return <LoadingSpinner />;
-    if (promos === undefined && promosError) {
+    if (configuration === undefined && promosLoading) return <LoadingSpinner />;
+    if (configuration === undefined && promosError) {
       return (
         <QueryErrorState
-          description="Не удалось загрузить акционные товары. Проверьте соединение."
+          description="Не удалось загрузить правила мотивации. Проверьте соединение."
           onRetry={() => refetchPromos()}
         />
       );
@@ -419,7 +373,7 @@ export default function MotivationScreen() {
         contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
       >
         {/* Add CTA */}
-        <TouchableOpacity activeOpacity={0.85} onPress={openPicker} style={styles.addCta}>
+        <TouchableOpacity activeOpacity={0.85} onPress={openBulk} style={styles.addCta}>
           <LinearGradient
             colors={[colors.green[500], colors.green[700]] as [string, string]}
             style={styles.addCtaGradient}
@@ -427,25 +381,84 @@ export default function MotivationScreen() {
             end={{ x: 1, y: 0 }}
           >
             <Ionicons name="add-circle-outline" size={20} color={colors.white} />
-            <Text style={styles.addCtaText}>Добавить акционный товар</Text>
+            <Text style={styles.addCtaText}>Выбрать товары и папки</Text>
           </LinearGradient>
         </TouchableOpacity>
 
+        {promosError && configuration ? (
+          <QueryErrorState
+            description="Правила могли измениться. Повторите загрузку."
+            onRetry={() => refetchPromos()}
+          />
+        ) : null}
+        {rules.length > 0 ? (
+          <View style={[styles.promoCard, { backgroundColor: palette.bg.card }]}>
+            {rules.map((rule) => (
+              <TouchableOpacity
+                key={rule.id}
+                accessibilityRole="button"
+                onPress={() => {
+                  if (modalPhase.current !== null) return;
+                  modalPhase.current = 'rule';
+                  setRuleEditor(rule);
+                  setRulePercent(String(rule.percent));
+                  setRuleActive(rule.active);
+                  setRuleError('');
+                  setRuleConflict(false);
+                  setRuleVisible(true);
+                }}
+                style={styles.promoRow}
+              >
+                <Ionicons
+                  name={rule.target.kind === 'folder' ? 'folder-outline' : 'cube-outline'}
+                  size={24}
+                  color={palette.accent.primary}
+                />
+                <View style={styles.promoInfo}>
+                  <Text variant="bodyEmph" color={palette.text.primary}>
+                    {rule.target.kind === 'folder'
+                      ? rule.target.path
+                      : rule.productName || `Товар ${rule.target.productId}`}
+                  </Text>
+                  <Text variant="footnote" color={palette.text.secondary}>
+                    {rule.target.kind === 'folder'
+                      ? `${rule.warehouseName || 'Склад'} · С подпапками и будущими товарами`
+                      : 'От продажи после скидки'}
+                  </Text>
+                  {!rule.active ? (
+                    <Text variant="footnote" color={palette.text.tertiary}>
+                      Пауза · подавляет правило родительской папки
+                    </Text>
+                  ) : null}
+                </View>
+                <Text variant="title3" color={palette.accent.primaryText}>
+                  {rule.percent}%
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+        {promoList.length > 0 ? (
+          <Text variant="footnote" color={palette.text.secondary} style={styles.listCaption}>
+            Прежние правила · от маржи
+          </Text>
+        ) : null}
         {promoList.length > 0 ? (
           <Text style={[styles.listCaption, { color: palette.text.tertiary }]}>
             {promoList.length} {pluralPromo(promoList.length)} · {activeCount} активн.
           </Text>
         ) : null}
 
-        {promoList.length === 0 ? (
+        {promoList.length === 0 && rules.length === 0 ? (
           <EmptyState
             icon="gift-outline"
-            title="Пока нет акционных товаров"
-            subtitle="Отметьте товар процентом — сотрудник будет получать бонус с его продажи"
+            title="Пока нет правил мотивации"
+            subtitle="Выберите товары или папки и задайте общий процент от продажи"
             palette={palette}
           />
-        ) : (
-          <View style={styles.promoCard}>
+        ) : promoList.length > 0 ? (
+          <View style={[styles.promoCard, { backgroundColor: palette.bg.card }]}>
             {promoList.map((promo, idx) => (
               <PromoRow
                 key={promo.id}
@@ -456,7 +469,7 @@ export default function MotivationScreen() {
               />
             ))}
           </View>
-        )}
+        ) : null}
       </ScrollView>
     );
   };
@@ -464,10 +477,10 @@ export default function MotivationScreen() {
   // ── Render: accruals tab ────────────────────────────────────────────────────────
 
   const renderAccrualRow = useCallback(
-    ({ item }: { item: MotivationAccrual }) => <AccrualRow accrual={item} palette={palette} />,
+    ({ item }: { item: MotivationAccrualV2 }) => <AccrualRow accrual={item} palette={palette} />,
     [palette],
   );
-  const accrualKey = useCallback((a: MotivationAccrual) => a.id, []);
+  const accrualKey = useCallback((a: MotivationAccrualV2) => a.id, []);
 
   const renderAccrualsTab = () => {
     const loadingFirst = accruals === undefined && accrualsLoading;
@@ -595,16 +608,16 @@ export default function MotivationScreen() {
           <Ionicons name="gift-outline" size={18} color={colors.green[600]} />
         </View>
         <Text style={[styles.ruleText, { color: palette.text.secondary }]}>
-          Сотрудник получает{' '}
-          <Text style={{ color: palette.text.primary, fontWeight: fontWeight.bold }}>% от маржи</Text> проданного
-          акционного товара. Бонус начисляется при оплате чека и попадает в зарплату.
+          Исполнители получают{' '}
+          <Text style={{ color: palette.text.primary, fontWeight: fontWeight.bold }}>% от продажи</Text> выбранных
+          товаров после скидки. Бонус делится поровну и попадает в зарплату. Старые правила от маржи сохраняются.
         </Text>
       </View>
 
       {/* Segmented control */}
       <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
         <SegmentButton
-          label="Акционные товары"
+          label="Правила"
           active={tab === 'promos'}
           onPress={() => {
             haptic('select');
@@ -625,22 +638,107 @@ export default function MotivationScreen() {
 
       {tab === 'promos' ? renderPromosTab() : renderAccrualsTab()}
 
-      {/* Warehouse product picker — reused, identical look/speed to Склад. */}
-      <ProductPickerModal
-        visible={pickerVisible}
-        onClose={closePicker}
-        onDismiss={onPickerDismiss}
-        onSelectProduct={openEditorForProduct}
-        title="Выберите товар"
-        showCostPrice
+      <MotivationBulkComposer
+        visible={bulkVisible}
+        sessionId={bulkSession}
+        onClose={closePresentation}
+        onDismiss={onPresentationDismiss}
+        onSaved={(_result, presentationActive = true) => {
+          refreshConfiguration();
+          if (presentationActive) {
+            closePresentation();
+            haptic('success');
+          }
+        }}
       />
+
+      <Modal
+        visible={ruleVisible}
+        onClose={() => {
+          if (!ruleMutation.isPending) closePresentation();
+        }}
+        onDismiss={onPresentationDismiss}
+        title="Правило от продажи"
+      >
+        {ruleEditor ? (
+          <View style={{ gap: spacing[3] }}>
+            <Text variant="title3" color={palette.text.primary}>
+              {ruleEditor.target.kind === 'folder' ? ruleEditor.target.path : ruleEditor.productName || 'Товар'}
+            </Text>
+            <Text color={palette.text.secondary}>
+              Процент от продажи товаров после скидки. Только для новых продаж. Старые чеки не изменятся.
+            </Text>
+            <TextInput
+              accessibilityLabel="Процент от продажи"
+              value={rulePercent}
+              onChangeText={setRulePercent}
+              keyboardType="decimal-pad"
+              editable={!ruleMutation.isPending}
+              style={[
+                styles.editorInput,
+                { color: palette.text.primary, backgroundColor: palette.bg.muted, minHeight: 48 },
+              ]}
+            />
+            <View style={styles.toggleRow}>
+              <Text color={palette.text.primary}>Правило активно</Text>
+              <Switch value={ruleActive} onValueChange={setRuleActive} disabled={ruleMutation.isPending} />
+            </View>
+            {ruleError ? (
+              <Text accessibilityRole="alert" color={colors.red[600]}>
+                {ruleError}
+              </Text>
+            ) : null}
+            {ruleConflict ? (
+              <TouchableOpacity
+                style={{ minHeight: 48, justifyContent: 'center' }}
+                onPress={async () => {
+                  const response = await refetchPromos();
+                  const current = response.data?.rules.find((rule) => rule.id === ruleEditor.id);
+                  if (current) {
+                    setRuleEditor(current);
+                    setRulePercent(String(current.percent));
+                    setRuleActive(current.active);
+                    setRuleError('');
+                    setRuleConflict(false);
+                  } else setRuleError('Правило удалено или недоступно. Закройте редактор и повторите загрузку.');
+                }}
+              >
+                <Text color={palette.accent.primaryText}>Загрузить текущую версию</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              disabled={ruleMutation.isPending || ruleConflict}
+              style={[styles.saveBtnGradient, ruleConflict && { opacity: 0.45 }]}
+              onPress={() => ruleMutation.mutate(false)}
+            >
+              <Text color={colors.white}>{ruleMutation.isPending ? 'Подождите…' : 'Сохранить'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              disabled={ruleMutation.isPending}
+              style={{ minHeight: 48, justifyContent: 'center' }}
+              onPress={() =>
+                Alert.alert(
+                  'Удалить правило?',
+                  'Будущие продажи будут использовать правило родительской папки, если оно есть. Прежние начисления сохранятся.',
+                  [
+                    { text: 'Отмена', style: 'cancel' },
+                    { text: 'Удалить', style: 'destructive', onPress: () => ruleMutation.mutate(true) },
+                  ],
+                )
+              }
+            >
+              <Text color={colors.red[600]}>Удалить правило</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </Modal>
 
       {/* Promo editor — percent / active / remove. */}
       <Modal
         visible={editorVisible}
         onClose={closeEditor}
-        onDismiss={onEditorDismiss}
-        title={editor?.isExisting ? 'Акционный товар' : 'Новая акция'}
+        onDismiss={onPresentationDismiss}
+        title="Прежнее правило от маржи"
       >
         {editor ? (
           <PromoEditor
@@ -787,7 +885,7 @@ const PromoRow = React.memo(function PromoRow({ promo, palette, showDivider, onP
 // ── Accrual row ────────────────────────────────────────────────────────────────
 
 interface AccrualRowProps {
-  accrual: MotivationAccrual;
+  accrual: MotivationAccrualV2;
   palette: SemanticPalette;
 }
 
@@ -814,9 +912,15 @@ const AccrualRow = React.memo(function AccrualRow({ accrual, palette }: AccrualR
           {accrual.productName || 'Товар'}
           {accrual.qty > 1 ? ` · ${accrual.qty} шт` : ''}
         </Text>
-        <Text style={[styles.accrualMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-          {accrual.checkNumber ? `Чек №${accrual.checkNumber}` : 'Чек'} · {accrual.percent}% от маржи ·{' '}
-          {formatAccrualDate(accrual.accruedAt)}
+        <Text style={[styles.accrualMeta, { color: palette.text.tertiary }]}>
+          {accrual.checkNumber ? `Чек №${accrual.checkNumber}` : 'Чек'} · {accrual.percent}%{' '}
+          {accrual.calculationBase === 'revenue' ? 'от продажи' : 'от маржи'} · {formatAccrualDate(accrual.accruedAt)}
+        </Text>
+        <Text variant="footnote" color={palette.text.secondary}>
+          База: {formatMoney(accrual.baseAmount)}
+          {accrual.scheme === 'revenue_v2'
+            ? ` · Доля 1/${accrual.shareCount} от ${formatMoney(accrual.totalBonus)}`
+            : ''}
         </Text>
       </View>
     </View>

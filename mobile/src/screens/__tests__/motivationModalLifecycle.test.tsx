@@ -3,7 +3,7 @@
 // This checks ordering, not UIKit presentation or a physical iPhone.
 import React from 'react';
 import { Platform } from 'react-native';
-import type { MotivationPromo, Product } from '../../../../shared/types';
+import type { MotivationPromo, MotivationRule, MotivationAccrualV2 } from '../../../../shared/types';
 
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
@@ -13,6 +13,9 @@ const mockCleanups: (() => void)[] = [];
 const mockEffects: (() => void)[] = [];
 let mockIndex = 0;
 let mockPromos: MotivationPromo[] = [];
+let mockRules: MotivationRule[] = [];
+let mockAccruals: MotivationAccrualV2[] = [];
+const mockPatch = jest.fn();
 const mockSetPromo = jest.fn();
 const mockAlert = jest.fn();
 const mockInvalidate = jest.fn(async () => undefined);
@@ -78,7 +81,11 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => mockNavigation }));
 jest.mock('../../api/services', () => ({
-  motivationApi: { setPromo: (...args: unknown[]) => mockSetPromo(...args), clearPromo: jest.fn() },
+  motivationApi: {
+    setPromo: (...args: unknown[]) => mockSetPromo(...args),
+    clearPromo: jest.fn(),
+    patchRule: (...args: unknown[]) => mockPatch(...args),
+  },
 }));
 jest.mock('../../api/axios', () => ({ getImageUrl: (url: string) => url }));
 jest.mock('../../contexts/ThemeContext', () => ({
@@ -96,7 +103,8 @@ jest.mock('../../platform/Typography', () => ({ Text: 'Text' }));
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
-    data: queryKey[1] === 'promos' ? mockPromos : [],
+    data:
+      queryKey[1] === 'rules' ? { rules: mockRules, legacyPromos: mockPromos, previewRevision: 'r1' } : mockAccruals,
     isLoading: false,
     isError: false,
     refetch: jest.fn(),
@@ -110,17 +118,13 @@ jest.mock('@tanstack/react-query', () => ({
     mutate: (input: unknown) => options.mutationFn(input).then(options.onSuccess, options.onError),
   }),
 }));
-for (const name of [
-  'IosScreenHeader',
-  'LoadingSpinner',
-  'QueryErrorState',
-  'Modal',
-  'CachedImage',
-  'ProductPickerModal',
-  'EmployeeAvatar',
-]) {
+for (const name of ['IosScreenHeader', 'LoadingSpinner', 'QueryErrorState', 'Modal', 'CachedImage', 'EmployeeAvatar']) {
   jest.doMock(`../../components/${name}`, () => ({ __esModule: true, default: name }));
 }
+jest.mock('../../components/motivation/MotivationBulkComposer', () => ({
+  __esModule: true,
+  default: 'MotivationBulkComposer',
+}));
 jest.doMock('../../components/TabBarScrollable', () => ({
   TabBarFlashList: 'FlashList',
   TabBarScrollView: 'ScrollView',
@@ -147,23 +151,22 @@ const render = () => {
   mockEffects.splice(0).forEach((effect) => effect());
   return tree;
 };
-const picker = () => nodes(render()).find((node) => node.type === 'ProductPickerModal')!;
-const modal = () => nodes(render()).find((node) => node.type === 'Modal')!;
+const bulk = () => nodes(render()).find((node) => node.type === 'MotivationBulkComposer')!;
+const modal = () =>
+  nodes(render()).find((node) => node.type === 'Modal' && node.props.title === 'Прежнее правило от маржи')!;
 const form = () => nodes(modal().props.children)[0];
-const product = (id = 'p1') => ({ id, name: `Товар ${id}`, sellPrice: 200, costPrice: 100 }) as Product;
-const openPicker = () => {
-  pressAdd();
-  expect(picker().props.visible).toBe(true);
-};
 const pressAdd = () => {
   const button = nodes(render()).find(
-    (node) => node.type === 'TouchableOpacity' && words(node) === 'Добавить акционный товар',
+    (node) => node.type === 'TouchableOpacity' && words(node) === 'Выбрать товары и папки',
   )!;
   (button.props.onPress as () => void)();
 };
-const select = (value = product()) => (picker().props.onSelectProduct as (value: Product) => void)(value);
-const dismiss = () => (picker().props.onDismiss as (() => void) | undefined)?.();
-const dismissEditor = () => (modal().props.onDismiss as (() => void) | undefined)?.();
+const dismiss = () => (bulk().props.onDismiss as () => void)();
+const dismissEditor = () => (modal().props.onDismiss as () => void)();
+const openLegacy = () => {
+  const row = nodes(render()).find((node) => node.props.promo === mockPromos[0])!;
+  (row.props.onPress as () => void)();
+};
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
@@ -174,6 +177,9 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockStates.length = mockRefs.length = mockCallbacks.length = mockDeps.length = mockEffects.length = 0;
   mockPromos = [];
+  mockRules = [];
+  mockAccruals = [];
+  mockPatch.mockResolvedValue({ data: {} });
   Platform.OS = 'ios';
   jest.clearAllMocks();
   mockSetPromo.mockImplementation(async (input: { productId: string; percent: number; active: boolean }) => {
@@ -187,143 +193,160 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-it('iOS waits for actual picker dismissal even after 320 ms, then presents the selected editor once', () => {
-  openPicker();
-  select();
-  expect(picker().props.visible).toBe(false);
-  jest.advanceTimersByTime(1000);
+it('uses one bulk container and rejects double opening before React commits', () => {
+  pressAdd();
+  pressAdd();
+  expect(bulk().props.visible).toBe(true);
+  expect(bulk().props.sessionId).toBe(1);
   expect(modal().props.visible).toBe(false);
-  dismiss();
-  expect(modal().props.visible).toBe(true);
-  expect(form().props.editor).toMatchObject({ productId: 'p1' });
-  (modal().props.onClose as () => void)();
-  dismiss();
-  expect(modal().props.visible).toBe(false);
+  expect(nodes(render()).some((node) => node.type === 'ProductPickerModal')).toBe(false);
 });
 
-it('iOS cannot reopen the picker until the editor has actually finished dismissing', () => {
-  openPicker();
-  select();
-  jest.advanceTimersByTime(1000);
-  dismiss();
-  expect(modal().props.visible).toBe(true);
-  (modal().props.onClose as () => void)();
+it('iOS waits for real bulk dismissal before reopening, even after one second', () => {
   pressAdd();
-  expect(picker().props.visible).toBe(false);
+  (bulk().props.onClose as () => void)();
+  pressAdd();
   jest.advanceTimersByTime(1000);
   pressAdd();
-  expect(picker().props.visible).toBe(false);
-  dismissEditor();
-  openPicker();
+  expect(bulk().props.visible).toBe(false);
+  dismiss();
+  pressAdd();
+  expect(bulk().props.visible).toBe(true);
+  expect(bulk().props.sessionId).toBe(2);
+  dismiss();
+  expect(bulk().props.visible).toBe(true);
 });
 
-it('cancel clears a queued selection; a late dismiss cannot reopen it or a reopened picker', () => {
-  openPicker();
-  select();
-  (picker().props.onClose as () => void)();
-  jest.runAllTimers();
-  dismiss();
-  expect(modal().props.visible).toBe(false);
-  openPicker();
-  dismiss();
-  expect(picker().props.visible).toBe(true);
-  expect(modal().props.visible).toBe(false);
-});
-
-it.each(['unmount', 'blur'])('a pending handoff is cancelled on %s', (boundary) => {
-  openPicker();
-  select();
-  const oldDismiss = picker().props.onDismiss as (() => void) | undefined;
+it.each(['blur', 'unmount'])('cancels presentation on %s and late dismissal cannot open an editor', (boundary) => {
+  pressAdd();
+  const lateDismiss = bulk().props.onDismiss as () => void;
   if (boundary === 'unmount') cleanup();
   else mockListeners.forEach((listener) => listener());
+  lateDismiss();
   jest.runAllTimers();
-  oldDismiss?.();
   expect(modal().props.visible).toBe(false);
-  if (boundary === 'blur') openPicker();
-});
-
-it('can add six distinct products sequentially through the editor and existing API', async () => {
-  for (let index = 1; index <= 6; index++) {
-    openPicker();
-    select(product(`p${index}`));
-    jest.advanceTimersByTime(1000);
-    dismiss();
-    expect(modal().props.visible).toBe(true);
-    (form().props.onSubmit as () => void)();
-    await flush();
-    expect(modal().props.visible).toBe(false);
-    dismissEditor();
+  if (boundary === 'blur') {
+    expect(bulk().props.visible).toBe(false);
+    pressAdd();
+    expect(bulk().props.visible).toBe(true);
   }
-  expect(mockSetPromo.mock.calls.map(([input]) => input.productId)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
-  expect(mockPromos).toHaveLength(6);
-  expect(mockInvalidate).toHaveBeenCalledWith({ queryKey: ['motivation'] });
 });
 
-it('save failure retains the selected editor and permits retry', async () => {
-  openPicker();
-  select();
-  jest.advanceTimersByTime(1000);
-  dismiss();
-  mockSetPromo.mockRejectedValueOnce(new Error('Соединение потеряно'));
-  (form().props.onSubmit as () => void)();
-  await flush();
-  expect(mockAlert).toHaveBeenCalledWith('Ошибка', 'Соединение потеряно');
-  expect(modal().props.visible).toBe(true);
-  expect(form().props.editor).toMatchObject({ productId: 'p1', percent: '10', active: true });
-  (form().props.onSubmit as () => void)();
-  await flush();
-  expect(modal().props.visible).toBe(false);
-  expect(mockSetPromo).toHaveBeenCalledTimes(2);
-});
-
-it('Android opens the editor without waiting for the iOS-only dismissal event', () => {
+it('Android can reopen without an iOS-only event', () => {
   Platform.OS = 'android';
-  openPicker();
-  select();
-  jest.runAllTimers();
-  expect(picker().props.visible).toBe(false);
-  expect(modal().props.visible).toBe(true);
-  (modal().props.onClose as () => void)();
-  openPicker();
-  (picker().props.onClose as () => void)();
-  openPicker();
+  pressAdd();
+  (bulk().props.onClose as () => void)();
+  pressAdd();
+  expect(bulk().props.visible).toBe(true);
 });
 
-it('selecting an existing paused promo preserves its rule and updates that product', async () => {
+it('bulk success closes once and refreshes rules and salary', () => {
+  pressAdd();
+  (bulk().props.onSaved as () => void)();
+  expect(bulk().props.visible).toBe(false);
+  expect(mockInvalidate).toHaveBeenCalledWith({ queryKey: ['motivation'] });
+  expect(mockInvalidate).toHaveBeenCalledWith({ queryKey: ['salary'] });
+  pressAdd();
+  expect(bulk().props.visible).toBe(false);
+  dismiss();
+  pressAdd();
+  expect(bulk().props.visible).toBe(true);
+});
+
+it('legacy paused 37% rule remains a margin editor, retains input after failure and can retry', async () => {
   mockPromos = [
     {
       productId: 'p1',
-      productName: 'Сохранённая акция',
+      productName: 'Старая акция',
       percent: 37,
       active: false,
       sellPrice: 400,
       costPrice: 150,
     } as MotivationPromo,
   ];
-  openPicker();
-  select();
-  jest.advanceTimersByTime(1000);
-  dismiss();
-  expect(form().props.editor).toMatchObject({
-    productId: 'p1',
-    percent: '37',
-    active: false,
-    isExisting: true,
-  });
-  expect(modal().props.title).toBe('Акционный товар');
+  openLegacy();
+  expect(form().props.editor).toMatchObject({ productId: 'p1', percent: '37', active: false });
+  pressAdd();
+  expect(bulk().props.visible).toBe(false);
+  mockSetPromo.mockRejectedValueOnce(new Error('Соединение потеряно'));
   (form().props.onSubmit as () => void)();
   await flush();
-  expect(mockSetPromo).toHaveBeenCalledWith({ productId: 'p1', percent: 37, active: false });
+  expect(modal().props.visible).toBe(true);
+  expect(mockAlert).toHaveBeenCalledWith('Ошибка', 'Соединение потеряно');
+  (form().props.onSubmit as () => void)();
+  await flush();
+  expect(mockSetPromo).toHaveBeenLastCalledWith({ productId: 'p1', percent: 37, active: false });
+  expect(modal().props.visible).toBe(false);
+  jest.advanceTimersByTime(1000);
+  pressAdd();
+  expect(bulk().props.visible).toBe(false);
+  dismissEditor();
+  pressAdd();
+  expect(bulk().props.visible).toBe(true);
 });
 
-it('two product taps before a render keep the first selection and dismissal is consumed once', () => {
-  openPicker();
-  const onSelect = picker().props.onSelectProduct as (value: Product) => void;
-  onSelect(product('first'));
-  onSelect(product('second'));
-  dismiss();
-  expect(form().props.editor).toMatchObject({ productId: 'first' });
-  (modal().props.onClose as () => void)();
-  dismiss();
-  expect(modal().props.visible).toBe(false);
+it('updates a sales rule with its exact revision and keeps the old check promise visible', async () => {
+  mockRules = [
+    {
+      id: 'r1',
+      target: { kind: 'folder', warehouseId: 'main', path: 'Масла' },
+      percent: 8,
+      active: true,
+      revision: 7,
+    } as MotivationRule,
+  ];
+  const ruleRow = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node).includes('Масла'))!;
+  (ruleRow.props.onPress as () => void)();
+  const ruleModal = () =>
+    nodes(render()).find((node) => node.type === 'Modal' && node.props.title === 'Правило от продажи')!;
+  expect(ruleModal().props.visible).toBe(true);
+  expect(words(ruleModal())).toContain('Только для новых продаж. Старые чеки не изменятся.');
+  const save = nodes(ruleModal().props.children as React.ReactNode).find(
+    (node) => node.type === 'TouchableOpacity' && words(node) === 'Сохранить',
+  )!;
+  (save.props.onPress as () => void)();
+  await flush();
+  expect(mockPatch).toHaveBeenCalledWith('r1', { expectedRevision: 7, percent: 8, active: true });
+  expect(ruleModal().props.visible).toBe(false);
+});
+
+it('mixed history states sales vs margin, exact kopecks and the employee share', () => {
+  mockAccruals = [
+    {
+      id: 'a1',
+      scheme: 'revenue_v2',
+      calculationBase: 'revenue',
+      percent: 8,
+      amount: 133.34,
+      baseAmount: 5000,
+      totalBonus: 400,
+      shareCount: 3,
+      accruedAt: '2026-10-20',
+    },
+    {
+      id: 'a2',
+      scheme: 'margin_v1',
+      calculationBase: 'margin',
+      percent: 37,
+      amount: 37,
+      baseAmount: 100,
+      accruedAt: '2026-10-19',
+    },
+  ] as MotivationAccrualV2[];
+  const segment = nodes(render()).find((node) => node.props.label === 'Начисления')!;
+  (segment.props.onPress as () => void)();
+  const ledger = nodes(render()).find((node) => node.type === 'FlashList')!;
+  const renderRow = ledger.props.renderItem as (input: { item: MotivationAccrualV2 }) => React.ReactElement;
+  const rowText = (item: MotivationAccrualV2) => {
+    const element = renderRow({ item });
+    const renderMemo = (element.type as unknown as { type: (props: unknown) => React.ReactNode }).type;
+    return words(renderMemo(element.props));
+  };
+  const revenue = rowText(mockAccruals[0]);
+  expect(revenue).toContain('8% от продажи');
+  expect(revenue).toContain('133,34');
+  expect(revenue).toContain('Доля 1/3');
+  const margin = rowText(mockAccruals[1]);
+  expect(margin).toContain('37% от маржи');
+  expect(margin).not.toContain('Доля');
 });
