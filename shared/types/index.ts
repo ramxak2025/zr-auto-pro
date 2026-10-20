@@ -2398,6 +2398,8 @@ export interface Check {
   date: string;
   master?: User;
   masterId: string;
+  /** New server: true only for an explicitly supplied and validated performer list. */
+  assigneesConfirmed?: boolean;
   client?: Client;
   clientId: string;
   /**
@@ -3758,6 +3760,7 @@ export interface MotivationRule {
   createdAt: string;
   updatedAt: string;
   productName?: string;
+  warehouseName?: string;
 }
 
 export interface MotivationRulesResponse {
