@@ -48,13 +48,17 @@ export class MotivationService {
       await client.query('BEGIN');
       await lockMotivation(client, tenantID);
       const { rows: prod } = await client.query(
-        'SELECT id,category,warehouse_id FROM products WHERE id = $1 AND tenant_id = $2',
+        `SELECT p.id,p.category,p.warehouse_id,
+                EXISTS (SELECT 1 FROM motivation_promo_products mp
+                         WHERE mp.tenant_id=p.tenant_id AND mp.product_id=p.id) AS has_legacy
+           FROM products p WHERE p.id = $1 AND p.tenant_id = $2`,
         [dto.productId, tenantID],
       );
       if (prod.length === 0) {
         throw new BadRequestException({ message: 'Товар не найден' });
       }
-      if (effectiveRule(prod[0], await readRules(client, tenantID)))
+      // Updating a preserved exception does not expose or override the v2 rule.
+      if (!prod[0].has_legacy && effectiveRule(prod[0], await readRules(client, tenantID)))
         conflict('MOTIVATION_LEGACY_CONFLICT', 'Для товара уже действует новая настройка. Измените её в разделе акций');
 
       await client.query(
@@ -94,12 +98,15 @@ export class MotivationService {
       await client.query('BEGIN');
       await lockMotivation(client, tenantID);
       const product = (
-        await client.query('SELECT id,category,warehouse_id FROM products WHERE id=$1 AND tenant_id=$2', [
-          productId,
-          tenantID,
-        ])
+        await client.query(
+          `SELECT p.id,p.category,p.warehouse_id,
+                  EXISTS (SELECT 1 FROM motivation_promo_products mp
+                           WHERE mp.tenant_id=p.tenant_id AND mp.product_id=p.id) AS has_legacy
+             FROM products p WHERE p.id=$1 AND p.tenant_id=$2`,
+          [productId, tenantID],
+        )
       ).rows[0];
-      if (product && effectiveRule(product, await readRules(client, tenantID)))
+      if (product?.has_legacy && effectiveRule(product, await readRules(client, tenantID)))
         conflict(
           'MOTIVATION_LEGACY_CONFLICT',
           'Прежняя акция является исключением новой настройки. Замените её через предварительный просмотр',

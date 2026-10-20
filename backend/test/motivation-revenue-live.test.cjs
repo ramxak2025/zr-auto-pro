@@ -24,6 +24,47 @@ Logger.overrideLogger(false);
 const live = process.env.AUTEXA_MOTIVATION_LIVE_DB;
 const options = { skip: !live, timeout: 60000 };
 
+test('actual PG: legacy API can update a preserved exception without rewriting paid history', options, async () => {
+  await fixture(async ({ product, create, bulk, legacy, run, tenant, accruals, q }) => {
+    const p = await product('Preserved legacy exception');
+    await run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 37 }));
+    const paid = await create([p]);
+    const history = await accruals(paid.id);
+    await bulk([{ kind: 'product', productId: p.productId }], 8);
+    const rulesBefore = await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant]);
+
+    const updated = await run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 40 }));
+    assert.equal(updated.percent, 40);
+    assert.deepEqual(await accruals(paid.id), history, 'configuration changes must not rewrite paid history');
+    await assert.rejects(run(() => legacy.clearPromo(tenant, p.productId)), (e) => e.getStatus() === 409);
+    assert.deepEqual(await accruals(paid.id), history);
+    assert.deepEqual(await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant]), rulesBefore);
+    const fresh = (await accruals((await create([p])).id))[0];
+    assert.equal(fresh.scheme, 'margin_v1');
+    assert.equal(Number(fresh.percent), 40);
+    assert.equal(Number(fresh.amount), 8);
+  });
+});
+
+test('actual PG: legacy DELETE remains idempotent when only a revenue rule exists', options, async () => {
+  await fixture(async ({ product, rule, create, legacy, run, tenant, accruals, q }) => {
+    const p = await product('Revenue only');
+    await rule(p.productId);
+    const paid = await create([p]);
+    const history = await accruals(paid.id);
+    const rulesBefore = await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant]);
+    await run(() => legacy.clearPromo(tenant, p.productId));
+    await run(() => legacy.clearPromo(tenant, p.productId));
+    await assert.rejects(
+      run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 40 })),
+      (e) => e.getStatus() === 409,
+    );
+    assert.equal((await run(() => legacy.listPromos(tenant))).length, 0);
+    assert.deepEqual(await accruals(paid.id), history);
+    assert.deepEqual(await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant]), rulesBefore);
+  });
+});
+
 test(
   'actual PG: a matching manual NULL-product row makes legacy deleted-SKU reconciliation ambiguous',
   options,
