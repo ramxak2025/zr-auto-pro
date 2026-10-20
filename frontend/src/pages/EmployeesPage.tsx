@@ -21,6 +21,8 @@ import {
 import toast from 'react-hot-toast';
 
 import { salaryApi, scheduleApi, usersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
+import { buttonClasses } from '../ui/Button';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import {
   Badge,
@@ -60,6 +62,7 @@ type AttendanceRow = AttendanceMap extends Map<string, infer V> ? V : never;
 
 export default function EmployeesPage() {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const [params, setParams] = useSearchParams();
   // Период — в URL (?period=), чтобы F5 и возврат из карточки не сбрасывали выбор.
   const rawPeriod = params.get('period');
@@ -228,13 +231,22 @@ export default function EmployeesPage() {
         icon={UserCircle}
         subtitle={usersLoading ? 'Команда автосервиса' : `${activeUsers.length} активных`}
         actions={
-          <div className="max-w-full overflow-x-auto no-scrollbar">
-            <SegmentedControl
-              aria-label="Период"
-              value={period}
-              onChange={setPeriod}
-              options={PERIOD_OPTIONS.map((p) => ({ value: p.key, label: p.label }))}
-            />
+          <div className="flex max-w-full flex-wrap items-center gap-3">
+            {(hasPermission('motivation_manage') ||
+              hasPermission('salary_view') ||
+              hasPermission('salary_view_all')) && (
+              <Link to="/motivation" className={buttonClasses({ variant: 'secondary' })}>
+                Мотивация сотрудников
+              </Link>
+            )}
+            <div className="max-w-full overflow-x-auto no-scrollbar">
+              <SegmentedControl
+                aria-label="Период"
+                value={period}
+                onChange={setPeriod}
+                options={PERIOD_OPTIONS.map((p) => ({ value: p.key, label: p.label }))}
+              />
+            </div>
           </div>
         }
       />

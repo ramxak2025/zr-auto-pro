@@ -1,3 +1,5 @@
+import { checkProductPayload, savedProductLineIds } from './checkCreate/productPayload';
+import { defaultConfirmedPerformers, explicitlyAssignedPerformers, performerPayload } from './checkCreate/performers';
 import { checkDateParts, selectedCheckDate } from '../../../shared/utils/checkDateTime';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { templatePickerQueryOptions, canApplyTemplateSnapshot } from '../../../shared/utils/templatePickerQuery';
@@ -20,6 +22,7 @@ import {
   AccessibilityInfo,
   Switch,
 } from 'react-native';
+import { Text as AppText } from '../platform/Typography';
 import CompactScreenHeader, { compactTouchSize } from '../components/CompactScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -465,7 +468,7 @@ export default function CheckCreateScreen() {
   // заказ-наряд» и после создания паркуем заказ в ПЕРВУЮ колонку доски (бэк сам
   // коэрсит чек в отложенный заказ-наряд без оплаты — мы лишь адаптируем UI и
   // ставим work_status, иначе чек с work_status=NULL не попадёт на доску).
-  const { orderMode, shiftModeEnabled } = usePosSettings();
+  const { orderMode, shiftModeEnabled, data: performerPosSettings } = usePosSettings();
   const { data: boardForOrder } = useQuery<ChecksBoard>({
     queryKey: ['checks', 'board'],
     queryFn: async () => (await checksApi.board()).data,
@@ -545,6 +548,10 @@ export default function CheckCreateScreen() {
   // правке (присутствие поля = перезапись), иначе сервер ничего не трогает.
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [assigneesDirty, setAssigneesDirty] = useState(false);
+  const commonAssigneesEdited = useRef(false);
+  const explicitCheckPerformer = useRef<string | undefined>(undefined);
+  const explicitServicePerformers = useRef(new Map<number, string>());
+  const hasExplicitWorkAssignment = useRef(false);
   const [orderLocationId, setOrderLocationId] = useState<string | null>(null);
   const [locationDirty, setLocationDirty] = useState(false);
   const [showAssigneeSheet, setShowAssigneeSheet] = useState(false);
@@ -565,6 +572,7 @@ export default function CheckCreateScreen() {
     (CheckServiceLine & { lineMasterId?: string; priceConfirmed?: boolean })[]
   >([]);
   const [productLines, setProductLines] = useState<CheckProductLine[]>([]);
+  const originalProductLineIds = useRef<ReadonlySet<string>>(new Set());
 
   // ── Photo attachments ─────────────────────────────────────────────────────
   // Three-state model so the "create" flow (where check id doesn't exist yet)
@@ -1379,10 +1387,11 @@ export default function CheckCreateScreen() {
         lineMasterId: line.masterId || '',
       })),
     );
+    originalProductLineIds.current = savedProductLineIds(c.products || []);
     setProductLines(c.products || []);
     // Round 14: гидрируем исполнителей и место БЕЗ dirty-флагов — payload
     // отправит их только после явной правки (см. proceed()).
-    setAssigneeIds((c.assignees ?? []).map((a) => a.id));
+    setAssigneeIds(c.assigneesConfirmed === true ? (c.assignees ?? []).map((a) => a.id) : []);
     setOrderLocationId(c.locationId ?? null);
     // Дата чека — только для показа/старта пикера, ручной её не считаем.
     setLoadedCheckDate(c.date ? new Date(c.date) : null);
@@ -1634,6 +1643,39 @@ export default function CheckCreateScreen() {
   // when the user is superadmin. Subscription query is already cached
   // app-wide via the same query key, so this is essentially free.
   const { user: authUser, hasPermission } = useAuth();
+  useEffect(() => {
+    if (editId || commonAssigneesEdited.current || hasExplicitWorkAssignment.current) return;
+    const defaults = defaultConfirmedPerformers(
+      authUser,
+      performerPosSettings?.isCashier,
+      isFromBooking ? route.params?.prefillMasterId : undefined,
+    );
+    explicitCheckPerformer.current = defaults[0];
+    setAssigneeIds(defaults);
+  }, [
+    editId,
+    authUser?.id,
+    authUser?.role,
+    performerPosSettings?.isCashier,
+    isFromBooking,
+    route.params?.prefillMasterId,
+  ]);
+  const confirmWorkPerformer = (id: string, serviceIndex?: number) => {
+    if (commonAssigneesEdited.current) return;
+    hasExplicitWorkAssignment.current = true;
+    if (serviceIndex === undefined) explicitCheckPerformer.current = id;
+    else explicitServicePerformers.current.set(serviceIndex, id);
+    setAssigneesDirty(true);
+    const explicit = explicitlyAssignedPerformers(explicitCheckPerformer.current, [
+      ...explicitServicePerformers.current.values(),
+    ]);
+    setAssigneeIds((previous) =>
+      serviceIndex !== undefined && editId && editCheck?.assigneesConfirmed === true
+        ? [...new Set([...previous, ...explicit])]
+        : explicit,
+    );
+  };
+
   // «Рассрочка» — способ оплаты доступен только при праве sell_installment
   // (owner-class — implicit, см. AuthContext.hasPermission) и только для НОВОГО
   // чека: план создаётся в момент продажи, не при правке. Способ показывается
@@ -1915,6 +1957,16 @@ export default function CheckCreateScreen() {
     setMileage('');
     setComment('');
     setSelectedTags([]);
+    commonAssigneesEdited.current = false;
+    hasExplicitWorkAssignment.current = false;
+    explicitServicePerformers.current.clear();
+    const defaults = defaultConfirmedPerformers(authUser, performerPosSettings?.isCashier);
+    explicitCheckPerformer.current = defaults[0];
+    setAssigneeIds(defaults);
+    setAssigneesDirty(false);
+    setMasterId('');
+    setOrderLocationId(null);
+    setLocationDirty(false);
     setDiscount('');
     setPaymentMethod('cash' as PaymentMethod);
     setCashAmount('');
@@ -1923,6 +1975,7 @@ export default function CheckCreateScreen() {
     setInstallmentNextDate(new Date(Date.now() + 30 * 86400000));
     setServiceLines([]);
     setProductLines([]);
+    originalProductLineIds.current = new Set();
     setManualDate(null);
     setLoadedCheckDate(null);
     setPendingPhotos([]);
@@ -1975,7 +2028,7 @@ export default function CheckCreateScreen() {
         installmentFirst,
         isDeferred,
         tagIds: selectedTags.map((t) => t.id),
-        assigneeIds,
+        assigneeIds: !editId && !assigneesDirty ? [] : assigneeIds,
         orderLocationId,
         serviceLines: serviceLines.map((l) => ({
           id: l.id,
@@ -2008,6 +2061,8 @@ export default function CheckCreateScreen() {
       isDeferred,
       selectedTags,
       assigneeIds,
+      assigneesDirty,
+      editId,
       orderLocationId,
       serviceLines,
       productLines,
@@ -2456,7 +2511,19 @@ export default function CheckCreateScreen() {
     setShowServicePicker(false);
   };
 
-  const removeServiceLine = (idx: number) => setServiceLines((prev) => prev.filter((_, i) => i !== idx));
+  const removeServiceLine = (idx: number) => {
+    explicitServicePerformers.current = new Map(
+      [...explicitServicePerformers.current]
+        .filter(([index]) => index !== idx)
+        .map(([index, id]) => [index > idx ? index - 1 : index, id]),
+    );
+    if (hasExplicitWorkAssignment.current && !commonAssigneesEdited.current && !editId) {
+      setAssigneeIds(
+        explicitlyAssignedPerformers(explicitCheckPerformer.current, [...explicitServicePerformers.current.values()]),
+      );
+    }
+    setServiceLines((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const updateServiceLine = (idx: number, field: string, value: any) => {
     setServiceLines((prev) =>
@@ -2760,20 +2827,16 @@ export default function CheckCreateScreen() {
           ? { installment: { nextPaymentDate: toYmd(installmentNextDate) } }
           : {}),
         isDeferred: shouldDefer,
-        // Round 14 (режим «Кассир»): исполнители + место. Create — только при
-        // явном выборе (absent → сервер выводит дефолт из строк услуг +
-        // главного мастера, старое поведение). Edit — только если поле ТРОГАЛИ
-        // (присутствие = перезапись набора; отсутствие = «не трогать»).
-        // Вне режима оба стейта пусты → payload байт-в-байт прежний.
+        // Explicit [] on create means no confirmed performer. Edit preserves
+        // existing attribution unless the operator actually assigns someone.
+        ...performerPayload(!!editId, assigneesDirty, assigneeIds),
         ...(editId
-          ? {
-              ...(assigneesDirty ? { assigneeIds } : {}),
-              ...(locationDirty ? { locationId: orderLocationId } : {}),
-            }
-          : {
-              ...(assigneeIds.length > 0 ? { assigneeIds } : {}),
-              ...(orderLocationId ? { locationId: orderLocationId } : {}),
-            }),
+          ? locationDirty
+            ? { locationId: orderLocationId }
+            : {}
+          : orderLocationId
+            ? { locationId: orderLocationId }
+            : {}),
         // У услуг количества нет — поле `quantity` не шлём (сервер берёт 1). Исключение —
         // legacy-строка («Мойка ×3»: старый чек на правке или неразворачиваемая строка
         // шаблона): её количество уходит как есть, иначе сумма строки на сервере разошлась
@@ -2786,14 +2849,7 @@ export default function CheckCreateScreen() {
           price: l.price,
           ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
-        products: productLines.map((l) => ({
-          sourceTemplateProduct: l.sourceTemplateProduct,
-          productId: l.productId,
-          name: l.name,
-          sellPrice: l.sellPrice,
-          costPrice: l.costPrice,
-          quantity: l.quantity,
-        })),
+        products: productLines.map((line) => checkProductPayload(line, originalProductLineIds.current)),
       };
       submittingRef.current = true;
       createMutation.mutate(payload);
@@ -3940,57 +3996,76 @@ export default function CheckCreateScreen() {
           )}
         </View>
 
-        {/* ═══ SECTION 1.6: ИСПОЛНИТЕЛИ И МЕСТО (Round 14, режим «Кассир») ═══
-              Видна ТОЛЬКО при включённом режиме кассовой смены — и мастеру в
-              orderMode, и админу на приёмке (у админа isCashier=true, поэтому
-              гейт именно shiftModeEnabled, не orderMode). Несколько
-              исполнителей → заказ падает на доску каждого; место — карточное
-              поле «где стоит машина». Вне режима секции нет — байт-в-байт. */}
-        {shiftModeEnabled && (
-          <View
-            style={[styles.sectionAssign, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        {/* Confirmed performers are visible in every sale/order mode. */}
+        <View style={[styles.sectionAssign, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="people-outline" size={16} color={colors.primary[600]} />
+            <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>
+              {shiftModeEnabled ? 'Исполнители и место' : 'Исполнители'}
+            </Text>
+          </View>
+          <AppText
+            variant="footnote"
+            color={palette.text.secondary}
+            style={{ paddingHorizontal: spacing[3], paddingBottom: spacing[2] }}
           >
-            <View style={styles.sectionHeader}>
-              <Ionicons name="people-outline" size={16} color={colors.primary[600]} />
-              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Исполнители и место</Text>
-            </View>
+            {assigneeIds.length
+              ? 'Бонус от продажи товаров делится поровну между исполнителями.'
+              : 'Исполнители не назначены — бонус от продажи товаров пока никому не начисляется.'}
+          </AppText>
+          {/* Исполнители — мультивыбор через шит с чекбоксами */}
+          <TouchableOpacity
+            onPress={() => {
+              haptic('select');
+              setShowAssigneeSheet(true);
+            }}
+            activeOpacity={0.7}
+            style={styles.tagGhostRow}
+            accessibilityRole="button"
+            accessibilityLabel={
+              assigneeIds.length > 0
+                ? `Исполнители: ${assigneeIds
+                    .map(
+                      (aid) =>
+                        (
+                          masters.find((m) => m.id === aid)?.fullName ||
+                          (authUser?.id === aid
+                            ? authUser.fullName
+                            : editCheck?.assignees?.find((a) => a.id === aid)?.fullName)
+                        )?.split(' ')[0] || 'Сотрудник',
+                    )
+                    .join(', ')}`
+                : 'Назначить исполнителей'
+            }
+          >
+            <Ionicons
+              name="construct-outline"
+              size={15}
+              color={assigneeIds.length > 0 ? colors.primary[600] : palette.text.tertiary}
+            />
+            {assigneeIds.length === 0 ? (
+              <Text style={[styles.tagGhostText, { color: palette.text.tertiary }]}>Исполнители</Text>
+            ) : (
+              <Text style={[styles.tagGhostText, { color: palette.text.primary }]} numberOfLines={2}>
+                {assigneeIds
+                  .map(
+                    (aid) =>
+                      (
+                        masters.find((m) => m.id === aid)?.fullName ||
+                        (authUser?.id === aid
+                          ? authUser.fullName
+                          : editCheck?.assignees?.find((a) => a.id === aid)?.fullName)
+                      )?.split(' ')[0] || 'Сотрудник',
+                  )
+                  .join(', ')}
+              </Text>
+            )}
+            <View style={{ flex: 1 }} />
+            <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+          </TouchableOpacity>
 
-            {/* Исполнители — мультивыбор через шит с чекбоксами */}
-            <TouchableOpacity
-              onPress={() => {
-                haptic('select');
-                setShowAssigneeSheet(true);
-              }}
-              activeOpacity={0.7}
-              style={styles.tagGhostRow}
-              accessibilityRole="button"
-              accessibilityLabel={
-                assigneeIds.length > 0
-                  ? `Исполнители: ${assigneeIds
-                      .map((aid) => masters.find((m) => m.id === aid)?.fullName?.split(' ')[0] || '—')
-                      .join(', ')}`
-                  : 'Назначить исполнителей'
-              }
-            >
-              <Ionicons
-                name="construct-outline"
-                size={15}
-                color={assigneeIds.length > 0 ? colors.primary[600] : palette.text.tertiary}
-              />
-              {assigneeIds.length === 0 ? (
-                <Text style={[styles.tagGhostText, { color: palette.text.tertiary }]}>Исполнители</Text>
-              ) : (
-                <Text style={[styles.tagGhostText, { color: palette.text.primary }]} numberOfLines={2}>
-                  {assigneeIds
-                    .map((aid) => masters.find((m) => m.id === aid)?.fullName?.split(' ')[0] || '—')
-                    .join(', ')}
-                </Text>
-              )}
-              <View style={{ flex: 1 }} />
-              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-            </TouchableOpacity>
-
-            {/* Место — из справочника tenant_locations */}
+          {/* Место — из справочника tenant_locations */}
+          {shiftModeEnabled && (
             <TouchableOpacity
               onPress={() => {
                 haptic('select');
@@ -4027,8 +4102,8 @@ export default function CheckCreateScreen() {
               <View style={{ flex: 1 }} />
               <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
             </TouchableOpacity>
-          </View>
-        )}
+          )}
+        </View>
 
         {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
         <View
@@ -4743,6 +4818,7 @@ export default function CheckCreateScreen() {
                     // ним: иначе человек выбрал бы мастера и упёрся в тот же
                     // отказ на следующей же строке.
                     setMasterId(m.id);
+                    confirmWorkPerformer(m.id);
                     setServiceLines((prev) =>
                       prev.map((line) =>
                         worksAtThisPoint(line.lineMasterId || line.masterId)
@@ -4751,6 +4827,7 @@ export default function CheckCreateScreen() {
                       ),
                     );
                   } else if (showMasterPicker !== null) {
+                    confirmWorkPerformer(m.id, showMasterPicker);
                     updateServiceLine(showMasterPicker, 'lineMasterId', m.id);
                     updateServiceLine(showMasterPicker, 'masterId', m.id);
                   }
@@ -4793,7 +4870,8 @@ export default function CheckCreateScreen() {
       {/* ── Шит «Исполнители» (Round 14) — чекбоксы, несколько мастеров ──── */}
       <Modal visible={showAssigneeSheet} onClose={() => setShowAssigneeSheet(false)} title="Исполнители">
         <Text style={[styles.assignSheetHint, { color: palette.text.tertiary }]}>
-          Заказ появится на доске у каждого выбранного. Зарплата считается по строкам услуг, как раньше.
+          Бонус от продажи товаров делится поровну между выбранными исполнителями. Без исполнителей бонус не
+          начисляется. Зарплата по услугам считается отдельно.
         </Text>
         <ScrollView
           style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}
@@ -4812,6 +4890,7 @@ export default function CheckCreateScreen() {
                 ]}
                 onPress={() => {
                   haptic('select');
+                  commonAssigneesEdited.current = true;
                   setAssigneesDirty(true);
                   setAssigneeIds((prev) => (isSelected ? prev.filter((x) => x !== m.id) : [...prev, m.id]));
                 }}

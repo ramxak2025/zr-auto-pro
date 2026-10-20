@@ -768,6 +768,8 @@ export interface CreateCheckRequest {
     quantity?: number;
   }>;
   products: Array<{
+    /** Existing saved check-product-line UUID on edit; omit for a new line. */
+    id?: string;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
@@ -794,6 +796,8 @@ export interface CreateCheckRequest {
    * кривые id сервер молча отбрасывает. Зарплату не двигает.
    */
   assigneeIds?: string[];
+  /** Explicit performer confirmation. Old-client array echoes alone cannot enable motivation. */
+  assigneesConfirmed?: boolean;
   /**
    * Филиал заказа (мульти-точки 156/160) — ТОЛЬКО для офлайн-очереди.
    *
@@ -832,6 +836,8 @@ export interface UpdateCheckRequest {
     quantity?: number;
   }>;
   products?: Array<{
+    /** Stable identity returned as CheckProductLine.id; verified against this check. */
+    id?: string;
     sourceTemplateProduct?: TemplateProductSource;
     productId?: string;
     name: string;
@@ -856,6 +862,8 @@ export interface UpdateCheckRequest {
    * трогать» — частичный PATCH и старые клиенты набор не стирают.
    */
   assigneeIds?: string[];
+  /** True only after an intentional performer choice; omit for untouched edit fields. */
+  assigneesConfirmed?: boolean;
 }
 
 /**

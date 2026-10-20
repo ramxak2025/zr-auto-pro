@@ -2398,6 +2398,8 @@ export interface Check {
   date: string;
   master?: User;
   masterId: string;
+  /** New server: true only for an explicitly supplied and validated performer list. */
+  assigneesConfirmed?: boolean;
   client?: Client;
   clientId: string;
   /**
@@ -3741,6 +3743,99 @@ export interface MotivationAccrual {
   /** marginBase × percent / 100 (RUB). */
   amount: number;
   accruedAt: string;
+}
+
+/** New configuration is sales-based; legacy promos remain independent margin rules. */
+export type MotivationTarget =
+  | { kind: 'product'; productId: string }
+  | { kind: 'folder'; warehouseId: string | null; categoryId?: string; path: string };
+
+export interface MotivationRule {
+  id: string;
+  target: MotivationTarget;
+  calculationBase: 'revenue';
+  percent: number;
+  active: boolean;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  productName?: string;
+  warehouseName?: string;
+}
+
+export interface MotivationRulesResponse {
+  rules: MotivationRule[];
+  legacyPromos: MotivationPromo[];
+  /** Opaque optimistic precondition; use the token returned by the latest preview. */
+  previewRevision: string;
+}
+
+export interface MotivationLegacyException {
+  productId: string;
+  productName: string;
+  percent: number;
+  active: boolean;
+  updatedAt: string;
+  replacing: boolean;
+  /** Replacement is blocked until old trash with missing historical snapshots is resolved. */
+  replacementBlockedReason?: string;
+}
+
+export interface MotivationBulkInput {
+  targets: MotivationTarget[];
+  percent: number;
+  active?: boolean;
+  dryRun?: boolean;
+  /** Keep stable across retries of this exact apply payload; UUID. */
+  requestId: string;
+  /** Required for apply; obtained by dryRun of the same selection. */
+  previewRevision?: string;
+  replaceLegacyPromos?: Array<{ productId: string; updatedAt: string }>;
+}
+
+export interface MotivationBulkResult {
+  rules: MotivationRule[];
+  coveredProductCount: number;
+  /** Unique products whose effective new rule is in this batch, excluding preserved exceptions. */
+  affectedProductCount: number;
+  legacyExceptions: MotivationLegacyException[];
+  previewRevision: string;
+  requestId: string;
+  dryRun: boolean;
+}
+
+export interface MotivationRulePatch {
+  expectedRevision: number;
+  percent?: number;
+  active?: boolean;
+}
+
+export type MotivationErrorCode =
+  | 'MOTIVATION_INVALID_INPUT'
+  | 'MOTIVATION_PREVIEW_STALE'
+  | 'MOTIVATION_REVISION_CONFLICT'
+  | 'MOTIVATION_REQUEST_CONFLICT'
+  | 'MOTIVATION_LEGACY_CONFLICT'
+  | 'MOTIVATION_RULE_NOT_FOUND';
+
+export interface MotivationApiError {
+  statusCode: number;
+  /** Optional for compatibility with servers whose exception filter omits codes. */
+  code?: MotivationErrorCode;
+  message: string;
+}
+
+/** Mixed ledger: basis/share are explicit, never interpret revenue as marginBase. */
+export interface MotivationAccrualV2 extends MotivationAccrual {
+  scheme: 'margin_v1' | 'revenue_v2';
+  calculationBase: 'margin' | 'revenue';
+  baseAmount: number;
+  revenueBase: number | null;
+  shareIndex: number;
+  shareCount: number;
+  /** Whole product bonus before equal distribution; amount is this employee's share. */
+  totalBonus: number;
+  ruleId: string | null;
 }
 
 export interface DashboardStats {

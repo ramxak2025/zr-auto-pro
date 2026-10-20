@@ -55,6 +55,7 @@ jobs:
           AUTEXA_OCT13_APP_PASSWORD: oct8_app_fixture_only
           AUTEXA_RECOVERY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           AUTEXA_RECOVERY_APP_PASSWORD: oct8_app_fixture_only
+          AUTEXA_MOTIVATION_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           AUTEXA_JOURNAL_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           AUTEXA_JOURNAL_APP_PASSWORD: oct8_app_fixture_only
           SUPPLIER_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
@@ -90,6 +91,7 @@ jobs:
           test/check-recovery-live.test.cjs
           test/service-fixed-pay-live.test.cjs
           test/check-product-locks-live.test.cjs
+          test/motivation-revenue-live.test.cjs
           test/starter-catalogs.live.test.cjs
           test/journal-filters-live.test.cjs
           test/subscription-composition-live.test.cjs

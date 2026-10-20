@@ -103,6 +103,11 @@ export class TemplateProductSourceDto {
 }
 
 export class CheckProductLineDto {
+  /** Existing saved product-line identity on a paid edit. */
+  @IsOptional()
+  @IsUUID('all')
+  id?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => TemplateProductSourceDto)
@@ -256,4 +261,9 @@ export class BaseCheckDto {
   @IsString({ each: true })
   @MaxLength(64, { each: true })
   assigneeIds?: string[];
+
+  /** Explicit intent from new clients; a legacy echo of assigneeIds is not confirmation. */
+  @IsOptional()
+  @IsBoolean()
+  assigneesConfirmed?: boolean;
 }

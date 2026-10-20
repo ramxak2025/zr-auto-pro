@@ -1,3 +1,4 @@
+import { lockMotivation } from '../motivation/motivation-rules';
 import {
   Injectable,
   Inject,
@@ -1286,31 +1287,42 @@ export class ProductsService {
   // Permanently delete a single trashed item.
   async hardDelete(id: string, tenantID: string, pointId: string | null = null) {
     await this.assertProductInPoint(id, tenantID, pointId);
-    // Проверка стоит ВНУТРИ DELETE, а не отдельным SELECT перед ним: иначе
-    // между проверкой и удалением может прилететь новое движение по складу, и
-    // мы сотрём документ, который появился секунду назад.
-    const result = await this.pool.query(
-      `DELETE FROM products AS p
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await lockMotivation(client, tenantID);
+      // Проверка стоит ВНУТРИ DELETE, а не отдельным SELECT перед ним: иначе
+      // между проверкой и удалением может прилететь новое движение по складу, и
+      // мы сотрём документ, который появился секунду назад.
+      const result = await client.query(
+        `DELETE FROM products AS p
         WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL
           AND ${ProductsService.NO_HARD_REFS_SQL}`,
-      [id, tenantID],
-    );
-    if (result.rowCount === 0) {
-      // Различаем «нет в корзине» и «лежит, но держат документы»: иначе человек
-      // видит «товар не найден» у строки, которая прямо перед ним на экране.
-      const { rows } = await this.pool.query(
-        `SELECT ${ProductsService.HARD_REF_FLAGS_SQL}
-           FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL`,
         [id, tenantID],
       );
-      if (rows.length) {
-        throw new ConflictException({
-          message: `Нельзя удалить навсегда: ${ProductsService.describeHardRefs(rows[0])}. Товар останется в корзине — складские документы по нему нужны для отчётов.`,
-        });
+      if (result.rowCount === 0) {
+        // Различаем «нет в корзине» и «лежит, но держат документы»: иначе человек
+        // видит «товар не найден» у строки, которая прямо перед ним на экране.
+        const { rows } = await client.query(
+          `SELECT ${ProductsService.HARD_REF_FLAGS_SQL}
+           FROM products p WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NOT NULL`,
+          [id, tenantID],
+        );
+        if (rows.length) {
+          throw new ConflictException({
+            message: `Нельзя удалить навсегда: ${ProductsService.describeHardRefs(rows[0])}. Товар останется в корзине — складские документы по нему нужны для отчётов.`,
+          });
+        }
+        throw new NotFoundException({ message: 'Товар не найден в корзине' });
       }
-      throw new NotFoundException({ message: 'Товар не найден в корзине' });
+      await client.query('COMMIT');
+      return { message: 'Удалено навсегда' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-    return { message: 'Удалено навсегда' };
   }
 
   // Drain the trash. Only ever touches rows with deleted_at IS NOT NULL.
@@ -1318,6 +1330,7 @@ export class ProductsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivation(client, tenantID);
       // 1. Что лежит в корзине филиала сессии (169) и что именно его держит.
       //    Нужен для отчёта человеку; сам запрет живёт в DELETE ниже.
       const { rows: trashed } = await client.query(

@@ -1,3 +1,5 @@
+import { lockMotivationRead } from '../motivation/motivation-rules';
+import { returnRevenueMotivation } from '../motivation/check-motivation';
 import {
   Injectable,
   Inject,
@@ -58,6 +60,7 @@ export class ReturnsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // Verify the check belongs to this tenant + grab basic data.
       //
@@ -481,6 +484,8 @@ export class ReturnsService {
         // Rolls back via the catch below — nothing of this return persists.
         throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
       }
+
+      await returnRevenueMotivation(client, tenantID, checkId, productMoves, dto.scope === 'full');
 
       if (dto.scope === 'full') {
         // M9 — полный возврат СТОРНИРУЕТ мотивационные начисления чека: маржа
