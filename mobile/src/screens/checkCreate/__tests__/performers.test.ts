@@ -18,14 +18,24 @@ it('unknown capability and owner/admin stay unassigned; a real booking performer
   ]);
 });
 it('creates always send an explicit list, including empty; untouched edits preserve provenance', () => {
-  expect(performerPayload(false, false, [])).toEqual({ assigneeIds: [] });
-  expect(performerPayload(false, false, ['self'])).toEqual({ assigneeIds: ['self'] });
+  expect(performerPayload(false, false, [])).toEqual({ assigneeIds: [], assigneesConfirmed: true });
+  expect(performerPayload(false, false, ['self'])).toEqual({ assigneeIds: ['self'], assigneesConfirmed: true });
   expect(performerPayload(true, false, ['legacy-cashier'])).toEqual({});
-  expect(performerPayload(true, true, [])).toEqual({ assigneeIds: [] });
-  expect(performerPayload(true, true, ['a', 'a', 'b'])).toEqual({ assigneeIds: ['a', 'b'] });
+  expect(performerPayload(true, true, [])).toEqual({ assigneeIds: [], assigneesConfirmed: true });
+  expect(performerPayload(true, true, ['a', 'a', 'b'])).toEqual({ assigneeIds: ['a', 'b'], assigneesConfirmed: true });
 });
 it('combines manual performers without duplicating a master and without guessing an administrator', () => {
   expect(explicitlyAssignedPerformers(undefined, ['a', 'a', 'b'])).toEqual(['a', 'b']);
   expect(explicitlyAssignedPerformers('booking', ['a'])).toEqual(['booking', 'a']);
   expect(explicitlyAssignedPerformers('self', [])).toEqual(['self']);
+});
+
+it('old hydrated arrays are never confirmation intent; a deliberate edit confirms exactly the chosen list', () => {
+  const legacyEcho = ['legacy-admin'];
+  expect(performerPayload(true, false, legacyEcho)).toEqual({});
+  expect(performerPayload(true, true, ['actual-master'])).toEqual({
+    assigneeIds: ['actual-master'],
+    assigneesConfirmed: true,
+  });
+  expect(performerPayload(false, false, [])).toEqual({ assigneeIds: [], assigneesConfirmed: true });
 });

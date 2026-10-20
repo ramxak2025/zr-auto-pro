@@ -24,14 +24,26 @@ export function coversChoice(parent: MotivationChoice, child: MotivationChoice):
   );
 }
 
-/** A parent replaces redundant descendants; another warehouse is always independent. */
+/** Explicit targets are independent: including a parent never discards an override. */
 export function toggleMotivationChoice(selected: MotivationChoice[], choice: MotivationChoice): MotivationChoice[] {
   const key = motivationTargetKey(choice.target);
   if (selected.some((item) => motivationTargetKey(item.target) === key)) {
     return selected.filter((item) => motivationTargetKey(item.target) !== key);
   }
-  if (selected.some((item) => coversChoice(item, choice))) return selected;
-  return [...selected.filter((item) => !coversChoice(choice, item)), choice];
+  return [...selected, choice];
+}
+
+/** A deliberate legacy conversion creates an effective individual sales rule. */
+export function motivationApplyTargets(
+  targets: MotivationTarget[],
+  replacements: { productId: string }[],
+): MotivationTarget[] {
+  const unique = new Map(targets.map((target) => [motivationTargetKey(target), target]));
+  for (const { productId } of replacements) {
+    const target: MotivationTarget = { kind: 'product', productId };
+    unique.set(motivationTargetKey(target), target);
+  }
+  return [...unique.values()];
 }
 
 export function buildMotivationChoices(

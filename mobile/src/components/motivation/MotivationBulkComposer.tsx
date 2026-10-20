@@ -20,6 +20,7 @@ import {
   coversChoice,
   filterMotivationChoices,
   motivationError,
+  motivationApplyTargets,
   motivationTargetKey,
   parseMotivationPercent,
   toggleMotivationChoice,
@@ -103,6 +104,18 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
     [catalog.data, segment, search],
   );
   const numericPercent = parseMotivationPercent(percent);
+  const effectiveTargets = motivationApplyTargets(
+    selected.map((choice) => choice.target),
+    replacements,
+  );
+  const targetSummary = `Папок: ${effectiveTargets.filter((target) => target.kind === 'folder').length} · Товаров: ${effectiveTargets.filter((target) => target.kind === 'product').length}`;
+  const replaceableExceptions = (preview?.legacyExceptions ?? []).filter(
+    (exception) => !exception.replacementBlockedReason,
+  );
+  const blockedExceptions = (preview?.legacyExceptions ?? []).filter(
+    (exception) => !!exception.replacementBlockedReason,
+  );
+  const replacementDisabled = pending || (!replacements.length && !replaceableExceptions.length);
   const invalidate = () => {
     generation.current += 1;
     request.current = null;
@@ -129,7 +142,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
     // preview token and payload; editing anything invalidates it first.
     if (!request.current)
       request.current = {
-        targets: selected.map((choice) => choice.target),
+        targets: effectiveTargets,
         percent: numericPercent,
         active: true,
         requestId: randomUUID(),
@@ -166,7 +179,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
     if (busy.current) return;
     const next = replacements.length
       ? []
-      : (preview?.legacyExceptions ?? []).map(({ productId, updatedAt }) => ({ productId, updatedAt }));
+      : replaceableExceptions.map(({ productId, updatedAt }) => ({ productId, updatedAt }));
     invalidate();
     setReplacements(next);
   };
@@ -209,20 +222,40 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
             : `Сохранятся как исключения: ${preview?.legacyExceptions.length}. Для них новый процент не применяется.`}
         </Text>
         {(preview?.legacyExceptions ?? []).slice(0, 12).map((exception) => (
-          <Text key={exception.productId} variant="footnote" color={palette.text.secondary}>
-            {exception.productName} · {exception.percent}% от маржи{exception.active ? '' : ' · пауза'}
-          </Text>
+          <View key={exception.productId}>
+            <Text variant="footnote" color={palette.text.secondary}>
+              {exception.productName} · {exception.percent}% от маржи{exception.active ? '' : ' · пауза'}
+            </Text>
+            {exception.replacementBlockedReason ? (
+              <View accessible accessibilityRole="checkbox" accessibilityState={{ checked: false, disabled: true }}>
+                <Text variant="footnote" color={palette.text.secondary}>
+                  Замена недоступна: {exception.replacementBlockedReason}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         ))}
         {(preview?.legacyExceptions.length ?? 0) > 12 ? (
           <Text variant="footnote" color={palette.text.secondary}>
             И ещё {(preview?.legacyExceptions.length ?? 0) - 12}
           </Text>
         ) : null}
+        {blockedExceptions.length ? (
+          <Text variant="footnote" color={palette.text.secondary}>
+            Сохранятся без замены: {blockedExceptions.length}.{' '}
+            {[...new Set(blockedExceptions.map((exception) => exception.replacementBlockedReason))].join(' ')}
+          </Text>
+        ) : null}
+        {replacements.length ? (
+          <Text variant="footnote" color={palette.text.secondary}>
+            Для заменяемых товаров будут сохранены отдельные правила от продажи.
+          </Text>
+        ) : null}
         <Pressable
           accessibilityRole="checkbox"
-          accessibilityState={{ checked: replacements.length > 0, disabled: pending }}
+          accessibilityState={{ checked: replacements.length > 0, disabled: replacementDisabled }}
           onPress={changeReplacements}
-          disabled={pending}
+          disabled={replacementDisabled}
           style={styles.choice}
           testID="replace-legacy"
         >
@@ -232,7 +265,8 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
             color={palette.accent.primary}
           />
           <Text color={palette.text.primary} style={styles.grow}>
-            Заменить эти старые правила процентом от продажи
+            Заменить доступные старые правила процентом от продажи (
+            {replacements.length || replaceableExceptions.length})
           </Text>
         </Pressable>
       </View>
@@ -283,7 +317,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
               </Text>
               <View style={[styles.summary, { backgroundColor: palette.bg.card }]}>
                 <Text variant="bodyEmph" color={palette.text.primary}>
-                  Выбрано целей: {selected.length}
+                  {targetSummary}
                 </Text>
                 {preview ? (
                   <>
@@ -301,6 +335,9 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                   </Text>
                 ) : null}
               </View>
+              <Text variant="footnote" color={palette.text.secondary}>
+                Индивидуальные и вложенные правила сохраняются, если не выбраны отдельно.
+              </Text>
               {legacyReview}
             </View>
           }
@@ -437,9 +474,8 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                   <Pressable
                     accessibilityRole="checkbox"
                     accessibilityLabel={`${item.title}, ${item.detail}`}
-                    accessibilityState={{ checked: direct || inherited, disabled: inherited }}
+                    accessibilityState={{ checked: direct }}
                     onPress={() => changeSelection(item)}
-                    disabled={inherited}
                     style={({ pressed }) => [
                       styles.catalogRow,
                       {
@@ -449,9 +485,9 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                     ]}
                   >
                     <Ionicons
-                      name={direct || inherited ? 'checkbox' : 'square-outline'}
+                      name={direct ? 'checkbox' : 'square-outline'}
                       size={24}
-                      color={direct || inherited ? palette.accent.primary : palette.text.tertiary}
+                      color={direct ? palette.accent.primary : palette.text.tertiary}
                     />
                     <View style={styles.grow}>
                       <Text variant="bodyEmph" color={palette.text.primary}>
@@ -467,7 +503,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                       ) : null}
                       {inherited ? (
                         <Text variant="footnote" color={palette.accent.primaryText}>
-                          Уже входит в выбранную папку
+                          В выбранной папке · можно выбрать отдельно
                         </Text>
                       ) : null}
                     </View>
@@ -498,7 +534,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                 Общий процент от продажи
               </Text>
               <Text variant="footnote" color={palette.text.secondary}>
-                Выбрано целей: {selected.length}
+                {targetSummary}
               </Text>
             </View>
             <View style={[styles.percentBox, { backgroundColor: palette.bg.muted }]}>

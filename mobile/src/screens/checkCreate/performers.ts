@@ -10,8 +10,12 @@ export function defaultConfirmedPerformers(
   return user?.role === 'master' && isCashier === false ? [user.id] : [];
 }
 
-export function performerPayload(editing: boolean, dirty: boolean, ids: string[]): { assigneeIds?: string[] } {
-  return !editing || dirty ? { assigneeIds: [...new Set(ids)] } : {};
+export function performerPayload(
+  editing: boolean,
+  dirty: boolean,
+  ids: string[],
+): { assigneeIds?: string[]; assigneesConfirmed?: true } {
+  return !editing || dirty ? { assigneeIds: [...new Set(ids)], assigneesConfirmed: true } : {};
 }
 
 /** Manual work assignment is evidence; automatically seeded service masters are not. */

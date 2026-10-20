@@ -207,20 +207,32 @@ it('selects 20 products in one common-percent preview/apply, and retains selecti
   expect(mockSaved).toHaveBeenCalledTimes(1);
 });
 
-it('selecting a folder includes descendants once and keeps the same folder in another warehouse independent', async () => {
-  choose(0);
+it('parent, child and product remain independently selectable and same-name folders in another warehouse stay separate', async () => {
   textPress('Папки');
-  const parentIndex = (list().props.data as { path: string }[]).findIndex((choice) => choice.path === 'Масла');
-  choose(parentIndex);
+  const folderIndex = (path: string) =>
+    (list().props.data as { path: string }[]).findIndex((choice) => choice.path === path);
+  choose(folderIndex('Масла'));
+  choose(folderIndex('Масла/Моторные'));
+  textPress('Товары');
+  const current = list();
+  const productRow = (current.props.renderItem as (input: { item: unknown }) => Element)({
+    item: (current.props.data as unknown[])[0],
+  });
+  expect(productRow.props.accessibilityState).toEqual({ checked: false });
+  expect(productRow.props.disabled).toBeUndefined();
+  choose(0);
   press((node) => node.props.accessibilityLabel === 'Выбрать склад');
   textPress('Б/У');
-  const otherParent = (list().props.data as { path: string }[]).findIndex((choice) => choice.path === 'Масла');
-  choose(otherParent);
+  textPress('Папки');
+  choose(folderIndex('Масла'));
   await submit();
   expect(mockBulk.mock.calls[0][0].targets).toEqual([
     { kind: 'folder', warehouseId: 'main', path: 'Масла' },
+    { kind: 'folder', warehouseId: 'main', path: 'Масла/Моторные' },
+    { kind: 'product', productId: '0' },
     { kind: 'folder', warehouseId: 'used', path: 'Масла' },
   ]);
+  expect(words(list().props.ListHeaderComponent as React.ReactNode)).toContain('Папок: 3 · Товаров: 1');
 });
 
 it('retries the exact UUID/payload after an uncertain apply response and blocks duplicate taps while pending', async () => {
@@ -370,4 +382,114 @@ it('an apply completed after blur still reports configuration success without cl
   await inFlight;
   expect(mockSaved).toHaveBeenCalledWith(committed, false);
   expect(mockClose).not.toHaveBeenCalled();
+});
+
+it('deliberate folder legacy replacement previews and applies the same added explicit product target', async () => {
+  const exception = {
+    productId: '0',
+    productName: 'Старая акция',
+    percent: 37,
+    active: true,
+    updatedAt: 'v1',
+    replacing: false,
+  };
+  mockBulk.mockImplementation(async (input: MotivationBulkInput) => ({
+    data: { ...result(input), legacyExceptions: [exception] },
+  }));
+  textPress('Папки');
+  choose((list().props.data as { path: string }[]).findIndex((choice) => choice.path === 'Масла'));
+  await submit();
+  expect(mockBulk.mock.calls[0][0].targets).toEqual([{ kind: 'folder', warehouseId: 'main', path: 'Масла' }]);
+  const replacement = () =>
+    nodes(list().props.ListHeaderComponent as React.ReactNode).find((node) => node.props.testID === 'replace-legacy')!;
+  (replacement().props.onPress as () => void)();
+  await submit();
+  const expected = [
+    { kind: 'folder', warehouseId: 'main', path: 'Масла' },
+    { kind: 'product', productId: '0' },
+  ];
+  expect(mockBulk.mock.calls[1][0]).toMatchObject({
+    targets: expected,
+    dryRun: true,
+    replaceLegacyPromos: [{ productId: '0', updatedAt: 'v1' }],
+  });
+  await submit();
+  expect(mockBulk.mock.calls[2][0]).toEqual({
+    ...mockBulk.mock.calls[1][0],
+    dryRun: false,
+    previewRevision: 'revision-1',
+  });
+});
+
+it('blocked old history is unchecked/disabled and preserving it does not block applying the folder', async () => {
+  mockBulk.mockImplementation(async (input: MotivationBulkInput) => ({
+    data: {
+      ...result(input),
+      legacyExceptions: [
+        {
+          productId: '0',
+          productName: 'Старая акция',
+          percent: 37,
+          active: true,
+          updatedAt: 'v1',
+          replacing: false,
+          replacementBlockedReason: 'Нет исторического снимка старого чека',
+        },
+      ],
+    },
+  }));
+  textPress('Папки');
+  choose((list().props.data as { path: string }[]).findIndex((choice) => choice.path === 'Масла'));
+  await submit();
+  const header = list().props.ListHeaderComponent as React.ReactNode;
+  const checkbox = nodes(header).find((node) => node.props.testID === 'replace-legacy')!;
+  expect(checkbox.props.accessibilityState).toEqual({ checked: false, disabled: true });
+  expect(words(header)).toContain('Нет исторического снимка старого чека');
+  await submit();
+  expect(mockBulk.mock.calls[1][0]).toMatchObject({
+    dryRun: false,
+    replaceLegacyPromos: [],
+    targets: [{ kind: 'folder', warehouseId: 'main', path: 'Масла' }],
+  });
+  expect(mockSaved).toHaveBeenCalledTimes(1);
+});
+
+it('mixed replacement adds only eligible scoped product IDs and can be unchecked without dropping a user target', async () => {
+  mockBulk.mockImplementation(async (input: MotivationBulkInput) => ({
+    data: {
+      ...result(input),
+      legacyExceptions: [
+        {
+          productId: '0',
+          productName: 'Заблокированная',
+          percent: 37,
+          active: true,
+          updatedAt: 'v1',
+          replacing: false,
+          replacementBlockedReason: 'Недоступная история',
+        },
+        { productId: '1', productName: 'Доступная', percent: 37, active: true, updatedAt: 'v2', replacing: false },
+      ],
+    },
+  }));
+  textPress('Папки');
+  choose((list().props.data as { path: string }[]).findIndex((choice) => choice.path === 'Масла'));
+  await submit();
+  const replacement = () =>
+    nodes(list().props.ListHeaderComponent as React.ReactNode).find((node) => node.props.testID === 'replace-legacy')!;
+  (replacement().props.onPress as () => void)();
+  await submit();
+  expect(mockBulk.mock.calls[1][0]).toMatchObject({
+    targets: [
+      { kind: 'folder', warehouseId: 'main', path: 'Масла' },
+      { kind: 'product', productId: '1' },
+    ],
+    replaceLegacyPromos: [{ productId: '1', updatedAt: 'v2' }],
+  });
+  (replacement().props.onPress as () => void)();
+  await submit();
+  expect(mockBulk.mock.calls[2][0]).toMatchObject({
+    targets: [{ kind: 'folder', warehouseId: 'main', path: 'Масла' }],
+    replaceLegacyPromos: [],
+  });
 });
