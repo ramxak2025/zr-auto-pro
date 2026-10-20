@@ -103,6 +103,11 @@ export class TemplateProductSourceDto {
 }
 
 export class CheckProductLineDto {
+  /** Existing saved product-line identity on a paid edit. */
+  @IsOptional()
+  @IsUUID('all')
+  id?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => TemplateProductSourceDto)

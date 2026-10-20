@@ -182,6 +182,7 @@ const legacyQuantity = (line: { quantity?: number | null }): number | undefined 
 };
 
 interface ProductLineForm {
+  id?: string;
   sourceTemplateProduct?: CheckProductLine['sourceTemplateProduct'];
   productId: string;
   name: string;
@@ -684,6 +685,7 @@ export default function CheckCreatePage() {
     if (existingCheck.products?.length) {
       setProductLines(
         existingCheck.products.map((p: CheckProductLine) => ({
+          id: p.id,
           productId: p.productId || '',
           name: p.name,
           sellPrice: p.sellPrice,
@@ -1183,6 +1185,7 @@ export default function CheckCreatePage() {
     });
 
     const products: CheckProductLine[] = productLines.map((l) => ({
+      id: l.id,
       sourceTemplateProduct: l.sourceTemplateProduct,
       productId: l.productId || undefined,
       name: l.name,

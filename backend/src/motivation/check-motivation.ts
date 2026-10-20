@@ -1,7 +1,8 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PoolClient } from 'pg';
 import { bonusShares, decimal, netProductBases, roundRatio, scaled } from './motivation-money';
-import { effectiveRule, lockMotivationRead, readRules, UUID } from './motivation-rules';
+import { digest, effectiveRule, lockMotivationRead, readRules, UUID } from './motivation-rules';
 
 interface CheckState {
   id: string;
@@ -23,6 +24,88 @@ interface SavedLine {
   id: string;
   quantity: string;
   netCents: string;
+  grossCents?: string;
+  basketKey?: string;
+}
+
+interface ProductInput {
+  id?: string;
+  productId?: string | null;
+  name?: string;
+  sellPrice?: number;
+  costPrice?: number;
+  quantity?: number;
+}
+
+/** Keep proven saved identities. Never guess between ambiguous deleted catalog rows. */
+export async function reconcileMotivationProductLines<T extends ProductInput>(
+  client: PoolClient,
+  tenant: string,
+  checkId: string,
+  inputs: T[],
+): Promise<Array<T & { id: string }>> {
+  const previous = (
+    await client.query<{
+      id: string;
+      product_id: string | null;
+      name: string;
+      sell_price: string;
+      cost_price: string;
+      quantity: string;
+    }>(
+      `SELECT pl.id,pl.product_id,pl.name,pl.sell_price,pl.cost_price,pl.quantity FROM check_product_lines pl
+     JOIN checks c ON c.id=pl.check_id WHERE c.tenant_id=$1 AND c.id=$2 ORDER BY pl.id`,
+      [tenant, checkId],
+    )
+  ).rows;
+  const saved = (
+    await client.query<{ sale_lines: SavedLine[] }>(
+      'SELECT sale_lines FROM check_motivation_snapshots WHERE tenant_id=$1 AND check_id=$2',
+      [tenant, checkId],
+    )
+  ).rows;
+  const historicalIds = new Set(saved.flatMap((s) => s.sale_lines.map((line) => line.id)));
+  const historicNull = previous.filter((line) => line.product_id === null && historicalIds.has(line.id));
+  const used = new Set<string>();
+  const identified = inputs.map((input) => {
+    if (input.id === undefined) return { ...input };
+    if (!UUID.test(input.id) || !previous.some((line) => line.id === input.id) || used.has(input.id)) {
+      throw new BadRequestException({ message: 'Строка товара не принадлежит этому заказ-наряду или указана дважды' });
+    }
+    used.add(input.id);
+    return { ...input };
+  });
+  const tuple = (name: string, price: string | number, cost: string | number, qty: string | number) => {
+    try {
+      return JSON.stringify([name, String(scaled(price, 2)), String(scaled(cost, 2)), String(scaled(qty, 3))]);
+    } catch {
+      throw new ConflictException({
+        message: 'Не удалось сопоставить старую строку товара. Обновите экран и приложение',
+      });
+    }
+  };
+  const oldKey = (row: (typeof historicNull)[number]) => tuple(row.name, row.sell_price, row.cost_price, row.quantity);
+  const newKey = (row: T) => tuple(row.name || '', row.sellPrice || 0, row.costPrice || 0, row.quantity || 1);
+  for (const input of identified) {
+    if (input.id || input.productId) continue;
+    const candidates = historicNull.filter((line) => !used.has(line.id) && oldKey(line) === newKey(input));
+    const incoming = identified.filter((row) => !row.id && !row.productId && newKey(row) === newKey(input));
+    if (candidates.length > 1 || (candidates.length === 1 && incoming.length !== 1)) {
+      throw new ConflictException({
+        message: 'Старые строки товара неоднозначны. Обновите экран и приложение перед правкой',
+      });
+    }
+    if (candidates.length === 1) {
+      input.id = candidates[0].id;
+      used.add(input.id);
+    }
+  }
+  if (historicNull.some((line) => !used.has(line.id)) && identified.some((row) => !row.id && !row.productId)) {
+    throw new ConflictException({
+      message: 'Правка удалённого товара требует исходной строки. Обновите экран и приложение',
+    });
+  }
+  return identified.map((input) => ({ ...input, id: input.id || randomUUID() }));
 }
 interface Snapshot {
   product_id: string;
@@ -173,13 +256,32 @@ export async function snapshotCheckMotivation(
       WHERE pl.check_id=$2 ORDER BY pl.id`,
         [tenant, checkId],
       )
-    ).rows.map((line) => ({
-      ...line,
-      product_id:
-        line.product_id ||
-        snapshots.find((snapshot) => snapshot.sale_lines.some((saved) => saved.id === line.id))?.product_id ||
-        null,
-    }));
+    ).rows
+      .map((line) => ({
+        ...line,
+        product_id:
+          line.product_id ||
+          snapshots.find((snapshot) => snapshot.sale_lines.some((saved) => saved.id === line.id))?.product_id ||
+          null,
+      }))
+      .sort(
+        (a, b) =>
+          (a.product_id || '').localeCompare(b.product_id || '') ||
+          a.name.localeCompare(b.name) ||
+          a.quantity.localeCompare(b.quantity) ||
+          a.total_sell.localeCompare(b.total_sell) ||
+          a.id.localeCompare(b.id),
+      );
+    const basketKey = digest({
+      discount: String(scaled(check.discount, 2)),
+      warranty: check.payment_method === 'warranty',
+      lines: lines.map((line) => ({
+        product: line.product_id,
+        name: line.name,
+        qty: String(scaled(line.quantity, 3)),
+        gross: String(scaled(line.total_sell, 2)),
+      })),
+    });
     const bases = netProductBases(
       lines.map((line) => scaled(line.total_sell, 2)),
       scaled(check.discount, 2),
@@ -213,10 +315,25 @@ export async function snapshotCheckMotivation(
         id: line.id,
         quantity: line.quantity,
         netCents: String(bases[index]),
+        grossCents: String(scaled(line.total_sell, 2)),
+        basketKey,
       }));
+      // A UUID rewrite is not a sale correction. Preserve original net cents when the full basket is identical.
+      const unchanged = !!old?.sale_lines.length && old.sale_lines.every((line) => line.basketKey === basketKey);
+      if (unchanged && old) {
+        const available = [...old.sale_lines];
+        for (const line of saved) {
+          const index = available.findIndex(
+            (prior) => prior.grossCents === line.grossCents && scaled(prior.quantity, 3) === scaled(line.quantity, 3),
+          );
+          if (index < 0) throw new Error('Unchanged basket lost a saved line');
+          line.netCents = available[index].netCents;
+          available.splice(index, 1);
+        }
+      }
       const qty = current.reduce((sum, { line }) => sum + scaled(line.quantity, 3), 0n);
       const base =
-        check.payment_method === 'warranty' ? 0n : current.reduce((sum, { index }) => sum + bases[index], 0n);
+        check.payment_method === 'warranty' ? 0n : saved.reduce((sum, line) => sum + BigInt(line.netCents), 0n);
       await client.query(
         `INSERT INTO check_motivation_snapshots(tenant_id,check_id,product_id,decision,rule_id,percent,qty,revenue_base,sale_lines,accrued_at,product_name)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
@@ -250,7 +367,8 @@ export async function writeRevenueAccruals(client: PoolClient, tenant: string, c
     await client.query<{ user_id: string }>(
       `SELECT a.user_id FROM check_assignees a
     JOIN checks c ON c.id=a.check_id AND c.tenant_id=a.tenant_id
-    WHERE a.tenant_id=$1 AND a.check_id=$2 AND c.motivation_assignees_confirmed=true ORDER BY a.user_id`,
+    WHERE a.tenant_id=$1 AND a.check_id=$2 AND c.motivation_assignees_confirmed=true
+      AND NOT (c.is_returned=true AND c.return_scope='full') ORDER BY a.user_id`,
       [tenant, checkId],
     )
   ).rows;

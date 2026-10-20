@@ -55,6 +55,7 @@ import { lockMotivationRead } from '../motivation/motivation-rules';
 import {
   archiveLegacyMotivation,
   snapshotCheckMotivation,
+  reconcileMotivationProductLines,
   confirmMotivationAssignees,
   assertMotivationAssignmentPermission,
   writeRevenueAccruals,
@@ -3638,6 +3639,13 @@ export class ChecksService {
     force = false,
   ) {
     if (!prior.motivation_v2_posted_at) return;
+    const eligible = await client.query(
+      "SELECT 1 FROM check_motivation_snapshots WHERE tenant_id=$1 AND check_id=$2 AND decision='revenue_v2' LIMIT 1",
+      [tenantID, checkId],
+    );
+    if (!eligible.rows.length) return;
+    if (prior.is_returned)
+      throw new BadRequestException({ message: 'Нельзя менять исполнителей возвращённого заказ-наряда' });
     const beforeIds = (
       await client.query<{ user_id: string }>(
         'SELECT user_id FROM check_assignees WHERE tenant_id=$1 AND check_id=$2 ORDER BY user_id',
@@ -3651,17 +3659,10 @@ export class ChecksService {
     const nextConfirmed =
       intent === true || (intent === undefined && prior.motivation_assignees_confirmed === true && unchanged);
     if (!force && unchanged && nextConfirmed === (prior.motivation_assignees_confirmed === true)) return;
-    const eligible = await client.query(
-      "SELECT 1 FROM check_motivation_snapshots WHERE tenant_id=$1 AND check_id=$2 AND decision='revenue_v2' LIMIT 1",
-      [tenantID, checkId],
-    );
-    if (!eligible.rows.length) return;
     assertMotivationAssignmentPermission(userHasPermission(actor, 'edit_closed_check'));
     if (!userHasPermission(actor, 'checks_edit_all') && prior.master_id !== actorUserId) {
       throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
     }
-    if (prior.is_returned)
-      throw new BadRequestException({ message: 'Нельзя менять исполнителей возвращённого заказ-наряда' });
   }
 
   private async updateMotivationAssignees(
@@ -5633,6 +5634,8 @@ export class ChecksService {
           actorPointId(actor),
         );
       const services = dto.services || [];
+      if (!preserve.products)
+        dto.products = await reconcileMotivationProductLines(client, tenantID, id, dto.products || []);
       const products = dto.products || [];
       if (dto.masterId) await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');
       if (dto.clientId) await this.assertOwnsByTenant(client, tenantID, 'clients', dto.clientId, 'Клиент');
@@ -5844,8 +5847,9 @@ export class ChecksService {
         await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
         for (const prod of c.productLines) {
           await client.query(
-            `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            `INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
             [
+              prod.id,
               id,
               prod.productId || null,
               prod.name,

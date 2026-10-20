@@ -24,6 +24,190 @@ Logger.overrideLogger(false);
 const live = process.env.AUTEXA_MOTIVATION_LIVE_DB;
 const options = { skip: !live, timeout: 60000 };
 
+for (const route of ['plain', 'nonactivating-close']) {
+  test(`actual PG: full return cannot be resurrected by same-performer echo via ${route}`, options, async () => {
+    await fixture(async ({ product, rule, create, run, returns, tenant, actor, first, accruals, edit }) => {
+      const p = await product();
+      await rule(p.productId);
+      const check = await create([p], { masterId: first, assigneeIds: [first] });
+      await run(() =>
+        returns.createReturn(tenant, actor.userID, check.id, { destination: 'warehouse', scope: 'full' }, actor),
+      );
+      assert.equal((await accruals(check.id)).length, 0);
+      const weak = {
+        ...actor,
+        userID: first,
+        role: 'master',
+        permissions: { checks_edit: true, edit_closed_check: false },
+      };
+      try {
+        await edit(
+          check,
+          {
+            assigneeIds: [first],
+            assigneesConfirmed: undefined,
+            ...(route === 'nonactivating-close' ? { isDeferred: false } : {}),
+          },
+          weak,
+        );
+      } catch (error) {
+        assert.ok([400, 403].includes(error.getStatus()));
+      }
+      assert.equal(
+        (await accruals(check.id)).length,
+        0,
+        'returned sale bonus must stay reversed without financial permission',
+      );
+    });
+  });
+}
+
+test(
+  'actual PG: deleted catalog lines keep proven identities on full edits; changed legacy or foreign IDs fail atomically',
+  options,
+  async () => {
+    await fixture(async ({ product, rule, create, run, tenant, pool, q, edit, accruals }) => {
+      const p = await product('Deleted edit');
+      await rule(p.productId);
+      const check = await create([{ ...p, quantity: 2 }], { discount: 20 });
+      const products = new ProductsService(pool, new WarehouseService(pool));
+      await run(() => products.remove(p.productId, tenant));
+      await run(() => products.hardDelete(p.productId, tenant));
+      const legacyLine = { productId: null, name: p.name, sellPrice: 100, costPrice: 80, quantity: 2 };
+      await edit(check, { products: [legacyLine] });
+      const retained = await accruals(check.id);
+      assert.equal(retained.length, 1, 'the same saved deleted-product sale keeps its original bonus');
+      assert.equal(Number(retained[0].amount), 14.4);
+      await assert.rejects(edit(check, { products: [{ ...legacyLine, quantity: 3 }] }), (e) => e.getStatus() === 409);
+      assert.equal(Number((await accruals(check.id))[0].amount), 14.4);
+      const line = (await q('SELECT id FROM check_product_lines WHERE check_id=$1', [check.id]))[0];
+      await edit(check, { products: [{ ...legacyLine, id: line.id, quantity: 3 }] });
+      assert.equal(Number((await accruals(check.id))[0].amount), 22.4);
+      assert.equal((await q('SELECT id FROM check_product_lines WHERE check_id=$1', [check.id]))[0].id, line.id);
+      await assert.rejects(
+        edit(check, { products: [{ ...legacyLine, id: randomUUID() }] }),
+        (e) => e.getStatus() === 400,
+      );
+      const otherCheck = await create([await product('Other check')]);
+      const foreignLine = (await q('SELECT id FROM check_product_lines WHERE check_id=$1', [otherCheck.id]))[0];
+      await assert.rejects(
+        edit(check, { products: [{ ...legacyLine, id: foreignLine.id }] }),
+        (e) => e.getStatus() === 400,
+      );
+      await assert.rejects(
+        edit(check, {
+          products: [
+            { ...legacyLine, id: line.id },
+            { ...legacyLine, id: line.id },
+          ],
+        }),
+        (e) => e.getStatus() === 400,
+      );
+      assert.equal(Number((await accruals(check.id))[0].amount), 22.4);
+      const fresh = await product('Later product');
+      await rule(fresh.productId, 90);
+      await edit(check, { products: [{ ...legacyLine, id: line.id, quantity: 3 }, fresh] });
+      const rows = await accruals(check.id);
+      assert.equal(rows.length, 1);
+      assert.equal(Number(rows[0].percent), 8);
+    });
+  },
+);
+
+test(
+  'actual PG: ambiguous deleted catalog lines require proven IDs rather than guessing historical rates',
+  options,
+  async () => {
+    await fixture(async ({ product, rule, create, run, tenant, pool, q, edit, accruals }) => {
+      const a = await product('Same'),
+        b = await product('Same');
+      await rule(a.productId, 8);
+      await rule(b.productId, 4);
+      const check = await create([a, b]);
+      const products = new ProductsService(pool, new WarehouseService(pool));
+      for (const p of [a, b]) {
+        await run(() => products.remove(p.productId, tenant));
+        await run(() => products.hardDelete(p.productId, tenant));
+      }
+      const raw = { productId: null, name: 'Same', sellPrice: 100, costPrice: 80, quantity: 1 };
+      await assert.rejects(edit(check, { products: [raw, raw] }), (e) => e.getStatus() === 409);
+      assert.equal(
+        (await accruals(check.id)).reduce((sum, row) => sum + Number(row.amount), 0),
+        12,
+      );
+      const lines = await q('SELECT id FROM check_product_lines WHERE check_id=$1 ORDER BY id', [check.id]);
+      await edit(check, { products: lines.map((line) => ({ ...raw, id: line.id })) });
+      assert.equal(
+        (await accruals(check.id)).reduce((sum, row) => sum + Number(row.amount), 0),
+        12,
+      );
+    });
+  },
+);
+
+test(
+  'actual PG: unchanged sale edits cannot move discount kopecks between products when line IDs change',
+  options,
+  async () => {
+    await fixture(async ({ product, rule, create, run, checks, tenant, actor, q, edit, accruals, pool }) => {
+      const rows = [await product('Cent A', 0.01, 0), await product('Cent B', 0.01, 0)].sort((a, b) =>
+        a.productId.localeCompare(b.productId),
+      );
+      const [a, b] = rows;
+      await rule(a.productId, 100);
+      const check = await create(rows, { isDeferred: true, discount: 0.01 });
+      await q('UPDATE check_product_lines SET id=$1 WHERE check_id=$2 AND product_id=$3', [
+        '0' + randomUUID().slice(1),
+        check.id,
+        a.productId,
+      ]);
+      await q('UPDATE check_product_lines SET id=$1 WHERE check_id=$2 AND product_id=$3', [
+        'f' + randomUUID().slice(1),
+        check.id,
+        b.productId,
+      ]);
+      await run(() => checks.acceptPayment(check.id, tenant, actor.role, {}, actor.userID, actor));
+      assert.equal((await accruals(check.id)).length, 0);
+      const connect = pool.connect.bind(pool);
+      let reordered = false;
+      pool.connect = async () => {
+        const client = await connect(),
+          query = client.query.bind(client),
+          release = client.release.bind(client);
+        client.query = async (sql, values) => {
+          if (!reordered && String(sql).includes('SELECT pl.id,pl.product_id') && values?.[1] === check.id) {
+            reordered = true;
+            await query('UPDATE check_product_lines SET id=$1 WHERE check_id=$2 AND product_id=$3', [
+              'f' + randomUUID().slice(1),
+              check.id,
+              a.productId,
+            ]);
+            await query('UPDATE check_product_lines SET id=$1 WHERE check_id=$2 AND product_id=$3', [
+              '0' + randomUUID().slice(1),
+              check.id,
+              b.productId,
+            ]);
+          }
+          return query(sql, values);
+        };
+        client.release = (...args) => {
+          client.query = query;
+          client.release = release;
+          return release(...args);
+        };
+        return client;
+      };
+      try {
+        await edit(check, { products: rows });
+        assert.ok(reordered);
+        assert.equal((await accruals(check.id)).length, 0, 'unchanged net sale must not generate a new kopeck bonus');
+      } finally {
+        pool.connect = connect;
+      }
+    });
+  },
+);
+
 test('actual PG: product FK lock ordering permits posting concurrently with a bulk rule insert', options, async () => {
   await fixture(async ({ product, run, rules, tenant, create, pool, q, accruals }) => {
     const p = await product('Posting race');
