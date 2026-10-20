@@ -281,6 +281,7 @@ const routeTitles: Record<string, string> = {
   planning: 'Планирование',
   users: 'Пользователи',
   employees: 'Сотрудники',
+  motivation: 'Мотивация',
   schedule: 'Расписание',
   more: 'Ещё',
   // Без этой строки хлебная крошка показывала сырое «Points» — раздел, куда

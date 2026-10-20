@@ -96,7 +96,10 @@ export function parseMotivationPercent(value: string): number | null {
   return percent > 0 && percent <= 100 ? percent : null;
 }
 
-export function motivationError(error: unknown, fallback: string): { message: string; stale: boolean } {
+export function motivationError(
+  error: unknown,
+  fallback: string,
+): { message: string; stale: boolean; definiteRejection: boolean } {
   const response = (error as { response?: { status?: number; data?: { message?: string | string[]; code?: string } } })
     ?.response;
   const message = response?.data?.message;
@@ -105,5 +108,11 @@ export function motivationError(error: unknown, fallback: string): { message: st
       ? message.join('\n')
       : message || (error instanceof Error ? error.message : fallback),
     stale: response?.status === 409 || response?.data?.code === 'MOTIVATION_PREVIEW_STALE',
+    // A timeout may arrive after commit; transport failures and 5xx are also ambiguous.
+    definiteRejection:
+      typeof response?.status === 'number' &&
+      response.status >= 400 &&
+      response.status < 500 &&
+      response.status !== 408,
   };
 }

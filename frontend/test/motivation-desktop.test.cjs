@@ -99,6 +99,8 @@ function mountComposer() {
     bulkRules: async (input) => {
       calls.push(structuredClone(input));
       if (!input.dryRun && mode === 'transport') throw new Error('Связь потеряна');
+      if (!input.dryRun && typeof mode === 'number')
+        throw { response: { status: mode, data: { message: `Сервер отклонил запрос: ${mode}` } } };
       if (!input.dryRun && mode === 'stale')
         throw { response: { status: 409, data: { message: 'Предпросмотр устарел' } } };
       return {
@@ -387,3 +389,53 @@ test('rule editor sends expected revision; legacy editing preserves rate, activi
   ]);
   renderer.act(() => ui.root.unmount());
 });
+
+for (const status of [400, 403, 422]) {
+  test(`definite HTTP ${status} rejection preserves selection and unlocks editing, then requires a fresh review and UUID`, async () => {
+    const ui = mountComposer();
+    ui.selectProduct(0);
+    await ui.click('Предварительный просмотр');
+    ui.setMode(status);
+    await ui.click('Применить правило');
+    assert.equal(ui.button('Закрыть').props.disabled, false);
+    const percent = ui.root.root.findAllByType('input').find((input) => input.props.inputMode === 'decimal');
+    assert.equal(percent.props.disabled, false);
+    assert.equal(
+      ui.root.root.findAllByType('input').filter((input) => input.props.type === 'checkbox')[0].props.checked,
+      true,
+    );
+    assert.equal(ui.button('Повторить сохранение'), undefined);
+    assert.ok(ui.button('Предварительный просмотр'));
+    renderer.act(() => percent.props.onChange({ target: { value: '11' } }));
+    ui.setMode('normal');
+    await ui.click('Предварительный просмотр');
+    assert.notEqual(ui.calls[0].requestId, ui.calls[2].requestId);
+    assert.equal(ui.calls[2].percent, 11);
+    assert.deepEqual(ui.calls[2].targets, ui.calls[0].targets);
+    assert.equal(ui.calls[2].dryRun, true);
+    await ui.click('Применить правило');
+    assert.equal(ui.calls[3].requestId, ui.calls[2].requestId);
+    assert.ok(ui.getSaved());
+    renderer.act(() => ui.root.unmount());
+  });
+}
+for (const status of [408, 503]) {
+  test(`ambiguous HTTP ${status} apply failure keeps the exact payload locked for receipt recovery`, async () => {
+    const ui = mountComposer();
+    ui.selectProduct(0);
+    await ui.click('Предварительный просмотр');
+    ui.setMode(status);
+    await ui.click('Применить правило');
+    assert.equal(ui.button('Закрыть').props.disabled, true);
+    assert.equal(
+      ui.root.root.findAllByType('input').find((input) => input.props.inputMode === 'decimal').props.disabled,
+      true,
+    );
+    assert.ok(ui.button('Повторить сохранение'));
+    ui.setMode('normal');
+    await ui.click('Повторить сохранение');
+    assert.deepEqual(ui.calls[1], ui.calls[2]);
+    assert.ok(ui.getSaved());
+    renderer.act(() => ui.root.unmount());
+  });
+}

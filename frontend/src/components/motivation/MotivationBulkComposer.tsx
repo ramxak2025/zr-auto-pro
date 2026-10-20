@@ -106,6 +106,10 @@ export default function MotivationBulkComposer({
         setReplacements([]);
         setError(`${failure.message} Проверьте выбор и выполните предварительный просмотр заново.`);
         setUncertain(false);
+      } else if (failure.definiteRejection) {
+        invalidate();
+        setUncertain(false);
+        setError(`${failure.message} Проверьте выбор и повторите предварительный просмотр.`);
       } else if (apply) {
         // Recovery uses this exact payload and UUID even if the server committed before the connection broke.
         setUncertain(true);
@@ -115,7 +119,7 @@ export default function MotivationBulkComposer({
       setPending(false);
     }
   };
-  const summary = `${selected.filter((c) => c.target.kind === 'product').length} товаров · ${selected.filter((c) => c.target.kind === 'folder').length} папок`;
+  const summary = `товаров: ${selected.filter((c) => c.target.kind === 'product').length} · папок: ${selected.filter((c) => c.target.kind === 'folder').length}`;
   return (
     <Card aria-label="Новое правило мотивации">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
@@ -128,7 +132,7 @@ export default function MotivationBulkComposer({
         </Button>
       </div>
       <div className="grid lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 border-b border-line lg:border-b-0 lg:border-r">
+        <div className="min-w-0 border-b border-line lg:sticky lg:top-0 lg:self-start lg:border-b-0 lg:border-r">
           <div className="space-y-3 p-4">
             <Select
               aria-label="Склад"
@@ -219,7 +223,7 @@ export default function MotivationBulkComposer({
         </div>
         <div className="space-y-4 p-5">
           <div>
-            <h3 className="text-sm font-semibold text-ink">Выбрано: {summary}</h3>
+            <h3 className="text-sm font-semibold text-ink">Выбрано {summary}</h3>
             <div className="mt-2 max-h-36 overflow-y-auto space-y-1">
               {selected.map((choice) => (
                 <div key={motivationTargetKey(choice.target)} className="flex items-start gap-2 text-xs text-ink-2">
