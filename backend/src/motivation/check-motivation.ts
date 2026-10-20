@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { bonusShares, decimal, netProductBases, roundRatio, scaled } from './motivation-money';
-import { effectiveRule, lockMotivation, readRules, UUID } from './motivation-rules';
+import { effectiveRule, lockMotivationRead, readRules, UUID } from './motivation-rules';
 
 interface CheckState {
   id: string;
@@ -17,6 +17,7 @@ interface Line {
   total_sell: string;
   category: string | null;
   warehouse_id: string | null;
+  name: string;
 }
 interface SavedLine {
   id: string;
@@ -32,6 +33,7 @@ interface Snapshot {
   revenue_base: string;
   sale_lines: SavedLine[];
   accrued_at: Date;
+  product_name: string | null;
 }
 
 export async function archiveLegacyMotivation(
@@ -65,11 +67,27 @@ export async function confirmMotivationAssignees(
   tenant: string,
   check: string,
   raw: unknown,
+  intent?: boolean,
 ): Promise<void> {
   if (!Array.isArray(raw) || raw.length > 50 || raw.some((id) => typeof id !== 'string' || !UUID.test(id))) {
     throw new BadRequestException({ message: 'Выберите не более 50 исполнителей' });
   }
   const ids = [...new Set((raw as string[]).map((id) => id.toLowerCase()))].sort();
+  const previous = (
+    await client.query<{ motivation_assignees_confirmed: boolean }>(
+      'SELECT motivation_assignees_confirmed FROM checks WHERE tenant_id=$1 AND id=$2',
+      [tenant, check],
+    )
+  ).rows[0];
+  const previousIds = (
+    await client.query<{ user_id: string }>(
+      'SELECT user_id FROM check_assignees WHERE tenant_id=$1 AND check_id=$2 ORDER BY user_id',
+      [tenant, check],
+    )
+  ).rows.map((r) => r.user_id);
+  const unchanged = ids.length === previousIds.length && ids.every((id, index) => id === previousIds[index]);
+  const confirmed =
+    intent === true || (intent === undefined && previous?.motivation_assignees_confirmed === true && unchanged);
   const users = (
     await client.query<{ id: string }>(
       `SELECT id FROM users WHERE tenant_id=$1 AND id=ANY($2::uuid[])
@@ -86,9 +104,10 @@ export async function confirmMotivationAssignees(
       check,
       ids,
     ]);
-  await client.query('UPDATE checks SET motivation_assignees_confirmed=true WHERE id=$1 AND tenant_id=$2', [
+  await client.query('UPDATE checks SET motivation_assignees_confirmed=$3 WHERE id=$1 AND tenant_id=$2', [
     check,
     tenant,
+    confirmed,
   ]);
 }
 
@@ -106,7 +125,8 @@ export async function snapshotCheckMotivation(
   checkId: string,
   mode: 'post' | 'edit' | 'restore',
 ) {
-  await lockMotivation(client, tenant);
+  // Reentrant shared backstop, never upgrade a financial reader to exclusive.
+  await lockMotivationRead(client, tenant);
   let check = (
     await client.query<CheckState>(
       `SELECT id,discount,payment_method,motivation_v2_posted_at,motivation_assignees_confirmed
@@ -148,12 +168,18 @@ export async function snapshotCheckMotivation(
     );
     const lines = (
       await client.query<Line>(
-        `SELECT pl.id,pl.product_id,pl.quantity,pl.total_sell,p.category,p.warehouse_id
+        `SELECT pl.id,pl.product_id,pl.quantity,pl.total_sell,pl.name,p.category,p.warehouse_id
       FROM check_product_lines pl LEFT JOIN products p ON p.id=pl.product_id AND p.tenant_id=$1
       WHERE pl.check_id=$2 ORDER BY pl.id`,
         [tenant, checkId],
       )
-    ).rows;
+    ).rows.map((line) => ({
+      ...line,
+      product_id:
+        line.product_id ||
+        snapshots.find((snapshot) => snapshot.sale_lines.some((saved) => saved.id === line.id))?.product_id ||
+        null,
+    }));
     const bases = netProductBases(
       lines.map((line) => scaled(line.total_sell, 2)),
       scaled(check.discount, 2),
@@ -192,8 +218,8 @@ export async function snapshotCheckMotivation(
       const base =
         check.payment_method === 'warranty' ? 0n : current.reduce((sum, { index }) => sum + bases[index], 0n);
       await client.query(
-        `INSERT INTO check_motivation_snapshots(tenant_id,check_id,product_id,decision,rule_id,percent,qty,revenue_base,sale_lines,accrued_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+        `INSERT INTO check_motivation_snapshots(tenant_id,check_id,product_id,decision,rule_id,percent,qty,revenue_base,sale_lines,accrued_at,product_name)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
         ON CONFLICT(tenant_id,check_id,product_id) DO UPDATE SET qty=EXCLUDED.qty,revenue_base=EXCLUDED.revenue_base,sale_lines=EXCLUDED.sale_lines`,
         [
           tenant,
@@ -206,6 +232,7 @@ export async function snapshotCheckMotivation(
           decimal(base),
           JSON.stringify(saved),
           check.motivation_v2_posted_at,
+          old?.product_name || current[0]?.line.name || null,
         ],
       );
     }
@@ -235,18 +262,25 @@ export async function writeRevenueAccruals(client: PoolClient, tenant: string, c
     )
   ).rows;
   for (const snapshot of snapshots) {
+    const currentProduct =
+      (
+        await client.query<{ id: string }>('SELECT id FROM products WHERE tenant_id=$1 AND id=$2', [
+          tenant,
+          snapshot.product_id,
+        ])
+      ).rows[0]?.id || null;
     const base = scaled(snapshot.revenue_base, 2);
     const { total, shares } = bonusShares(base, snapshot.percent, recipients.length);
     for (const [index, recipient] of recipients.entries()) {
       if (shares[index] <= 0n) continue;
       await client.query(
-        `INSERT INTO motivation_accruals(tenant_id,employee_id,check_id,product_id,qty,margin_base,percent,amount,accrued_at,scheme,revenue_base,share_index,share_count,total_bonus,rule_id)
-        VALUES($1,$2,$3,$4,$5,0,$6,$7,$8,'revenue_v2',$9,$10,$11,$12,$13)`,
+        `INSERT INTO motivation_accruals(tenant_id,employee_id,check_id,product_id,qty,margin_base,percent,amount,accrued_at,scheme,revenue_base,share_index,share_count,total_bonus,rule_id,snapshot_product_id)
+        VALUES($1,$2,$3,$4,$5,0,$6,$7,$8,'revenue_v2',$9,$10,$11,$12,$13,$14)`,
         [
           tenant,
           recipient.user_id,
           checkId,
-          snapshot.product_id,
+          currentProduct,
           snapshot.qty,
           snapshot.percent,
           decimal(shares[index]),
@@ -256,6 +290,7 @@ export async function writeRevenueAccruals(client: PoolClient, tenant: string, c
           recipients.length,
           decimal(total),
           snapshot.rule_id,
+          snapshot.product_id,
         ],
       );
     }

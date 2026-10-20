@@ -45,9 +45,13 @@ export function withinFolder(category: string | null, folder: string): boolean {
   const path = normalizePath(category || '');
   return path === folder || path.startsWith(folder + '/');
 }
-/** Shared by config writers and posting readers. It does not lock checks/products in reverse order. */
+/** Configuration/catalog writers take exclusive BEFORE touching FK parent rows. */
 export async function lockMotivation(client: PoolClient, tenant: string): Promise<void> {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext('motivation-v2'), hashtext($1))`, [tenant]);
+}
+/** Financial writers take this BEFORE any check/product row lock. Config takes exclusive first. */
+export async function lockMotivationRead(client: PoolClient, tenant: string): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock_shared(hashtext('motivation-v2'), hashtext($1))`, [tenant]);
 }
 export async function readRules(client: PoolClient, tenant: string): Promise<RuleRow[]> {
   const { rows } = await client.query<RuleRow>(

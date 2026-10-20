@@ -152,7 +152,26 @@ export class MotivationRulesService {
         [tenant],
       )
     ).rows;
-    return { rules, products, categories, legacy, revision: digest({ rules, products, categories, legacy }) };
+    const unarchivedTrash = (
+      await client.query<{ product_id: string; check_id: string }>(
+        `SELECT DISTINCT pl.product_id,c.id AS check_id FROM checks c
+       JOIN check_product_lines pl ON pl.check_id=c.id
+       JOIN motivation_promo_products mp ON mp.tenant_id=c.tenant_id AND mp.product_id=pl.product_id
+       WHERE c.tenant_id=$1 AND c.deleted_at IS NOT NULL AND c.is_deferred=false AND c.is_returned=false
+         AND NOT EXISTS (SELECT 1 FROM check_motivation_legacy_snapshots a
+           WHERE a.tenant_id=c.tenant_id AND a.check_id=c.id AND a.product_id=pl.product_id)
+       ORDER BY pl.product_id,c.id`,
+        [tenant],
+      )
+    ).rows;
+    return {
+      rules,
+      products,
+      categories,
+      legacy,
+      unarchivedTrash,
+      revision: digest({ rules, products, categories, legacy, unarchivedTrash }),
+    };
   }
 
   async list(tenant: string) {
@@ -318,6 +337,12 @@ export class MotivationRulesService {
       const coveredIds = new Set(covered.map((p) => p.id));
       const replacing = new Set((input.replaceLegacyPromos || []).map((r) => r.productId));
       for (const replacement of input.replaceLegacyPromos || []) {
+        if (!input.dryRun && state.unarchivedTrash.some((r) => r.product_id === replacement.productId)) {
+          conflict(
+            'MOTIVATION_LEGACY_CONFLICT',
+            'Сначала восстановите старые чеки с этим товаром из корзины: в них нет сохранённого начисления прежней акции',
+          );
+        }
         const old = state.legacy.find((r) => r.product_id === replacement.productId);
         if (!old || !coveredIds.has(replacement.productId) || old.updated_at.toISOString() !== replacement.updatedAt) {
           conflict('MOTIVATION_LEGACY_CONFLICT', 'Прежняя акция изменилась или не входит в выбранные товары');
@@ -332,6 +357,12 @@ export class MotivationRulesService {
           active: r.active,
           updatedAt: r.updated_at.toISOString(),
           replacing: replacing.has(r.product_id),
+          ...(state.unarchivedTrash.some((old) => old.product_id === r.product_id)
+            ? {
+                replacementBlockedReason:
+                  'В корзине есть старые чеки без сохранённого начисления. Сначала восстановите их',
+              }
+            : {}),
         }));
       const affectedProductCount = covered.filter((p) => {
         if (state.legacy.some((r) => r.product_id === p.id) && !replacing.has(p.id)) return false;

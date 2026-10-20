@@ -69,7 +69,6 @@ import type {
   Warehouse,
   PosSettings,
   TenantLocation,
-  CheckAssignee,
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
@@ -277,6 +276,15 @@ function SummaryRow({
 // ---------------------------------------------------------------------------
 // Main Page Component
 // ---------------------------------------------------------------------------
+
+/** Shared by the actual form submit and the bounded protocol regression. */
+export function checkPerformerPayload(editing: boolean, dirty: boolean, ids: string[]) {
+  return editing && !dirty ? {} : { assigneeIds: [...new Set(ids)], assigneesConfirmed: true as const };
+}
+
+export function confirmedCheckPerformers(confirmed: boolean | undefined, rows: { id: string }[]) {
+  return confirmed === true ? rows.map((row) => row.id) : [];
+}
 
 export default function CheckCreatePage() {
   const navigate = useNavigate();
@@ -533,6 +541,11 @@ export default function CheckCreatePage() {
   const conveyorMode = !!posSettings?.shiftModeEnabled;
   const canManageLocations = hasPermission('settings_manage');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  const [assigneesDirty, setAssigneesDirty] = useState(false);
+  useEffect(() => {
+    if (!isEditMode && !assigneesDirty && user?.role === 'master' && posSettings?.isCashier === false && user?.id)
+      setAssigneeIds([user.id]);
+  }, [isEditMode, assigneesDirty, posSettings?.isCashier, user?.id, user?.role]);
   const [locationId, setLocationId] = useState('');
   const [newLocationName, setNewLocationName] = useState('');
   const [creatingLocation, setCreatingLocation] = useState(false);
@@ -549,6 +562,7 @@ export default function CheckCreatePage() {
   );
 
   const toggleAssignee = (id: string) => {
+    setAssigneesDirty(true);
     setAssigneeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
@@ -655,7 +669,8 @@ export default function CheckCreatePage() {
     setIsDeferred(existingCheck.isDeferred || false);
     // Round 14: исполнители + место — гидрируем, иначе сохранение в режиме
     // конвейера перезаписало бы набор пустым (assigneeIds шлётся при edit).
-    setAssigneeIds((existingCheck.assignees ?? []).map((a: CheckAssignee) => a.id));
+    setAssigneeIds(confirmedCheckPerformers(existingCheck.assigneesConfirmed, existingCheck.assignees ?? []));
+    setAssigneesDirty(false);
     setLocationId(existingCheck.locationId ?? existingCheck.location?.id ?? '');
 
     if (existingCheck.services?.length) {
@@ -1242,14 +1257,9 @@ export default function CheckCreatePage() {
         : selectedTags.length > 0
           ? { tagIds: selectedTags.map((t) => t.id) }
           : {}),
-      // Round 14 (конвейер): исполнители и место уходят ТОЛЬКО при включённом
-      // режиме кассовой смены. Вне режима payload байт-в-байт прежний.
-      ...(conveyorMode
-        ? {
-            ...(isEditMode || assigneeIds.length > 0 ? { assigneeIds } : {}),
-            locationId: locationId || null,
-          }
-        : {}),
+      // Only deliberate performer choices carry confirmation; untouched old edits never echo legacy defaults.
+      ...checkPerformerPayload(isEditMode, assigneesDirty, assigneeIds),
+      ...(conveyorMode ? { locationId: locationId || null } : {}),
       // Рассрочка — всегда реальная продажа, отложить нельзя.
       isDeferred: isInstallment ? false : isDeferred,
       ...(isInstallment
@@ -1910,81 +1920,85 @@ export default function CheckCreatePage() {
           </Card>
 
           {/* ── Конвейер (Round 14): исполнители + место ── */}
-          {conveyorMode && (
-            <Card padding="none">
-              <CardHeader
-                icon={MapPin}
-                title="Исполнители и место"
-                subtitle="Заказ появится на доске каждого выбранного исполнителя"
-                dense
-              />
-              <CardBody className="space-y-4" padding="sm">
-                {(masters ?? []).length === 0 ? (
-                  <p className="text-sm text-ink-3">Нет сотрудников для назначения</p>
-                ) : (
-                  <fieldset className="min-w-0 border-0 p-0">
-                    <legend className="mb-2 text-sm font-medium text-ink-2">Исполнители</legend>
-                    <div className="grid max-h-48 grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
-                      {(masters ?? []).map((m) => (
-                        <Checkbox
-                          key={m.id}
-                          label={m.fullName}
-                          checked={assigneeIds.includes(m.id)}
-                          onChange={() => toggleAssignee(m.id)}
-                          className="rounded-lg border border-line px-3 py-2"
-                        />
-                      ))}
-                    </div>
-                    <p className="mt-1.5 text-xs text-ink-3">Без выбора — исполнители из строк услуг.</p>
-                  </fieldset>
-                )}
-
-                <Field label="Место" htmlFor="check-location" hint="Например, «Бокс 2» или «возле задних ворот»">
-                  <Select id="check-location" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                    <option value="">Без места</option>
-                    {activeLocations.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                      </option>
+          <Card padding="none">
+            <CardHeader
+              icon={MapPin}
+              title={conveyorMode ? 'Исполнители и место' : 'Исполнители'}
+              subtitle="Мотивация за товары делится между выбранными исполнителями"
+              dense
+            />
+            <CardBody className="space-y-4" padding="sm">
+              {(masters ?? []).length === 0 ? (
+                <p className="text-sm text-ink-3">Нет сотрудников для назначения</p>
+              ) : (
+                <fieldset className="min-w-0 border-0 p-0">
+                  <legend className="mb-2 text-sm font-medium text-ink-2">Исполнители</legend>
+                  <div className="grid max-h-48 grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
+                    {(masters ?? []).map((m) => (
+                      <Checkbox
+                        key={m.id}
+                        label={m.fullName}
+                        checked={assigneeIds.includes(m.id)}
+                        onChange={() => toggleAssignee(m.id)}
+                        className="rounded-lg border border-line px-3 py-2"
+                      />
                     ))}
-                    {/* Выбранное, но архивное место (edit-гидрация) — не терять */}
-                    {locationId && !activeLocations.some((l) => l.id === locationId) && (
-                      <option value={locationId}>
-                        {(locations ?? []).find((l) => l.id === locationId)?.name ?? 'Выбранное место'}
-                      </option>
-                    )}
-                  </Select>
-                </Field>
-                {canManageLocations && (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={newLocationName}
-                      onChange={(e) => setNewLocationName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleCreateLocation();
-                        }
-                      }}
-                      maxLength={100}
-                      size="sm"
-                      aria-label="Новое место"
-                      placeholder="Новое место…"
-                    />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={handleCreateLocation}
-                      disabled={!newLocationName.trim()}
-                      loading={creatingLocation}
-                    >
-                      Добавить
-                    </Button>
                   </div>
-                )}
-              </CardBody>
-            </Card>
-          )}
+                  <p className="mt-1.5 text-xs text-ink-3">
+                    Без выбранного исполнителя мотивация за товары не начисляется.
+                  </p>
+                </fieldset>
+              )}
+
+              {conveyorMode && (
+                <>
+                  <Field label="Место" htmlFor="check-location" hint="Например, «Бокс 2» или «возле задних ворот»">
+                    <Select id="check-location" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                      <option value="">Без места</option>
+                      {activeLocations.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                      {/* Выбранное, но архивное место (edit-гидрация) — не терять */}
+                      {locationId && !activeLocations.some((l) => l.id === locationId) && (
+                        <option value={locationId}>
+                          {(locations ?? []).find((l) => l.id === locationId)?.name ?? 'Выбранное место'}
+                        </option>
+                      )}
+                    </Select>
+                  </Field>
+                  {canManageLocations && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={newLocationName}
+                        onChange={(e) => setNewLocationName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleCreateLocation();
+                          }
+                        }}
+                        maxLength={100}
+                        size="sm"
+                        aria-label="Новое место"
+                        placeholder="Новое место…"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleCreateLocation}
+                        disabled={!newLocationName.trim()}
+                        loading={creatingLocation}
+                      >
+                        Добавить
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardBody>
+          </Card>
 
           {/* ── Комментарий и метки ── */}
           <Card padding="none">

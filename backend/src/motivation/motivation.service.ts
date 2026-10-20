@@ -143,11 +143,13 @@ export class MotivationService {
       params.push(query.dateTo);
     }
     const { rows } = await this.pool.query(
-      `SELECT ma.*, u.full_name AS employee_name, u.avatar AS employee_avatar, p.name AS product_name, c.number AS check_number
+      `SELECT ma.*, u.full_name AS employee_name, u.avatar AS employee_avatar, p.name AS product_name, c.number AS check_number,
+              ms.product_name AS snapshot_product_name
          FROM motivation_accruals ma
          LEFT JOIN users u ON u.id = ma.employee_id
          LEFT JOIN products p ON p.id = ma.product_id
          LEFT JOIN checks c ON c.id = ma.check_id
+         LEFT JOIN check_motivation_snapshots ms ON ms.tenant_id=ma.tenant_id AND ms.check_id=ma.check_id AND ms.product_id=ma.snapshot_product_id
         WHERE ${conds.join(' AND ')}
         ORDER BY ma.accrued_at DESC
         LIMIT 500`,
@@ -157,6 +159,12 @@ export class MotivationService {
       mixed
         ? {
             ...this.mapAccrual(r),
+            ...(r.scheme === 'revenue_v2'
+              ? {
+                  productId: r.snapshot_product_id,
+                  productName: r.snapshot_product_name ?? r.product_name ?? undefined,
+                }
+              : {}),
             scheme: r.scheme,
             calculationBase: r.scheme === 'revenue_v2' ? 'revenue' : 'margin',
             baseAmount: Number(r.scheme === 'revenue_v2' ? r.revenue_base : r.margin_base),

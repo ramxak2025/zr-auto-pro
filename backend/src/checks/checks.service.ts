@@ -51,6 +51,7 @@ import {
   ServiceLineInput,
 } from './check-service-prices';
 import { resolveTemplateProductSources } from '../check-templates/template-product-source';
+import { lockMotivationRead } from '../motivation/motivation-rules';
 import {
   archiveLegacyMotivation,
   snapshotCheckMotivation,
@@ -3020,6 +3021,7 @@ export class ChecksService {
     };
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // ── Cross-tenant integrity guard ─────────────────────────────────
       products = await resolveTemplateProductSources(
@@ -3465,7 +3467,8 @@ export class ChecksService {
           ),
         ),
       );
-      if (dto.assigneeIds !== undefined) await confirmMotivationAssignees(client, tenantID, checkId, dto.assigneeIds);
+      if (dto.assigneeIds !== undefined)
+        await confirmMotivationAssignees(client, tenantID, checkId, dto.assigneeIds, dto.assigneesConfirmed);
       else await this.syncCheckAssignees(client, tenantID, checkId, defaultAssignees);
 
       // ── «Мотивация»: accrue promo-product bonuses (095) ───────────────────
@@ -3622,11 +3625,32 @@ export class ChecksService {
     client: PoolClient,
     tenantID: string,
     checkId: string,
-    prior: { motivation_v2_posted_at?: Date | null; master_id?: string; is_returned?: boolean },
+    prior: {
+      motivation_v2_posted_at?: Date | null;
+      master_id?: string;
+      is_returned?: boolean;
+      motivation_assignees_confirmed?: boolean;
+    },
     actorUserId: string | null,
     actor?: ChecksActor,
+    raw?: unknown,
+    intent?: boolean,
+    force = false,
   ) {
     if (!prior.motivation_v2_posted_at) return;
+    const beforeIds = (
+      await client.query<{ user_id: string }>(
+        'SELECT user_id FROM check_assignees WHERE tenant_id=$1 AND check_id=$2 ORDER BY user_id',
+        [tenantID, checkId],
+      )
+    ).rows.map((r) => r.user_id);
+    const nextIds = Array.isArray(raw)
+      ? [...new Set(raw.filter((v): v is string => typeof v === 'string').map((v) => v.toLowerCase()))].sort()
+      : [];
+    const unchanged = beforeIds.length === nextIds.length && beforeIds.every((v, i) => v === nextIds[i]);
+    const nextConfirmed =
+      intent === true || (intent === undefined && prior.motivation_assignees_confirmed === true && unchanged);
+    if (!force && unchanged && nextConfirmed === (prior.motivation_assignees_confirmed === true)) return;
     const eligible = await client.query(
       "SELECT 1 FROM check_motivation_snapshots WHERE tenant_id=$1 AND check_id=$2 AND decision='revenue_v2' LIMIT 1",
       [tenantID, checkId],
@@ -3646,10 +3670,12 @@ export class ChecksService {
     assigneeIds: unknown,
     actorUserId: string | null,
     actor?: ChecksActor,
+    intent?: boolean,
   ) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
       const prior = (
         await client.query('SELECT * FROM checks WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE', [
           tenantID,
@@ -3657,8 +3683,8 @@ export class ChecksService {
         ])
       ).rows[0];
       if (!prior) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
-      await this.assertMotivationAssigneeWrite(client, tenantID, id, prior, actorUserId, actor);
-      await confirmMotivationAssignees(client, tenantID, id, assigneeIds);
+      await this.assertMotivationAssigneeWrite(client, tenantID, id, prior, actorUserId, actor, assigneeIds, intent);
+      await confirmMotivationAssignees(client, tenantID, id, assigneeIds, intent);
       if (prior.motivation_v2_posted_at && !prior.is_deferred) await writeRevenueAccruals(client, tenantID, id);
       await client.query('COMMIT');
     } catch (error) {
@@ -3668,6 +3694,52 @@ export class ChecksService {
       client.release();
     }
     this.invalidateReports(tenantID);
+  }
+
+  private async patchMotivationPayment(
+    id: string,
+    tenantID: string,
+    method: string,
+    sql: string,
+    values: unknown[],
+    actorUserId: string | null,
+    actor?: ChecksActor,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
+      const prior = (
+        await client.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE', [
+          id,
+          tenantID,
+        ])
+      ).rows[0];
+      if (!prior) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      const boundary =
+        prior.payment_method !== method && (prior.payment_method === 'warranty' || method === 'warranty');
+      if (boundary && !prior.is_deferred)
+        await this.assertMotivationAssigneeWrite(
+          client,
+          tenantID,
+          id,
+          prior,
+          actorUserId,
+          actor,
+          undefined,
+          undefined,
+          true,
+        );
+      const result = await client.query(sql, values);
+      if (boundary && !prior.is_deferred) await snapshotCheckMotivation(client, tenantID, id, 'edit');
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async update(
@@ -3707,7 +3779,7 @@ export class ChecksService {
     const assigneeIdsPatch: unknown = dto.assigneeIds;
     const applyAssignees = async () => {
       if (assigneeIdsPatch === undefined) return false;
-      await this.updateMotivationAssignees(id, tenantID, assigneeIdsPatch, actorUserId, actor);
+      await this.updateMotivationAssignees(id, tenantID, assigneeIdsPatch, actorUserId, actor, dto.assigneesConfirmed);
       return true;
     };
 
@@ -3902,10 +3974,11 @@ export class ChecksService {
     if (sets.length === 0) return this.getById(id, tenantID, actor);
 
     vals.push(id, tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} AND deleted_at IS NULL RETURNING id, number, total_revenue`,
-      vals,
-    );
+    const patchSql = `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} AND deleted_at IS NULL RETURNING id, number, total_revenue`;
+    const { rows } =
+      dto.paymentMethod !== undefined
+        ? await this.patchMotivationPayment(id, tenantID, dto.paymentMethod, patchSql, vals, actorUserId, actor)
+        : await this.pool.query(patchSql, vals);
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
 
     // Payment-method / amount / status edits can move the cash-position and
@@ -4036,6 +4109,7 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // Lock the row so two concurrent closes can't both observe
       // is_deferred=true and both decrement stock / create warranties. A trashed
@@ -4335,13 +4409,41 @@ export class ChecksService {
         vals.push(dto.paymentStatus);
       }
       vals.push(id, tenantID);
+      const warrantyChanged =
+        !isActivating &&
+        dto.paymentMethod !== undefined &&
+        dto.paymentMethod !== checkRows[0].payment_method &&
+        (dto.paymentMethod === 'warranty' || checkRows[0].payment_method === 'warranty');
+      if (warrantyChanged)
+        await this.assertMotivationAssigneeWrite(
+          client,
+          tenantID,
+          id,
+          checkRows[0],
+          actorUserId,
+          actor,
+          undefined,
+          undefined,
+          true,
+        );
       await client.query(`UPDATE checks SET ${sets.join(', ')} WHERE id=$${ui++} AND tenant_id=$${ui}`, vals);
 
       if (dto.assigneeIds !== undefined) {
-        await this.assertMotivationAssigneeWrite(client, tenantID, id, checkRows[0], actorUserId, actor);
-        await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds);
+        await this.assertMotivationAssigneeWrite(
+          client,
+          tenantID,
+          id,
+          checkRows[0],
+          actorUserId,
+          actor,
+          dto.assigneeIds,
+          dto.assigneesConfirmed,
+        );
+        await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds, dto.assigneesConfirmed);
         if (!isActivating && checkRows[0].motivation_v2_posted_at) await writeRevenueAccruals(client, tenantID, id);
       }
+
+      if (warrantyChanged) await snapshotCheckMotivation(client, tenantID, id, 'edit');
 
       // Side-effects ONLY on the real transition.
       if (isActivating) {
@@ -4541,6 +4643,7 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // Re-read the prior is_deferred under a row lock so two concurrent closes
       // can't BOTH see is_deferred=true and both decrement stock. The locked
@@ -4550,6 +4653,9 @@ export class ChecksService {
         [id, tenantID],
       );
       if (lockedRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (lockedRows[0].is_deferred !== true) {
+        throw new ConflictException({ message: 'Заказ-наряд уже проведён другим сотрудником. Обновите экран' });
+      }
       const lockedIsActivating = lockedRows[0].is_deferred === true && dto.isDeferred === false;
 
       // POS shift-mode CASHIER gate (092): closing this draft IS taking payment;
@@ -4979,7 +5085,8 @@ export class ChecksService {
         }
       }
 
-      if (dto.assigneeIds !== undefined) await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds);
+      if (dto.assigneeIds !== undefined)
+        await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds, dto.assigneesConfirmed);
 
       // ── Deferred → active side-effects ───────────────────────────────────
       // ONLY on the genuine true→false transition: now that the final lines are
@@ -5384,6 +5491,7 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // Lock the check row for the whole edit so a concurrent edit/return/delete
       // can't race the reverse+reapply. This locked row is the authority for the
@@ -5766,7 +5874,8 @@ export class ChecksService {
       }
 
       // ── 5) Motivation — idempotent re-accrual from the new lines + master ───
-      if (dto.assigneeIds !== undefined) await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds);
+      if (dto.assigneeIds !== undefined)
+        await confirmMotivationAssignees(client, tenantID, id, dto.assigneeIds, dto.assigneesConfirmed);
       await this.accrueMotivationPromos(client, tenantID, id, 'edit');
 
       // ── 6) Warranty — re-derive unused claims, preserve redeemed history ────
@@ -5957,6 +6066,7 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
       // Lock the LIVE check row for the lifetime of the delete so a concurrent
       // edit/return/restore can't race the footprint reverse below. A row that is
       // already in the trash is excluded → a double-delete is a clean 404 no-op.
@@ -6169,6 +6279,7 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
       // Lock the TRASHED row (deleted_at IS NOT NULL). A live check → 404 no-op,
       // so a double-restore can never re-apply the footprint twice.
       const { rows } = await client.query(

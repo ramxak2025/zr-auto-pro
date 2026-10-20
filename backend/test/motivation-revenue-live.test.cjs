@@ -18,9 +18,402 @@ const { SalaryService } = require('../dist/salary/salary.service');
 const { ScheduleService } = require('../dist/schedule/schedule.service');
 const { InstallmentsService } = require('../dist/installments/installments.service');
 const { motivationByPointMonthSql } = require('../dist/common/salary-extras-sql');
+const { ProductsService } = require('../dist/products/products.service');
+const { WarehouseService } = require('../dist/warehouse/warehouse.service');
 Logger.overrideLogger(false);
 const live = process.env.AUTEXA_MOTIVATION_LIVE_DB;
 const options = { skip: !live, timeout: 60000 };
+
+test('actual PG: product FK lock ordering permits posting concurrently with a bulk rule insert', options, async () => {
+  await fixture(async ({ product, run, rules, tenant, create, pool, q, accruals }) => {
+    const p = await product('Posting race');
+    const input = { targets: [{ kind: 'product', productId: p.productId }], percent: 8, requestId: randomUUID() };
+    const preview = await run(() => rules.bulk(tenant, { ...input, dryRun: true }));
+    let reachedCreate,
+      releaseCreate,
+      bulkPid,
+      creating,
+      applying,
+      paused = false,
+      stage = 'create';
+    const reached = new Promise((r) => {
+        reachedCreate = r;
+      }),
+      resume = new Promise((r) => {
+        releaseCreate = r;
+      });
+    const connect = pool.connect.bind(pool);
+    pool.connect = async () => {
+      const client = await connect();
+      if (stage === 'bulk' && !bulkPid) bulkPid = client.processID;
+      const query = client.query.bind(client),
+        release = client.release.bind(client);
+      client.query = async (sql, values) => {
+        const result = await query(sql, values);
+        if (!paused && String(sql).includes('FROM products') && String(sql).includes('FOR UPDATE')) {
+          paused = true;
+          reachedCreate();
+          await resume;
+        }
+        return result;
+      };
+      client.release = (...args) => {
+        client.query = query;
+        client.release = release;
+        return release(...args);
+      };
+      return client;
+    };
+    try {
+      creating = create([p]);
+      creating.catch(() => undefined);
+      await reached;
+      stage = 'bulk';
+      applying = run(() => rules.bulk(tenant, { ...input, previewRevision: preview.previewRevision }));
+      applying.catch(() => undefined);
+      let blocked = false;
+      for (let i = 0; i < 200; i++) {
+        if (
+          bulkPid &&
+          (await q('SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1', [bulkPid]))[0]?.wait_event_type ===
+            'Lock'
+        ) {
+          blocked = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(blocked);
+      releaseCreate();
+      const results = await Promise.allSettled([creating, applying]);
+      assert.ok(
+        results.every((r) => r.status === 'fulfilled'),
+        results.map((r) => r.reason?.code || r.reason?.message).join(', '),
+      );
+      assert.equal(
+        (await accruals(results[0].value.id)).length,
+        0,
+        'the earlier sale must not receive a later program',
+      );
+      assert.equal(Number((await accruals((await create([p])).id))[0].amount), 8);
+    } finally {
+      releaseCreate();
+      await Promise.allSettled([creating, applying].filter(Boolean));
+      pool.connect = connect;
+    }
+  });
+});
+
+test(
+  'actual PG: old web assignee echoes cannot confirm the cashier; explicit intent and unchanged echoes are distinct',
+  options,
+  async () => {
+    await fixture(
+      async ({ product, rule, create, edit, accruals, checks, run, tenant, actor, owner, first, second, q }) => {
+        const p = await product();
+        await rule(p.productId);
+        const old = await create([p], { isDeferred: true, assigneeIds: undefined, assigneesConfirmed: undefined });
+        await edit(old, { products: [p], assigneeIds: [owner], assigneesConfirmed: undefined });
+        assert.equal(
+          (await q('SELECT motivation_assignees_confirmed FROM checks WHERE id=$1', [old.id]))[0]
+            .motivation_assignees_confirmed,
+          false,
+        );
+        await run(() => checks.acceptPayment(old.id, tenant, actor.role, {}, owner, actor));
+        assert.equal((await accruals(old.id)).length, 0, 'an echoed legacy admin default is not a performer');
+        await edit(old, { assigneeIds: [first], assigneesConfirmed: true });
+        assert.equal((await accruals(old.id))[0].employee_id, first);
+        await edit(old, { assigneeIds: [first], assigneesConfirmed: undefined });
+        assert.equal(
+          (await accruals(old.id))[0].employee_id,
+          first,
+          'unchanged old-client echo preserves an already confirmed choice',
+        );
+        const weak = {
+          ...actor,
+          role: 'master',
+          permissions: { checks_edit: true, checks_edit_all: true, edit_closed_check: false },
+        };
+        await assert.rejects(
+          edit(old, { assigneeIds: [second], assigneesConfirmed: undefined }, weak),
+          (e) => e.getStatus() === 403,
+        );
+        await edit(old, { assigneeIds: [second], assigneesConfirmed: undefined });
+        assert.equal((await accruals(old.id)).length, 0, 'changed legacy choices cannot silently move motivation');
+        assert.equal(
+          (await q('SELECT motivation_assignees_confirmed FROM checks WHERE id=$1', [old.id]))[0]
+            .motivation_assignees_confirmed,
+          false,
+        );
+      },
+    );
+  },
+);
+
+test(
+  'actual PG: draft save race rechecks the locked posted state instead of rewriting its recipients or lines',
+  options,
+  async () => {
+    await fixture(
+      async ({ product, rule, create, edit, accruals, run, checks, tenant, actor, pool, first, second, q }) => {
+        const p = await product();
+        await rule(p.productId);
+        const check = await create([p], { isDeferred: true });
+        let reachedEdit,
+          releaseEdit,
+          paused = false,
+          editing;
+        const reached = new Promise((r) => {
+            reachedEdit = r;
+          }),
+          resume = new Promise((r) => {
+            releaseEdit = r;
+          });
+        const connect = pool.connect.bind(pool);
+        pool.connect = async () => {
+          const client = await connect(),
+            query = client.query.bind(client),
+            release = client.release.bind(client);
+          client.query = async (sql, values) => {
+            if (!paused && String(sql).includes('FROM checks') && String(sql).includes('FOR UPDATE')) {
+              paused = true;
+              reachedEdit();
+              await resume;
+            }
+            return query(sql, values);
+          };
+          client.release = (...args) => {
+            client.query = query;
+            client.release = release;
+            return release(...args);
+          };
+          return client;
+        };
+        try {
+          editing = edit(check, { products: [{ ...p, quantity: 2 }], assigneeIds: [second], assigneesConfirmed: true });
+          editing.catch(() => undefined);
+          await reached;
+          await run(() => checks.acceptPayment(check.id, tenant, actor.role, {}, actor.userID, actor));
+          releaseEdit();
+          await assert.rejects(editing, (e) => e.getStatus() === 409);
+          assert.equal((await accruals(check.id))[0].employee_id, first);
+          assert.equal(Number((await accruals(check.id))[0].amount), 8);
+          assert.equal(
+            Number((await q('SELECT quantity FROM check_product_lines WHERE check_id=$1', [check.id]))[0].quantity),
+            1,
+          );
+        } finally {
+          releaseEdit();
+          if (editing) await Promise.allSettled([editing]);
+          pool.connect = connect;
+        }
+      },
+    );
+  },
+);
+
+test(
+  'actual PG: actual warranty boundary changes reverse v2 only with financial permission and retain saved rates',
+  options,
+  async () => {
+    await fixture(async ({ product, rule, create, edit, accruals, q, tenant, actor }) => {
+      const p = await product();
+      await rule(p.productId);
+      const check = await create([p]),
+        original = (await accruals(check.id))[0];
+      const weak = {
+        ...actor,
+        role: 'master',
+        permissions: { checks_edit: true, checks_edit_all: true, payment_edit: true, edit_closed_check: false },
+      };
+      await assert.rejects(edit(check, { paymentMethod: 'warranty' }, weak), (e) => e.getStatus() === 403);
+      assert.equal(Number((await accruals(check.id))[0].amount), 8);
+      await edit(check, { paymentMethod: 'warranty' });
+      assert.equal((await accruals(check.id)).length, 0);
+      await q('UPDATE motivation_rules SET percent=90 WHERE tenant_id=$1', [tenant]);
+      await edit(check, { paymentMethod: 'cash' });
+      assert.equal(Number((await accruals(check.id))[0].amount), 8);
+      assert.equal((await accruals(check.id))[0].accrued_at.toISOString(), original.accrued_at.toISOString());
+      await edit(check, { isDeferred: false, paymentMethod: 'warranty' });
+      assert.equal(
+        (await q('SELECT payment_method FROM checks WHERE id=$1', [check.id]))[0].payment_method,
+        'warranty',
+      );
+      assert.equal((await accruals(check.id)).length, 0);
+    });
+  },
+);
+
+test(
+  'actual PG: actual catalog hard-delete retains historical identity for assignment, restore and partial return',
+  options,
+  async () => {
+    await fixture(
+      async ({
+        product,
+        rule,
+        create,
+        edit,
+        accruals,
+        run,
+        tenant,
+        checks,
+        actor,
+        first,
+        second,
+        returns,
+        q,
+        pool,
+        legacy,
+      }) => {
+        const p = await product('Историческое масло');
+        await rule(p.productId);
+        const check = await create([{ ...p, quantity: 2 }], { discount: 20 });
+        const products = new ProductsService(pool, new WarehouseService(pool));
+        await run(() => products.remove(p.productId, tenant));
+        await run(() => products.hardDelete(p.productId, tenant));
+        assert.equal(
+          (await q('SELECT product_id FROM check_product_lines WHERE check_id=$1', [check.id]))[0].product_id,
+          null,
+        );
+        await edit(check, { assigneeIds: [second], assigneesConfirmed: true });
+        let rows = await accruals(check.id);
+        assert.equal(rows[0].product_id, null);
+        assert.equal(rows[0].snapshot_product_id, p.productId);
+        assert.equal(Number(rows[0].amount), 14.4);
+        const mixed = await run(() => legacy.listAccruals(tenant, {}, true));
+        assert.equal(mixed[0].productId, p.productId);
+        assert.equal(mixed[0].productName, 'Историческое масло');
+        await run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor));
+        await run(() => checks.restore(check.id, tenant, actor));
+        assert.equal(Number((await accruals(check.id))[0].amount), 14.4);
+        const line = (await q('SELECT id FROM check_product_lines WHERE check_id=$1', [check.id]))[0];
+        await run(() =>
+          returns.createReturn(
+            tenant,
+            actor.userID,
+            check.id,
+            { destination: 'warehouse', scope: 'partial', lines: [{ productLineId: line.id, quantity: 0.5 }] },
+            actor,
+          ),
+        );
+        rows = await accruals(check.id);
+        assert.equal(Number(rows[0].amount), 10.8);
+        assert.equal(rows[0].snapshot_product_id, p.productId);
+        await assert.rejects(
+          run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor)),
+          (e) => e.getStatus() === 400,
+        );
+      },
+    );
+  },
+);
+
+test(
+  'actual PG: unarchived historical trash blocks explicit legacy replacement, preserving exceptions remains allowed',
+  options,
+  async () => {
+    await fixture(async ({ product, create, legacy, run, tenant, checks, actor, q, bulk, rules, accruals }) => {
+      const p = await product('Old trash');
+      await run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 37 }));
+      const check = await create([p]);
+      await run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor));
+      await q('DELETE FROM check_motivation_legacy_snapshots WHERE check_id=$1', [check.id]);
+      await q('DELETE FROM check_motivation_snapshots WHERE check_id=$1', [check.id]);
+      await q('UPDATE checks SET motivation_v2_posted_at=NULL WHERE id=$1', [check.id]);
+      const preserved = await bulk([{ kind: 'product', productId: p.productId }]);
+      assert.ok(preserved.preview.legacyExceptions[0].replacementBlockedReason);
+      const old = (await run(() => legacy.listPromos(tenant)))[0];
+      await assert.rejects(
+        bulk([{ kind: 'product', productId: p.productId }], 8, {
+          replaceLegacyPromos: [{ productId: p.productId, updatedAt: old.updatedAt.toISOString() }],
+        }),
+        (e) => e.getStatus() === 409,
+      );
+      assert.equal((await run(() => legacy.listPromos(tenant))).length, 1);
+      await run(() => checks.restore(check.id, tenant, actor));
+      assert.equal(Number((await accruals(check.id))[0].percent), 37);
+    });
+  },
+);
+
+test('actual PG: archive lock ordering lets replacement and soft-delete commit without deadlock', options, async () => {
+  await fixture(async ({ product, create, legacy, run, tenant, rules, pool, q, checks, actor }) => {
+    const p = await product('Concurrent legacy');
+    await run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 37 }));
+    const check = await create([p]);
+    const old = (await run(() => legacy.listPromos(tenant)))[0];
+    const input = {
+      targets: [{ kind: 'product', productId: p.productId }],
+      percent: 8,
+      requestId: randomUUID(),
+      replaceLegacyPromos: [{ productId: p.productId, updatedAt: old.updatedAt.toISOString() }],
+    };
+    const preview = await run(() => rules.bulk(tenant, { ...input, dryRun: true }));
+    let releaseDelete, reachedDelete, bulkPid, deleting, applying;
+    const reached = new Promise((resolve) => {
+      reachedDelete = resolve;
+    });
+    const resume = new Promise((resolve) => {
+      releaseDelete = resolve;
+    });
+    const connect = pool.connect.bind(pool);
+    let stage = 'delete';
+    pool.connect = async () => {
+      const client = await connect();
+      if (stage === 'bulk' && !bulkPid) bulkPid = client.processID;
+      const query = client.query.bind(client),
+        release = client.release.bind(client);
+      client.query = async (sql, values) => {
+        if (String(sql).includes('INSERT INTO check_motivation_legacy_snapshots') && values?.[1] === check.id) {
+          reachedDelete();
+          await resume;
+        }
+        return query(sql, values);
+      };
+      client.release = (...args) => {
+        client.query = query;
+        client.release = release;
+        return release(...args);
+      };
+      return client;
+    };
+    try {
+      deleting = run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor));
+      deleting.catch(() => undefined);
+      await reached;
+      stage = 'bulk';
+      applying = run(() => rules.bulk(tenant, { ...input, previewRevision: preview.previewRevision }));
+      applying.catch(() => undefined);
+      let blocked = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (bulkPid) {
+          const activity = await q('SELECT wait_event_type FROM pg_stat_activity WHERE pid=$1', [bulkPid]);
+          if (activity[0]?.wait_event_type === 'Lock') {
+            blocked = true;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(blocked, 'replacement is waiting on the deletion transaction');
+      releaseDelete();
+      const outcomes = await Promise.allSettled([deleting, applying]);
+      assert.ok(
+        outcomes.every((result) => result.status === 'fulfilled'),
+        outcomes.map((r) => r.reason?.code || r.reason?.message).join(', '),
+      );
+      await run(() => checks.restore(check.id, tenant, actor));
+      const rows = await q('SELECT percent,amount FROM motivation_accruals WHERE check_id=$1', [check.id]);
+      assert.equal(Number(rows[0].percent), 37);
+      assert.equal(Number(rows[0].amount), 7.4);
+    } finally {
+      releaseDelete();
+      await Promise.allSettled([deleting, applying].filter(Boolean));
+      pool.connect = connect;
+    }
+  });
+});
 
 test(
   'actual PG: preview binds its selection/rate; mid-batch database failure rolls all effects back',
@@ -188,6 +581,7 @@ async function fixture(work) {
           {
             masterId: owner,
             assigneeIds: [first],
+            assigneesConfirmed: true,
             products: lines,
             services: [],
             paymentMethod: 'cash',
@@ -475,13 +869,13 @@ test(
         },
       };
       await assert.rejects(edit(check, { assigneeIds: [first] }, weak), (e) => e.getStatus() === 403);
-      await edit(check, { assigneeIds: [first, second] });
+      await edit(check, { assigneeIds: [first, second], assigneesConfirmed: true });
       assert.equal(
         (await accruals(check.id)).reduce((a, r) => a + Number(r.amount), 0),
         8,
       );
       assert.ok((await accruals(check.id)).every((r) => r.employee_id !== owner));
-      const oldClient = await create([p], { assigneeIds: undefined });
+      const oldClient = await create([p], { assigneeIds: undefined, assigneesConfirmed: undefined });
       assert.equal((await accruals(oldClient.id)).length, 0, 'legacy default including cashier is not confirmed');
       await assert.rejects(create([p], { assigneeIds: [randomUUID()] }), (e) => e.getStatus() === 400);
     });
@@ -538,7 +932,7 @@ test(
       ]);
       for (const check of [unmatched, historical]) {
         await edit(check, { comment: 'Комментарий' });
-        await edit(check, { assigneeIds: [first] });
+        await edit(check, { assigneeIds: [first], assigneesConfirmed: true });
         await edit(check, { products: [original, added] });
         assert.equal((await accruals(check.id)).length, 0);
         await run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor));

@@ -1,3 +1,4 @@
+import { lockMotivationRead } from '../motivation/motivation-rules';
 import { returnRevenueMotivation } from '../motivation/check-motivation';
 import {
   Injectable,
@@ -59,6 +60,7 @@ export class ReturnsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockMotivationRead(client, tenantID);
 
       // Verify the check belongs to this tenant + grab basic data.
       //

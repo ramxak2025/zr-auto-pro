@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS check_motivation_snapshots (
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   check_id UUID NOT NULL REFERENCES checks(id) ON DELETE CASCADE,
   product_id UUID NOT NULL,
+  product_name TEXT,
   decision TEXT NOT NULL CHECK (decision IN ('revenue_v2','margin_v1','none')),
   rule_id UUID,
   percent NUMERIC(5,2) NOT NULL DEFAULT 0,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS check_motivation_snapshots (
   accrued_at TIMESTAMPTZ NOT NULL,
   UNIQUE (tenant_id, check_id, product_id)
 );
+ALTER TABLE check_motivation_snapshots ADD COLUMN IF NOT EXISTS product_name TEXT;
 
 -- Narrow archive for explicitly replaced legacy exceptions; trash/restore keeps
 -- the original legacy attribution even after its live config has been replaced.
@@ -66,13 +68,17 @@ ALTER TABLE motivation_accruals ADD COLUMN IF NOT EXISTS share_index INTEGER NOT
 ALTER TABLE motivation_accruals ADD COLUMN IF NOT EXISTS share_count INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE motivation_accruals ADD COLUMN IF NOT EXISTS total_bonus NUMERIC(14,2);
 ALTER TABLE motivation_accruals ADD COLUMN IF NOT EXISTS rule_id UUID;
+-- Immutable identity is independent of nullable current catalog FK.
+ALTER TABLE motivation_accruals ADD COLUMN IF NOT EXISTS snapshot_product_id UUID;
+UPDATE motivation_accruals SET snapshot_product_id=product_id WHERE scheme='revenue_v2' AND snapshot_product_id IS NULL;
 DROP INDEX IF EXISTS uq_motivation_accrual_check_product;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_motivation_accrual_legacy
   ON motivation_accruals(tenant_id, check_id, product_id)
   WHERE product_id IS NOT NULL AND scheme = 'margin_v1';
+DROP INDEX IF EXISTS uq_motivation_accrual_revenue_employee;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_motivation_accrual_revenue_employee
-  ON motivation_accruals(tenant_id, check_id, product_id, employee_id)
-  WHERE scheme = 'revenue_v2' AND product_id IS NOT NULL AND employee_id IS NOT NULL;
+  ON motivation_accruals(tenant_id, check_id, snapshot_product_id, employee_id)
+  WHERE scheme = 'revenue_v2' AND snapshot_product_id IS NOT NULL AND employee_id IS NOT NULL;
 
 DO $$
 DECLARE t TEXT;
