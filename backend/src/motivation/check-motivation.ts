@@ -89,8 +89,14 @@ export async function reconcileMotivationProductLines<T extends ProductInput>(
   for (const input of identified) {
     if (input.id || input.productId) continue;
     const candidates = historicNull.filter((line) => !used.has(line.id) && oldKey(line) === newKey(input));
+    const allNullCandidates = previous.filter(
+      (line) => line.product_id === null && !used.has(line.id) && oldKey(line) === newKey(input),
+    );
     const incoming = identified.filter((row) => !row.id && !row.productId && newKey(row) === newKey(input));
-    if (candidates.length > 1 || (candidates.length === 1 && incoming.length !== 1)) {
+    if (
+      candidates.length > 1 ||
+      (candidates.length === 1 && (incoming.length !== 1 || allNullCandidates.length !== 1))
+    ) {
       throw new ConflictException({
         message: 'Старые строки товара неоднозначны. Обновите экран и приложение перед правкой',
       });

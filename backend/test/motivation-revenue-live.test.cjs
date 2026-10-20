@@ -24,6 +24,33 @@ Logger.overrideLogger(false);
 const live = process.env.AUTEXA_MOTIVATION_LIVE_DB;
 const options = { skip: !live, timeout: 60000 };
 
+test(
+  'actual PG: a matching manual NULL-product row makes legacy deleted-SKU reconciliation ambiguous',
+  options,
+  async () => {
+    await fixture(async ({ product, rule, create, run, pool, tenant, q, edit, accruals }) => {
+      const p = await product('Same as manual');
+      await rule(p.productId);
+      const manual = { name: p.name, sellPrice: 100, costPrice: 80, quantity: 1 };
+      const check = await create([p, manual]);
+      const manualId = (
+        await q('SELECT id FROM check_product_lines WHERE check_id=$1 AND product_id IS NULL', [check.id])
+      )[0].id;
+      const products = new ProductsService(pool, new WarehouseService(pool));
+      await run(() => products.remove(p.productId, tenant));
+      await run(() => products.hardDelete(p.productId, tenant));
+      await assert.rejects(edit(check, { products: [manual] }), (e) => e.getStatus() === 409);
+      assert.equal(Number((await accruals(check.id))[0].amount), 8, 'ambiguous legacy save must roll back');
+      await edit(check, { products: [{ ...manual, id: manualId }] });
+      assert.equal(
+        (await accruals(check.id)).length,
+        0,
+        'keeping the proven manual row cannot inherit the deleted SKU rate',
+      );
+    });
+  },
+);
+
 for (const route of ['plain', 'nonactivating-close']) {
   test(`actual PG: full return cannot be resurrected by same-performer echo via ${route}`, options, async () => {
     await fixture(async ({ product, rule, create, run, returns, tenant, actor, first, accruals, edit }) => {
