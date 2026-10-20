@@ -3777,6 +3777,8 @@ export interface MotivationLegacyException {
   active: boolean;
   updatedAt: string;
   replacing: boolean;
+  /** Replacement is blocked until old trash with missing historical snapshots is resolved. */
+  replacementBlockedReason?: string;
 }
 
 export interface MotivationBulkInput {
