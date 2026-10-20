@@ -511,6 +511,7 @@ export default function MotivationScreen() {
         {employeeChips.length > 0 ? (
           <ScrollView
             horizontal
+            style={styles.chipScroll}
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chipsRow}
             keyboardShouldPersistTaps="handled"
@@ -708,10 +709,21 @@ export default function MotivationScreen() {
             ) : null}
             <TouchableOpacity
               disabled={ruleMutation.isPending || ruleConflict}
-              style={[styles.saveBtnGradient, ruleConflict && { opacity: 0.45 }]}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: ruleMutation.isPending || ruleConflict }}
+              style={[
+                styles.saveBtnGradient,
+                styles.saveBtn,
+                {
+                  minHeight: 48,
+                  backgroundColor: ruleMutation.isPending || ruleConflict ? palette.bg.muted : palette.accent.primary,
+                },
+              ]}
               onPress={() => ruleMutation.mutate(false)}
             >
-              <Text color={colors.white}>{ruleMutation.isPending ? 'Подождите…' : 'Сохранить'}</Text>
+              <Text color={ruleMutation.isPending || ruleConflict ? palette.text.secondary : colors.white}>
+                {ruleMutation.isPending ? 'Подождите…' : 'Сохранить'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               disabled={ruleMutation.isPending}
@@ -818,12 +830,7 @@ function FilterChip({ label, active, onPress, palette }: FilterChipProps) {
       onPress={onPress}
       activeOpacity={0.8}
     >
-      <Text
-        style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
+      <Text style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -1219,12 +1226,17 @@ const styles = StyleSheet.create({
   },
   totalPillText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
 
+  chipScroll: { flexGrow: 0 },
   chipsRow: {
+    alignItems: 'center',
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[3],
     gap: spacing[2],
   },
   filterChip: {
+    alignSelf: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1.5],
     borderRadius: borderRadius.full,

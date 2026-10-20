@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal as RNModal, View, Pressable, StyleSheet, TextInput, Keyboard } from 'react-native';
+import {
+  Modal as RNModal,
+  View,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  Keyboard,
+  InputAccessoryView,
+  Platform,
+} from 'react-native';
 import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
@@ -59,6 +68,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
   const [warehousesOpen, setWarehousesOpen] = useState(false);
   const [segment, setSegment] = useState<'products' | 'folders'>('products');
   const [search, setSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const [selected, setSelected] = useState<MotivationChoice[]>([]);
   const [percent, setPercent] = useState('10');
   const [preview, setPreview] = useState<MotivationBulkResult | null>(null);
@@ -369,50 +379,61 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
       ) : (
         <>
           <View style={styles.controls}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Выбрать склад"
-              accessibilityState={{ expanded: warehousesOpen }}
-              onPress={() => setWarehousesOpen((value) => !value)}
-              style={[styles.warehouse, { backgroundColor: palette.bg.card }]}
-            >
-              <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
-              <Text variant="bodyEmph" color={palette.text.primary} style={styles.grow}>
-                {activeWarehouse?.name || 'Склад'}
-              </Text>
-              <Ionicons
-                name={warehousesOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={palette.text.secondary}
-              />
-            </Pressable>
-            {warehousesOpen ? (
-              <TabBarScrollView horizontal reserveBottomNavigation={false} showsHorizontalScrollIndicator={false}>
-                {(warehouses.data ?? []).map((warehouse) => (
-                  <Pressable
-                    key={warehouse.id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: warehouse.id === activeWarehouseId }}
-                    onPress={() => {
-                      setWarehouseId(warehouse.id);
-                      setWarehousesOpen(false);
-                    }}
-                    style={styles.warehouseOption}
-                  >
-                    <Text
-                      color={warehouse.id === activeWarehouseId ? palette.accent.primaryText : palette.text.secondary}
-                    >
-                      {warehouse.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </TabBarScrollView>
+            {!searchFocused ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Выбрать склад"
+                  accessibilityState={{ expanded: warehousesOpen }}
+                  onPress={() => setWarehousesOpen((value) => !value)}
+                  style={[styles.warehouse, { backgroundColor: palette.bg.card }]}
+                >
+                  <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
+                  <Text variant="bodyEmph" color={palette.text.primary} style={styles.grow}>
+                    {activeWarehouse?.name || 'Склад'}
+                  </Text>
+                  <Ionicons
+                    name={warehousesOpen ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={palette.text.secondary}
+                  />
+                </Pressable>
+                {warehousesOpen ? (
+                  <TabBarScrollView horizontal reserveBottomNavigation={false} showsHorizontalScrollIndicator={false}>
+                    {(warehouses.data ?? []).map((warehouse) => (
+                      <Pressable
+                        key={warehouse.id}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: warehouse.id === activeWarehouseId }}
+                        onPress={() => {
+                          setWarehouseId(warehouse.id);
+                          setWarehousesOpen(false);
+                        }}
+                        style={styles.warehouseOption}
+                      >
+                        <Text
+                          color={
+                            warehouse.id === activeWarehouseId ? palette.accent.primaryText : palette.text.secondary
+                          }
+                        >
+                          {warehouse.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </TabBarScrollView>
+                ) : null}
+              </>
             ) : null}
             <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="search" size={20} color={palette.text.secondary} />
               <TextInput
                 value={search}
                 onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
+                returnKeyType="done"
+                submitBehavior="blurAndSubmit"
+                onSubmitEditing={Keyboard.dismiss}
                 placeholder="Название, папка, артикул"
                 accessibilityLabel="Поиск товаров и папок"
                 placeholderTextColor={palette.text.tertiary}
@@ -421,21 +442,23 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                 clearButtonMode="while-editing"
               />
             </View>
-            <View accessibilityRole="tablist" style={[styles.segments, { backgroundColor: palette.bg.muted }]}>
-              {(['products', 'folders'] as const).map((value) => (
-                <Pressable
-                  key={value}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: segment === value }}
-                  onPress={() => setSegment(value)}
-                  style={[styles.segment, segment === value && { backgroundColor: palette.bg.card }]}
-                >
-                  <Text variant="bodyEmph" color={segment === value ? palette.text.primary : palette.text.secondary}>
-                    {value === 'products' ? 'Товары' : 'Папки'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            {!searchFocused ? (
+              <View accessibilityRole="tablist" style={[styles.segments, { backgroundColor: palette.bg.muted }]}>
+                {(['products', 'folders'] as const).map((value) => (
+                  <Pressable
+                    key={value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: segment === value }}
+                    onPress={() => setSegment(value)}
+                    style={[styles.segment, segment === value && { backgroundColor: palette.bg.card }]}
+                  >
+                    <Text variant="bodyEmph" color={segment === value ? palette.text.primary : palette.text.secondary}>
+                      {value === 'products' ? 'Товары' : 'Папки'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
           </View>
           {warehouses.isError || catalog.isError ? (
             retry
@@ -517,67 +540,88 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
           )}
         </>
       )}
-      <View
-        style={[
-          styles.footer,
-          {
-            backgroundColor: palette.bg.card,
-            borderTopColor: palette.border.subtle,
-            paddingBottom: Math.max(insets.bottom, spacing[3]),
-          },
-        ]}
-      >
-        {!reviewing ? (
-          <View style={styles.percentRow}>
-            <View style={styles.grow}>
-              <Text variant="bodyEmph" color={palette.text.primary}>
-                Общий процент от продажи
-              </Text>
-              <Text variant="footnote" color={palette.text.secondary}>
-                {targetSummary}
-              </Text>
+      {!searchFocused ? (
+        <View
+          style={[
+            styles.footer,
+            {
+              backgroundColor: palette.bg.card,
+              borderTopColor: palette.border.subtle,
+              paddingBottom: Math.max(insets.bottom, spacing[3]),
+            },
+          ]}
+        >
+          {!reviewing ? (
+            <View style={styles.percentRow}>
+              <View style={styles.grow}>
+                <Text variant="bodyEmph" color={palette.text.primary}>
+                  Общий процент от продажи
+                </Text>
+                <Text variant="footnote" color={palette.text.secondary}>
+                  {targetSummary}
+                </Text>
+              </View>
+              <View style={[styles.percentBox, { backgroundColor: palette.bg.muted }]}>
+                <TextInput
+                  accessibilityLabel="Общий процент от продажи"
+                  value={percent}
+                  keyboardType="decimal-pad"
+                  inputAccessoryViewID={Platform.OS === 'ios' ? 'motivation-bulk-percent-done' : undefined}
+                  style={[textVariantStyles.title3, styles.percentInput, { color: palette.text.primary }]}
+                  maxLength={6}
+                  onChangeText={(value) => {
+                    invalidate();
+                    setPercent(value);
+                  }}
+                />
+                <Text color={palette.text.secondary}>%</Text>
+              </View>
             </View>
-            <View style={[styles.percentBox, { backgroundColor: palette.bg.muted }]}>
-              <TextInput
-                accessibilityLabel="Общий процент от продажи"
-                value={percent}
-                keyboardType="decimal-pad"
-                style={[textVariantStyles.title3, styles.percentInput, { color: palette.text.primary }]}
-                maxLength={6}
-                onChangeText={(value) => {
-                  invalidate();
-                  setPercent(value);
-                }}
-              />
-              <Text color={palette.text.secondary}>%</Text>
-            </View>
+          ) : null}
+          {numericPercent === null ? (
+            <Text variant="footnote" color={palette.mode === 'dark' ? colors.red[400] : colors.red[600]}>
+              Введите процент больше 0 и не больше 100, до двух знаков после запятой.
+            </Text>
+          ) : null}
+          {error ? (
+            <Text accessibilityRole="alert" color={palette.mode === 'dark' ? colors.red[400] : colors.red[600]}>
+              {error}
+            </Text>
+          ) : null}
+          {action(
+            pending ? 'Подождите…' : reviewing && preview ? 'Сохранить правило' : 'Проверить правило',
+            () => {
+              void run(reviewing && !!preview);
+            },
+            pending || !selected.length || numericPercent === null,
+            'bulk-submit',
+          )}
+        </View>
+      ) : null}
+      {Platform.OS === 'ios' ? (
+        <InputAccessoryView nativeID="motivation-bulk-percent-done" backgroundColor={palette.bg.card}>
+          <View style={styles.keyboardAccessory}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Скрыть клавиатуру процента"
+              onPress={Keyboard.dismiss}
+              style={styles.keyboardDone}
+            >
+              <Text variant="callout" color={palette.accent.primaryText}>
+                Готово
+              </Text>
+            </Pressable>
           </View>
-        ) : null}
-        {numericPercent === null ? (
-          <Text variant="footnote" color={palette.mode === 'dark' ? colors.red[400] : colors.red[600]}>
-            Введите процент больше 0 и не больше 100, до двух знаков после запятой.
-          </Text>
-        ) : null}
-        {error ? (
-          <Text accessibilityRole="alert" color={palette.mode === 'dark' ? colors.red[400] : colors.red[600]}>
-            {error}
-          </Text>
-        ) : null}
-        {action(
-          pending ? 'Подождите…' : reviewing && preview ? 'Сохранить правило' : 'Проверить правило',
-          () => {
-            void run(reviewing && !!preview);
-          },
-          pending || !selected.length || numericPercent === null,
-          'bulk-submit',
-        )}
-      </View>
+        </InputAccessoryView>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  keyboardAccessory: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: spacing[4] },
+  keyboardDone: { minHeight: 44, minWidth: 64, justifyContent: 'center', alignItems: 'center' },
   grow: { flex: 1, minWidth: 0 },
   iconButton: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   controls: { paddingHorizontal: spacing[4], gap: spacing[2], paddingBottom: spacing[3] },

@@ -12,6 +12,7 @@ const mockDeps: (unknown[] | undefined)[] = [];
 const mockCleanups: (() => void)[] = [];
 const mockEffects: (() => void)[] = [];
 let mockIndex = 0;
+let mockMutationPending = false;
 let mockPromos: MotivationPromo[] = [];
 let mockRules: MotivationRule[] = [];
 let mockAccruals: MotivationAccrualV2[] = [];
@@ -114,7 +115,7 @@ jest.mock('@tanstack/react-query', () => ({
     onSuccess: () => void;
     onError: (error: unknown) => void;
   }) => ({
-    isPending: false,
+    isPending: mockMutationPending,
     mutate: (input: unknown) => options.mutationFn(input).then(options.onSuccess, options.onError),
   }),
 }));
@@ -178,6 +179,7 @@ beforeEach(() => {
   mockStates.length = mockRefs.length = mockCallbacks.length = mockDeps.length = mockEffects.length = 0;
   mockPromos = [];
   mockRules = [];
+  mockMutationPending = false;
   mockAccruals = [];
   mockPatch.mockResolvedValue({ data: {} });
   Platform.OS = 'ios';
@@ -304,6 +306,10 @@ it('updates a sales rule with its exact revision and keeps the old check promise
   const save = nodes(ruleModal().props.children as React.ReactNode).find(
     (node) => node.type === 'TouchableOpacity' && words(node) === 'Сохранить',
   )!;
+  const saveStyle = Object.assign({}, ...(save.props.style as object[]));
+  expect(saveStyle.backgroundColor).toBe('#2563eb');
+  expect(saveStyle.minHeight).toBeGreaterThanOrEqual(44);
+  expect(save.props.disabled).toBe(false);
   (save.props.onPress as () => void)();
   await flush();
   expect(mockPatch).toHaveBeenCalledWith('r1', { expectedRevision: 7, percent: 8, active: true });
@@ -349,4 +355,40 @@ it('mixed history states sales vs margin, exact kopecks and the employee share',
   const margin = rowText(mockAccruals[1]);
   expect(margin).toContain('37% от маржи');
   expect(margin).not.toContain('Доля');
+});
+
+it('revenue save has a contrasting disabled surface/text during a pending mutation', () => {
+  mockRules = [
+    {
+      id: 'r1',
+      target: { kind: 'product', productId: 'p1' },
+      productName: 'Масло QA',
+      percent: 8,
+      active: true,
+      revision: 1,
+    } as MotivationRule,
+  ];
+  const row = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node).includes('Масло QA'))!;
+  (row.props.onPress as () => void)();
+  mockMutationPending = true;
+  const save = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Подождите…')!;
+  expect(save.props.disabled).toBe(true);
+  expect(Object.assign({}, ...(save.props.style as object[])).backgroundColor).toBe('#eee');
+  expect(nodes(save.props.children as React.ReactNode).find((node) => node.type === 'Text')!.props.color).toBe('#555');
+});
+
+it('employee filter scroll does not grow vertically and its chips wrap with a minimum touch target', () => {
+  mockAccruals = [
+    { id: 'a1', employeeId: 'employee', employeeName: 'Очень длинное имя сотрудника QA', amount: 1 },
+  ] as MotivationAccrualV2[];
+  (nodes(render()).find((node) => node.props.label === 'Начисления')!.props.onPress as () => void)();
+  const scroll = nodes(render()).find((node) => node.type === 'ScrollView' && node.props.horizontal)!;
+  expect((scroll.props.style as { flexGrow: number }).flexGrow).toBe(0);
+  expect((scroll.props.contentContainerStyle as { alignItems: string }).alignItems).toBe('center');
+  const chip = nodes(scroll.props.children as React.ReactNode).find((node) => node.props.label === 'Все')!;
+  const rendered = (chip.type as (props: unknown) => Element)(chip.props);
+  const chipStyle = Object.assign({}, ...(rendered.props.style as object[]));
+  expect(chipStyle.minHeight).toBeGreaterThanOrEqual(44);
+  expect(chipStyle.height).toBeUndefined();
+  expect(nodes(rendered).find((node) => node.type === 'Text')!.props.numberOfLines).toBeUndefined();
 });

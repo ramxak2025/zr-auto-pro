@@ -1,3 +1,4 @@
+import { checkProductPayload, savedProductLineIds } from './checkCreate/productPayload';
 import { defaultConfirmedPerformers, explicitlyAssignedPerformers, performerPayload } from './checkCreate/performers';
 import { checkDateParts, selectedCheckDate } from '../../../shared/utils/checkDateTime';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -571,6 +572,7 @@ export default function CheckCreateScreen() {
     (CheckServiceLine & { lineMasterId?: string; priceConfirmed?: boolean })[]
   >([]);
   const [productLines, setProductLines] = useState<CheckProductLine[]>([]);
+  const originalProductLineIds = useRef<ReadonlySet<string>>(new Set());
 
   // ── Photo attachments ─────────────────────────────────────────────────────
   // Three-state model so the "create" flow (where check id doesn't exist yet)
@@ -1385,6 +1387,7 @@ export default function CheckCreateScreen() {
         lineMasterId: line.masterId || '',
       })),
     );
+    originalProductLineIds.current = savedProductLineIds(c.products || []);
     setProductLines(c.products || []);
     // Round 14: гидрируем исполнителей и место БЕЗ dirty-флагов — payload
     // отправит их только после явной правки (см. proceed()).
@@ -1972,6 +1975,7 @@ export default function CheckCreateScreen() {
     setInstallmentNextDate(new Date(Date.now() + 30 * 86400000));
     setServiceLines([]);
     setProductLines([]);
+    originalProductLineIds.current = new Set();
     setManualDate(null);
     setLoadedCheckDate(null);
     setPendingPhotos([]);
@@ -2845,14 +2849,7 @@ export default function CheckCreateScreen() {
           price: l.price,
           ...(hasLegacyQty(l) ? { quantity: l.quantity } : {}),
         })),
-        products: productLines.map((l) => ({
-          sourceTemplateProduct: l.sourceTemplateProduct,
-          productId: l.productId,
-          name: l.name,
-          sellPrice: l.sellPrice,
-          costPrice: l.costPrice,
-          quantity: l.quantity,
-        })),
+        products: productLines.map((line) => checkProductPayload(line, originalProductLineIds.current)),
       };
       submittingRef.current = true;
       createMutation.mutate(payload);

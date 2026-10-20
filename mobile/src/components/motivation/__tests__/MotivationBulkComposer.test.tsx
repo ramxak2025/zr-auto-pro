@@ -1,6 +1,7 @@
 // Actual form handlers + transport fixture. Native hosts are inert: this is
 // behavioral evidence, not device/simulator presentation evidence.
 import React from 'react';
+import { Keyboard, Platform } from 'react-native';
 import type { MotivationBulkInput, MotivationBulkResult, Product } from '../../../../../shared/types';
 import { buildMotivationChoices } from '../selection';
 
@@ -48,6 +49,8 @@ jest.mock('react', () => ({
 }));
 jest.mock('react-native', () => ({
   Keyboard: { dismiss: jest.fn() },
+  Platform: { OS: 'ios' },
+  InputAccessoryView: 'InputAccessoryView',
   Modal: 'RNModal',
   View: 'View',
   Pressable: 'Pressable',
@@ -159,6 +162,7 @@ beforeEach(() => {
   mockIndex = mockUUID = 0;
   mockError = false;
   visible = true;
+  Platform.OS = 'ios';
   jest.clearAllMocks();
   const products = Array.from(
     { length: 24 },
@@ -492,4 +496,51 @@ it('mixed replacement adds only eligible scoped product IDs and can be unchecked
     targets: [{ kind: 'folder', warehouseId: 'main', path: 'Масла' }],
     replaceLegacyPromos: [],
   });
+});
+
+it('search focus frees result space and restores warehouse/segment/percent/selection on blur without changing retry UUID', async () => {
+  press((node) => node.props.accessibilityLabel === 'Выбрать склад');
+  textPress('Б/У');
+  textPress('Папки');
+  choose(0);
+  change('Общий процент от продажи', '8');
+  await submit();
+  const original = mockBulk.mock.calls[0][0];
+  (find((node) => node.type === 'Header').props.onBack as () => void)();
+  const searchInput = () =>
+    find((node) => node.type === 'TextInput' && node.props.accessibilityLabel === 'Поиск товаров и папок');
+  (searchInput().props.onFocus as () => void)();
+  change('Поиск товаров и папок', 'Масла');
+  expect(nodes(render()).some((node) => node.props.accessibilityLabel === 'Выбрать склад')).toBe(false);
+  expect(nodes(render()).some((node) => node.props.accessibilityRole === 'tablist')).toBe(false);
+  expect(nodes(render()).some((node) => node.props.testID === 'bulk-submit')).toBe(false);
+  expect(nodes(render()).some((node) => node.props.accessibilityLabel === 'Общий процент от продажи')).toBe(false);
+  expect(list().props.data).not.toHaveLength(0);
+  expect(searchInput().props.returnKeyType).toBe('done');
+  expect(searchInput().props.submitBehavior).toBe('blurAndSubmit');
+  (searchInput().props.onSubmitEditing as () => void)();
+  expect(Keyboard.dismiss).toHaveBeenCalled();
+  (searchInput().props.onBlur as () => void)();
+  expect(words(find((node) => node.props.accessibilityLabel === 'Выбрать склад'))).toContain('Б/У');
+  expect(
+    find((node) => node.props.accessibilityRole === 'tab' && words(node) === 'Папки').props.accessibilityState,
+  ).toEqual({ selected: true });
+  expect(find((node) => node.props.accessibilityLabel === 'Общий процент от продажи').props.value).toBe('8');
+  expect(find((node) => node.props.testID === 'bulk-submit')).toBeDefined();
+  await submit();
+  expect(mockBulk.mock.calls[1][0]).toEqual(original);
+});
+
+it('decimal keyboard has an iOS native Done accessory in this same form and Android leaves the native accessory absent', () => {
+  const percent = find((node) => node.props.accessibilityLabel === 'Общий процент от продажи');
+  expect(percent.props.inputAccessoryViewID).toBe('motivation-bulk-percent-done');
+  const accessory = find((node) => node.type === 'InputAccessoryView');
+  expect(accessory.props.nativeID).toBe(percent.props.inputAccessoryViewID);
+  press((node) => node.props.accessibilityLabel === 'Скрыть клавиатуру процента');
+  expect(Keyboard.dismiss).toHaveBeenCalledTimes(1);
+  Platform.OS = 'android';
+  expect(nodes(render()).some((node) => node.type === 'InputAccessoryView')).toBe(false);
+  expect(
+    find((node) => node.props.accessibilityLabel === 'Общий процент от продажи').props.inputAccessoryViewID,
+  ).toBeUndefined();
 });
