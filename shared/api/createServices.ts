@@ -62,6 +62,12 @@ import type {
   SalaryPayment,
   MotivationPromo,
   MotivationAccrual,
+  MotivationRulesResponse,
+  MotivationBulkInput,
+  MotivationBulkResult,
+  MotivationRule,
+  MotivationRulePatch,
+  MotivationAccrualV2,
   FinancialReport,
   DashboardChartResponse,
   DashboardStats,
@@ -1449,6 +1455,13 @@ export function createSalaryApi(api: HttpClient) {
 
 export function createMotivationApi(api: HttpClient) {
   return {
+    getRules: () => api.get<MotivationRulesResponse>('/motivation/rules'),
+    bulkRules: (data: MotivationBulkInput) => api.post<MotivationBulkResult>('/motivation/rules/bulk', data),
+    patchRule: (id: string, data: MotivationRulePatch) => api.patch<MotivationRule>(`/motivation/rules/${id}`, data),
+    deleteRule: (id: string, expectedRevision: number) =>
+      api.delete<{ message: string }>(`/motivation/rules/${id}`, { params: { expectedRevision } }),
+    getAccrualsV2: (params?: { userId?: string; dateFrom?: string; dateTo?: string }) =>
+      api.get<MotivationAccrualV2[]>('/motivation/accruals-v2', { params }),
     /** All promo products for the tenant (owner-class), joined with current prices. */
     getPromos: () => api.get<MotivationPromo[]>('/motivation/promos'),
     /**
