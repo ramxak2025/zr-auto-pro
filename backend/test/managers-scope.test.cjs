@@ -217,6 +217,7 @@ function fakeJwt(overrides = {}) {
       signCalls.push({ payload, options });
       return JSON.stringify({
         ...payload,
+        iat: payload.iat ?? Math.floor(Date.now() / 1000),
         expiresIn: options?.expiresIn ?? null,
         exp: Math.floor(Date.now() / 1000) + 600,
       });
@@ -4496,7 +4497,7 @@ const SESSION_EXP = 1_790_000_000;
 // Общий кусок колонок пользователя содержит комментарии `--`, поэтому маршруты пула привязаны к ХВОСТУ запроса.
 const AUTH_LOGIN_SQL = /WHERE u\.phone = \$1 OR u\.phone = \$2 LIMIT 1$/;
 const AUTH_BY_ID_SQL = /WHERE u\.id = \$1$/;
-const AUTH_REFRESH_SQL = /FROM users u WHERE u\.id=\$1$/;
+const AUTH_REFRESH_SQL = /WHERE u\.id=\$1 FOR SHARE OF u$/;
 const AUTH_CLAIM_SQL = /^INSERT INTO revoked_tokens/;
 const AUTH_CLAIMED = { rows: [], rowCount: 1 };
 const NO_POINTS_ROUTE = [/FROM tenant_points WHERE tenant_id=\$1 AND is_active/, [{ has_points: false }]];
@@ -4552,13 +4553,21 @@ const sessionActor = (userId, overrides = {}) => ({
   jti: 'jti-a',
   ...overrides,
 });
-const rawSessionToken = (extra = {}) => JSON.stringify({ jti: 'jti-a', iat: SESSION_IAT, exp: SESSION_EXP, ...extra });
+const rawSessionToken = (extra = {}) =>
+  JSON.stringify({ sub: MANAGER_ID, tenantId: null, jti: 'jti-a', iat: SESSION_IAT, exp: SESSION_EXP, ...extra });
 const refreshPool = (row, claim = AUTH_CLAIMED) =>
   fakePool([
+    [
+      /FROM revoked_tokens r WHERE r.jti=\$1 FOR UPDATE OF r$/,
+      claim.rowCount === 0 ? [{ revocation_reason: 'forced' }] : [],
+    ],
     [AUTH_REFRESH_SQL, row ? [row] : []],
     [AUTH_CLAIM_SQL, claim],
   ]);
 const liveRow = (overrides = {}) => ({
+  tenant_id: null,
+  tenant_active: true,
+  point_allowed: true,
   is_active: true,
   dismissed_at: null,
   purged_at: null,
@@ -4759,26 +4768,29 @@ test('смена филиала директором работает как п�
   assert.equal('ownerSharePercent' in result.user, false);
 });
 
-test('продление сессии менеджера: claim старого jti, новый токен без тенанта и без филиала, ровно два запроса', async () => {
-  const jwt = fakeJwt();
-  const pool = refreshPool(liveRow());
+test('продление сессии менеджера: atomic claim+receipt, новый токен без тенанта и без филиала', async () => {
+  const jwt = fakeJwt(),
+    pool = refreshPool(liveRow());
   const result = await authOf(pool, jwt).refresh(sessionActor(MANAGER_ID), rawSessionToken());
-
-  assert.equal(pool.calls.length, 2);
-  assert.match(pool.calls[0].text, AUTH_REFRESH_SQL);
-  assert.deepEqual(pool.calls[0].params, [MANAGER_ID, SESSION_IAT]);
-  const claim = pool.calls[1];
-  assert.match(claim.text, AUTH_CLAIM_SQL);
-  assert.match(claim.text, /ON CONFLICT \(jti\) DO NOTHING$/);
-  assert.deepEqual(claim.params, ['jti-a', MANAGER_ID, null, 120000, new Date(SESSION_EXP * 1000)]);
-
-  assert.equal(jwt.signCalls.length, 1);
-  const { payload } = jwt.signCalls[0];
-  assert.equal(payload.sub, MANAGER_ID);
-  assert.equal(payload.tenantId, undefined, 'нулевой тенант в новый токен не зашивается');
-  assert.equal(payload.pointId, null);
-  assert.notEqual(payload.jti, 'jti-a');
-  assert.equal(JSON.parse(result.token).sub, MANAGER_ID);
+  assert.equal(pool.calls[0].text, 'BEGIN');
+  assert.equal(pool.calls.at(-1).text, 'COMMIT');
+  assert.equal(pool.connects, 1);
+  assert.equal(pool.released, 1);
+  const live = pool.calls.find((c) => AUTH_REFRESH_SQL.test(c.text));
+  assert.deepEqual(live.params, [MANAGER_ID, SESSION_IAT, null, null]);
+  const claims = pool.calls.filter((c) => AUTH_CLAIM_SQL.test(c.text));
+  assert.equal(claims.length, 1);
+  assert.deepEqual(claims[0].params.slice(0, 5), ['jti-a', MANAGER_ID, null, 120000, SESSION_EXP]);
+  const stored = JSON.parse(claims[0].params[6]);
+  assert.equal(stored.sub, MANAGER_ID);
+  assert.equal(stored.tenantId, undefined);
+  assert.equal(stored.pointId, null);
+  assert.notEqual(stored.jti, 'jti-a');
+  const issued = JSON.parse(result.token);
+  assert.deepEqual(
+    [issued.sub, issued.tenantId, issued.pointId, issued.jti],
+    [stored.sub, undefined, null, stored.jti],
+  );
 });
 
 test('продление сессии: отказы (недоступен, устарела, токен уже обменян, вход «под пользователем», чужой jti) — без нового токена', async () => {
@@ -4796,7 +4808,8 @@ test('продление сессии: отказы (недоступен, ус�
       401,
       'Аккаунт недоступен',
     );
-    assert.equal(pool.calls.length, 1, label);
+    assert.equal(pool.calls.filter((c) => AUTH_CLAIM_SQL.test(c.text)).length, 0, label);
+    assert.equal(pool.calls.at(-1).text, 'ROLLBACK');
     assert.equal(jwt.signCalls.length, 0, label);
   }
 
@@ -4807,7 +4820,11 @@ test('продление сессии: отказы (недоступен, ус�
     401,
     SESSION_STALE_MESSAGE,
   );
-  assert.equal(stalePool.calls.length, 1, 'после смены пароля claim не пишется');
+  assert.equal(
+    stalePool.calls.filter((c) => AUTH_CLAIM_SQL.test(c.text)).length,
+    0,
+    'после смены пароля claim не пишется',
+  );
   assert.equal(staleJwt.signCalls.length, 0);
 
   const lostJwt = fakeJwt();
@@ -4817,7 +4834,7 @@ test('продление сессии: отказы (недоступен, ус�
     401,
     'Токен отозван',
   );
-  assert.equal(lostPool.calls.length, 2);
+  assert.equal(lostPool.calls.filter((c) => AUTH_CLAIM_SQL.test(c.text)).length, 0);
   assert.equal(lostJwt.signCalls.length, 0);
 
   const refusals = [
@@ -4828,8 +4845,8 @@ test('продление сессии: отказы (недоступен, ус�
       'Сессия входа под пользователем не продлевается',
     ],
     [sessionActor(MANAGER_ID, { jti: undefined }), rawSessionToken(), 401, 'Сессия устарела — войдите заново'],
-    [sessionActor(MANAGER_ID), rawSessionToken({ jti: 'jti-other' }), 401, 'Неверный токен'],
-    [sessionActor(MANAGER_ID), '', 401, 'Неверный токен'],
+    [sessionActor(MANAGER_ID), rawSessionToken({ jti: 'jti-other' }), 401, 'Сессия устарела — войдите заново'],
+    [sessionActor(MANAGER_ID), '', 401, 'Неверный или истёкший токен'],
   ];
   for (const [actor, rawToken, status, message] of refusals) {
     const pool = refreshPool(liveRow());
@@ -4840,18 +4857,18 @@ test('продление сессии: отказы (недоступен, ус�
 
 test('продление сессии директора работает как прежде: тенант и филиал переезжают в новый токен', async () => {
   const jwt = fakeJwt();
-  const pool = refreshPool(liveRow());
+  const pool = refreshPool(liveRow({ tenant_id: TENANT_ID }));
   await authOf(pool, jwt).refresh(
     sessionActor(DIRECTOR_ID, { tenantID: TENANT_ID, currentPointId: POINT_ID }),
-    rawSessionToken(),
+    rawSessionToken({ sub: DIRECTOR_ID, tenantId: TENANT_ID, pointId: POINT_ID }),
   );
-  assert.equal(pool.calls[1].params[2], TENANT_ID);
+  assert.equal(pool.calls.find((c) => AUTH_CLAIM_SQL.test(c.text)).params[2], TENANT_ID);
   const { payload } = jwt.signCalls[0];
   assert.deepEqual([payload.sub, payload.tenantId, payload.pointId], [DIRECTOR_ID, TENANT_ID, POINT_ID]);
 });
 
 test('выход менеджера: в blacklist пишется NULL вместо нулевого тенанта, кэш авторизации токена сброшен', async () => {
-  for (const [tenantId, stored] of [
+  for (const [tenantId] of [
     [NO_TENANT_ID, null],
     ['', null],
     [TENANT_ID, TENANT_ID],
@@ -4860,12 +4877,16 @@ test('выход менеджера: в blacklist пишется NULL вмест
     seedAuthCache(MANAGER_ID, 'jti-out');
     try {
       await authOf(pool).logout('jti-out', MANAGER_ID, tenantId);
-      assert.equal(pool.calls.length, 1, String(tenantId));
-      const [call] = pool.calls;
+      const writes = pool.calls.filter((c) => AUTH_CLAIM_SQL.test(c.text));
+      assert.equal(writes.length, 1, String(tenantId));
+      assert.equal(pool.calls[0].text, 'BEGIN');
+      assert.equal(pool.calls.at(-1).text, 'COMMIT');
+      const [call] = writes;
       assert.match(call.text, AUTH_CLAIM_SQL);
       assert.match(call.text, /ON CONFLICT \(jti\) DO UPDATE SET/);
-      assert.deepEqual(call.params.slice(0, 4), ['jti-out', MANAGER_ID, stored, 0]);
-      assert.ok(call.params[4] instanceof Date && call.params[4].getTime() > Date.now(), 'expires_at — в будущем');
+      assert.match(call.text, /VALUES \(\$1,\$2,NULL,now\(\),\$3,'forced'\)/);
+      assert.deepEqual(call.params.slice(0, 2), ['jti-out', MANAGER_ID]);
+      assert.ok(call.params[2] instanceof Date && call.params[2].getTime() > Date.now(), 'expires_at — в будущем');
       assert.equal(isAuthCached(MANAGER_ID, 'jti-out'), false, 'следующий запрос с этим токеном пойдёт в БД');
     } finally {
       ttlCache.invalidate(authCacheKey(MANAGER_ID, 'jti-out'));

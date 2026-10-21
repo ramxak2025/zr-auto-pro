@@ -5,6 +5,8 @@ import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
+import { randomUUID } from 'expo-crypto';
+import { isApiRouteFailure, isAuthoritativeAuthFailure } from '../api/apiHosts';
 // Same alias style as CheckCreateScreen — expo-image is cross-platform, and
 // its static cache-clear methods are the only thing this file needs.
 import { Image as ExpoImage } from 'expo-image';
@@ -12,14 +14,17 @@ import type { QueryClient } from '@tanstack/react-query';
 import { authApi } from '../api/services';
 import * as serviceFactories from '../../../shared/api/createServices';
 import api, {
-  beginSessionReissueWindow,
   captureAuthSession,
   createSessionBoundClient,
   createCapturedAuthRequester,
   onApiRouteReady,
   onAuthExpired,
   onRequestSucceeded,
+  onSessionRecoveryNeeded,
+  markSessionRefreshPending,
+  markSessionReissueDenied,
   reselectApiHost,
+  reportAuthExpiry,
   setAuthToken,
 } from '../api/axios';
 import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
@@ -35,7 +40,6 @@ import { inspectSavedAccountRemoval, type AccountRemovalInspection } from './acc
 import {
   adoptOfflineCheckQueue,
   endOfflineCheckQueueSession,
-  setOfflineCheckQueuePointId,
   stampOfflineCheckQueuePoint,
   type QueueOwner,
 } from '../utils/offlineCheckQueue';
@@ -57,6 +61,7 @@ import {
   activeAccount,
   type AccountRegistry,
   type SavedAccountSummary,
+  type PendingSessionReissue,
 } from './accountRegistry';
 import { setDataSession, userDataOwner } from './dataSession';
 import { createForegroundProfileRefreshController } from './foregroundProfileRefresh';
@@ -193,10 +198,7 @@ function queueOwnerOf(u: User): QueueOwner {
   return { userId: u.id, tenantId: u.tenantId ?? null, pointId: u.currentPointId };
 }
 
-/** True when an axios error is a genuine 401 (session expired / revoked). */
-function isAuthExpiry(err: unknown): boolean {
-  return (err as { response?: { status?: number } })?.response?.status === 401;
-}
+const isAuthExpiry = isAuthoritativeAuthFailure;
 
 // ── Тихое продление сессии ──────────────────────────────────────────────────
 // Токен живёт фиксированный TTL и раньше НИКОГДА не продлевался: пользователь,
@@ -209,54 +211,6 @@ const SESSION_REFRESH_AGE_MS = 7 * 86_400_000;
 
 /** Паузы между попытками продления. Три попытки, ~0,55 с суммарного ожидания. */
 const SESSION_REFRESH_RETRY_DELAYS_MS = [150, 400];
-
-/**
- * Идущее продление. Обмен токена ОДНОРАЗОВЫЙ: сервер «клеймит» jti через
- * ON CONFLICT DO NOTHING, поэтому два параллельных /auth/refresh — это
- * гарантированный проигрыш одного из них с «Токен отозван». Держим
- * единственный полёт и отдаём его всем желающим.
- */
-let sessionRefreshInFlight: { epoch: number; promise: Promise<string | null> } | null = null;
-
-/**
- * Продлить сессию. Возвращает новый токен или null.
- *
- * Почему с ретраями. Сервер продлевает по схеме «сначала погасить, потом
- * выдать» (backend/src/auth/auth.service.ts): старый токен уходит в blacklist
- * ДО того, как новый уедет на телефон. Значит потерянный ответ — это не
- * «попробуем в следующий раз», а мёртвая сессия: у клиента на руках токен,
- * который сервер уже считает отозванным, и человека выбросит на вход через
- * AUTH_CACHE_TTL плюс grace. Раньше здесь была ровно ОДНА попытка с пустым
- * catch, а комментарий рядом уверял, что «текущий токен остаётся валидным до
- * своего exp» — это было неправдой.
- *
- * Повторяем ТОЛЬКО транспортные отказы: если ответ не доехал, есть шанс, что и
- * запрос не дошёл — тогда повтор спасает. На 401 повтор бессмысленен: наш jti
- * уже заклеймён, второй раз его не обменять.
- */
-async function refreshSessionToken(): Promise<string | null> {
-  const lease = captureAuthSession();
-  if (!lease.token) return null;
-  if (sessionRefreshInFlight?.epoch === lease.epoch) return sessionRefreshInFlight.promise;
-  const bound = createSessionBoundClient(lease.token);
-  const flight = { epoch: lease.epoch, promise: Promise.resolve<string | null>(null) };
-  flight.promise = (async () => {
-    for (let attempt = 0; lease.isCurrent(); attempt++) {
-      try {
-        const res = await bound.post<{ token?: string }>('/auth/refresh');
-        return lease.isCurrent() && typeof res.data?.token === 'string' ? res.data.token : null;
-      } catch (err) {
-        if (!lease.isCurrent() || isAuthExpiry(err) || attempt >= SESSION_REFRESH_RETRY_DELAYS_MS.length) return null;
-        await sleep(SESSION_REFRESH_RETRY_DELAYS_MS[attempt]);
-      }
-    }
-    return null;
-  })().finally(() => {
-    if (sessionRefreshInFlight === flight) sessionRefreshInFlight = null;
-  });
-  sessionRefreshInFlight = flight;
-  return flight.promise;
-}
 
 /**
  * iat-клейм JWT в миллисекундах. Payload декодируется БЕЗ верификации подписи
@@ -542,8 +496,12 @@ const pushLifecycle = createPushSessionLifecycle(secureAccountStorage, {
     });
     return response.data;
   },
-  logout: async (bearer) => {
-    await createCapturedAuthRequester(bearer)({ method: 'post', url: '/auth/logout' });
+  logout: async (bearer, refreshRequestId) => {
+    await createCapturedAuthRequester(bearer)({
+      method: 'post',
+      url: '/auth/logout',
+      headers: refreshRequestId ? { 'x-refresh-request-id': refreshRequestId } : undefined,
+    });
   },
   unregister: async ({ bearer, deviceToken }) => {
     await createCapturedAuthRequester(bearer)({ method: 'delete', url: '/push/token', data: { token: deviceToken } });
@@ -729,7 +687,173 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       generation: number,
     ) => {
       if (!sessionRuntime.isCurrent(epoch)) return;
-      await authAccounts.update(session, generation, () => sessionRuntime.isCurrent(epoch));
+      await authAccounts.update(session, generation, () => sessionRuntime.isCurrent(epoch), session.token);
+    },
+    [sessionRuntime],
+  );
+  const applyReissuedSessionRef = useRef<((saved: AccountRegistry<User>) => Promise<void>) | null>(null);
+  const unacknowledgedReissueRef = useRef<{
+    epoch: number;
+    accountId: string | null;
+    generation: number;
+    sourceToken: string;
+    token: string;
+    pending: PendingSessionReissue;
+  } | null>(null);
+  const refreshFlightRef = useRef<{ epoch: number; promise: Promise<void>; pointId?: string } | null>(null);
+  const refreshJournalRef = useRef<{ token: string; requestId: string; epoch: number; denied?: true } | null>(null);
+  const ensureSessionToken = useCallback(
+    async (epoch: number, signal?: AbortSignal, requestedPointId?: string) => {
+      if (refreshFlightRef.current?.epoch === epoch) {
+        if (requestedPointId && refreshFlightRef.current.pointId !== requestedPointId)
+          throw new AccountRegistryError('SESSION_CHANGED', 'Дождитесь завершения смены сессии.');
+        return refreshFlightRef.current.promise;
+      }
+      const lease = captureAuthSession();
+      if (!lease.token || !sessionRuntime.isCurrent(epoch)) return;
+      const isCurrent = () => sessionRuntime.isCurrent(epoch) && lease.isCurrent() && !signal?.aborted;
+      const flight = { epoch, promise: Promise.resolve(), pointId: requestedPointId };
+      flight.promise = (async () => {
+        const saved = await authAccounts.read();
+        const session = activeAccount(saved)?.session;
+        const unacknowledged = unacknowledgedReissueRef.current;
+        if (
+          isCurrent() &&
+          unacknowledged?.epoch === epoch &&
+          unacknowledged.sourceToken === lease.token &&
+          saved.activeId === unacknowledged.accountId &&
+          session?.token === unacknowledged.token &&
+          !session.pendingReissue &&
+          saved.generation === unacknowledged.generation + (unacknowledged.pending.kind === 'switch-point' ? 1 : 0)
+        ) {
+          // The atomic write can succeed while native readback/acknowledgement
+          // fails. Adopt only the exact response we were committing, never an
+          // arbitrary different account/token found on disk.
+          await sessionRuntime.commit(epoch, async () => {
+            if (!isCurrent()) return;
+            unacknowledgedReissueRef.current = null;
+            refreshJournalRef.current = null;
+            if (unacknowledged.pending.kind === 'switch-point') await applyReissuedSessionRef.current!(saved);
+            else {
+              setAuthToken(session.token);
+              setToken(session.token);
+            }
+          });
+          return;
+        }
+        if (!isCurrent() || session?.token !== lease.token || session.impersonating) return;
+        const issuedAt = jwtIssuedAtMs(session.token);
+        let pending = session.pendingReissue;
+        const denial =
+          session.reissueDenied === true ||
+          (refreshJournalRef.current?.epoch === epoch &&
+            refreshJournalRef.current.token === lease.token &&
+            refreshJournalRef.current.requestId === pending?.refreshRequestId &&
+            refreshJournalRef.current.denied === true);
+        if (requestedPointId && pending && (pending.kind !== 'switch-point' || pending.pointId !== requestedPointId))
+          throw new AccountRegistryError(
+            'SESSION_CHANGED',
+            denial
+              ? 'Предыдущее переключение не завершено. Повторите его или выйдите из аккаунта.'
+              : 'Дождитесь завершения смены сессии.',
+          );
+        if (pending && denial) {
+          refreshJournalRef.current = { token: lease.token, requestId: pending.refreshRequestId, epoch, denied: true };
+          markSessionReissueDenied(lease.token);
+          if (!requestedPointId) return; // /me may still authorize the unchanged source; retain its proof either way.
+          // An explicit retry reuses the immutable operation and key. Protect
+          // in-flight source401s while its denied marker is durably cleared.
+          markSessionRefreshPending(lease.token);
+          try {
+            pending = (await authAccounts.beginReissue(saved.generation, lease.token, pending, isCurrent)).result;
+          } catch (error) {
+            if (isCurrent()) markSessionReissueDenied(lease.token);
+            throw error;
+          }
+        }
+        if (!pending) {
+          if (!requestedPointId && (issuedAt === null || Date.now() - issuedAt <= SESSION_REFRESH_AGE_MS)) return;
+          const operation: PendingSessionReissue = requestedPointId
+            ? { kind: 'switch-point', refreshRequestId: randomUUID(), pointId: requestedPointId }
+            : { kind: 'refresh', refreshRequestId: randomUUID() };
+          // Atomic secure write/readback before dispatch. Source token and target
+          // stay in one value across crashes; no operation may replace this one.
+          pending = (await authAccounts.beginReissue(saved.generation, lease.token, operation, isCurrent)).result;
+        }
+        if (!isCurrent()) return;
+        flight.pointId = pending.kind === 'switch-point' ? pending.pointId : undefined;
+        const requestId = pending.refreshRequestId;
+        markSessionRefreshPending(lease.token);
+        refreshJournalRef.current = { token: lease.token, requestId, epoch };
+        const bound = createSessionBoundClient(lease.token);
+        for (let attempt = 0; isCurrent(); attempt++) {
+          try {
+            const res = await bound.post<{ token: string; user?: User; currentPointId?: string }>(
+              pending.kind === 'switch-point' ? '/auth/switch-point' : '/auth/refresh',
+              pending.kind === 'switch-point' ? { pointId: pending.pointId } : undefined,
+              {
+                signal,
+                headers: { 'x-refresh-request-id': requestId },
+              },
+            );
+            if (!isCurrent()) return;
+            if (typeof res.data?.token !== 'string') throw new Error('Invalid session recovery response');
+            await sessionRuntime.commit(epoch, async () => {
+              if (!isCurrent()) return;
+              unacknowledgedReissueRef.current = {
+                epoch,
+                accountId: saved.activeId,
+                generation: saved.generation,
+                sourceToken: lease.token!,
+                token: res.data.token,
+                pending: pending!,
+              };
+              const completed = await authAccounts.completeReissue(
+                saved.generation,
+                lease.token!,
+                pending!,
+                res.data.token,
+                res.data.user ?? null,
+                isCurrent,
+              );
+              if (!isCurrent()) return;
+              unacknowledgedReissueRef.current = null;
+              refreshJournalRef.current = null;
+              if (pending!.kind === 'switch-point') {
+                await applyReissuedSessionRef.current!(completed.registry);
+              } else {
+                setAuthToken(res.data.token);
+                setToken(res.data.token);
+              }
+            });
+            return;
+          } catch (error) {
+            if (!isCurrent()) return;
+            if (isAuthExpiry(error)) reportAuthExpiry(error, lease);
+            const status = (error as { response?: { status?: number } })?.response?.status;
+            if ((status === 400 || status === 403) && !isApiRouteFailure(error)) {
+              // A denied replay can follow a committed exchange. Keep the key
+              // for owned logout; it is not evidence that the source is unused.
+              refreshJournalRef.current = { token: lease.token!, requestId, epoch, denied: true };
+              markSessionReissueDenied(lease.token!);
+              await authAccounts.denyReissue(saved.generation, lease.token!, pending, isCurrent);
+            }
+            // Only keyed, ambiguous route failures may be repeated. Storage,
+            // validation, rate limits and real auth rejection are never retried.
+            if (
+              !isApiRouteFailure(error) ||
+              error instanceof AccountRegistryError ||
+              attempt >= SESSION_REFRESH_RETRY_DELAYS_MS.length
+            )
+              throw error;
+            await sleep(SESSION_REFRESH_RETRY_DELAYS_MS[attempt]);
+          }
+        }
+      })().finally(() => {
+        if (refreshFlightRef.current === flight) refreshFlightRef.current = null;
+      });
+      refreshFlightRef.current = flight;
+      return flight.promise;
     },
     [sessionRuntime],
   );
@@ -750,6 +874,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // transition advances the epoch immediately and aborts tracked bootstrap /
   // recovery reads; a late login response can then only resolve to a no-op.
   const beginSessionTransition = useCallback(() => {
+    unacknowledgedReissueRef.current = null;
     recoveryWakeQueuedRef.current = false;
     recoveryForceQueuedRef.current = false;
     recoveryBackoffRef.current.reset();
@@ -856,6 +981,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // intentionally ONE request: axios owns traversal of the three-host
       // ring, while the AbortSignal enforces the single cold-start deadline.
       try {
+        await ensureSessionToken(bootstrapEpoch, bootstrapAbort.signal);
+        if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
+        const validatedToken = captureAuthSession().token;
+        if (!validatedToken) return;
         const res = await api.get<User>('/auth/me', { signal: bootstrapAbort.signal });
         const fresh = res.data;
         // The deadline and epoch are checked AFTER resolution as well: abort
@@ -876,7 +1005,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           setRecoveringSession(false);
           applied = true;
           await persistCurrentSession(
-            { token: stored, user: fresh, impersonating: storedSession.impersonating },
+            { token: validatedToken, user: fresh, impersonating: storedSession.impersonating },
             bootstrapEpoch,
             bootstrapRegistryGeneration,
           );
@@ -885,46 +1014,6 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         // Token still valid — kick off prefetch for a warm session.
         if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && queryClient) {
           prefetchAfterLogin(queryClient, fresh);
-        }
-        // Тихое продление сессии: /auth/me подтвердил, что bearer жив; если
-        // ему больше SESSION_REFRESH_AGE_MS — fire-and-forget обмен на свежий
-        // токен. ГЕЙТ: impersonation-сессию (30-мин директорский токен)
-        // продлевать нельзя. Результат применяется СТРОГО через
-        // sessionRuntime.commit с ЭТИМ же bootstrapEpoch — тот же серийный
-        // путь, что и запись /auth/me выше: любой более новый login/logout
-        // продвигает эпоху, isCurrent() становится false и поздний refresh
-        // токена A не может перезаписать токен B (класс багов, от которого
-        // построен epoch-механизм). axios.ts не трогаем: refresh — обычный
-        // авторизованный POST на текущем bearer'е.
-        if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && !storedSession.impersonating) {
-          const issuedAt = jwtIssuedAtMs(stored);
-          if (issuedAt !== null && Date.now() - issuedAt > SESSION_REFRESH_AGE_MS) {
-            void (async () => {
-              try {
-                const newToken = await refreshSessionToken();
-                if (!newToken) return;
-                await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
-                  if (!isCurrent()) return;
-                  await persistCurrentSession(
-                    { token: newToken, user: fresh, impersonating: storedSession.impersonating },
-                    bootstrapEpoch,
-                    bootstrapRegistryGeneration,
-                  );
-                  if (!isCurrent()) return;
-                  setAuthToken(newToken);
-                  setToken(newToken);
-                });
-              } catch {
-                // Сюда доходит только сбой записи сессии: сам обмен свои
-                // транспортные отказы уже отретраил и на любом исходе вернул
-                // токен либо null. И честно: «не продлили» НЕ означает «старый
-                // токен ещё жив» — сервер гасит его раньше, чем выдаёт новый,
-                // поэтому при потерянном ответе сессия доживает лишь остаток
-                // grace-окна. Это цена одноразового обмена, ради неё выше и
-                // стоят ретраи.
-              }
-            })();
-          }
         }
       } catch (err) {
         if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
@@ -1016,11 +1105,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
             forceFreshRoute: force,
             reselectRoute: reselectApiHost,
             isCurrent: () => !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch),
-            loadUser: () =>
-              api.get<User>('/auth/me', {
+            loadUser: async () => {
+              await ensureSessionToken(recoveryEpoch, recoveryAbort.signal);
+              return api.get<User>('/auth/me', {
                 signal: recoveryAbort.signal,
                 timeout: SESSION_RECOVERY_HOST_TIMEOUT_MS,
-              }),
+              });
+            },
           });
           if (!res) return;
           const fresh = res.data;
@@ -1039,7 +1130,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
             recovered = true;
             recoveryBackoffRef.current.reset();
             await persistCurrentSession(
-              { token, user: fresh, impersonating: isImpersonating },
+              { token: captureAuthSession().token ?? token, user: fresh, impersonating: isImpersonating },
               recoveryEpoch,
               recoveryRegistryGeneration,
             );
@@ -1074,7 +1165,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       })();
       recoveryAttemptRef.current = work;
     },
-    [isImpersonating, loading, queryClient, recoveringSession, sessionRuntime, token, user],
+    [ensureSessionToken, isImpersonating, loading, queryClient, recoveringSession, sessionRuntime, token, user],
   );
 
   const retrySessionRecovery = useCallback(() => attemptSessionRecovery(true), [attemptSessionRecovery]);
@@ -1096,8 +1187,22 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // Listen for 401 events from axios interceptor
   useEffect(() => {
     return onAuthExpired((reason) => {
+      const epoch = sessionRuntime.capture();
+      const saved = authAccounts.snapshot();
+      const owned = saved?.accounts.find((account) => account.id === activeRegistryRef.current.id)?.session;
+      const journal = refreshJournalRef.current;
+      const proof =
+        journal?.epoch === epoch
+          ? { token: journal.token, key: journal.requestId }
+          : saved?.generation === activeRegistryRef.current.generation && owned?.pendingReissue
+            ? { token: owned.token, key: owned.pendingReissue.refreshRequestId }
+            : null;
+      // Capture/enqueue the owned revoke before tombstoning its only proof.
+      // This is the existing best-effort transport policy, not an offline outbox.
+      if (proof) void pushLifecycle.logout(proof.token, true, proof.key).catch(() => {});
+      else void pushLifecycle.detach().catch(() => {});
+      refreshJournalRef.current = null;
       const expiredEpoch = beginSessionTransition();
-      void pushLifecycle.detach().catch(() => {});
       void resetLiveActivitySession();
       // Причину ставим ДО гашения сессии: экран входа отрисуется тем же
       // кадром, что и разлогин, и должен уже знать, что сказать человеку.
@@ -1172,8 +1277,16 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setIsImpersonating(next?.impersonating ?? false);
       setSessionEndedNotice(null);
       setRegistry(saved);
+      if (next?.user) await adoptTenantStorage(queueOwnerOf(next.user)).catch(() => {});
+      if (next?.token) {
+        try {
+          await ensureSessionToken(epoch);
+        } catch {
+          return;
+        }
+        if (!sessionRuntime.isCurrent(epoch)) return;
+      }
       if (next?.user) {
-        await adoptTenantStorage(queueOwnerOf(next.user)).catch(() => {});
         if (!sessionRuntime.isCurrent(epoch)) return;
         if (queryClient) {
           await hydratePriorityCache(queryClient);
@@ -1185,8 +1298,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         }
       }
     },
-    [beginSessionTransition, queryClient, sessionRuntime],
+    [beginSessionTransition, ensureSessionToken, queryClient, sessionRuntime],
   );
+
+  applyReissuedSessionRef.current = applyRegistrySession;
 
   const commitSession = useCallback(
     async (
@@ -1362,7 +1477,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
           next.registry.accounts.flatMap((item) => item.scopes.map((scope) => JSON.stringify(scope))),
         );
         const scopes = account.scopes.filter((scope) => !otherScopes.has(JSON.stringify(scope)));
-        if (account.session) void pushLifecycle.logout(account.session.token, saved.activeId === id).catch(() => {});
+        if (account.session)
+          void pushLifecycle
+            .logout(account.session.token, saved.activeId === id, account.session.pendingReissue?.refreshRequestId)
+            .catch(() => {});
         if (saved.activeId === id) await applyRegistrySession(next.registry);
         const cleanupEpoch = sessionRuntime.capture();
         await clearAccountCaches(scopes, () => sessionRuntime.isCurrent(cleanupEpoch));
@@ -1378,43 +1496,22 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
    * with the replacement bearer. The reissue window preserves existing 401
    * handling while the old JWT is being exchanged. */
   const renderEpoch = sessionRuntime.capture();
-  const sessionClient = useMemo(() => createSessionBoundClient(token), [token, sessionGeneration]);
   const switchSessionPoint = useCallback(
     async (pointId: string) => {
-      if (installingRef.current || !sessionRuntime.isCurrent(renderEpoch))
-        throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
-      const saved = authAccounts.snapshot();
-      if (!saved?.activeId) throw new AccountRegistryError('SESSION_CHANGED', 'Нет активного аккаунта.');
-      const previousPointId = user?.currentPointId ?? null;
-      if (previousPointId) {
-        try {
-          await stampOfflineCheckQueuePoint(previousPointId);
-        } catch {
-          // Диск отказал — переключение важнее штампа: человек уже прочитал в
-          // диалоге, что лежит на телефоне, а сервер при досылке подставит
-          // филиал сам, ровно как до 167.
-        }
-      }
-      // Окно перевыпуска держим ОТ запроса ДО применения нового токена: в этой
-      // щели старый bearer уже мёртв на сервере, и чужие запросы, улетевшие с
-      // ним, вернут 401 «Токен отозван». Гасить из-за них живую сессию нельзя —
-      // см. beginSessionReissueWindow в api/axios.ts.
       if (!sessionRuntime.isCurrent(renderEpoch))
         throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
-      const closeReissueWindow = beginSessionReissueWindow();
-      try {
-        const res = await serviceFactories.createAuthApi(sessionClient).switchSessionPoint(pointId);
-        await commitSession(res.data.token, res.data.user, {
-          generation: saved.generation,
-          originalAccountId: saved.activeId,
-          isCurrent: () => sessionRuntime.isCurrent(renderEpoch),
-        });
-        setOfflineCheckQueuePointId(res.data.currentPointId);
-      } finally {
-        closeReissueWindow();
-      }
+      // A pending refresh must settle before a different operation can consume
+      // this source. Completion of a pending point switch changes the epoch.
+      await ensureSessionToken(renderEpoch);
+      if (!sessionRuntime.isCurrent(renderEpoch))
+        throw new AccountRegistryError('SESSION_CHANGED', 'Сессия изменилась.');
+      const previousPointId = user?.currentPointId;
+      if (previousPointId) await stampOfflineCheckQueuePoint(previousPointId);
+      // Failure to bind old queued checks stops dispatch: they must never be
+      // submitted with the target branch's new bearer.
+      await ensureSessionToken(renderEpoch, undefined, pointId);
     },
-    [commitSession, user, sessionClient, renderEpoch, sessionRuntime],
+    [ensureSessionToken, renderEpoch, sessionRuntime, user],
   );
 
   const refreshUser = useCallback(async () => {
@@ -1425,14 +1522,18 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     const flight = { epoch: refreshEpoch, promise: Promise.resolve() };
     const work = (async () => {
       try {
-        const res = await serviceFactories.createAuthApi(sessionClient).me();
+        await ensureSessionToken(refreshEpoch);
+        if (!sessionRuntime.isCurrent(refreshEpoch)) return;
+        const profileLease = captureAuthSession();
+        if (!profileLease.token) return;
+        const res = await serviceFactories.createAuthApi(createSessionBoundClient(profileLease.token)).me();
         const fresh = res.data as User;
         await sessionRuntime.commit(refreshEpoch, async (isCurrent) => {
-          if (!isCurrent()) return;
+          if (!isCurrent() || !profileLease.isCurrent()) return;
           setUser(fresh);
-          if (token)
+          if (profileLease.token)
             await persistCurrentSession(
-              { token, user: fresh, impersonating: isImpersonating },
+              { token: profileLease.token, user: fresh, impersonating: isImpersonating },
               refreshEpoch,
               refreshRegistryGeneration,
             );
@@ -1446,7 +1547,23 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     flight.promise = work;
     foregroundProfileRefreshRef.current = flight;
     return work;
-  }, [isImpersonating, sessionRuntime, token, renderEpoch, sessionClient, persistCurrentSession]);
+  }, [ensureSessionToken, isImpersonating, sessionRuntime, renderEpoch, persistCurrentSession]);
+
+  useEffect(
+    () =>
+      onApiRouteReady(() => {
+        const saved = authAccounts.snapshot();
+        if (saved && activeAccount(saved)?.session?.pendingReissue) void refreshUser();
+      }),
+    [refreshUser],
+  );
+  useEffect(
+    () =>
+      onSessionRecoveryNeeded(() => {
+        void refreshUser();
+      }),
+    [refreshUser],
+  );
 
   foregroundProfileInputsRef.current = { loading, token, user, refreshUser };
 
@@ -1474,7 +1591,17 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     void resetLiveActivitySession();
     // Queue cleanup before the next owner's registration. A failed cleanup
     // retains its secure claim and does not revoke the only usable credential.
-    if (token) void pushLifecycle.logout(token, true).catch(() => {});
+    const saved = authAccounts.snapshot();
+    const session = saved && activeAccount(saved)?.session;
+    const currentToken = captureAuthSession().token;
+    const recoveryKey =
+      session?.token === currentToken
+        ? session.pendingReissue?.refreshRequestId
+        : refreshJournalRef.current?.token === currentToken
+          ? refreshJournalRef.current.requestId
+          : undefined;
+    refreshJournalRef.current = null;
+    if (currentToken) void pushLifecycle.logout(currentToken, true, recoveryKey).catch(() => {});
 
     setAuthToken(null);
     setToken(null);

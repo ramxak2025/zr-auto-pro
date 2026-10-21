@@ -27,3 +27,15 @@ export async function readStoredAccountSession() {
   const registry = await authAccounts.read();
   return activeAccount(registry)?.session ?? { token: null, user: null, impersonating: false };
 }
+
+export function hasPendingSessionReissue(token: string | null): boolean {
+  const saved = authAccounts.snapshot();
+  const session = saved && activeAccount(saved)?.session;
+  return !!token && session?.token === token && !!session.pendingReissue;
+}
+
+export function isSessionReissueDenied(token: string | null): boolean {
+  const saved = authAccounts.snapshot();
+  const session = saved && activeAccount(saved)?.session;
+  return !!token && session?.token === token && session.reissueDenied === true;
+}

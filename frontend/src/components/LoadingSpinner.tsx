@@ -1,3 +1,5 @@
+import { Button } from '../ui/Button';
+
 /**
  * Полноэкранный скелет оболочки — fallback маршрута / загрузки сессии
  * (App.tsx). Повторяет форму НОВОЙ оболочки: тёмная боковая панель + белая
@@ -5,9 +7,19 @@
  * кадр приложения не отличался от следующего. Внутри страниц НЕ использовать
  * (там — Skeleton / InlineLoader / QueryState).
  */
-export default function LoadingSpinner() {
+export default function LoadingSpinner({
+  recoveryError,
+  onRetry,
+}: {
+  recoveryError?: string | null;
+  onRetry?: () => void;
+} = {}) {
   return (
-    <div className="flex h-screen h-[100dvh] bg-canvas" role="status" aria-label="Загрузка…">
+    <div
+      className="flex h-screen h-[100dvh] bg-canvas"
+      role="status"
+      aria-label={recoveryError ? 'Подключение к серверу' : 'Загрузка…'}
+    >
       {/* Боковая панель (desktop) */}
       <div className="hidden w-[256px] flex-shrink-0 flex-col bg-rail md:flex" aria-hidden="true">
         <div className="flex h-14 items-center gap-2.5 border-b border-white/10 px-4">
@@ -37,16 +49,26 @@ export default function LoadingSpinner() {
         </div>
 
         {/* Контент */}
-        <div className="flex-1 space-y-4 overflow-hidden p-4 md:p-6" aria-hidden="true">
-          <div className="h-6 w-48 animate-pulse rounded bg-line/70" />
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-24 animate-pulse rounded-xl border border-line bg-surface" />
-            ))}
+        {recoveryError ? (
+          <div className="flex flex-1 items-center justify-center p-5">
+            <div className="max-w-md space-y-4">
+              <h1 className="text-lg font-semibold text-ink">Не удалось подключиться</h1>
+              <p className="text-sm leading-relaxed text-ink-2">{recoveryError}</p>
+              <Button onClick={onRetry}>Повторить подключение</Button>
+            </div>
           </div>
-          <div className="h-48 animate-pulse rounded-xl border border-line bg-surface" />
-          <div className="h-32 animate-pulse rounded-xl border border-line bg-surface" />
-        </div>
+        ) : (
+          <div className="flex-1 space-y-4 overflow-hidden p-4 md:p-6" aria-hidden="true">
+            <div className="h-6 w-48 animate-pulse rounded bg-line/70" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl border border-line bg-surface" />
+              ))}
+            </div>
+            <div className="h-48 animate-pulse rounded-xl border border-line bg-surface" />
+            <div className="h-32 animate-pulse rounded-xl border border-line bg-surface" />
+          </div>
+        )}
 
         {/* Нижние табы (mobile) */}
         <div

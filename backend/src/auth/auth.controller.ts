@@ -6,6 +6,8 @@ import { RegisterDto } from './dto/register.dto';
 import { SelectPointDto } from './dto/select-point.dto';
 import { SwitchPointDto } from './dto/switch-point.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { JwtRefreshGuard, JwtLogoutGuard, JwtSwitchPointGuard } from './jwt-refresh.guard';
+import { REFRESH_KEY_HEADER } from './refresh-recovery';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 @Controller('auth')
@@ -46,24 +48,19 @@ export class AuthController {
     return this.authService.me(user);
   }
 
-  // Тихое продление сессии: клиент со СТАРЫМ, но ещё валидным токеном получает
-  // свежий (полный TTL из JwtModule). Обмен строго 1:1 — старый jti атомарно
-  // уходит в blacklist с 2-минутным grace-окном доживания, повторный refresh
-  // тем же токеном → 401, impersonation-токен → 403; живые проверки идут МИМО
-  // 30с auth-кэша — подробности в AuthService.refresh. Сырой bearer нужен
-  // сервису ради claims, которые guard не прокидывает (impersonatedBy, exp).
-  // RateLimitGuard глобальный (write-бакет 150/мин) — отдельный не нужен.
-  @UseGuards(JwtAuthGuard)
+  // Secret opt-in recovery key retries exactly one committed successor. The
+  // dedicated guard never enables old-token access to any other API route.
+  @UseGuards(JwtRefreshGuard)
   @Post('refresh')
   refresh(@CurrentUser() user: JwtPayload, @Req() req: Request) {
     const auth = (req.headers['authorization'] as string | undefined) || '';
     const rawToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    return this.authService.refresh(user, rawToken);
+    return this.authService.refresh(user, rawToken, req.headers[REFRESH_KEY_HEADER]);
   }
 
   /**
    * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167) — ПЕРЕВЫПУСК СЕССИИ, а не «вход без пароля».
-   * Требует ЖИВОЙ обычной сессии (JwtAuthGuard) и права управления персоналом;
+   * Проверяет подпись/срок сессии и живое право управления персоналом;
    * сотруднику отвечает понятным отказом «выйдите и войдите заново» — прежний
    * сценарий 163 для него сохраняется дословно. Клиент вызывает ручку ТОЛЬКО
    * из раздела «Филиалы» (требование владельца) и обязан применить новый токен
@@ -86,15 +83,16 @@ export class AuthController {
    * экземпляр списывал бы те же бакеты дважды за один запрос. POST → write-бакет
    * (150/мин на ip+токен), как у /auth/refresh и /auth/select-point.
    */
-  @UseGuards(JwtAuthGuard)
+  // A secret key opts into fixed-result recovery bound to this exact target.
+  @UseGuards(JwtSwitchPointGuard)
   @Post('switch-point')
   switchPoint(@CurrentUser() user: JwtPayload, @Req() req: Request, @Body() dto: SwitchPointDto) {
     const auth = (req.headers['authorization'] as string | undefined) || '';
     const rawToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    return this.authService.switchPoint(user, rawToken, dto);
+    return this.authService.switchPoint(user, rawToken, dto, req.headers[REFRESH_KEY_HEADER]);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtLogoutGuard)
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {
     if (user.jti) {

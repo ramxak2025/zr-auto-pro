@@ -38,7 +38,11 @@ let mockReadStoredSession: () => Promise<{ token: string | null; user: null; imp
   user: null,
   impersonating: false,
 });
-jest.mock('../../contexts/authAccountStorage', () => ({ readStoredAccountSession: () => mockReadStoredSession() }));
+jest.mock('../../contexts/authAccountStorage', () => ({
+  readStoredAccountSession: () => mockReadStoredSession(),
+  hasPendingSessionReissue: () => false,
+  isSessionReissueDenied: () => false,
+}));
 
 jest.mock('expo-constants', () => ({
   __esModule: true,

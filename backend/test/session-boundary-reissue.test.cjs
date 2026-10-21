@@ -134,6 +134,8 @@ const baseRow = (extra = {}) => ({
   dismissed_at: null,
   purged_at: null,
   tenant_id: TENANT,
+  tenant_active: true,
+  point_allowed: true,
   current_point_id: MAIN,
   created_at: new Date().toISOString(),
   tenant_json: null,
@@ -316,14 +318,10 @@ test('обе ручки подставляют ОБЩЕЕ выражение г�
   assert.match(flat(jwtStrategySrc), /\$\{sessionStaleSql\('\$3'\)\}/, 'стратегия обязана брать то же выражение');
   assert.doesNotMatch(
     authServiceSrc,
-    /to_timestamp\(/,
+    /to_timestamp\([^)]*\)\s*[<>]=?\s*u\.sessions_valid_from/,
     'в сервисе завелась вторая копия SQL границы — копии разъедутся, и одна из них станет дырой',
   );
-  assert.doesNotMatch(
-    authServiceSrc,
-    /sessions_valid_from/,
-    'колонку границы читает общее выражение, а не сервис',
-  );
+  assert.doesNotMatch(authServiceSrc, /sessions_valid_from/, 'колонку границы читает общее выражение, а не сервис');
   // Сравнение — в базе: часы Node и Postgres расходиться не обязаны.
   assert.doesNotMatch(authServiceSrc, /session_stale[\s\S]{0,80}Date\.now\(\)/);
 });
@@ -343,7 +341,7 @@ test('граница проверяется ДО атомарного claim — 
     ['switchPoint', switchBody],
   ]) {
     const stale = body.indexOf('session_stale === true');
-    const claim = body.indexOf('this.blacklistToken(');
+    const claim = body.indexOf(name === 'refresh' ? 'INSERT INTO revoked_tokens' : 'this.blacklistToken(');
     assert.ok(stale > 0, `${name}: проверка границы пропала — смена пароля снова не выгоняет вора`);
     assert.ok(claim > 0, `${name}: claim обмена пропал`);
     assert.ok(stale < claim, `${name}: отказ по границе гасит линию токенов вместо того, чтобы её не трогать`);

@@ -9,11 +9,28 @@ import {
 // Axios-shaped errors. The interceptor in src/api/axios.ts wraps a
 // no-response (network/timeout) failure into a plain Error WITHOUT a
 // `response` field, and leaves a real HTTP error with `response.status`.
-const httpError = (status: number) => ({ response: { status } });
+const httpError = (status: number) => ({ response: { status, data: { message: 'API error' } } });
 const networkError = () => new Error('Нет соединения с сервером');
 const timeoutError = () => Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
 
 describe('isDeterministicClientError', () => {
+  it.each([401, 403, 408, 421, 451])(
+    'proxy/route %s is recoverable while real auth remains authoritative',
+    (status) => {
+      const proxy = {
+        response: { status, data: '<html>route blocked</html>', headers: { 'content-type': 'application/json' } },
+      };
+      expect(isDeterministicClientError(proxy)).toBe(false);
+      expect(shouldRetryTransient(0, proxy)).toBe(true);
+    },
+  );
+  it('unrecognized JSON401 cannot disable recovery or expire a credential', () => {
+    expect(isDeterministicClientError({ response: { status: 401, data: { proxy: 'unauthorized' } } })).toBe(false);
+  });
+  it.each([408, 421, 451])('plain JSON route status %s is transient', (status) => {
+    expect(isDeterministicClientError(httpError(status))).toBe(false);
+    expect(shouldRetryTransient(0, httpError(status))).toBe(true);
+  });
   it('treats 4xx as deterministic', () => {
     expect(isDeterministicClientError(httpError(400))).toBe(true);
     expect(isDeterministicClientError(httpError(401))).toBe(true);

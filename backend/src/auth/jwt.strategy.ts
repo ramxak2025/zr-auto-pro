@@ -8,6 +8,14 @@ import { authCacheKey, AUTH_CACHE_TTL_MS, NO_TENANT_ID, ValidatedUser } from '..
 import { mergeEffectivePermissions } from '../common/role-matrix';
 import { POINT_SELECT_PURPOSE } from './point-session';
 import { SESSION_STALE_MESSAGE, sessionStaleSql, tokenIatOf } from './session-boundary';
+import { recoverableSessionSql } from './refresh-recovery';
+
+interface RecoveryValidation {
+  keyHash: string | null;
+  operation: 'refresh' | 'switch-point' | 'logout';
+  targetPointId?: string;
+  signedTenantId?: string | null;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -26,6 +34,29 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: Record<string, unknown>): Promise<ValidatedUser> {
+    return this.validateSession(payload);
+  }
+
+  async validateRefresh(payload: Record<string, unknown>, keyHash: string | null): Promise<ValidatedUser> {
+    return this.validateSession(payload, { keyHash, operation: 'refresh' });
+  }
+
+  async validateLogout(payload: Record<string, unknown>, keyHash: string | null): Promise<ValidatedUser> {
+    return this.validateSession(payload, { keyHash, operation: 'logout' });
+  }
+
+  async validateSwitchPoint(
+    payload: Record<string, unknown>,
+    keyHash: string | null,
+    targetPointId: string,
+  ): Promise<ValidatedUser> {
+    return this.validateSession(payload, { keyHash, operation: 'switch-point', targetPointId });
+  }
+
+  private async validateSession(
+    payload: Record<string, unknown>,
+    recovery?: RecoveryValidation,
+  ): Promise<ValidatedUser> {
     const userID = payload.sub as string | undefined;
     const jti = payload.jti as string | undefined;
     if (!userID) {
@@ -55,6 +86,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // (jsonwebtoken проставляет его всегда), но если он пришёл — считаем
     // сессию неопределённо старой: fail-closed решает база ниже.
     const tokenIat = tokenIatOf(payload);
+    if (recovery) {
+      // Never cache this entry point: revocation, receipt and account checks must
+      // run on every attempt, including on another replica after a lost response.
+      return this.loadValidatedUser(userID, jti, tokenPointId, tokenIat, {
+        ...recovery,
+        signedTenantId: typeof payload.tenantId === 'string' ? payload.tenantId : null,
+      });
+    }
 
     // ── Auth-hop cache ───────────────────────────────────────────────────
     // validate() runs on EVERY authenticated request and otherwise pays 2 DB
@@ -92,6 +131,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     jti: string | undefined,
     tokenPointId: string | null,
     tokenIat: number | null,
+    recovery?: RecoveryValidation,
   ): Promise<ValidatedUser> {
     // Check if token has been revoked (via POST /auth/logout or exchanged via
     // POST /auth/refresh). `revoked_at` — момент, С КОТОРОГО ревокация
@@ -102,13 +142,34 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // «ревокирован сразу» — fail-closed. Запрос всегда идёт admin-пулом
     // (guards выполняются до TenantContextInterceptor — CLS-контекста ещё
     // нет), поэтому видит и NULL-tenant строки, записанные admin-ремнём.
+    let fixedSource = false;
     if (jti) {
-      const { rows: revoked } = await this.pool.query(
-        `SELECT 1 FROM revoked_tokens WHERE jti=$1 AND (revoked_at IS NULL OR revoked_at <= now()) LIMIT 1`,
-        [jti],
-      );
-      if (revoked.length > 0) {
-        throw new UnauthorizedException({ message: 'Токен отозван' });
+      if (recovery) {
+        const { rows } = await this.pool.query(
+          `SELECT r.user_id::text, r.tenant_id::text, r.refresh_source_point_id, (r.revoked_at IS NULL OR r.revoked_at<=now()) as revoked,
+                  COALESCE((${recoverableSessionSql(recovery.operation)}),false) as recoverable
+             FROM revoked_tokens r WHERE r.jti=$1`,
+          [jti, recovery.keyHash, ...(recovery.operation === 'switch-point' ? [recovery.targetPointId] : [])],
+        );
+        if (rows[0]) {
+          if (rows[0].recoverable === true) {
+            if (rows[0].user_id !== userID || rows[0].tenant_id !== recovery.signedTenantId)
+              throw new UnauthorizedException({ message: 'Неверная линия сессии' });
+            const source = rows[0].refresh_source_point_id as string | null;
+            if (tokenPointId && tokenPointId !== source)
+              throw new UnauthorizedException({ message: 'Неверная линия сессии' });
+            tokenPointId = source;
+            fixedSource = true;
+          } else if (recovery.operation !== 'logout' || rows[0].revoked !== false) {
+            throw new UnauthorizedException({ message: 'Токен отозван' });
+          }
+        }
+      } else {
+        const { rows } = await this.pool.query(
+          `SELECT 1 FROM revoked_tokens WHERE jti=$1 AND (revoked_at IS NULL OR revoked_at <= now()) LIMIT 1`,
+          [jti],
+        );
+        if (rows.length) throw new UnauthorizedException({ message: 'Токен отозван' });
       }
     }
 
@@ -161,6 +222,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (rows.length === 0) {
       throw new UnauthorizedException({ message: 'Пользователь не найден' });
     }
+    if (fixedSource && (rows[0].tenant_id ?? null) !== recovery?.signedTenantId)
+      throw new UnauthorizedException({ message: 'Автосервис изменён' });
+    // This exception is available only through jwt-logout and an exact owned
+    // receipt/capability. Revoking a descendant grants no source-point data
+    // access; archival of the source must not prevent an explicit logout.
+    const revokeOnly = fixedSource && recovery?.operation === 'logout';
 
     // 065_users_dismissed — a dismissed («Уволенные») or purged user must not be
     // able to authenticate. The row is kept only so historical checks/shifts
@@ -190,7 +257,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // получает отказ. Продолжать пускать нельзя ни в каком виде: молча
     // подставить другой филиал значило бы, что человек дальше пробивает чеки,
     // думая, что работает в прежнем.
-    if (tokenPointId && rows[0].point_allowed !== true) {
+    if (!revokeOnly && tokenPointId && rows[0].point_allowed !== true) {
       throw new UnauthorizedException({ message: 'Филиал больше не доступен — войдите заново' });
     }
 
@@ -207,7 +274,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // autexa_available_points отдаёт его при «назначения есть, живых нет».
     // Проверять это ещё раз здесь НЕЛЬЗЯ — правило доступа одно и живёт в
     // SQL-функции; вторая копия неминуемо отстанет от первой.
-    if (!tokenPointId && rows[0].tenant_has_points === true && !rows[0].default_point_id) {
+    if (
+      !revokeOnly &&
+      !tokenPointId &&
+      rows[0].tenant_has_points === true &&
+      (fixedSource || !rows[0].default_point_id)
+    ) {
       throw new UnauthorizedException({
         message: 'Вам не назначен ни один действующий филиал — обратитесь к руководителю',
       });
@@ -244,7 +316,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // подставленный сервером (старая сборка / сессия до 163 / филиал появился
       // у тенанта уже после входа). null — только когда живых филиалов у
       // тенанта нет вовсе.
-      currentPointId: tokenPointId ?? (rows[0].default_point_id as string | null) ?? null,
+      currentPointId: fixedSource
+        ? tokenPointId
+        : (tokenPointId ?? (rows[0].default_point_id as string | null) ?? null),
       jti,
     };
   }

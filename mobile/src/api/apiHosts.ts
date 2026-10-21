@@ -109,7 +109,63 @@ export function isBodyLimitedGatewayHost(base: string): boolean {
  */
 export function isHtmlApiPayload(data: unknown, contentType: unknown): boolean {
   const ct = typeof contentType === 'string' ? contentType.toLowerCase() : '';
-  if (ct.includes('text/html')) return true;
-  if (typeof data === 'string' && /^\s*<(!doctype|html|head|body)/i.test(data)) return true;
+  if (ct.includes('text/html') || ct.includes('application/xhtml+xml')) return true;
+  if (typeof data !== 'string') return false;
+  // Scan each prefix once. A repeated lazy-comment regex can backtrack
+  // exponentially on a small hostile/non-HTML proxy response and freeze JS.
+  let cursor = 0;
+  const whitespace = /\s/;
+  while (cursor < data.length) {
+    while (cursor < data.length && whitespace.test(data[cursor])) cursor++;
+    if (data.startsWith('<!--', cursor)) {
+      const end = data.indexOf('-->', cursor + 4);
+      if (end < 0) return false;
+      cursor = end + 3;
+      continue;
+    }
+    if (data.slice(cursor, cursor + 5).toLowerCase() === '<?xml') {
+      const end = data.indexOf('?>', cursor + 5);
+      if (end < 0) return false;
+      cursor = end + 2;
+      continue;
+    }
+    return /^<(?:!doctype\b|html\b|head\b|body\b)/i.test(data.slice(cursor, cursor + 16));
+  }
   return false;
+}
+
+type ApiFailure = { code?: string; response?: { status?: number; data?: unknown; headers?: Record<string, unknown> } };
+
+/** One classification for transport, bootstrap and query recovery. */
+export function isApiRouteFailure(error: unknown): boolean {
+  const e = error as ApiFailure | null | undefined;
+  if (e?.code === 'ERR_CANCELED') return false;
+  if (!e?.response || e.code === 'ERR_HTML_RESPONSE' || e.code === 'ERR_SESSION_RECOVERING') return true;
+  // The API's error contract is {message:string}. Unknown proxy 401 payloads
+  // cannot revoke credentials merely because a gateway chose that status.
+  if (
+    e.response.status === 401 &&
+    (!e.response.data ||
+      typeof e.response.data !== 'object' ||
+      Array.isArray(e.response.data) ||
+      typeof (e.response.data as { message?: unknown }).message !== 'string')
+  )
+    return true;
+  return (
+    [408, 421, 451, 502, 503, 504].includes(e.response.status ?? 0) ||
+    isHtmlApiPayload(e.response.data, e.response.headers?.['content-type'])
+  );
+}
+
+/** HTTP status alone is not evidence that the API rejected credentials. */
+export function isAuthoritativeAuthFailure(error: unknown): boolean {
+  const e = error as ApiFailure | null | undefined;
+  return (
+    e?.response?.status === 401 &&
+    !isApiRouteFailure(error) &&
+    !!e.response.data &&
+    typeof e.response.data === 'object' &&
+    !Array.isArray(e.response.data) &&
+    typeof (e.response.data as { message?: unknown }).message === 'string'
+  );
 }

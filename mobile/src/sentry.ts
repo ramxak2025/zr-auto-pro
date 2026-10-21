@@ -1,3 +1,4 @@
+import { redactRefreshTelemetry } from './utils/refreshTelemetry';
 import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 
@@ -136,6 +137,7 @@ export function initSentry(): void {
     tracesSampleRate: 0.1,
     enableNativeCrashHandling: true,
     beforeBreadcrumb(breadcrumb) {
+      breadcrumb = redactRefreshTelemetry(breadcrumb);
       const context = [breadcrumb.message, breadcrumb.data?.url].some(isNfcTelemetry);
       if (!context) return breadcrumb;
       return {
@@ -146,10 +148,10 @@ export function initSentry(): void {
     },
     beforeSend(event, hint) {
       if (isTransientNetworkError(hint.originalException, event.exception?.values?.[0])) return null;
-      return scrubNfcEvent(event);
+      return redactRefreshTelemetry(scrubNfcEvent(event), hint.originalException);
     },
     beforeSendTransaction(event) {
-      return scrubNfcEvent(event);
+      return redactRefreshTelemetry(scrubNfcEvent(event));
     },
   });
 

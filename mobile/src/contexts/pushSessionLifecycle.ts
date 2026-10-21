@@ -11,7 +11,7 @@ interface PushClaim {
 interface PushTransport {
   register(claim: PushClaim): Promise<{ registered?: boolean }>;
   unregister(claim: PushClaim): Promise<void>;
-  logout?(bearer: string): Promise<void>;
+  logout?(bearer: string, refreshRequestId?: string): Promise<void>;
 }
 
 /** One device subscription, including a possibly committed response that was
@@ -74,12 +74,22 @@ export function createPushSessionLifecycle(storage: AccountKeyValueStorage, tran
         const previous = await read();
         if (previous) await release(previous);
       }),
-    logout: (bearer: string, wasActive = false) =>
+    logout: (bearer: string, wasActive = false, refreshRequestId?: string) =>
       serial(async () => {
-        const previous = await read();
-        if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer))))
-          await release({ ...previous, bearer });
-        await transport.logout?.(bearer);
+        try {
+          const previous = await read();
+          if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer)))) {
+            await release({ ...previous, bearer });
+          }
+        } catch (error) {
+          // Reading/parsing the unrelated push claim can fail as well as its
+          // cleanup. The captured recovery capability still owns a revoke-only
+          // request; attempt it exactly once without changing another claim.
+          if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
+          throw error;
+        }
+        if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
+        else await transport.logout?.(bearer);
       }),
   };
 }
