@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { useQueryClient, QueryClient } from '@tanstack/react-query';
 import {
   authApi,
@@ -17,6 +17,7 @@ import { clearPersistentCache } from '../utils/persistentCache';
 import { clearOwnSessionToken, readStoredToken, writeSessionToken } from '../utils/sessionToken';
 import { flushOfflineQueue, purgeApiCache, purgeOfflineQueues, readOfflineQueueState } from '../utils/swCache';
 import { judgeQueueFlush, OfflineQueueBlockedError } from '../utils/offlineQueueSwitch';
+import { isApiSessionDenial } from '../api/routeFailure';
 import { forgetSessionEndedNotice, peekSessionEndedNotice } from '../utils/sessionNotice';
 
 /**
@@ -131,6 +132,8 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
+  sessionRestoreError: string | null;
+  retrySessionRestore: () => void;
   /**
    * ШАГ 1 ВХОДА: телефон + пароль. Возвращает, закончился ли вход (сессия
    * установлена) или требуется выбор филиала — см. {@link LoginStepResult}.
@@ -187,6 +190,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(readStoredToken());
   const [loading, setLoading] = useState(true);
+  const [sessionRestoreError, setSessionRestoreError] = useState<string | null>(null);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+  const restoreInFlight = useRef(false);
+  const retrySessionRestore = useCallback(() => {
+    if (restoreInFlight.current) return;
+    restoreInFlight.current = true;
+    setLoading(true);
+    setSessionRestoreError(null);
+    setRestoreAttempt((attempt) => attempt + 1);
+  }, []);
   const queryClient = useQueryClient();
   // Причина принудительного разлогина (163): «Филиал больше не доступен».
   // Её кладёт перехватчик axios ПЕРЕД жёсткой перезагрузкой на /login, поэтому
@@ -196,34 +209,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionEndedNotice, setSessionEndedNotice] = useState<string | null>(() => peekSessionEndedNotice());
 
   useEffect(() => {
-    if (token) {
-      authApi
-        .me()
-        .then((res: any) => {
-          setUser(res.data);
-          // Warm reference data immediately after session restore so the
-          // first navigation feels instant. Gated by the restored user's role
-          // so a master never fires owner-only boot requests.
-          prefetchAfterLogin(queryClient, res.data as User);
-        })
-        .catch((err: any) => {
-          // Only clear the token on a genuine auth failure (401/403).
-          // Network errors, 5xx, or transient SW offline responses must NOT
-          // log the user out — otherwise a 1-second network blip kicks them
-          // back to the login screen.
-          const status = err?.response?.status;
-          if (status === 401 || status === 403) {
-            clearOwnSessionToken();
-            setToken(null);
-          } else {
-            console.warn('Failed to fetch user (kept session):', status, err?.message);
-          }
-        })
-        .finally(() => setLoading(false));
-    } else {
+    let active = true;
+    if (!token) {
+      restoreInFlight.current = false;
+      setSessionRestoreError(null);
       setLoading(false);
+      return;
     }
-  }, [token, queryClient]);
+    restoreInFlight.current = true;
+    setLoading(true);
+    setSessionRestoreError(null);
+    authApi
+      .me()
+      .then((res) => {
+        if (!active || readStoredToken() !== token) return;
+        setUser(res.data);
+        prefetchAfterLogin(queryClient, res.data);
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        const currentToken = readStoredToken();
+        if (currentToken && currentToken !== token) return;
+        // The interceptor may already have cleared this exact session. A JSON403
+        // is a permissions refusal, while HTML401/403 is an untrusted route.
+        if (isApiSessionDenial(err) || currentToken === null) {
+          clearOwnSessionToken();
+          setToken(null);
+          setUser(null);
+        } else {
+          setSessionRestoreError(
+            'Не удалось проверить сессию. Данные входа сохранены. Проверьте соединение и повторите.',
+          );
+        }
+      })
+      .finally(() => {
+        if (!active) return;
+        restoreInFlight.current = false;
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, queryClient, restoreAttempt]);
+
+  useEffect(() => {
+    if (!token || !sessionRestoreError) return;
+    window.addEventListener('online', retrySessionRestore);
+    window.addEventListener('focus', retrySessionRestore);
+    return () => {
+      window.removeEventListener('online', retrySessionRestore);
+      window.removeEventListener('focus', retrySessionRestore);
+    };
+  }, [token, sessionRestoreError, retrySessionRestore]);
 
   /**
    * УСТАНОВИТЬ СЕССИЮ по выданному сервером токену — общее тело ОБОИХ шагов
@@ -260,6 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeSessionToken(t);
     setToken(t);
     setUser(u);
+    setSessionRestoreError(null);
     // Вход состоялся — прошлая причина разлогина больше не актуальна.
     forgetSessionEndedNotice();
     setSessionEndedNotice(null);
@@ -344,9 +382,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshUser = async () => {
+    const expectedToken = readStoredToken();
     try {
       const res = await authApi.me();
-      setUser(res.data);
+      if (readStoredToken() === expectedToken) setUser(res.data);
     } catch (err) {
       console.warn('Failed to refresh user:', err);
     }
@@ -427,6 +466,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         token,
         loading,
+        sessionRestoreError,
+        retrySessionRestore,
         login,
         loginWithPoint,
         switchPoint,

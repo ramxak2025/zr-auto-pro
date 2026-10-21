@@ -1,9 +1,10 @@
 import { lazy, Suspense, ComponentType, ReactElement } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from './contexts/AuthContext';
 import { subscriptionApi } from './api/services';
 import { UserRole } from './types';
+import { canRenderWithoutSessionProfile } from './utils/sessionRestoreRoute';
 
 // Layout / AdminLayout — lazy-loaded (объявлены ниже через lazyWithRetry).
 // Раньше были eager-импортами и тянули framer-motion (через Modal/EmptyState
@@ -205,7 +206,8 @@ function homePathFor(role: UserRole): string {
 }
 
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionRestoreError, retrySessionRestore } = useAuth();
+  const { pathname } = useLocation();
 
   // Authoritative subscription status (102) for the hard gate. This reuses the
   // same ['subscription'] cache Layout / FeatureGate already warm, so it adds no
@@ -219,8 +221,8 @@ export default function App() {
     staleTime: 5 * 60 * 1000,
   });
 
-  if (loading) {
-    return <LoadingSpinner />;
+  if (loading || (!user && sessionRestoreError && !canRenderWithoutSessionProfile(pathname))) {
+    return <LoadingSpinner recoveryError={sessionRestoreError} onRetry={retrySessionRestore} />;
   }
 
   // Hard gate: a tenant whose subscription is `expired` or `suspended` cannot use

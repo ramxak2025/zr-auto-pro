@@ -1,4 +1,4 @@
-import axios, { AxiosError, InternalAxiosRequestConfig, type AxiosRequestConfig } from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 import { rememberSessionEndedNotice } from '../utils/sessionNotice';
@@ -11,6 +11,7 @@ import {
 } from '../utils/sessionToken';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 import { isPublicSessionLandingPath } from './publicAuthPath';
+import { API_ROUTE_FAILURE_CODE, isApiSessionDenial, isHtmlApiResponse, isSessionProfileUrl } from './routeFailure';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -35,7 +36,10 @@ const IDEMPOTENT_METHODS = new Set(['get', 'head', 'options']);
 
 // Custom marker so a request is retried against the reserve at most once (loop
 // guard): once we flip it, an inner failure re-enters the interceptor and skips.
-type ReserveRetryConfig = InternalAxiosRequestConfig & { _reserveRetried?: boolean };
+type ReserveRetryConfig = InternalAxiosRequestConfig & {
+  _reserveRetried?: boolean;
+  _expectedSessionToken?: string | null;
+};
 type SessionBoundConfig = AxiosRequestConfig & { _expectedSessionToken?: string };
 
 /** Capture the owner before axios schedules its interceptors or a reserve retry. */
@@ -120,7 +124,7 @@ function hardLogoutRedirect(): void {
     // Give the purge a brief head start, then redirect regardless — never hang
     // the user on a stuck SW. The direct caches.delete() resolves in a few ms.
     setTimeout(() => {
-      window.location.href = '/login';
+      if (!readStoredToken()) window.location.href = '/login';
     }, 200);
   }
 }
@@ -155,129 +159,148 @@ function isPreviousSessionRequest(config: InternalAxiosRequestConfig | undefined
   return !!current && sent !== `Bearer ${current}`;
 }
 
-api.interceptors.response.use(
-  (res) => res,
-  async (error: AxiosError<{ message?: string }>) => {
-    // Запрос погашен нами же: сессию перевыпустили в другой вкладке (167).
-    // Ответа нет и не будет, но это НЕ сетевой сбой — переигрывать такой
-    // запрос через резервный шлюз нельзя, он ушёл бы с чужим токеном.
-    if (isSessionTakeoverError(error)) {
-      return Promise.reject(error);
-    }
+function routeFailure(response: AxiosResponse): AxiosError {
+  // Do not expose a captive portal's401/403 to downstream auth/permission logic.
+  return new AxiosError(
+    'Сервер вернул страницу вместо данных. Проверьте соединение и повторите.',
+    API_ROUTE_FAILURE_CODE,
+    response.config,
+    response.request,
+  );
+}
 
-    // Network error or server unreachable
-    if (!error.response) {
-      // ── Best-effort reserve failover ──────────────────────────────────────
-      // `!error.response` is the ONLY signal that the origin `/api` path itself
-      // is unreachable (DNS/timeout/blocked/no CORS), as opposed to a real HTTP
-      // error from the server. In that case retry the SAME request ONCE against
-      // the absolute reserve base — but only for idempotent methods
-      // (GET/HEAD/OPTIONS), never for mutations, to avoid a double-write, and at
-      // most once (loop guard via `_reserveRetried`). Re-issuing via
-      // `api.request` re-runs the request interceptor, so Authorization /
-      // withCredentials behaviour is byte-identical to the primary path.
-      //
-      // CORS reality: the reserve is a different origin, so this only succeeds
-      // if the gateway returns CORS headers for our origin. If CORS blocks it,
-      // the retry just fails and we fall through to today's rejection below —
-      // best-effort, strictly never worse than the current behaviour.
-      const config = error.config as ReserveRetryConfig | undefined;
-      const method = (config?.method || '').toLowerCase();
-      if (
-        config &&
-        RESERVE_API_URL &&
-        !config._reserveRetried &&
-        IDEMPOTENT_METHODS.has(method) &&
-        config.baseURL !== RESERVE_API_URL
-      ) {
-        config._reserveRetried = true;
-        config.baseURL = RESERVE_API_URL;
-        try {
-          return await api.request(config);
-        } catch {
-          // Reserve also unreachable / CORS-blocked → fall through to the
-          // original network-error rejection. No regression vs. today.
-        }
-      }
-
-      console.error('Network error:', error.message);
-      return Promise.reject(new Error('Нет соединения с сервером'));
-    }
-
-    const status = error.response.status;
-    const url = error.config?.url || '';
-
-    // ── Ответ ПРОШЛОГО поколения сессии (167) ─────────────────────────────
-    // Мгновенная смена филиала перевыпускает сессию: сервер выдаёт новый токен
-    // и гасит прежний МГНОВЕННО, без грейс-окна. Запросы, улетевшие за секунду
-    // до перехода, возвращаются уже с 401 «Токен отозван» — по СТАРОМУ токену,
-    // который мы сами и заменили. Гасить из-за них новую сессию нельзя: человек
-    // успешно перешёл в другой филиал и был бы выброшен на экран входа за
-    // собственное удачное действие.
-    //
-    // Отличаем по заголовку самого запроса: он ушёл не с тем токеном, который
-    // сейчас у сессии. Прочитать заголовок не удалось — считаем отказ обычным
-    // (поведение как до правки): молчаливо проигнорированный 401 опаснее лишней
-    // перезагрузки на вход.
-    const staleSessionResponse = status === 401 && isPreviousSessionRequest(error.config);
-
-    // ── Session validity: /auth/me is the SOLE authority ───────────────────
-    // A 401 means "this request was not authorized" — it does NOT mean the
-    // session token is dead. The ONLY endpoint that proves the token itself is
-    // invalid is /auth/me (it validates the bearer and nothing else). A 401
-    // from any DATA endpoint (a permission-scoped resource the current role
-    // can't read, an owner-only widget a master shouldn't hit, a deterministic
-    // server-side failure on real data) must surface to React Query as an
-    // error WITHOUT wiping a valid token — otherwise one unrelated 401 during
-    // the post-refresh data fan-out logs the user out on EVERY refresh.
-    //
-    // This mirrors mobile, where the navigation gate is driven by
-    // `useAuth().user` (revalidated via /auth/me), never by a data endpoint.
-    //
-    // AuthContext owns the /auth/me boot path: it clears the token only when
-    // /auth/me itself returns 401/403. For a 401 on /auth/me that happens
-    // OUTSIDE that boot flow (e.g. a background refreshUser after the token was
-    // revoked), we tear the session down here so the user lands on /login.
-    // ── Сессия потеряла свой филиал (163) ─────────────────────────────────
-    // Единственное исключение из правила выше. Филиал лежит в подписанном
-    // токене, и когда его архивируют или снимают у сотрудника доступ, сервер
-    // отвечает 401 «Филиал больше не доступен — войдите заново» на КАЖДЫЙ
-    // запрос, а не только на /auth/me. Токен после этого мёртв целиком —
-    // держать его дальше значит показывать человеку экраны, где ни одна цифра
-    // не обновится, и дать ему пробить чек в филиал, откуда его убрали.
-    // Подставить другой филиал молча НЕЛЬЗЯ: он бы этого не заметил.
-    //
-    // Отличаем по ПОЛНОМУ тексту сервера (shared/utils/apiError.ts), а не по
-    // одному коду 401: обычный 401 с денежной ручки — это отказ в доступе к
-    // данным, и он не должен ронять живую сессию.
-    //
-    // ПРИЧИНУ ЗАПОМИНАЕМ ПЕРВОЙ СТРОКОЙ — до любого вызова hardLogoutRedirect
-    // (тот же отказ мог прилететь и с /auth/me, и тогда сессию гасит ветка
-    // ниже). Экран входа обязан объяснить, ПОЧЕМУ человека выкинуло, а после
-    // перезагрузки на /login объяснять будет уже нечем.
-    const pointLost = staleSessionResponse ? null : sessionPointLostMessage(error);
-    if (pointLost) rememberSessionEndedNotice(pointLost);
-
-    if (status === 401 && url.includes('/auth/me') && !staleSessionResponse) {
-      hardLogoutRedirect();
-    }
-
-    if (pointLost) {
-      hardLogoutRedirect();
-    }
-
-    // Rate-limited — log so we can see in console, but don't logout
-    if (status === 429) {
-      console.warn('Rate limited:', error.response.data);
-    }
-
-    // Server error — generic message
-    if (status >= 500) {
-      console.error(`Server error ${status}:`, error.response.data);
-    }
-
+async function handleApiFailure(error: AxiosError): Promise<AxiosResponse> {
+  // Запрос погашен нами же: сессию перевыпустили в другой вкладке (167).
+  // Ответа нет и не будет, но это НЕ сетевой сбой — переигрывать такой
+  // запрос через резервный шлюз нельзя, он ушёл бы с чужим токеном.
+  if (isSessionTakeoverError(error)) {
     return Promise.reject(error);
-  },
+  }
+
+  const response = error.response;
+  if (response && isHtmlApiResponse(response)) error = routeFailure(response);
+
+  // Network error, captive portal or an untrusted proxy response.
+  if (!error.response) {
+    if (isPreviousSessionRequest(error.config)) return Promise.reject(error);
+    // ── Best-effort reserve failover ──────────────────────────────────────
+    // Missing responses and explicitly classified HTML routes mean the origin
+    // cannot supply API data (DNS/timeout/blocked/CORS/captive portal). Retry
+    // the SAME request ONCE against
+    // the absolute reserve base — but only for idempotent methods
+    // (GET/HEAD/OPTIONS), never for mutations, to avoid a double-write, and at
+    // most once (loop guard via `_reserveRetried`). Re-issuing via
+    // `api.request` re-runs the request interceptor, so Authorization /
+    // withCredentials behaviour is byte-identical to the primary path.
+    //
+    // CORS reality: the reserve is a different origin, so this only succeeds
+    // if the gateway returns CORS headers for our origin. If CORS blocks it,
+    // the retry just fails and we fall through to today's rejection below —
+    // best-effort, strictly never worse than the current behaviour.
+    const config = error.config as ReserveRetryConfig | undefined;
+    const method = (config?.method || '').toLowerCase();
+    if (
+      config &&
+      RESERVE_API_URL &&
+      !config._reserveRetried &&
+      IDEMPOTENT_METHODS.has(method) &&
+      config.baseURL !== RESERVE_API_URL
+    ) {
+      // A reserve retry belongs to the original session, even if login/branch
+      // switching completes while Axios is scheduling its request interceptor.
+      config._expectedSessionToken = sentAuthorization(config)?.replace(/^Bearer /, '') ?? null;
+      config._reserveRetried = true;
+      config.baseURL = RESERVE_API_URL;
+      try {
+        return await api.request(config);
+      } catch {
+        // Reserve also unreachable / CORS-blocked → fall through to the
+        // original network-error rejection. No regression vs. today.
+      }
+    }
+
+    console.error('Network error:', error.message);
+    return Promise.reject(error.code === API_ROUTE_FAILURE_CODE ? error : new Error('Нет соединения с сервером'));
+  }
+
+  const status = error.response.status;
+  const url = error.config?.url || '';
+
+  // ── Ответ ПРОШЛОГО поколения сессии (167) ─────────────────────────────
+  // Мгновенная смена филиала перевыпускает сессию: сервер выдаёт новый токен
+  // и гасит прежний МГНОВЕННО, без грейс-окна. Запросы, улетевшие за секунду
+  // до перехода, возвращаются уже с 401 «Токен отозван» — по СТАРОМУ токену,
+  // который мы сами и заменили. Гасить из-за них новую сессию нельзя: человек
+  // успешно перешёл в другой филиал и был бы выброшен на экран входа за
+  // собственное удачное действие.
+  //
+  // Отличаем по заголовку самого запроса: он ушёл не с тем токеном, который
+  // сейчас у сессии. Прочитать заголовок не удалось — считаем отказ обычным
+  // (поведение как до правки): молчаливо проигнорированный 401 опаснее лишней
+  // перезагрузки на вход.
+  const staleSessionResponse = status === 401 && isPreviousSessionRequest(error.config);
+
+  // ── Session validity: /auth/me is the SOLE authority ───────────────────
+  // A 401 means "this request was not authorized" — it does NOT mean the
+  // session token is dead. The ONLY endpoint that proves the token itself is
+  // invalid is /auth/me (it validates the bearer and nothing else). A 401
+  // from any DATA endpoint (a permission-scoped resource the current role
+  // can't read, an owner-only widget a master shouldn't hit, a deterministic
+  // server-side failure on real data) must surface to React Query as an
+  // error WITHOUT wiping a valid token — otherwise one unrelated 401 during
+  // the post-refresh data fan-out logs the user out on EVERY refresh.
+  //
+  // This mirrors mobile, where the navigation gate is driven by
+  // `useAuth().user` (revalidated via /auth/me), never by a data endpoint.
+  //
+  // AuthContext owns the /auth/me boot path: it clears the token only when
+  // /auth/me itself returns a genuine JSON401. For a 401 on /auth/me that happens
+  // OUTSIDE that boot flow (e.g. a background refreshUser after the token was
+  // revoked), we tear the session down here so the user lands on /login.
+  // ── Сессия потеряла свой филиал (163) ─────────────────────────────────
+  // Единственное исключение из правила выше. Филиал лежит в подписанном
+  // токене, и когда его архивируют или снимают у сотрудника доступ, сервер
+  // отвечает 401 «Филиал больше не доступен — войдите заново» на КАЖДЫЙ
+  // запрос, а не только на /auth/me. Токен после этого мёртв целиком —
+  // держать его дальше значит показывать человеку экраны, где ни одна цифра
+  // не обновится, и дать ему пробить чек в филиал, откуда его убрали.
+  // Подставить другой филиал молча НЕЛЬЗЯ: он бы этого не заметил.
+  //
+  // Отличаем по ПОЛНОМУ тексту сервера (shared/utils/apiError.ts), а не по
+  // одному коду 401: обычный 401 с денежной ручки — это отказ в доступе к
+  // данным, и он не должен ронять живую сессию.
+  //
+  // ПРИЧИНУ ЗАПОМИНАЕМ ПЕРВОЙ СТРОКОЙ — до любого вызова hardLogoutRedirect
+  // (тот же отказ мог прилететь и с /auth/me, и тогда сессию гасит ветка
+  // ниже). Экран входа обязан объяснить, ПОЧЕМУ человека выкинуло, а после
+  // перезагрузки на /login объяснять будет уже нечем.
+  const pointLost = staleSessionResponse ? null : sessionPointLostMessage(error);
+  if (pointLost) rememberSessionEndedNotice(pointLost);
+
+  if (isApiSessionDenial(error) && isSessionProfileUrl(url) && !staleSessionResponse) {
+    hardLogoutRedirect();
+  }
+
+  if (pointLost) {
+    hardLogoutRedirect();
+  }
+
+  // Rate-limited — log so we can see in console, but don't logout
+  if (status === 429) {
+    console.warn('Rate limited:', error.response.data);
+  }
+
+  // Server error — generic message
+  if (status >= 500) {
+    console.error(`Server error ${status}:`, error.response.data);
+  }
+
+  return Promise.reject(error);
+}
+
+api.interceptors.response.use(
+  (res) => (isHtmlApiResponse(res) ? handleApiFailure(routeFailure(res)) : res),
+  handleApiFailure,
 );
 
 /**
