@@ -20,12 +20,17 @@ export function isHtmlApiResponse(response: ResponseLike | undefined): boolean {
   );
 }
 
-/** /auth/me has no permission403 contract: only an API JSON401 ends a session. */
+/** Nest auth denials are JSON401 objects with a string message, never arbitrary proxy bodies. */
 export function isApiSessionDenial(error: unknown): boolean {
   const response = (error as { response?: ResponseLike } | null)?.response;
   if (!response || response.status !== 401 || isHtmlApiResponse(response)) return false;
   const data = response.data;
-  return !!data && typeof data === 'object' && !Array.isArray(data);
+  return (
+    !!data &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    typeof (data as { message?: unknown }).message === 'string'
+  );
 }
 
 export function isSessionProfileUrl(url: string): boolean {

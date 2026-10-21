@@ -152,6 +152,7 @@ async function harness(responder) {
     storage,
     effects,
     timers,
+    resolveSwitchPointFailure: load(path.join(root, 'src/utils/switchPointFailure.ts')).resolveSwitchPointFailure,
     get current() {
       return current;
     },
@@ -537,6 +538,56 @@ test('public contracts remain reachable during pending staff restore, while priv
       h.pendingApp();
     }
     assert.equal(h.storage.get('token'), 'token-A');
+  } finally {
+    await h.destroy();
+  }
+});
+
+for (const [label, body] of [
+  ['empty object', {}],
+  ['null body', null],
+  ['array', []],
+  ['string body', 'Unauthorized'],
+  ['empty body', ''],
+  ['numeric body', 401],
+  ['error-only object', { error: 'Unauthorized' }],
+  ['array message', { message: ['Unauthorized'] }],
+  ['null message', { message: null }],
+  ['numeric message', { message: 401 }],
+]) {
+  test(`non-authoritative JSON401 (${label}) stays a bounded route recovery without deleting credentials`, async () => {
+    const h = await harness(() => json(401, body));
+    try {
+      assert.equal(h.storage.get('token'), 'token-A');
+      assert.equal(h.current.token, 'token-A');
+      assert.equal(h.current.user, null);
+      assert.ok(h.current.sessionRestoreError);
+      assert.equal(h.effects.requests.length, 2, 'one reserve retry only, no automatic recovery loop');
+      assert.equal(h.effects.cache + h.effects.queue + h.effects.persist, 0);
+      assert.equal(h.timers.length, 0);
+      h.pendingApp();
+    } finally {
+      await h.destroy();
+    }
+  });
+}
+
+test('a malformed401 mutation cannot reach the switch-point consumer as an authoritative logout and is never replayed', async () => {
+  const h = await harness((config) => (config.url === '/auth/me' ? json(200, user('A')) : json(401, {})));
+  try {
+    const before = h.effects.requests.length;
+    let failure;
+    try {
+      await h.current.switchPoint('fixture-point');
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure);
+    assert.equal(failure.response, undefined);
+    assert.equal(h.resolveSwitchPointFailure(failure).action, 'stay');
+    assert.equal(h.effects.requests.length, before + 1);
+    assert.equal(h.storage.get('token'), 'token-A');
+    assert.equal(h.current.user.id, 'A');
   } finally {
     await h.destroy();
   }

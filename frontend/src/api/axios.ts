@@ -160,9 +160,11 @@ function isPreviousSessionRequest(config: InternalAxiosRequestConfig | undefined
 }
 
 function routeFailure(response: AxiosResponse): AxiosError {
-  // Do not expose a captive portal's401/403 to downstream auth/permission logic.
+  // Do not expose an unconfirmed proxy401/403 to downstream auth/permission logic.
   return new AxiosError(
-    'Сервер вернул страницу вместо данных. Проверьте соединение и повторите.',
+    isHtmlApiResponse(response)
+      ? 'Сервер вернул страницу вместо данных. Проверьте соединение и повторите.'
+      : 'Не удалось подтвердить ответ сервера. Проверьте соединение и повторите.',
     API_ROUTE_FAILURE_CODE,
     response.config,
     response.request,
@@ -178,13 +180,15 @@ async function handleApiFailure(error: AxiosError): Promise<AxiosResponse> {
   }
 
   const response = error.response;
-  if (response && isHtmlApiResponse(response)) error = routeFailure(response);
+  if (response && (isHtmlApiResponse(response) || (response.status === 401 && !isApiSessionDenial(error)))) {
+    error = routeFailure(response);
+  }
 
   // Network error, captive portal or an untrusted proxy response.
   if (!error.response) {
     if (isPreviousSessionRequest(error.config)) return Promise.reject(error);
     // ── Best-effort reserve failover ──────────────────────────────────────
-    // Missing responses and explicitly classified HTML routes mean the origin
+    // Missing responses and explicitly classified untrusted routes mean the origin
     // cannot supply API data (DNS/timeout/blocked/CORS/captive portal). Retry
     // the SAME request ONCE against
     // the absolute reserve base — but only for idempotent methods
