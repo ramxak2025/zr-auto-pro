@@ -98,3 +98,49 @@ it('pending rotation logout cancels the lineage even when its old bearer no long
   expect(f.transport.logout).toHaveBeenCalledWith(old, key);
   expect(f.map.has(PUSH_CLAIM_KEY)).toBe(true);
 });
+
+it.each(['read failure', 'malformed JSON', 'invalid claim'])(
+  'keyed logout still revokes exactly once after %s without deleting another push claim',
+  async (failure) => {
+    const f = fixture(),
+      parent = bearer('a'),
+      other = bearer('b');
+    const key = '11111111-1111-4111-8111-111111111111';
+    await f.core.register(other, 'device', 'ios', () => true);
+    if (failure === 'malformed JSON') f.map.set(PUSH_CLAIM_KEY, '{broken');
+    if (failure === 'invalid claim') f.map.set(PUSH_CLAIM_KEY, JSON.stringify({ v: 1, bearer: other }));
+    const preserved = f.map.get(PUSH_CLAIM_KEY);
+    if (failure === 'read failure')
+      f.storage.getItem.mockImplementation(async (name) => {
+        if (name === PUSH_CLAIM_KEY) throw new Error('push keychain read failed');
+        return f.map.get(name) ?? null;
+      });
+    await expect(f.core.logout(parent, true, key)).rejects.toBeTruthy();
+    expect(f.transport.logout).toHaveBeenCalledTimes(1);
+    expect(f.transport.logout).toHaveBeenCalledWith(parent, key);
+    expect(f.transport.unregister).not.toHaveBeenCalled();
+    expect(f.storage.removeItem).not.toHaveBeenCalled();
+    expect(f.map.get(PUSH_CLAIM_KEY)).toBe(preserved);
+  },
+);
+
+it('ordinary no-key logout retains its cleanup-first policy after a push-claim read failure', async () => {
+  const f = fixture();
+  f.storage.getItem.mockRejectedValueOnce(new Error('keychain unavailable'));
+  await expect(f.core.logout(bearer('a'), true)).rejects.toThrow('keychain unavailable');
+  expect(f.transport.logout).not.toHaveBeenCalled();
+});
+
+it('keyed logout still revokes exactly once when clearing an owned push claim fails', async () => {
+  const f = fixture(),
+    parent = bearer('a'),
+    key = '11111111-1111-4111-8111-111111111111';
+  await f.core.register(parent, 'device', 'ios', () => true);
+  const preserved = f.map.get(PUSH_CLAIM_KEY);
+  f.storage.removeItem.mockRejectedValueOnce(new Error('push cleanup unavailable'));
+  await expect(f.core.logout(parent, true, key)).rejects.toThrow('push cleanup unavailable');
+  expect(f.transport.unregister).toHaveBeenCalledTimes(1);
+  expect(f.transport.logout).toHaveBeenCalledTimes(1);
+  expect(f.transport.logout).toHaveBeenCalledWith(parent, key);
+  expect(f.map.get(PUSH_CLAIM_KEY)).toBe(preserved);
+});

@@ -76,17 +76,17 @@ export function createPushSessionLifecycle(storage: AccountKeyValueStorage, tran
       }),
     logout: (bearer: string, wasActive = false, refreshRequestId?: string) =>
       serial(async () => {
-        const previous = await read();
-        if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer)))) {
-          try {
+        try {
+          const previous = await read();
+          if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer)))) {
             await release({ ...previous, bearer });
-          } catch (error) {
-            // A rotated parent may no longer authorize push cleanup. Its
-            // recovery capability still authorizes cancellation of the lineage;
-            // retain the failed push claim, but do not lose the explicit logout.
-            if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
-            throw error;
           }
+        } catch (error) {
+          // Reading/parsing the unrelated push claim can fail as well as its
+          // cleanup. The captured recovery capability still owns a revoke-only
+          // request; attempt it exactly once without changing another claim.
+          if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
+          throw error;
         }
         if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
         else await transport.logout?.(bearer);

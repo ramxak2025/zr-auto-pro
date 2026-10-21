@@ -54,10 +54,7 @@ test('чтение карточки сотрудника проходит чер
   );
   // Все три чтения обязаны его звать.
   for (const method of ['async listDocuments(', 'async getDocumentStoredPath(', 'async fullProfile(']) {
-    const body = employeesService.slice(
-      employeesService.indexOf(method),
-      employeesService.indexOf(method) + 1200,
-    );
+    const body = employeesService.slice(employeesService.indexOf(method), employeesService.indexOf(method) + 1200);
     assert.ok(
       /this\.assertCanViewEmployee\(actor/.test(body),
       `${method} снова открыт любому аутентифицированному — мастер скачает паспорт коллеги`,
@@ -86,7 +83,9 @@ test('денежная часть профиля закрыта правом в�
     'выручка сотрудника снова открыта всем, кто добрался до карточки',
   );
   // Рублёвые поля обязаны уходить нулями, а не значениями.
-  assert.ok(/const totalRevenue = canSeeMoney \? parseFloat\(totals\[0\]\?\.revenue\) \|\| 0 : 0;/.test(employeesService));
+  assert.ok(
+    /const totalRevenue = canSeeMoney \? parseFloat\(totals\[0\]\?\.revenue\) \|\| 0 : 0;/.test(employeesService),
+  );
   assert.ok(/value: canSeeMoney \? parseFloat\(bestDayRows\[0\]\.revenue\) \|\| 0 : 0,/.test(employeesService));
   assert.ok(/value: canSeeMoney \? parseFloat\(bestMonthRows\[0\]\.revenue\) \|\| 0 : 0,/.test(employeesService));
 });
@@ -109,10 +108,14 @@ test('ключ кеша профиля несёт филиал и объём п�
     employeesService.indexOf('const cacheKey ='),
     employeesService.indexOf('return ttlCache.wrap(cacheKey'),
   );
-  assert.ok(/employee:\$\{tenantID\}:\$\{employeeId\}:full:\$\{pointCacheSegment\(pointId\)\}/.test(key),
-    'филиал выпал из ключа — филиал Б получит цифры филиала А');
-  assert.ok(/isManager \? 'n' : ''/.test(key) && /canSeeMoney \? 'm' : ''/.test(key),
-    'объём прав выпал из ключа — мастер прочитает payload, посчитанный для владельца');
+  assert.ok(
+    /employee:\$\{tenantID\}:\$\{employeeId\}:full:\$\{pointCacheSegment\(pointId\)\}/.test(key),
+    'филиал выпал из ключа — филиал Б получит цифры филиала А',
+  );
+  assert.ok(
+    /isManager \? 'n' : ''/.test(key) && /canSeeMoney \? 'm' : ''/.test(key),
+    'объём прав выпал из ключа — мастер прочитает payload, посчитанный для владельца',
+  );
   // Инвалидация чистит по префиксу `employee:<тенант>:<сотрудник>` — сегмент
   // филиала обязан стоять ПОСЛЕ id, иначе мутации перестанут сбрасывать кеш.
   assert.ok(
@@ -317,7 +320,7 @@ test('«доступ не настроен» и «филиал закрыт» �
   );
 });
 
-test('сотрудник без единого доступного филиала не получает сессию без филиала', () => {
+test('сотрудник без единого доступного филиала не получает сессию без филиала', async () => {
   // Вход: отказ с объяснением вместо молчаливого входа «в никуда».
   assert.ok(
     /Вам не назначен ни один действующий филиал — обратитесь к руководителю/.test(authService),
@@ -325,10 +328,32 @@ test('сотрудник без единого доступного филиал
   );
   // Живые сессии (токен без филиала) обязаны умереть тем же текстом.
   assert.ok(/tenant_has_points/.test(jwtStrategy), 'стратегия не отличает одноточечный тенант от «нет доступа»');
-  assert.ok(
-    /!tokenPointId && rows\[0\]\.tenant_has_points === true && !rows\[0\]\.default_point_id/.test(jwtStrategy),
-    'сессия без филиала у тенанта с филиалами снова живёт',
-  );
+  const { randomUUID } = require('node:crypto');
+  const { JwtStrategy } = require('../dist/auth/jwt.strategy');
+  process.env.JWT_SECRET = 'isolated-access-point-guard-fixture-secret';
+  const user = randomUUID(),
+    tenant = randomUUID();
+  const row = {
+    is_active: true,
+    tenant_id: tenant,
+    role: 'master',
+    session_stale: false,
+    tenant_has_points: true,
+    point_allowed: false,
+    default_point_id: null,
+  };
+  const strategy = new JwtStrategy({ query: async (sql) => ({ rows: /FROM revoked_tokens/.test(sql) ? [] : [row] }) });
+  const payload = () => ({ sub: user, tenantId: tenant, jti: randomUUID(), iat: Math.floor(Date.now() / 1000) });
+  for (const validate of [() => strategy.validate(payload()), () => strategy.validateRefresh(payload(), null)]) {
+    await assert.rejects(
+      validate,
+      (error) => error.status === 401 && /не назначен ни один действующий филиал/.test(error.response.message),
+    );
+  }
+  // The genuine tenant-without-points case remains supported; a missing point
+  // is not a blanket bypass when live points exist but none is accessible.
+  row.tenant_has_points = false;
+  assert.equal((await strategy.validate(payload())).currentPointId, null);
 });
 
 // ── 6. Смена пароля гасит все прежние сессии ───────────────────────────────
@@ -339,7 +364,10 @@ test('смена пароля пишет границу жизни сессий 
     'самостоятельная смена пароля снова оставляет старые токены живыми на 30 суток',
   );
   const body = profileService.slice(profileService.indexOf('async changePassword('));
-  assert.ok(/invalidateAuthUser\(self\.id\)/.test(body), '30-секундный auth-кеш продержит украденный токен ещё полминуты');
+  assert.ok(
+    /invalidateAuthUser\(self\.id\)/.test(body),
+    '30-секундный auth-кеш продержит украденный токен ещё полминуты',
+  );
 
   // Сброс пароля владельцем — то же самое.
   const passwordBranch = usersService.slice(usersService.indexOf('if (dto.password) {'));

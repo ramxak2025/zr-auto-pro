@@ -127,7 +127,7 @@ test('invalidateReportsForTenant покрывает каждое кешируе�
 
 // ── 3. Актор несёт точку из JWT, переключение сбрасывает auth-кеш ───────────
 
-test('филиал сессии резолвится тем же SELECT, что роль (без лишнего DB-hop)', () => {
+test('филиал сессии резолвится тем же SELECT, что роль (без лишнего DB-hop)', async () => {
   // 163 — филиал приезжает ИЗ ТОКЕНА; тем же запросом проверяется, что он ещё
   // жив и ещё разрешён, и подставляется филиал по умолчанию сессии без него.
   assert.ok(
@@ -142,10 +142,62 @@ test('филиал сессии резолвится тем же SELECT, что 
     !/u\.current_point_id::text as current_point_id/.test(jwtStrategy),
     'jwt.strategy: филиал снова читается из строки пользователя — веб унаследует филиал телефона',
   );
-  assert.ok(
-    /currentPointId: tokenPointId \?\? \(rows\[0\]\.default_point_id as string \| null\) \?\? null/.test(jwtStrategy),
-    'jwt.strategy: филиал актора собирается не из токена',
-  );
+  const { randomUUID } = require('node:crypto');
+  const { JwtStrategy } = require('../dist/auth/jwt.strategy');
+  process.env.JWT_SECRET = 'isolated-session-point-resolution-fixture-secret';
+  const user = randomUUID(),
+    tenant = randomUUID(),
+    signed = randomUUID(),
+    hint = randomUUID();
+  for (const mode of ['signed', 'legacy', 'receipt']) {
+    const calls = [];
+    const strategy = new JwtStrategy({
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (/FROM revoked_tokens/.test(sql))
+          return {
+            rows:
+              mode === 'receipt'
+                ? [
+                    {
+                      user_id: user,
+                      tenant_id: tenant,
+                      refresh_source_point_id: signed,
+                      revoked: true,
+                      recoverable: true,
+                    },
+                  ]
+                : [],
+          };
+        return {
+          rows: [
+            {
+              is_active: true,
+              tenant_id: tenant,
+              role: 'director',
+              session_stale: false,
+              tenant_has_points: true,
+              point_allowed: true,
+              default_point_id: hint,
+            },
+          ],
+        };
+      },
+    });
+    const payload = {
+      sub: user,
+      tenantId: tenant,
+      jti: randomUUID(),
+      iat: Math.floor(Date.now() / 1000),
+      ...(mode === 'signed' ? { pointId: signed } : {}),
+    };
+    const actor =
+      mode === 'receipt' ? await strategy.validateRefresh(payload, 'fixture-hash') : await strategy.validate(payload);
+    assert.equal(actor.currentPointId, mode === 'legacy' ? hint : signed, mode);
+    const userReads = calls.filter((call) => /FROM users u/.test(call.sql));
+    assert.equal(userReads.length, 1, 'point and role share the same user read');
+    assert.equal(userReads[0].params[1], mode === 'legacy' ? null : signed, mode);
+  }
 
   // Лишний SELECT точки внутри транзакции создания чека должен быть удалён.
   assert.ok(

@@ -22,6 +22,7 @@ import api, {
   onRequestSucceeded,
   onSessionRecoveryNeeded,
   markSessionRefreshPending,
+  markSessionReissueDenied,
   reselectApiHost,
   reportAuthExpiry,
   setAuthToken,
@@ -700,7 +701,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     pending: PendingSessionReissue;
   } | null>(null);
   const refreshFlightRef = useRef<{ epoch: number; promise: Promise<void>; pointId?: string } | null>(null);
-  const refreshJournalRef = useRef<{ token: string; requestId: string } | null>(null);
+  const refreshJournalRef = useRef<{ token: string; requestId: string; epoch: number; denied?: true } | null>(null);
   const ensureSessionToken = useCallback(
     async (epoch: number, signal?: AbortSignal, requestedPointId?: string) => {
       if (refreshFlightRef.current?.epoch === epoch) {
@@ -743,8 +744,33 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         if (!isCurrent() || session?.token !== lease.token || session.impersonating) return;
         const issuedAt = jwtIssuedAtMs(session.token);
         let pending = session.pendingReissue;
+        const denial =
+          session.reissueDenied === true ||
+          (refreshJournalRef.current?.epoch === epoch &&
+            refreshJournalRef.current.token === lease.token &&
+            refreshJournalRef.current.requestId === pending?.refreshRequestId &&
+            refreshJournalRef.current.denied === true);
         if (requestedPointId && pending && (pending.kind !== 'switch-point' || pending.pointId !== requestedPointId))
-          throw new AccountRegistryError('SESSION_CHANGED', 'Дождитесь завершения смены сессии.');
+          throw new AccountRegistryError(
+            'SESSION_CHANGED',
+            denial
+              ? 'Предыдущее переключение не завершено. Повторите его или выйдите из аккаунта.'
+              : 'Дождитесь завершения смены сессии.',
+          );
+        if (pending && denial) {
+          refreshJournalRef.current = { token: lease.token, requestId: pending.refreshRequestId, epoch, denied: true };
+          markSessionReissueDenied(lease.token);
+          if (!requestedPointId) return; // /me may still authorize the unchanged source; retain its proof either way.
+          // An explicit retry reuses the immutable operation and key. Protect
+          // in-flight source401s while its denied marker is durably cleared.
+          markSessionRefreshPending(lease.token);
+          try {
+            pending = (await authAccounts.beginReissue(saved.generation, lease.token, pending, isCurrent)).result;
+          } catch (error) {
+            if (isCurrent()) markSessionReissueDenied(lease.token);
+            throw error;
+          }
+        }
         if (!pending) {
           if (!requestedPointId && (issuedAt === null || Date.now() - issuedAt <= SESSION_REFRESH_AGE_MS)) return;
           const operation: PendingSessionReissue = requestedPointId
@@ -758,7 +784,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         flight.pointId = pending.kind === 'switch-point' ? pending.pointId : undefined;
         const requestId = pending.refreshRequestId;
         markSessionRefreshPending(lease.token);
-        refreshJournalRef.current = { token: lease.token, requestId };
+        refreshJournalRef.current = { token: lease.token, requestId, epoch };
         const bound = createSessionBoundClient(lease.token);
         for (let attempt = 0; isCurrent(); attempt++) {
           try {
@@ -806,11 +832,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
             if (isAuthExpiry(error)) reportAuthExpiry(error, lease);
             const status = (error as { response?: { status?: number } })?.response?.status;
             if ((status === 400 || status === 403) && !isApiRouteFailure(error)) {
-              await authAccounts.cancelReissue(saved.generation, lease.token!, pending, isCurrent);
-              if (isCurrent()) {
-                markSessionRefreshPending(null);
-                refreshJournalRef.current = null;
-              }
+              // A denied replay can follow a committed exchange. Keep the key
+              // for owned logout; it is not evidence that the source is unused.
+              refreshJournalRef.current = { token: lease.token!, requestId, epoch, denied: true };
+              markSessionReissueDenied(lease.token!);
+              await authAccounts.denyReissue(saved.generation, lease.token!, pending, isCurrent);
             }
             // Only keyed, ambiguous route failures may be repeated. Storage,
             // validation, rate limits and real auth rejection are never retried.
@@ -1161,8 +1187,22 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // Listen for 401 events from axios interceptor
   useEffect(() => {
     return onAuthExpired((reason) => {
+      const epoch = sessionRuntime.capture();
+      const saved = authAccounts.snapshot();
+      const owned = saved?.accounts.find((account) => account.id === activeRegistryRef.current.id)?.session;
+      const journal = refreshJournalRef.current;
+      const proof =
+        journal?.epoch === epoch
+          ? { token: journal.token, key: journal.requestId }
+          : saved?.generation === activeRegistryRef.current.generation && owned?.pendingReissue
+            ? { token: owned.token, key: owned.pendingReissue.refreshRequestId }
+            : null;
+      // Capture/enqueue the owned revoke before tombstoning its only proof.
+      // This is the existing best-effort transport policy, not an offline outbox.
+      if (proof) void pushLifecycle.logout(proof.token, true, proof.key).catch(() => {});
+      else void pushLifecycle.detach().catch(() => {});
+      refreshJournalRef.current = null;
       const expiredEpoch = beginSessionTransition();
-      void pushLifecycle.detach().catch(() => {});
       void resetLiveActivitySession();
       // Причину ставим ДО гашения сессии: экран входа отрисуется тем же
       // кадром, что и разлогин, и должен уже знать, что сказать человеку.

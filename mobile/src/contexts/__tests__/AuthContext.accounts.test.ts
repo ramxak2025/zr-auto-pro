@@ -73,7 +73,7 @@ jest.mock('../authAccountStorage', () => ({
     update: (...a: Parameters<typeof mockRegistry.update>) => mockRegistry.update(...a),
     beginReissue: (...a: Parameters<typeof mockRegistry.beginReissue>) => mockRegistry.beginReissue(...a),
     completeReissue: (...a: Parameters<typeof mockRegistry.completeReissue>) => mockRegistry.completeReissue(...a),
-    cancelReissue: (...a: Parameters<typeof mockRegistry.cancelReissue>) => mockRegistry.cancelReissue(...a),
+    denyReissue: (...a: Parameters<typeof mockRegistry.denyReissue>) => mockRegistry.denyReissue(...a),
     deactivate: (...a: Parameters<typeof mockRegistry.deactivate>) => mockRegistry.deactivate(...a),
     remove: (...a: Parameters<typeof mockRegistry.remove>) => mockRegistry.remove(...a),
   },
@@ -85,6 +85,11 @@ jest.mock('../authAccountStorage', () => ({
     const saved = mockRegistry.snapshot();
     const session = saved?.accounts.find((a) => a.id === saved.activeId)?.session;
     return !!token && session?.token === token && !!session.pendingReissue;
+  },
+  isSessionReissueDenied: (token: string | null) => {
+    const saved = mockRegistry.snapshot();
+    const session = saved?.accounts.find((a) => a.id === saved.activeId)?.session;
+    return !!token && session?.token === token && session.reissueDenied === true;
   },
 }));
 jest.mock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: mockLegacy }));
@@ -355,6 +360,208 @@ describe('durable refresh lifecycle in the real provider', () => {
       config,
       response: { status: 401, data: { message: 'Токен отозван' }, headers: {}, config },
     });
+  const forbidden = (config: InternalAxiosRequestConfig) =>
+    Object.assign(new Error('point permission removed'), {
+      isAxiosError: true,
+      config,
+      response: {
+        status: 403,
+        data: { message: 'Мгновенное переключение филиала доступно только руководителю' },
+        headers: {},
+        config,
+      },
+    });
+  const rejectedPointSwitch = async (f: Awaited<ReturnType<typeof setup>>, committed: boolean) => {
+    const branch = '99999999-9999-4999-8999-999999999999';
+    let attempts = 0,
+      key = '';
+    f.transport.default.defaults.adapter = async (config) => {
+      expect(config.url).toBe('/auth/switch-point');
+      key = String(config.headers['x-refresh-request-id']);
+      attempts++;
+      if (committed && attempts === 1) throw offline(config); // The server committed; only its reply was lost.
+      throw forbidden(config); // A replay can lose manage permission while the child still has data access.
+    };
+    const work = f
+      .render()
+      .switchSessionPoint(branch)
+      .catch((error: unknown) => error);
+    await jest.advanceTimersByTimeAsync(551);
+    expect(await work).toMatchObject({ response: { status: 403 } });
+    return { branch, key, attempts };
+  };
+
+  it('committed lost switch followed by replay403 retains its original proof for explicit logout', async () => {
+    const f = await setup();
+    const { key, branch } = await rejectedPointSwitch(f, true);
+    let childStillActive = true;
+    const revokes: InternalAxiosRequestConfig[] = [];
+    f.transport.default.defaults.adapter = async (config) => {
+      if (config.url === '/auth/logout') {
+        revokes.push(config);
+        if (config.headers.Authorization === `Bearer ${jwt(f.a)}` && config.headers['x-refresh-request-id'] === key)
+          childStillActive = false;
+      }
+      return response(config, {});
+    };
+    expect(mockRegistry.snapshot()!.accounts[0].session?.pendingReissue).toEqual({
+      kind: 'switch-point',
+      refreshRequestId: key,
+      pointId: branch,
+    });
+    await f.render().logout();
+    await flush();
+    expect(revokes).toHaveLength(1);
+    expect(revokes[0].headers['x-refresh-request-id']).toBe(key);
+    expect(childStillActive).toBe(false);
+  });
+
+  it('a fresh precommit403 keeps the source usable, stops automatic handoff repeats and reuses the proof on explicit retry', async () => {
+    const f = await setup();
+    const crypto = jest.requireMock('expo-crypto') as { randomUUID: () => string };
+    const minted = jest
+      .spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222');
+    const { key, branch } = await rejectedPointSwitch(f, false);
+    const calls: InternalAxiosRequestConfig[] = [];
+    f.transport.default.defaults.adapter = async (config) => {
+      calls.push(config);
+      return response(config, f.a);
+    };
+    await f.render().refreshUser();
+    f.render();
+    mockAppStateListeners.forEach((listener) => listener('background'));
+    mockAppStateListeners.forEach((listener) => listener('active'));
+    await flush();
+    expect(calls.every((config) => config.url === '/auth/me')).toBe(true);
+    expect(f.render().token).toBe(jwt(f.a));
+    expect(mockRegistry.snapshot()!.accounts[0].session?.pendingReissue?.refreshRequestId).toBe(key);
+    await expect(f.render().switchSessionPoint('88888888-8888-4888-8888-888888888888')).rejects.toMatchObject({
+      code: 'SESSION_CHANGED',
+    });
+    const target = { ...f.a, currentPointId: branch };
+    f.transport.default.defaults.adapter = async (config) => {
+      expect(config.url).toBe('/auth/switch-point');
+      expect(config.headers['x-refresh-request-id']).toBe(key);
+      return response(config, { token: childToken(target), user: target, currentPointId: branch });
+    };
+    await f.render().switchSessionPoint(branch);
+    expect(f.render().user?.currentPointId).toBe(branch);
+    expect(minted).toHaveBeenCalledTimes(1);
+  });
+
+  it('real source401 after a denied committed handoff captures the owned revoke before expiring local credentials', async () => {
+    const f = await setup();
+    const { key } = await rejectedPointSwitch(f, true);
+    const revokes: InternalAxiosRequestConfig[] = [];
+    f.transport.default.defaults.adapter = async (config) => {
+      if (config.url === '/auth/logout') {
+        revokes.push(config);
+        return response(config, {});
+      }
+      throw denied(config);
+    };
+    await expect(f.transport.default.get('/products')).rejects.toMatchObject({ response: { status: 401 } });
+    await flush();
+    expect(f.render().token).toBeNull();
+    expect(mockRegistry.snapshot()!.accounts[0].session).toBeNull();
+    expect(revokes).toHaveLength(1);
+    expect(revokes[0].headers.Authorization).toBe(`Bearer ${jwt(f.a)}`);
+    expect(revokes[0].headers['x-refresh-request-id']).toBe(key);
+  });
+
+  it.each([true, false])(
+    'a denied proof survives profile persistence and restart without automatic handoff retries (source valid=%s)',
+    async (sourceValid) => {
+      const f = await setup();
+      const { key } = await rejectedPointSwitch(f, false);
+      f.transport.default.defaults.adapter = async (config) => response(config, f.a);
+      await f.render().refreshUser();
+      expect(mockRegistry.snapshot()!.accounts[0].session?.reissueDenied).toBe(true);
+      const stored = mockSecureMap.get('autexa.auth.accounts.v1')!;
+      for (const cleanup of mockCleanups.splice(0)) cleanup();
+      const sent: InternalAxiosRequestConfig[] = [];
+      const resumed = await setup(false, f.a, {
+        restore: stored,
+        adapter: async (config) => {
+          sent.push(config);
+          if (config.url === '/auth/logout') return response(config, {});
+          expect(config.url).toBe('/auth/me');
+          if (!sourceValid) throw denied(config);
+          return response(config, f.a);
+        },
+      });
+      await flush();
+      expect(sent.filter((config) => config.url === '/auth/switch-point')).toHaveLength(0);
+      expect(resumed.render().token).toBe(sourceValid ? jwt(f.a) : null);
+      if (sourceValid) expect(mockRegistry.snapshot()!.accounts[0].session?.pendingReissue?.refreshRequestId).toBe(key);
+      else expect(sent.find((config) => config.url === '/auth/logout')?.headers['x-refresh-request-id']).toBe(key);
+    },
+  );
+
+  it('authoritative refresh401 captures its pending ancestor proof before the auth-expiry tombstone', async () => {
+    const a = user('a'),
+      parent = oldToken(a);
+    const f = await setup(false, a, {
+      token: parent,
+      adapter: async (config) => {
+        throw offline(config);
+      },
+    });
+    await jest.advanceTimersByTimeAsync(551);
+    const key = mockRegistry.snapshot()!.accounts[0].session!.pendingReissue!.refreshRequestId;
+    const revokes: InternalAxiosRequestConfig[] = [];
+    f.transport.default.defaults.adapter = async (config) => {
+      if (config.url === '/auth/logout') {
+        revokes.push(config);
+        return response(config, {});
+      }
+      expect(config.url).toBe('/auth/refresh');
+      throw denied(config);
+    };
+    await f.render().refreshUser();
+    await flush();
+    expect(f.render().token).toBeNull();
+    expect(mockRegistry.snapshot()!.accounts[0].session).toBeNull();
+    expect(revokes).toHaveLength(1);
+    expect(revokes[0].headers.Authorization).toBe(`Bearer ${parent}`);
+    expect(revokes[0].headers['x-refresh-request-id']).toBe(key);
+  });
+
+  it('a denied A proof cannot revoke B when stale A401 or a later current B401 arrives', async () => {
+    const f = await setup();
+    const { key } = await rejectedPointSwitch(f, true);
+    let rejectA!: (error: unknown) => void, configA!: InternalAxiosRequestConfig;
+    f.transport.default.defaults.adapter = (config) =>
+      new Promise((_resolve, reject) => {
+        configA = config;
+        rejectA = reject;
+      });
+    const old = f.transport.default.get('/products').catch((error: unknown) => error);
+    await flush();
+    const b = user('b');
+    f.transport.default.defaults.adapter = async (config) => response(config, { token: jwt(b), user: b });
+    await f.render().addAccount('B', 'pw');
+    const revokes: InternalAxiosRequestConfig[] = [];
+    f.transport.default.defaults.adapter = async (config) => {
+      if (config.url === '/auth/logout') {
+        revokes.push(config);
+        return response(config, {});
+      }
+      throw denied(config);
+    };
+    rejectA(denied(configA));
+    await old;
+    await flush();
+    expect(f.render().token).toBe(jwt(b));
+    expect(revokes).toHaveLength(0);
+    await expect(f.transport.default.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    await flush();
+    expect(revokes).toHaveLength(0);
+    const a = mockRegistry.snapshot()!.accounts.find((slot) => slot.identity.userId === 'a')!;
+    expect(a.session?.pendingReissue?.refreshRequestId).toBe(key);
+  });
 
   it('lost replies, 20 minutes offline and process restart recover the same operation before /me', async () => {
     const a = user('a'),

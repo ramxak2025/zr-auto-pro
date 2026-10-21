@@ -33,3 +33,9 @@ export function hasPendingSessionReissue(token: string | null): boolean {
   const session = saved && activeAccount(saved)?.session;
   return !!token && session?.token === token && !!session.pendingReissue;
 }
+
+export function isSessionReissueDenied(token: string | null): boolean {
+  const saved = authAccounts.snapshot();
+  const session = saved && activeAccount(saved)?.session;
+  return !!token && session?.token === token && session.reissueDenied === true;
+}

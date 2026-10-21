@@ -10,7 +10,11 @@ import {
   nextUntriedApiHost,
   orderApiHosts,
 } from './apiHosts';
-import { hasPendingSessionReissue, readStoredAccountSession } from '../contexts/authAccountStorage';
+import {
+  hasPendingSessionReissue,
+  isSessionReissueDenied,
+  readStoredAccountSession,
+} from '../contexts/authAccountStorage';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 import { resolveImageUrl } from './imageUrl';
 
@@ -860,8 +864,18 @@ export function captureAuthSession() {
 // A failed native readback invalidates the registry's cached snapshot. Keep
 // the already-durable pending boundary until this exact bearer changes.
 let pendingRefreshToken: string | null = null;
+let pendingReissueDenied = false;
 export function markSessionRefreshPending(token: string | null): void {
-  if (token === null || cachedAuthToken === token) pendingRefreshToken = token;
+  if (token === null || cachedAuthToken === token) {
+    pendingRefreshToken = token;
+    pendingReissueDenied = false;
+  }
+}
+export function markSessionReissueDenied(token: string): void {
+  if (cachedAuthToken === token) {
+    pendingRefreshToken = token;
+    pendingReissueDenied = true;
+  }
 }
 
 /** A failed refresh may end only the exact credential that made the attempt. */
@@ -882,6 +896,7 @@ export function onSessionRecoveryNeeded(listener: () => void): () => void {
 export function setAuthToken(token: string | null, forceNewSession = false): void {
   if (cachedAuthToken !== token || forceNewSession) {
     pendingRefreshToken = null;
+    pendingReissueDenied = false;
     authTokenEpoch += 1;
     explicitAuthTransitionEpoch += 1;
   }
@@ -1480,11 +1495,19 @@ api.interceptors.response.use(
       !cfg._allowCapturedAuthDispatch
     ) {
       if (pendingRefreshToken === cfg._authToken || hasPendingSessionReissue(cfg._authToken ?? null)) {
-        // The server may have committed rotation while its response was lost.
-        // Only the keyed recovery result may declare this session expired.
-        error.code = 'ERR_SESSION_RECOVERING';
-        fireNetworkListeners([...sessionRecoveryListeners]);
-        return Promise.reject(error);
+        const reissueIsDenied =
+          pendingRefreshToken === cfg._authToken
+            ? pendingReissueDenied
+            : isSessionReissueDenied(cfg._authToken ?? null);
+        if (!reissueIsDenied) {
+          // The server may have committed rotation while its response was lost.
+          // Only the keyed recovery result may declare this session expired.
+          error.code = 'ERR_SESSION_RECOVERING';
+          fireNetworkListeners([...sessionRecoveryListeners]);
+          return Promise.reject(error);
+        }
+        // A denied handoff is parked, not retried by every source401. The
+        // provider captures its owned revoke proof before the normal expiry.
       }
       // Идёт перевыпуск сессии (167): старый токен уже мёртв, новый ещё в пути.
       // 401 чужого запроса в этой щели — ожидаемое следствие переключения, а не

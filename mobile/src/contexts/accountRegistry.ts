@@ -32,6 +32,8 @@ export interface AccountSession<U> {
   impersonating: boolean;
   /** Secret recovery capability, stored only in this encrypted registry. */
   pendingReissue?: PendingSessionReissue;
+  /** Retain the revoke proof after a denial without automatically replaying it. */
+  reissueDenied?: true;
 }
 export interface SavedAccount<U> {
   id: string;
@@ -144,6 +146,7 @@ export function createAccountRegistry<U extends AccountProfile>(
   };
   const validateSession = (session: AccountSession<U>): AccountIdentity => {
     const pending = session.pendingReissue;
+    if (session.reissueDenied !== undefined && (session.reissueDenied !== true || !pending)) throw storageError();
     if (
       pending &&
       (session.impersonating ||
@@ -455,7 +458,7 @@ export function createAccountRegistry<U extends AccountProfile>(
           // A profile response cannot erase an in-flight recovery journal.
           slot.session = clone(
             session.token === slot.session.token
-              ? { ...session, pendingReissue: slot.session.pendingReissue }
+              ? { ...session, pendingReissue: slot.session.pendingReissue, reissueDenied: slot.session.reissueDenied }
               : session,
           );
           if (!session.impersonating) {
@@ -481,6 +484,7 @@ export function createAccountRegistry<U extends AccountProfile>(
           if (slot.session.pendingReissue && JSON.stringify(slot.session.pendingReissue) !== JSON.stringify(pending))
             throw changed();
           slot.session.pendingReissue = clone(pending);
+          delete slot.session.reissueDenied;
           validateSession(slot.session);
           return pending;
         },
@@ -512,6 +516,7 @@ export function createAccountRegistry<U extends AccountProfile>(
           const session = { ...slot.session, token, user: pending.kind === 'switch-point' ? user : slot.session.user };
           if (accountId(validateSession(session)) !== accountId(validateSession(slot.session))) throw changed();
           delete session.pendingReissue;
+          delete session.reissueDenied;
           slot.session = session;
           if (pending.kind === 'switch-point') {
             rememberScope(slot, user);
@@ -520,7 +525,7 @@ export function createAccountRegistry<U extends AccountProfile>(
         },
         isCurrent,
       ),
-    cancelReissue: (
+    denyReissue: (
       generation: number,
       expectedToken: string,
       pending: PendingSessionReissue,
@@ -536,7 +541,7 @@ export function createAccountRegistry<U extends AccountProfile>(
             JSON.stringify(slot.session.pendingReissue) !== JSON.stringify(pending)
           )
             throw changed();
-          delete slot.session.pendingReissue;
+          slot.session.reissueDenied = true;
         },
         isCurrent,
       ),
