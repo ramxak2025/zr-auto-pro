@@ -57,6 +57,46 @@ const deferred = <T = void>() => {
   return { promise, resolve };
 };
 
+it('late profile update cannot roll back a rotated token in the same account generation', async () => {
+  const f = setup(),
+    a = session(profile('a'));
+  await f.registry.install(a, 0);
+  const generation = f.registry.snapshot()!.generation;
+  const rotated = { ...a, token: a.token.replace('.fixture', '.successor') };
+  await f.registry.update(rotated, generation, () => true, a.token);
+  await expect(f.registry.update(a, generation, () => true, a.token)).rejects.toMatchObject({
+    code: 'SESSION_CHANGED',
+  });
+  expect(activeAccount(await f.make().read())!.session!.token).toBe(rotated.token);
+});
+
+it('profile persistence preserves a pending capability, and completion requires its exact source token and generation', async () => {
+  const f = setup(),
+    a = session(profile('a'));
+  await f.registry.install(a, 0);
+  const g = f.registry.snapshot()!.generation,
+    key = '11111111-1111-4111-8111-111111111111';
+  const pending = { kind: 'refresh' as const, refreshRequestId: key };
+  await f.registry.beginReissue(g, a.token, pending, () => true);
+  await f.registry.update(a, g, () => true, a.token);
+  expect(activeAccount(await f.make().read())!.session!.pendingReissue!.refreshRequestId).toBe(key);
+  await expect(
+    f.registry.completeReissue(
+      g,
+      a.token,
+      { kind: 'refresh', refreshRequestId: '22222222-2222-4222-8222-222222222222' },
+      a.token + '.new',
+      null,
+      () => true,
+    ),
+  ).rejects.toMatchObject({ code: 'SESSION_CHANGED' });
+  const b = await f.registry.install(session(profile('b')), g);
+  await expect(
+    f.registry.completeReissue(g, a.token, pending, a.token + '.new', null, () => true),
+  ).rejects.toMatchObject({ code: 'SESSION_CHANGED' });
+  expect(activeAccount(b.registry)!.identity.userId).toBe('b');
+});
+
 it('migrates legacy credential only after encrypted write and exact readback; restarts with same account', async () => {
   const f = setup(),
     a = session(profile('a'));

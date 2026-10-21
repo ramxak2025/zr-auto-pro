@@ -23,10 +23,15 @@ export interface AccountProfile {
 export interface AccountDataScope extends AccountIdentity {
   pointId: string | null;
 }
+export type PendingSessionReissue =
+  | { kind: 'refresh'; refreshRequestId: string }
+  | { kind: 'switch-point'; refreshRequestId: string; pointId: string };
 export interface AccountSession<U> {
   token: string;
   user: U | null;
   impersonating: boolean;
+  /** Secret recovery capability, stored only in this encrypted registry. */
+  pendingReissue?: PendingSessionReissue;
 }
 export interface SavedAccount<U> {
   id: string;
@@ -138,6 +143,15 @@ export function createAccountRegistry<U extends AccountProfile>(
     for (const listener of listeners) listener();
   };
   const validateSession = (session: AccountSession<U>): AccountIdentity => {
+    const pending = session.pendingReissue;
+    if (
+      pending &&
+      (session.impersonating ||
+        !['refresh', 'switch-point'].includes(pending.kind) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(pending.refreshRequestId) ||
+        (pending.kind === 'switch-point' && (typeof pending.pointId !== 'string' || !pending.pointId)))
+    )
+      throw storageError();
     const decoded = tokenIdentity(session.token);
     if (
       !decoded ||
@@ -425,25 +439,104 @@ export function createAccountRegistry<U extends AccountProfile>(
         },
         isCurrent,
       ),
-    update: (session: AccountSession<U>, generation: number, isCurrent?: () => boolean) =>
+    update: (session: AccountSession<U>, generation: number, isCurrent?: () => boolean, expectedToken?: string) =>
       mutate(
         generation,
         (next) => {
           const slot = next.accounts.find((a) => a.id === next.activeId);
           if (!slot?.session) throw changed();
+          if (expectedToken !== undefined && slot.session.token !== expectedToken) throw changed();
           const identity = validateSession(session);
           if (
             accountId(identity) !== accountId(validateSession(slot.session)) ||
             session.impersonating !== slot.session.impersonating
           )
             throw changed();
-          slot.session = clone(session);
+          // A profile response cannot erase an in-flight recovery journal.
+          slot.session = clone(
+            session.token === slot.session.token
+              ? { ...session, pendingReissue: slot.session.pendingReissue }
+              : session,
+          );
           if (!session.impersonating) {
             slot.displayName = session.user?.fullName ?? slot.displayName;
             slot.role = session.user?.role ?? slot.role;
             slot.avatar = session.user?.avatar ?? null;
           }
           rememberScope(slot, session.user);
+        },
+        isCurrent,
+      ),
+    beginReissue: (
+      generation: number,
+      expectedToken: string,
+      pending: PendingSessionReissue,
+      isCurrent: () => boolean,
+    ) =>
+      mutate(
+        generation,
+        (next) => {
+          const slot = next.accounts.find((a) => a.id === next.activeId);
+          if (!slot?.session || slot.session.token !== expectedToken || slot.session.impersonating) throw changed();
+          if (slot.session.pendingReissue && JSON.stringify(slot.session.pendingReissue) !== JSON.stringify(pending))
+            throw changed();
+          slot.session.pendingReissue = clone(pending);
+          validateSession(slot.session);
+          return pending;
+        },
+        isCurrent,
+      ),
+    completeReissue: (
+      generation: number,
+      expectedToken: string,
+      pending: PendingSessionReissue,
+      token: string,
+      user: U | null,
+      isCurrent: () => boolean,
+    ) =>
+      mutate(
+        generation,
+        (next) => {
+          const slot = next.accounts.find((a) => a.id === next.activeId);
+          if (
+            !slot?.session ||
+            slot.session.token !== expectedToken ||
+            JSON.stringify(slot.session.pendingReissue) !== JSON.stringify(pending)
+          )
+            throw changed();
+          if (
+            pending.kind === 'switch-point' &&
+            (!user || user.currentPointId !== pending.pointId || tokenIdentity(token)?.pointId !== pending.pointId)
+          )
+            throw changed();
+          const session = { ...slot.session, token, user: pending.kind === 'switch-point' ? user : slot.session.user };
+          if (accountId(validateSession(session)) !== accountId(validateSession(slot.session))) throw changed();
+          delete session.pendingReissue;
+          slot.session = session;
+          if (pending.kind === 'switch-point') {
+            rememberScope(slot, user);
+            next.generation += 1;
+          }
+        },
+        isCurrent,
+      ),
+    cancelReissue: (
+      generation: number,
+      expectedToken: string,
+      pending: PendingSessionReissue,
+      isCurrent: () => boolean,
+    ) =>
+      mutate(
+        generation,
+        (next) => {
+          const slot = next.accounts.find((a) => a.id === next.activeId);
+          if (
+            !slot?.session ||
+            slot.session.token !== expectedToken ||
+            JSON.stringify(slot.session.pendingReissue) !== JSON.stringify(pending)
+          )
+            throw changed();
+          delete slot.session.pendingReissue;
         },
         isCurrent,
       ),

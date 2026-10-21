@@ -24,7 +24,7 @@ function http401(config: InternalAxiosRequestConfig): Error {
     isAxiosError: true,
     code: 'ERR_BAD_REQUEST',
     config,
-    response: { status: 401, statusText: 'Unauthorized', data: {}, headers: {}, config },
+    response: { status: 401, statusText: 'Unauthorized', data: { message: 'Токен отозван' }, headers: {}, config },
   });
 }
 

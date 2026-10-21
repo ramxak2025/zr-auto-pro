@@ -5,10 +5,12 @@ import {
   buildApiHosts,
   isBodyLimitedGatewayHost,
   isHtmlApiPayload,
+  isApiRouteFailure,
+  isAuthoritativeAuthFailure,
   nextUntriedApiHost,
   orderApiHosts,
 } from './apiHosts';
-import { readStoredAccountSession } from '../contexts/authAccountStorage';
+import { hasPendingSessionReissue, readStoredAccountSession } from '../contexts/authAccountStorage';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 import { resolveImageUrl } from './imageUrl';
 
@@ -625,22 +627,8 @@ function isSessionReissueRequest(cfg: InternalAxiosRequestConfig): boolean {
   return /(^|\/)auth\/switch-point\/?$/.test(cfg.url || '');
 }
 
-/**
- * Это POST /auth/refresh — ТИХОЕ ПРОДЛЕНИЕ СЕССИИ?
- *
- * Сервер продлевает по схеме «сначала погасить, потом выдать»
- * (backend/src/auth/auth.service.ts): старый токен уходит в blacklist ДО того,
- * как новый уедет на телефон. Значит 401 на самом продлении — это нормальный
- * исход гонки, а не «сессия кончилась»: у нас на руках может быть уже мёртвый
- * токен, но за ним стоит живой аккаунт, и решать, что делать, должен вызывающий
- * (AuthContext), а не универсальный убийца сессии.
- *
- * ВАЖНО: соблазнительно добавить /auth/refresh в isSessionReissueRequest — это
- * БАГ. Проверка ниже читается как `if (sessionReissueDepth > 0 &&
- * !isSessionReissueRequest(cfg)) return reject`, то есть совпадение сделало бы
- * refresh ЕДИНСТВЕННЫМ запросом, который проваливается в fireAuthExpired.
- * Нужно ровно обратное — освобождение, как у isLoginRequest.
- */
+/** Refresh decides expiry in its owner after durable recovery. A generic
+ * interceptor cannot delete the pending journal before that decision. */
 function isSessionRefreshRequest(cfg: InternalAxiosRequestConfig): boolean {
   if ((cfg.method || 'get').toLowerCase() !== 'post') return false;
   return /(^|\/)auth\/refresh\/?$/.test(cfg.url || '');
@@ -696,6 +684,10 @@ const SERIALIZED_CLIENT_REQUEST_ID_RE =
 function hasMutationIdempotencyKey(cfg: FailoverAwareConfig): boolean {
   const method = (cfg.method || 'get').toLowerCase();
   if (method !== 'post' && method !== 'patch' && method !== 'put') return false;
+  if (method === 'post' && (isSessionRefreshRequest(cfg) || isSessionReissueRequest(cfg))) {
+    const key = cfg.headers?.['x-refresh-request-id'];
+    if (typeof key === 'string' && CLIENT_REQUEST_ID_RE.test(key)) return true;
+  }
   const data: unknown = cfg.data;
   if (typeof data === 'string') return SERIALIZED_CLIENT_REQUEST_ID_RE.test(data);
   if (data && typeof data === 'object' && !(typeof FormData !== 'undefined' && data instanceof FormData)) {
@@ -865,8 +857,31 @@ export function captureAuthSession() {
   return { token, epoch, isCurrent: () => epoch === authTokenEpoch && token === cachedAuthToken };
 }
 
+// A failed native readback invalidates the registry's cached snapshot. Keep
+// the already-durable pending boundary until this exact bearer changes.
+let pendingRefreshToken: string | null = null;
+export function markSessionRefreshPending(token: string | null): void {
+  if (token === null || cachedAuthToken === token) pendingRefreshToken = token;
+}
+
+/** A failed refresh may end only the exact credential that made the attempt. */
+export function reportAuthExpiry(error: unknown, lease: ReturnType<typeof captureAuthSession>): void {
+  if (!lease.token || !lease.isCurrent() || !isAuthoritativeAuthFailure(error)) return;
+  setAuthToken(null);
+  fireAuthExpired(sessionPointLostMessage(error) ?? undefined, { status: 401, path: '/auth/refresh' });
+}
+
+const sessionRecoveryListeners = new Set<() => void>();
+export function onSessionRecoveryNeeded(listener: () => void): () => void {
+  sessionRecoveryListeners.add(listener);
+  return () => {
+    sessionRecoveryListeners.delete(listener);
+  };
+}
+
 export function setAuthToken(token: string | null, forceNewSession = false): void {
   if (cachedAuthToken !== token || forceNewSession) {
+    pendingRefreshToken = null;
     authTokenEpoch += 1;
     explicitAuthTransitionEpoch += 1;
   }
@@ -1206,19 +1221,7 @@ function fireAuthExpired(reason?: string, details?: AuthExpiredDetails) {
 
 /** Route-класс ошибки (transport / HTML-подмена / proxy-статус) — не наш API. */
 function isRouteClassError(error: unknown): boolean {
-  const candidate = error as AxiosError | undefined;
-  if (axios.isCancel(candidate) || candidate?.code === 'ERR_CANCELED') return false;
-  if (!candidate?.response) return true;
-  const status = candidate.response.status;
-  return (
-    status === 502 ||
-    status === 503 ||
-    status === 504 ||
-    status === 408 ||
-    status === 421 ||
-    status === 451 ||
-    isHtmlApiPayload(candidate.response.data, candidate.response.headers?.['content-type'])
-  );
+  return !axios.isCancel(error) && isApiRouteFailure(error);
 }
 
 /**
@@ -1355,14 +1358,11 @@ api.interceptors.response.use(
 
     const cfg = error.config as FailoverAwareConfig | undefined;
     const status = error.response?.status;
-    const gatewayFailure = status === 502 || status === 503 || status === 504;
-    const routeStatusFailure = status === 408 || status === 421 || status === 451;
     // Axios sends non-2xx responses straight to this error handler, so the
     // success-path HTML guard cannot see a captive/WAF page with 403/451.
     // Detect it here too; JSON 4xx remains an authoritative API response.
     const htmlErrorResponse = isHtmlApiPayload(error.response?.data, error.response?.headers?.['content-type']);
-    const transportOrHtmlFailure = !error.response || error.code === 'ERR_HTML_RESPONSE' || htmlErrorResponse;
-    const failoverClassFailure = transportOrHtmlFailure || gatewayFailure || routeStatusFailure;
+    const failoverClassFailure = isApiRouteFailure(error);
     const method = (cfg?.method || 'get').toLowerCase();
     const idempotent = method === 'get' || method === 'head' || method === 'options';
 
@@ -1458,7 +1458,7 @@ api.interceptors.response.use(
 
     // Only the FINAL gateway failure emits offline/recovery work; intermediate
     // 502/503/504 responses have already moved to the next ring member above.
-    if ((gatewayFailure || routeStatusFailure || htmlErrorResponse) && !cfg?._suppressNetworkFailure) {
+    if (failoverClassFailure && !cfg?._suppressNetworkFailure) {
       fireNetworkListeners(networkFailureListeners);
     }
 
@@ -1467,25 +1467,25 @@ api.interceptors.response.use(
     // delete B from memory/storage. Anonymous/public 401s are ignored too.
     const authSnapshotIsCurrent =
       !!cfg?._authToken && cfg._authEpoch === authTokenEpoch && cfg._authToken === cachedAuthToken;
-    // `!htmlErrorResponse` — обязателен. Весь файл трактует HTML вместо JSON как
-    // подмену от промежуточного узла (портал оператора, WAF, корпоративный
-    // прокси), и только эта ветка раньше его игнорировала: 401 с HTML-страницей
-    // в теле выкидывал человека из ЖИВОЙ сессии, хотя наш сервер этого ответа
-    // даже не видел.
-    //
-    // `!isSessionRefreshRequest(cfg)` — тоже. Сервер при продлении гасит старый
-    // токен РАНЬШЕ, чем выдаёт новый, поэтому 401 самого продления — штатная
-    // гонка. Раньше он шёл сюда и убивал сессию окончательно; теперь решение за
-    // AuthContext, который умеет повторить попытку.
+    // Only a recognized API auth response can expire credentials. Refresh is
+    // decided by its captured owner after the durable recovery attempt.
     if (
-      status === 401 &&
+      isAuthoritativeAuthFailure(error) &&
       cfg &&
       !isLoginRequest(cfg) &&
       !isSessionRefreshRequest(cfg) &&
+      !(isSessionReissueRequest(cfg) && cfg.headers?.['x-refresh-request-id']) &&
       !htmlErrorResponse &&
       authSnapshotIsCurrent &&
       !cfg._allowCapturedAuthDispatch
     ) {
+      if (pendingRefreshToken === cfg._authToken || hasPendingSessionReissue(cfg._authToken ?? null)) {
+        // The server may have committed rotation while its response was lost.
+        // Only the keyed recovery result may declare this session expired.
+        error.code = 'ERR_SESSION_RECOVERING';
+        fireNetworkListeners([...sessionRecoveryListeners]);
+        return Promise.reject(error);
+      }
       // Идёт перевыпуск сессии (167): старый токен уже мёртв, новый ещё в пути.
       // 401 чужого запроса в этой щели — ожидаемое следствие переключения, а не
       // конец сессии. Гасим только по 401 самого перевыпуска: для него это

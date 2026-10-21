@@ -81,7 +81,11 @@ function fakePool(routes) {
 function fakeJwt(overrides = {}) {
   return {
     sign(payload, opts) {
-      return JSON.stringify({ ...payload, expiresIn: opts?.expiresIn ?? null, exp: Math.floor(Date.now() / 1000) + 600 });
+      return JSON.stringify({
+        ...payload,
+        expiresIn: opts?.expiresIn ?? null,
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
     },
     decode(token) {
       try {
@@ -376,7 +380,11 @@ test('живой доступ — сессия работает, филиал б
   const actor = await strategy.validate({ sub: USER, jti: 'jti-live-2', pointId: BRANCH });
   assert.equal(actor.currentPointId, BRANCH);
   const userQuery = pool.calls.find((c) => /FROM users u LEFT JOIN roles r/.test(c.text.replace(/\s+/g, ' ')));
-  assert.equal(userQuery.params[1], BRANCH, 'филиал обязан приезжать параметром ИЗ ТОКЕНА, а не читаться из строки users');
+  assert.equal(
+    userQuery.params[1],
+    BRANCH,
+    'филиал обязан приезжать параметром ИЗ ТОКЕНА, а не читаться из строки users',
+  );
   assert.ok(
     !/u\.current_point_id::text as current_point_id/.test(jwtStrategySrc),
     'филиал сессии снова читается из колонки пользователя — веб опять унаследует филиал телефона',
@@ -457,7 +465,11 @@ test('филиал сессии подставляется сессии БЕЗ �
   ]);
   const strategy = new JwtStrategy(pool);
   const actor = await strategy.validate({ sub: USER, jti: 'jti-legacy' });
-  assert.equal(actor.currentPointId, MAIN, 'сессия без филиала на тенанте с филиалами снова писала бы деньги «в никуда»');
+  assert.equal(
+    actor.currentPointId,
+    MAIN,
+    'сессия без филиала на тенанте с филиалами снова писала бы деньги «в никуда»',
+  );
 });
 
 // ── 8. Правило одно, копий нет ──────────────────────────────────────────────
@@ -500,7 +512,9 @@ test('денежная запись больше не резолвит фили�
     'src/products/products.service.ts',
   ];
   for (const file of sources) {
-    const code = read(file).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const code = read(file)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
     assert.ok(
       !/resolvePointForWrite/.test(code),
       `${file}: денежный путь снова резолвит филиал сам — филиал сессии единственный ответ`,
@@ -580,7 +594,7 @@ test('вход не отдаёт филиал из колонки пользов
     '/auth/me обязан отдавать филиал ЭТОЙ сессии',
   );
   assert.ok(
-    /this\.generateToken\(user\.userID, tenantID, user\.currentPointId \?\? null\)/.test(authServiceSrc),
+    /this\.generateToken\(user\.userID, tenantID \?\? undefined, nextPoint\)/.test(authServiceSrc),
     'refresh обязан переносить филиал в новый токен — иначе продление молча меняет автосервис',
   );
 });

@@ -29,6 +29,7 @@
  * Max transient retries IN ADDITION to the initial attempt. 6 retries with
  * the capped backoff below ≈ 1+2+4+8+8+8 = 31s of coverage.
  */
+import { isApiRouteFailure } from '../api/apiHosts';
 export const MAX_TRANSIENT_RETRIES = 6;
 
 /** Backoff ceiling — a single retry never waits longer than this. */
@@ -41,7 +42,7 @@ export const RETRY_DELAY_CAP_MS = 8_000;
  */
 export function isDeterministicClientError(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | null | undefined)?.response?.status;
-  return status !== undefined && status >= 400 && status < 500;
+  return !isApiRouteFailure(error) && status !== undefined && status >= 400 && status < 500;
 }
 
 /**

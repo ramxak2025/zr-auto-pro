@@ -5,6 +5,7 @@
  *   2) уже раскатанные битые конфиги самолечатся (главный кейс);
  *   3) HTML-ответ на /api-запрос детектится как чужой апстрим.
  */
+import { spawnSync } from 'node:child_process';
 import {
   apiPathOf,
   buildApiHosts,
@@ -91,6 +92,26 @@ describe('isBodyLimitedGatewayHost — шлюз с лимитом тела ~3.5�
 });
 
 describe('isHtmlApiPayload — HTML-страж', () => {
+  it('large comment/prolog prefixes finish in a bounded process for positive and negative payloads', () => {
+    // A synchronous catastrophic regex would ignore Jest's timer. Execute the
+    // actual pure detector in a child so a regression is killed deterministically.
+    const script = `const detect=(${isHtmlApiPayload.toString()});
+      const prefix=('<!-- proxy --><?xml version="1.0"?> ').repeat(30000);
+      process.stdout.write(JSON.stringify([
+        detect(prefix+'plain upstream error','application/json'),
+        detect(prefix+'<html>blocked</html>','application/json'),
+        detect(prefix+'<!-- unterminated','application/json')
+      ]));`;
+    const result = spawnSync(process.execPath, ['-e', script], { timeout: 3000, encoding: 'utf8' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('[false,true,false]');
+  });
+  it('recognizes XHTML, XML prologs and comment-prefixed HTML even with spoofed JSON MIME', () => {
+    expect(isHtmlApiPayload('<?xml version="1.0"?><html>blocked</html>', 'application/xhtml+xml')).toBe(true);
+    expect(isHtmlApiPayload('<!-- proxy -->\n<html>blocked</html>', 'application/json')).toBe(true);
+    expect(isHtmlApiPayload('<?xml version="1.0"?><!-- proxy --><html>blocked</html>', 'application/json')).toBe(true);
+  });
   it('SPA-HTML по content-type', () => {
     expect(isHtmlApiPayload('<!doctype html><html>…', 'text/html; charset=utf-8')).toBe(true);
   });

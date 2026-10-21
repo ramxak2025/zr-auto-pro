@@ -1,3 +1,4 @@
+import { redactRefreshTelemetry } from './refresh-telemetry';
 import * as Sentry from '@sentry/nestjs';
 
 /** NFC request bodies contain the static tag bearer. Keep attendance telemetry
@@ -55,8 +56,8 @@ export function redactPublicBookingTelemetry<T extends BookingTelemetry>(event: 
   }
   return event;
 }
-function redactRequestTelemetry<T extends BookingTelemetry>(event: T): T {
-  return redactPublicBookingTelemetry(redactNfcTelemetry(event));
+function redactRequestTelemetry<T extends BookingTelemetry>(event: T, hint?: unknown): T {
+  return redactRefreshTelemetry(redactPublicBookingTelemetry(redactNfcTelemetry(event)), hint);
 }
 
 const dsn = process.env.SENTRY_DSN;
@@ -68,6 +69,7 @@ if (dsn) {
     tracesSampleRate: 0.2,
     profilesSampleRate: 0.1,
     integrations: [],
+    beforeBreadcrumb: (breadcrumb) => redactRefreshTelemetry(breadcrumb),
     beforeSend: redactRequestTelemetry,
     beforeSendTransaction: redactRequestTelemetry,
   });

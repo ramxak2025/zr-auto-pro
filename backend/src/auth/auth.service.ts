@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
+import { refreshKeyHash } from './refresh-recovery';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthToken, isPlatformRole, NO_TENANT_ID } from '../common/auth-cache';
@@ -227,33 +228,10 @@ export class AuthService {
     }
   }
 
-  /**
-   * ЕДИНСТВЕННАЯ точка записи в blacklist (logout И refresh-claim).
-   *
-   * mode 'force' (logout) — ревокация НЕМЕДЛЕННО (graceMs=0). Upsert: если по
-   *   jti уже лежит строка ОТЛОЖЕННОЙ ревокации (refresh-claim с grace-окном),
-   *   LEAST() подтягивает момент ревокации к now() — выход всегда побеждает
-   *   grace и никогда его не продлевает. Возвращает true.
-   *
-   * mode 'claim' (refresh) — атомарный «обмен» токена. ON CONFLICT DO NOTHING
-   *   + rowCount: строка вставилась → линия наша, можно чеканить новый токен;
-   *   конфликт (строка уже есть: токен ревокирован logout'ом ИЛИ уже обменян
-   *   ранее) → false, refresh отвечает 401. Один INSERT одновременно является
-   *   и живой проверкой blacklist МИМО auth-кэша, и арбитром гонки двух
-   *   параллельных refresh одним токеном — claim выигрывает ровно один.
-   *
-   * RLS-ремень: ревокация — инвариант, запись обязана попасть в blacklist из
-   * ЛЮБОГО контекста. Обычный путь идёт текущим пулом (тенантный запрос →
-   * app-пул; WITH CHECK политики 112 проходит для строки со своим tenant_id).
-   * ЛЮБОЙ сбой — 23503 (FK на умерший тенант), 42501 (WITH CHECK отбивает
-   * NULL-tenant строку tenant-scoped сессии — прежний 23503-ремень этого не
-   * ловил и logout 500-ил), либо иной — повторяет тот же statement через
-   * admin-пул с tenant_id NULL: runWithTenant('') кладёт пустой tenantId в
-   * CLS, TenantAwarePool на falsy-контекст маршрутизирует в admin-пул
-   * (superuser, RLS обходится). tenant_id в этой таблице — бухгалтерия,
-   * NULL допустим. Ошибка admin-повтора ПРОБРАСЫВАЕТСЯ: молча съесть сбой =
-   * вернуть 200 при живом токене — запрещено.
-   */
+  /** Point-selection/switch claims remain one-use. Force logout serializes on
+   * each lineage row and revokes every committed successor in one transaction.
+   * Auth ledger writes use the admin pool when necessary so RLS or a deleted
+   * tenant cannot silently turn logout into a no-op. */
   private async blacklistToken(opts: {
     jti: string;
     userId: string;
@@ -261,30 +239,79 @@ export class AuthService {
     graceMs: number;
     expiresAt: Date;
     mode: 'force' | 'claim';
+    successorClaims?: Record<string, unknown>;
   }): Promise<boolean> {
-    const conflictClause =
-      opts.mode === 'force'
-        ? `ON CONFLICT (jti) DO UPDATE SET
-             revoked_at = LEAST(revoked_tokens.revoked_at, EXCLUDED.revoked_at),
-             expires_at = GREATEST(revoked_tokens.expires_at, EXCLUDED.expires_at)`
-        : `ON CONFLICT (jti) DO NOTHING`;
+    if (opts.mode === 'force') {
+      // Lock each parent via the same PK arbitration as refresh/switch-point.
+      // An in-flight exchange either sees this revocation or commits first and
+      // exposes its successor here. Explicit logout cancels the whole lineage.
+      await runWithTenant('', async () => {
+        const client = await this.pool.connect();
+        const invalidated: string[] = [];
+        try {
+          await client.query('BEGIN');
+          let jti: string | null = opts.jti;
+          let expiry = opts.expiresAt;
+          const seen = new Set<string>();
+          while (jti && !seen.has(jti)) {
+            seen.add(jti);
+            const result = await client.query(
+              `INSERT INTO revoked_tokens (jti,user_id,tenant_id,revoked_at,expires_at,revocation_reason)
+               VALUES ($1,$2,NULL,now(),$3,'forced') ON CONFLICT (jti) DO UPDATE SET
+                 revoked_at=LEAST(revoked_tokens.revoked_at,EXCLUDED.revoked_at),
+                 expires_at=GREATEST(revoked_tokens.expires_at,EXCLUDED.expires_at),
+                 revocation_reason='forced',refresh_key_hash=NULL,refresh_recover_until=NULL
+               RETURNING refresh_successor`,
+              [jti, opts.userId, expiry],
+            );
+            invalidated.push(jti);
+            const child = result.rows[0]?.refresh_successor as Record<string, unknown> | undefined;
+            jti = child?.sub === opts.userId && typeof child.jti === 'string' ? child.jti : null;
+            if (typeof child?.exp === 'number') expiry = new Date(child.exp * 1000);
+          }
+          await client.query('COMMIT');
+          for (const revokedJti of invalidated) invalidateAuthToken(opts.userId, revokedJti);
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      });
+      return true;
+    }
+    const conflictClause = `ON CONFLICT (jti) DO NOTHING`;
     // revoked_at считается ЧАСАМИ БАЗЫ (now() + grace) — сравнение в
     // JwtStrategy тоже идёт по now() базы, расхождение часов Node/PG не влияет.
-    const sql = `INSERT INTO revoked_tokens (jti, user_id, tenant_id, revoked_at, expires_at)
-                 VALUES ($1, $2, $3, now() + ($4::int * interval '1 millisecond'), $5)
+    const sql = `INSERT INTO revoked_tokens (jti, user_id, tenant_id, revoked_at, expires_at, refresh_successor)
+                 VALUES ($1, $2, $3, now() + ($4::int * interval '1 millisecond'), $5, $6::jsonb)
                  ${conflictClause}`;
     try {
-      const res = await this.pool.query(sql, [opts.jti, opts.userId, opts.tenantId, opts.graceMs, opts.expiresAt]);
-      return opts.mode === 'force' ? true : (res.rowCount ?? 0) > 0;
+      const res = await this.pool.query(sql, [
+        opts.jti,
+        opts.userId,
+        opts.tenantId,
+        opts.graceMs,
+        opts.expiresAt,
+        opts.successorClaims ? JSON.stringify(opts.successorClaims) : null,
+      ]);
+      return (res.rowCount ?? 0) > 0;
     } catch (err) {
       const code = (err as { code?: string } | null)?.code ?? 'unknown';
       this.logger.warn(
         `revoked_tokens write failed (code=${code}) — retrying via admin pool: ${err instanceof Error ? err.message : err}`,
       );
       const res = await runWithTenant('', () =>
-        this.pool.query(sql, [opts.jti, opts.userId, null, opts.graceMs, opts.expiresAt]),
+        this.pool.query(sql, [
+          opts.jti,
+          opts.userId,
+          null,
+          opts.graceMs,
+          opts.expiresAt,
+          opts.successorClaims ? JSON.stringify(opts.successorClaims) : null,
+        ]),
       );
-      return opts.mode === 'force' ? true : (res.rowCount ?? 0) > 0;
+      return (res.rowCount ?? 0) > 0;
     }
   }
 
@@ -316,115 +343,194 @@ export class AuthService {
     invalidateAuthToken(userId, jti);
   }
 
-  /**
-   * Тихое продление сессии (mobile): обменять живой bearer на СВЕЖИЙ токен.
-   *
-   * Линия токенов после этой правки — ЦЕПЬ, а не дерево (Round 14
-   * adversarial-ревью, линза auth — 3 находки закрыты здесь):
-   *
-   * • Атомарный claim: старый jti пишется в revoked_tokens (ON CONFLICT DO
-   *   NOTHING) С ОТЛОЖЕННЫМ revoked_at = now()+2мин ДО чеканки нового токена.
-   *   Строка уже существует (logout ИЛИ более ранний обмен) → 401, нового
-   *   токена нет. Тем самым: (а) отозванный токен НЕ может продлиться даже в
-   *   30-секундном окне позитивного auth-кэша JwtStrategy — INSERT бьёт в базу
-   *   напрямую, мимо кэша и на любой реплике; (б) каждый токен обменивается
-   *   РОВНО один раз — «бесконечный форк» скомпрометированного bearer'а
-   *   невозможен, у активной сессии всегда ровно один живой токен (плюс
-   *   предыдущий, доживающий ≤2 минут); (в) logout типа продолжает быть kill
-   *   switch: он ревокирует jti в руках клиента немедленно, а вся его линия
-   *   либо уже мертва, либо умирает по своему grace.
-   * • Grace 2 минуты (см. REFRESH_ROTATE_GRACE_MS): in-flight запросы со
-   *   старым токеном доживают, клиент применяет новый токен атомарно через
-   *   sessionRuntime.commit. Потолок доживания = grace + TTL auth-кэша (30с).
-   * • Impersonation НЕ продлевается — СЕРВЕРНЫЙ гейт: 30-минутный токен
-   *   «войти как владелец» (tenants.service.impersonate, claim impersonatedBy)
-   *   получает 403, а не полноценный 30-дневный директорский токен без следа
-   *   impersonation. Клиентский гейт в AuthContext остаётся, но больше не
-   *   является единственной защитой.
-   * • Живая перепроверка users.is_active/dismissed/purged мимо auth-кэша —
-   *   деактивированный аккаунт не чеканит новый токен даже в 30с окне.
-   * • Rate-limit: /auth/refresh метится обычным write-бакетом глобального
-   *   RateLimitGuard (150/мин на ip+токен); claim-семантика дополнительно
-   *   ограничивает обмен одним разом на токен.
-   * • Sentinel-тенант (NO_TENANT_ID — tenant-less superadmin) НЕ зашивается в
-   *   новый токен: generateToken получает undefined, ровно как при login, и
-   *   JwtStrategy снова подставит sentinel при валидации.
-   */
+  /** Atomic, durable 1:1 rotation. The receipt contains only immutable claims.
+   * A secret key opts new clients into replay until the original JWT expires;
+   * replay never changes claims, TTL or the 120-second ordinary-access grace.
+   * Legacy clients keep their one-use exchange contract. */
   async refresh(
     user: { userID: string; tenantID: string; currentPointId?: string | null; jti?: string },
     rawToken: string,
+    requestId?: unknown,
   ): Promise<{ token: string }> {
-    const oldJti = user.jti;
-    if (!oldJti) {
-      // Токен без jti нельзя ревокировать → его линию нельзя оборвать. Такие
-      // токены не выпускаются с 021 и давно истекли — fail-closed.
-      throw new UnauthorizedException({ message: 'Сессия устарела — войдите заново' });
-    }
+    const result = await this.rotateSession(user, rawToken, requestId, 'refresh');
+    return { token: result.token };
+  }
 
-    // rawToken — тот же bearer, что прошёл JwtAuthGuard (подпись уже проверена
-    // стратегией); decode без verify достаточен, чтобы прочитать claims,
-    // которые guard не прокидывает в ValidatedUser: impersonatedBy и exp.
-    const decoded = rawToken ? (this.jwtService.decode(rawToken) as Record<string, unknown> | null) : null;
-    if (!decoded || decoded.jti !== oldJti) {
-      throw new UnauthorizedException({ message: 'Неверный токен' });
+  private async rotateSession(
+    user: { userID: string; tenantID: string; currentPointId?: string | null; jti?: string },
+    rawToken: string,
+    requestId: unknown,
+    operation: 'refresh' | 'switch-point',
+    targetPointId?: string,
+  ) {
+    const keyHash = refreshKeyHash(requestId);
+    const switching = operation === 'switch-point';
+    if (switching && !targetPointId) throw new BadRequestException({ message: 'Неверный филиал' });
+    let decoded: Record<string, unknown>;
+    try {
+      decoded = this.jwtService.verify<Record<string, unknown>>(rawToken);
+    } catch {
+      throw new UnauthorizedException({ message: 'Неверный или истёкший токен' });
+    }
+    const oldJti = user.jti;
+    if (
+      !oldJti ||
+      decoded.jti !== oldJti ||
+      decoded.sub !== user.userID ||
+      typeof decoded.exp !== 'number' ||
+      !Number.isFinite(decoded.exp)
+    ) {
+      throw new UnauthorizedException({ message: 'Сессия устарела — войдите заново' });
     }
     if (decoded.impersonatedBy) {
       throw new ForbiddenException({ message: 'Сессия входа под пользователем не продлевается' });
     }
-
-    // Живая проверка аккаунта МИМО 30с auth-кэша. Под RLS запрос идёт app-пулом
-    // и видит собственную строку тенантного пользователя; аномальный
-    // non-superadmin без тенанта не увидит ничего и получит 401 — fail-closed,
-    // идентично его же /auth/me.
-    //
-    // ГРАНИЦА «ПАРОЛЬ ИЗМЕНЁН» (165) — ТЕМ ЖЕ ЗАПРОСОМ И ТОЖЕ МИМО КЭША. Без
-    // неё смена пароля переставала выгонять вора: проверка границы живёт в
-    // JwtStrategy, но её результат кешируется на 30 секунд, а кеш
-    // внутрипроцессный — в docker-compose реплик backend несколько, у каждой
-    // свой. В этом окне украденный токен продлевался, и вор получал СВЕЖИЙ
-    // токен, выписанный уже ПОСЛЕ смены пароля: дальше он проходит границу
-    // законно и живёт ещё 30 суток. Выражение — общее с JwtStrategy
-    // (auth/session-boundary.ts), чтобы две редакции правила не разъехались;
-    // сравнение считает база, а не часы Node.
+    if (decoded.purpose) throw new UnauthorizedException({ message: 'Неверное назначение токена' });
+    const tenantID = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : null;
+    if ((decoded.tenantId ?? null) !== tenantID) throw new UnauthorizedException({ message: 'Автосервис изменён' });
     const tokenIat = tokenIatOf(decoded);
-    const { rows } = await this.pool.query(
-      `SELECT u.is_active, u.dismissed_at, u.purged_at,
-              ${sessionStaleSql('$2')}
-         FROM users u
-        WHERE u.id=$1`,
-      [user.userID, tokenIat],
-    );
-    if (rows.length === 0 || rows[0].dismissed_at || rows[0].purged_at || !rows[0].is_active) {
-      throw new UnauthorizedException({ message: 'Аккаунт недоступен' });
-    }
-    if (rows[0].session_stale === true) {
-      throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
-    }
+    const sourceExpiry = decoded.exp;
 
-    // Атомарный claim обмена (подробности — doc-комментарий выше и
-    // blacklistToken). expires_at строки = НАСТОЯЩИЙ exp старого токена, чтобы
-    // строка пережила токен, который она ревокирует.
-    const exp = typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : new Date(Date.now() + 30 * 86400000);
-    const tenantForRow = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : null;
-    const claimed = await this.blacklistToken({
-      jti: oldJti,
-      userId: user.userID,
-      tenantId: tenantForRow,
-      graceMs: REFRESH_ROTATE_GRACE_MS,
-      expiresAt: exp,
-      mode: 'claim',
+    // The auth ledger must see NULL-tenant fallback revocations as well as the
+    // current tenant. Only this bounded auth transaction uses the admin pool;
+    // signed identity + live database tenant/point are checked explicitly.
+    const result = await runWithTenant('', async () => {
+      const client = await this.pool.connect();
+      let committed = false;
+      try {
+        await client.query('BEGIN');
+        // Serialize new recoverable exchanges before selecting an existing
+        // receipt. PK arbitration still protects against logout/legacy switch.
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,197))', [oldJti]);
+        const receipt = await client.query(
+          `SELECT r.*, r.refresh_recover_until > now() as recoverable,
+                  EXISTS (SELECT 1 FROM revoked_tokens child WHERE child.jti=r.refresh_successor->>'jti') as child_consumed
+             FROM revoked_tokens r WHERE r.jti=$1 FOR UPDATE OF r`,
+          [oldJti],
+        );
+        const previous = receipt.rows[0];
+        if (
+          previous &&
+          (!keyHash ||
+            previous.revocation_reason !== operation ||
+            previous.refresh_key_hash !== keyHash ||
+            previous.user_id !== user.userID ||
+            previous.tenant_id !== tenantID ||
+            !previous.recoverable ||
+            previous.child_consumed ||
+            (switching && previous.refresh_successor?.pointId !== targetPointId))
+        ) {
+          throw new UnauthorizedException({ message: 'Токен отозван' });
+        }
+        // Legacy JWTs omitted pointId. Their mutable last-point hint is not
+        // the source of a committed operation: persist and recheck that source.
+        const sourcePoint: string | null = previous ? previous.refresh_source_point_id : (user.currentPointId ?? null);
+        if (typeof decoded.pointId === 'string' && decoded.pointId !== sourcePoint)
+          throw new UnauthorizedException({ message: 'Неверная линия сессии' });
+        const nextPoint = switching ? (targetPointId ?? null) : sourcePoint;
+        const { rows } = await client.query(
+          `SELECT ${USER_WITH_TENANT_COLUMNS}, t.is_active as tenant_active,
+                  ${sessionStaleSql('$2')},
+                  CASE WHEN $3::uuid IS NULL THEN
+                    NOT EXISTS (SELECT 1 FROM tenant_points p WHERE p.tenant_id=u.tenant_id AND p.is_active)
+                  ELSE autexa_point_is_allowed(u.tenant_id,u.id,$3::uuid) END as point_allowed,
+                  CASE WHEN $4::uuid IS NOT NULL THEN autexa_point_is_allowed(u.tenant_id,u.id,$4::uuid) END as target_allowed,
+                  CASE WHEN $4::uuid IS NOT NULL THEN autexa_can_manage_staff(u.id) END as can_manage
+             FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id ${ROLE_JOIN}
+            WHERE u.id=$1 FOR SHARE OF u`,
+          [user.userID, tokenIat, sourcePoint, switching ? nextPoint : null],
+        );
+        const row = rows[0];
+        if (!row || row.dismissed_at || row.purged_at || !row.is_active)
+          throw new UnauthorizedException({ message: 'Аккаунт недоступен' });
+        if (row.session_stale === true) throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
+        if ((row.tenant_id ?? null) !== tenantID || (tenantID && row.tenant_active !== true))
+          throw new UnauthorizedException({ message: 'Автосервис недоступен' });
+        if (row.point_allowed !== true)
+          throw new UnauthorizedException({ message: 'Филиал больше не доступен — войдите заново' });
+        if (switching) {
+          if (isPlatformRole(row.role)) throw new ForbiddenException({ message: 'У этой роли нет филиалов' });
+          // An existing receipt is handled before this genuine unused-source no-op.
+          if (!previous && nextPoint === sourcePoint) {
+            await client.query('COMMIT');
+            committed = true;
+            return {
+              token: rawToken,
+              user: mapUserRow(row, nextPoint),
+              currentPointId: nextPoint,
+              switched: false as const,
+            };
+          }
+          if (row.can_manage !== true)
+            throw new ForbiddenException({ message: 'Мгновенное переключение филиала доступно только руководителю' });
+          if (row.target_allowed !== true) throw new ForbiddenException({ message: 'Филиал недоступен' });
+        }
+        let successor: Record<string, unknown> = previous?.refresh_successor;
+        if (!previous) {
+          // Sign before claiming: signer/SQL failure leaves the source usable.
+          const candidate = this.generateToken(user.userID, tenantID ?? undefined, nextPoint);
+          successor = this.jwtService.decode(candidate) as Record<string, unknown>;
+          const inserted = await client.query(
+            `INSERT INTO revoked_tokens
+               (jti,user_id,tenant_id,revoked_at,expires_at,revocation_reason,
+                refresh_key_hash,refresh_successor,refresh_recover_until,refresh_source_point_id)
+             VALUES ($1,$2,$3,now()+($4::int * interval '1 millisecond'),to_timestamp($5),$9,
+                     $6,$7::jsonb,to_timestamp(LEAST($5,$8)),$10) ON CONFLICT (jti) DO NOTHING`,
+            [
+              oldJti,
+              user.userID,
+              tenantID,
+              switching ? 0 : REFRESH_ROTATE_GRACE_MS,
+              sourceExpiry,
+              keyHash,
+              JSON.stringify(successor),
+              successor.exp,
+              operation,
+              sourcePoint,
+            ],
+          );
+          // Another recoverable exchange uses the same advisory lock. A conflict
+          // here can only be a force revocation or a legacy one-use switch.
+          if (!inserted.rowCount) throw new UnauthorizedException({ message: 'Токен отозван' });
+        }
+        // Canonical order preserves the exact signed bytes after JSONB storage.
+        if (
+          !successor ||
+          successor.sub !== user.userID ||
+          (successor.tenantId ?? null) !== tenantID ||
+          successor.pointId !== nextPoint ||
+          typeof successor.jti !== 'string' ||
+          typeof successor.iat !== 'number' ||
+          typeof successor.exp !== 'number'
+        )
+          throw new UnauthorizedException({ message: 'Неверная линия сессии' });
+        const token = this.jwtService.sign(
+          {
+            sub: successor.sub,
+            tenantId: successor.tenantId,
+            jti: successor.jti,
+            pointId: successor.pointId,
+            iat: successor.iat,
+          },
+          { expiresIn: successor.exp - successor.iat },
+        );
+        await client.query('COMMIT');
+        committed = true;
+        invalidateAuthToken(user.userID, oldJti);
+        return switching
+          ? { token, user: mapUserRow(row, nextPoint), currentPointId: nextPoint, switched: true as const }
+          : { token };
+      } catch (error) {
+        if (!committed) await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     });
-    if (!claimed) {
-      throw new UnauthorizedException({ message: 'Токен отозван' });
-    }
-
-    const tenantID = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : undefined;
-    // ФИЛИАЛ ПЕРЕЕЗЖАЕТ В НОВЫЙ ТОКЕН (163). Иначе тихое продление сессии
-    // молча перекидывало бы человека в филиал по умолчанию: он продолжает
-    // работать, думая, что сидит в прежнем, а чеки уходят в другой автосервис.
-    // Филиал уже проверен на живость и доступность JwtStrategy этого же
-    // запроса — второй проверки не нужно.
-    return { token: this.generateToken(user.userID, tenantID, user.currentPointId ?? null) };
+    // This hint needs another checkout. Release the transaction first (including
+    // max=1 pools), and never roll back a committed receipt if the hint fails.
+    if ('switched' in result && result.switched) await this.rememberPoint(user.userID, result.currentPointId);
+    return result;
   }
 
   async isTokenRevoked(jti: string): Promise<boolean> {
@@ -737,7 +843,9 @@ export class AuthService {
     actor: { userID: string; tenantID: string; currentPointId?: string | null; jti?: string },
     rawToken: string,
     dto: SwitchPointDto,
+    requestId?: unknown,
   ) {
+    if (requestId !== undefined) return this.rotateSession(actor, rawToken, requestId, 'switch-point', dto.pointId);
     const oldJti = actor.jti;
     if (!oldJti) {
       // Токен без jti нельзя ревокировать → старый филиал остался бы рабочим
@@ -842,8 +950,12 @@ export class AuthService {
       throw new ForbiddenException({ message: 'Филиал недоступен' });
     }
 
-    // Атомарный claim: старый токен становится недействительным ДО чеканки
-    // нового. Строка уже есть (logout, ротация refresh'а или ПАРАЛЛЕЛЬНОЕ
+    // Prepare the successor before claiming, then persist its lineage in the
+    // same INSERT. There is no replay capability for switch-point, but force
+    // logout of an ancestor must also revoke this successor (including races).
+    const tenantID = row.tenant_id && row.tenant_id !== NO_TENANT_ID ? row.tenant_id : undefined;
+    const token = this.generateToken(actor.userID, tenantID, dto.pointId);
+    // Атомарный claim: строка уже есть (logout, ротация refresh'а или ПАРАЛЛЕЛЬНОЕ
     // переключение тем же токеном) → 401 и никакого второго токена: у сессии
     // всегда ровно одна живая линия. expires_at = настоящий exp старого
     // токена, чтобы строка blacklist пережила токен, который она гасит.
@@ -856,6 +968,7 @@ export class AuthService {
       graceMs: 0,
       expiresAt: exp,
       mode: 'claim',
+      successorClaims: this.jwtService.decode(token) as Record<string, unknown>,
     });
     if (!claimed) {
       throw new UnauthorizedException({ message: 'Токен отозван' });
@@ -868,8 +981,6 @@ export class AuthService {
     this.logger.log(`Point switch: user=${actor.userID} ${current ?? 'none'} -> ${dto.pointId}`);
     // Sentinel-тенант (tenant-less суперадмин) в токен не зашивается — ровно
     // как при login: стратегия подставит его снова при валидации.
-    const tenantID = row.tenant_id && row.tenant_id !== NO_TENANT_ID ? row.tenant_id : undefined;
-    const token = this.generateToken(actor.userID, tenantID, dto.pointId);
     return {
       token,
       user: mapUserRow(row, dto.pointId),

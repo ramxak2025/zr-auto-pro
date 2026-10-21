@@ -424,7 +424,7 @@ test('POST /auth/switch-point метится обычным write-бакетом
   assert.match(flat(authControllerSrc), /@Post\('switch-point'\)/);
   assert.match(
     flat(authControllerSrc),
-    /@UseGuards\(JwtAuthGuard\) @Post\('switch-point'\)/,
+    /@UseGuards\(JwtSwitchPointGuard\) @Post\('switch-point'\)/,
     'ручка обязана требовать ЖИВУЮ сессию — иначе это вход без пароля',
   );
   assert.doesNotMatch(

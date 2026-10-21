@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { JwtRefreshStrategy, JwtLogoutStrategy, JwtSwitchPointStrategy } from './jwt-refresh.strategy';
 
 /**
  * JWT secret loader — fail fast on boot.
@@ -50,7 +51,7 @@ function loadJwtSecret(): string {
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, JwtRefreshStrategy, JwtLogoutStrategy, JwtSwitchPointStrategy],
   exports: [JwtModule],
 })
 export class AuthModule {}

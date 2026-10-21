@@ -11,7 +11,7 @@ interface PushClaim {
 interface PushTransport {
   register(claim: PushClaim): Promise<{ registered?: boolean }>;
   unregister(claim: PushClaim): Promise<void>;
-  logout?(bearer: string): Promise<void>;
+  logout?(bearer: string, refreshRequestId?: string): Promise<void>;
 }
 
 /** One device subscription, including a possibly committed response that was
@@ -74,12 +74,22 @@ export function createPushSessionLifecycle(storage: AccountKeyValueStorage, tran
         const previous = await read();
         if (previous) await release(previous);
       }),
-    logout: (bearer: string, wasActive = false) =>
+    logout: (bearer: string, wasActive = false, refreshRequestId?: string) =>
       serial(async () => {
         const previous = await read();
-        if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer))))
-          await release({ ...previous, bearer });
-        await transport.logout?.(bearer);
+        if (previous && (previous.bearer === bearer || (wasActive && sameActor(previous.bearer, bearer)))) {
+          try {
+            await release({ ...previous, bearer });
+          } catch (error) {
+            // A rotated parent may no longer authorize push cleanup. Its
+            // recovery capability still authorizes cancellation of the lineage;
+            // retain the failed push claim, but do not lose the explicit logout.
+            if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
+            throw error;
+          }
+        }
+        if (refreshRequestId) await transport.logout?.(bearer, refreshRequestId);
+        else await transport.logout?.(bearer);
       }),
   };
 }

@@ -88,3 +88,13 @@ it('uses refreshed current bearer for owned cleanup, never revokes before remova
   expect(f.transport.unregister.mock.calls[1][0].bearer).toBe(refreshed);
   expect(f.map.has(PUSH_CLAIM_KEY)).toBe(false);
 });
+it('pending rotation logout cancels the lineage even when its old bearer no longer authorizes push cleanup', async () => {
+  const f = fixture(),
+    old = bearer('a'),
+    key = '11111111-1111-4111-8111-111111111111';
+  await f.core.register(old, 'device', 'ios', () => true);
+  f.transport.unregister.mockRejectedValueOnce(new Error('source consumed'));
+  await expect(f.core.logout(old, true, key)).rejects.toThrow('source consumed');
+  expect(f.transport.logout).toHaveBeenCalledWith(old, key);
+  expect(f.map.has(PUSH_CLAIM_KEY)).toBe(true);
+});

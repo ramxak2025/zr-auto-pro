@@ -125,6 +125,43 @@ describe('границы failover axios-интерсептора', () => {
     global.fetch = realFetch;
   });
 
+  it.each([200, 403])(
+    'XML/comment HTML with status %s fails over GET but cannot falsely succeed or replay an unkeyed mutation',
+    async (status) => {
+      const body = '<?xml version="1.0"?><!-- gateway --><html>blocked</html>';
+      const mod = loadApiModule([RESERVE]);
+      mod.setAuthToken('live-token');
+      const expired = jest.fn();
+      mod.onAuthExpired(expired);
+      const calls: InternalAxiosRequestConfig[] = [];
+      mod.default.defaults.adapter = async (cfg) => {
+        calls.push(cfg);
+        if (cfg.baseURL === RESERVE) return okResponse(cfg, { ok: true });
+        if (status === 200) return okResponse(cfg, body, 'application/json');
+        const error = httpError(cfg, status) as Error & { response: AxiosResponse };
+        error.response.data = body;
+        error.response.headers = { 'content-type': 'application/xhtml+xml' };
+        throw error;
+      };
+      expect((await mod.default.get('/auth/me')).data).toEqual({ ok: true });
+      expect(calls.map((cfg) => cfg.baseURL)).toEqual([PRIMARY, RESERVE]);
+      expect(expired).not.toHaveBeenCalled();
+      const isolated = loadApiModule([RESERVE]);
+      let posts = 0;
+      isolated.default.defaults.adapter = async (cfg) => {
+        posts++;
+        if (status === 200) return okResponse(cfg, body, 'application/json');
+        throw Object.assign(new Error('proxy'), {
+          isAxiosError: true,
+          config: cfg,
+          response: { status, data: body, headers: { 'content-type': 'application/xhtml+xml' }, config: cfg },
+        });
+      };
+      await expect(isolated.default.post('/expenses', { amount: 100 })).rejects.toBeTruthy();
+      expect(posts).toBe(1);
+    },
+  );
+
   it('прямой POST /auth/login при ERR_NETWORK не получает скрытый второй запрос', async () => {
     const mod = loadApiModule([RESERVE]);
     const calls = scriptAdapter(mod.default, ['net', 'ok']);
