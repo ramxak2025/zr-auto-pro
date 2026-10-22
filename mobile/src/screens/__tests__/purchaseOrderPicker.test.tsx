@@ -334,6 +334,7 @@ test('cash opt-out still adds immediately, quick plus/minus remain direct, stale
   };
   claimProductPickerSession(cash);
   const cashTree = render('picker');
+  expect(nodes(cashTree).some((node) => node.props.accessibilityLabel === 'Готово')).toBe(true);
   expect((cashTree as Element).type).toBe('View');
   const cashRow = row(cashTree);
   cashRow.props.onPress(mockProduct);
@@ -574,3 +575,41 @@ test('selected cash row keeps its actual plus/minus controls and default product
   ).toBe(false);
   releaseProductPickerSession(cash);
 });
+
+test.each(['create', 'direct'] as const)(
+  'visual: %s visible inline editor owns actions; Done restores on cancel/confirm and filter hiding',
+  (flow) => {
+    jest.useFakeTimers();
+    try {
+      if (flow === 'create') openPicker();
+      else {
+        const form = render('direct');
+        (nodes(form).find((node) => node.props.accessibilityLabel === 'Добавить товар')!.props.onPress as () => void)();
+      }
+      const done = (tree: React.ReactNode) => nodes(tree).find((node) => node.props.accessibilityLabel === 'Готово');
+      expect(done(render('picker'))).toBeDefined();
+      row(render('picker')).props.onPress(mockProduct);
+      let tree = render('picker');
+      expect(editor(tree)).toBeDefined();
+      expect(done(tree)).toBeUndefined();
+      (editor(tree).props.onCancel as () => void)();
+      expect(done(render('picker'))).toBeDefined();
+      row(render('picker')).props.onPress(mockProduct);
+      tree = render('picker');
+      const search = nodes(tree).find((node) => node.type === 'TextInput' && node.props.returnKeyType === 'search')!;
+      (search.props.onChangeText as (text: string) => void)('не найдено');
+      jest.advanceTimersByTime(250);
+      tree = render('picker');
+      expect(done(tree)).toBeDefined();
+      (done(tree)!.props.onPress as () => void)();
+      tree = render('picker');
+      expect(editor(tree)).toBeDefined();
+      expect(done(tree)).toBeUndefined();
+      (editor(tree).props.onConfirm as (value: unknown) => void)({ quantity: 2.5, costPrice: 123.45 });
+      render(flow);
+      expect(done(render('picker'))).toBeDefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  },
+);

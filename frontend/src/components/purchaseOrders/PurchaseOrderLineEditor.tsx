@@ -76,9 +76,10 @@ export default function PurchaseOrderLineEditor({
             }}
           />
         </Field>
-        <Field label={`Закупочная цена за ${unitLabel(product.unit)}, ₽`} htmlFor="po-picker-cost">
+        <Field label="Цена закупки, ₽" htmlFor="po-picker-cost">
           <Input
             id="po-picker-cost"
+            aria-label={`Закупочная цена за ${unitLabel(product.unit)}, ₽`}
             inputMode="decimal"
             value={costPriceText}
             onChange={(e) => {

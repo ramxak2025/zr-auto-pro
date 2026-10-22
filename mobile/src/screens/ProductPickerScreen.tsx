@@ -724,6 +724,13 @@ export default function ProductPickerScreen() {
   const showInitialSkeleton = allProducts === undefined && isLoading;
   const showErrorState = allProducts === undefined && isError;
   const queryResolvedEmpty = Array.isArray(allProducts) && allProducts.length === 0;
+  const visibleProcurementEditor =
+    isFocused &&
+    !!procurement?.drafts.active &&
+    !!procurement.drafts.entries[procurement.drafts.active] &&
+    !showInitialSkeleton &&
+    !showErrorState &&
+    listRows.some((item) => item.type === 'product' && item.product.id === procurement.drafts.active);
 
   if (!session) return null; // закрываемся в effect выше
   const ScreenContainer = session.purchaseOrder ? KeyboardAvoidingView : View;
@@ -917,49 +924,56 @@ export default function ProductPickerScreen() {
         )}
       </View>
 
-      {/* ── Нижний бар корзины — на КАЖДОМ уровне: счётчик + сумма + Готово. */}
-      <View
-        style={[
-          styles.cartBar,
-          {
-            backgroundColor: palette.bg.elevated,
-            borderTopColor: palette.border.subtle,
-            paddingBottom: Math.max(insets.bottom, spacing[2]),
-          },
-        ]}
-      >
-        {cartTotals.qty > 0 ? (
-          <View style={styles.cartSummary}>
-            <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
-              <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
-              <View style={styles.cartCountBadge}>
-                <Text style={styles.cartCountBadgeText}>{formatQty(cartTotals.qty)}</Text>
+      {/* While editing a procurement row its inline/keyboard actions own confirmation. */}
+      {!visibleProcurementEditor && (
+        <View
+          style={[
+            styles.cartBar,
+            {
+              backgroundColor: palette.bg.elevated,
+              borderTopColor: palette.border.subtle,
+              paddingBottom: Math.max(insets.bottom, spacing[2]),
+            },
+          ]}
+        >
+          {cartTotals.qty > 0 ? (
+            <View style={styles.cartSummary}>
+              <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
+                <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
+                <View style={styles.cartCountBadge}>
+                  <Text style={styles.cartCountBadgeText}>{formatQty(cartTotals.qty)}</Text>
+                </View>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>
+                  {session?.totalLabel ?? 'В чеке'}
+                </Text>
+                <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
+                  {procurement
+                    ? procurement.invalid
+                      ? 'Проверьте позиции'
+                      : formatPurchaseOrderMoney(cartTotals.sum)
+                    : formatMoney(cartTotals.sum)}
+                </Text>
               </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>
-                {session?.totalLabel ?? 'В чеке'}
-              </Text>
-              <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
-                {procurement
-                  ? procurement.invalid
-                    ? 'Проверьте позиции'
-                    : formatPurchaseOrderMoney(cartTotals.sum)
-                  : formatMoney(cartTotals.sum)}
+          ) : (
+            <View style={styles.cartSummary}>
+              <Text style={[styles.cartEmptyHint, { color: palette.text.tertiary }]}>
+                Нажмите на товар, чтобы добавить
               </Text>
             </View>
-          </View>
-        ) : (
-          <View style={styles.cartSummary}>
-            <Text style={[styles.cartEmptyHint, { color: palette.text.tertiary }]}>
-              Нажмите на товар, чтобы добавить
-            </Text>
-          </View>
-        )}
-        <TouchableOpacity style={styles.doneBtn} onPress={handleDone} activeOpacity={0.85} accessibilityLabel="Готово">
-          <Text style={styles.doneBtnText}>Готово</Text>
-        </TouchableOpacity>
-      </View>
+          )}
+          <TouchableOpacity
+            style={styles.doneBtn}
+            onPress={handleDone}
+            activeOpacity={0.85}
+            accessibilityLabel="Готово"
+          >
+            <Text style={styles.doneBtnText}>Готово</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Сканер штрих-кода — общий компонент (Склад/Инвентаризация), здесь в
           continuous-режиме (round 12 #6в): успешный скан добавляет товар в чек

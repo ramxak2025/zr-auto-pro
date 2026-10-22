@@ -98,9 +98,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
           />
         </View>
         <View style={styles.field}>
-          <Text style={[styles.label, { color: palette.text.secondary }]}>
-            Закупочная цена за {unitLabel(props.unit)}, ₽
-          </Text>
+          <Text style={[styles.label, { color: palette.text.secondary }]}>Цена закупки, ₽</Text>
           <TextInput
             accessibilityLabel="Закупочная цена за единицу"
             value={costPriceText}

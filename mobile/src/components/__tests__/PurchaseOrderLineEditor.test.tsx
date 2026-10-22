@@ -247,3 +247,11 @@ test('half-cent procurement totals are rounded like backend before a bankers-rou
     spy.mockRestore();
   }
 });
+
+test('visual: native compact price label keeps existing accessible input name', () => {
+  const f = fixture({ unit: 'длинная единица товара' });
+  const tree = f.render();
+  expect(text(tree)).toContain('Цена закупки, ₽');
+  expect(text(tree)).not.toContain('Закупочная цена за длинная единица товара');
+  expect(f.field(tree, 'Закупочная цена за единицу').props.accessibilityLabel).toBe('Закупочная цена за единицу');
+});

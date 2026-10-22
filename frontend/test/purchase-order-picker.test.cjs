@@ -741,3 +741,28 @@ test('repair proof: same-name restore prioritizes exact cached SKU while query i
     Renderer.act(() => tree.unmount());
   }
 });
+
+test('visual: compact price label shares quantity row and accessible price name retains the unit', () => {
+  let tree;
+  Renderer.act(() => {
+    tree = Renderer.create(React.createElement(Editor, { product, onConfirm() {}, onCancel() {} }));
+  });
+  try {
+    const fields = tree.root.findAllByType(Field);
+    const quantity = fields.find((node) => node.props.htmlFor === 'po-picker-quantity');
+    const price = fields.find((node) => node.props.htmlFor === 'po-picker-cost');
+    assert.equal(price.props.label, 'Цена закупки, ₽');
+    assert.equal(price.parent, quantity.parent);
+    assert.match(price.parent.props.className, /grid-cols-2/);
+    assert.equal(input(tree, 'po-picker-cost').props['aria-label'], 'Закупочная цена за м, ₽');
+    assert.equal(
+      tree.root
+        .findAllByType('label')
+        .find((node) => node.props.htmlFor === 'po-picker-cost')
+        .children.join(''),
+      'Цена закупки, ₽',
+    );
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
