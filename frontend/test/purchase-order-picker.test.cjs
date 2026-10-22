@@ -84,11 +84,11 @@ const api = {
     create: async (payload) => {
       requests.push(payload);
       if (failSave) throw new Error('fixture offline');
-      return { data: { id: 'saved' } };
+      return { data: { id: 'b47fa84f-9795-4a1b-8068-b807c44e4c7e' } };
     },
     update: async (_id, payload) => {
       requests.push(payload);
-      return { data: { id: 'saved' } };
+      return { data: { id: 'b47fa84f-9795-4a1b-8068-b807c44e4c7e' } };
     },
   },
 };
@@ -325,7 +325,7 @@ test('cancel and invalid price/quantity do not mutate an order; validation keeps
 });
 test('received quantity minimum and deletion guard remain in force', async () => {
   const tree = createPage({
-    id: 'order',
+    id: 'b47fa84f-9795-4a1b-8068-b807c44e4c7e',
     status: 'draft',
     supplierId: 'supplier',
     items: [{ productId: 'product', name: product.name, quantity: 4, costPrice: 2, receivedQuantity: 3 }],
