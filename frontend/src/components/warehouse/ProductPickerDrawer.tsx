@@ -1,3 +1,5 @@
+import ProcurementProductPicker from '../checks/ProductPickerDrawer';
+import type { ProcurementPickerOptions } from '../purchaseOrders/useProcurementPickerDrafts';
 import { useMemo, useState } from 'react';
 import { Check, ChevronRight, FolderOpen, Package, Plus, Search } from 'lucide-react';
 import type { Product } from '../../types';
@@ -14,6 +16,7 @@ import { countLabel } from './format';
 
 export interface ProductPickerDrawerProps {
   open: boolean;
+  purchaseOrder?: ProcurementPickerOptions;
   onClose: () => void;
   title?: string;
   subtitle?: string;
@@ -45,8 +48,25 @@ export default function ProductPickerDrawer({
   onClose,
   title = 'Выбрать товар',
   subtitle,
+  purchaseOrder,
   ...rest
 }: ProductPickerDrawerProps) {
+  if (purchaseOrder)
+    return (
+      <ProcurementProductPicker
+        open={open}
+        onClose={onClose}
+        products={rest.products}
+        purchaseOrder={purchaseOrder}
+        priceKind="cost"
+        onSelectProduct={rest.onSelect}
+        selectedIds={rest.selectedIds}
+        isLoading={rest.isLoading}
+        isError={rest.isError}
+        onRetry={rest.onRetry}
+        closeOnSelect={false}
+      />
+    );
   return (
     <Drawer open={open} onClose={onClose} title={title} subtitle={subtitle} size="lg">
       {open && <PickerBody onClose={onClose} {...rest} />}

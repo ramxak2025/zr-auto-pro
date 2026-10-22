@@ -90,7 +90,7 @@ for (const platform of ['ios', 'android'])
     const tree = f.render();
     (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('125,5');
     (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('0');
-    f.press(tree, 'Добавить в заказ');
+    f.press(tree, 'Добавить');
     expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 125.5, costPrice: 0 });
   });
 test('live total, cancel and repeated edit use order snapshots instead of catalogue prices', () => {
@@ -117,7 +117,7 @@ test('invalid quantity/price never silently becomes zero; text and errors remain
     let tree = f.render();
     (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)(qty);
     (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)(cost);
-    f.press(tree, 'Добавить в заказ');
+    f.press(tree, 'Добавить');
     tree = f.render();
     expect(f.props.onConfirm).not.toHaveBeenCalled();
     expect(f.field(tree, 'Количество товара').props.value).toBe(qty);
@@ -127,7 +127,7 @@ test('invalid quantity/price never silently becomes zero; text and errors remain
   const tree = f.render();
   (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('0,001');
   (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('0');
-  f.press(tree, 'Добавить в заказ');
+  f.press(tree, 'Добавить');
   expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 0.001, costPrice: 0 });
 });
 test('received minimum and callback failure preserve draft; retry consumes the same entered values', () => {
@@ -137,16 +137,16 @@ test('received minimum and callback failure preserve draft; retry consumes the s
   const f = fixture({ existing: true, quantityText: '4', costPriceText: '2', receivedQuantity: 3, onConfirm });
   let tree = f.render();
   (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('2');
-  f.press(tree, 'Сохранить позицию');
+  f.press(tree, 'Сохранить');
   tree = f.render();
   expect(onConfirm).not.toHaveBeenCalled();
   expect(text(tree)).toContain('Уже принято 3');
   (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('3');
-  f.press(tree, 'Сохранить позицию');
+  f.press(tree, 'Сохранить');
   tree = f.render();
   expect(text(tree)).toContain('fixture temporary failure');
   expect(f.field(tree, 'Количество товара').props.value).toBe('3');
-  f.press(tree, 'Сохранить позицию');
+  f.press(tree, 'Сохранить');
   expect(onConfirm).toHaveBeenLastCalledWith({ quantity: 3, costPrice: 2 });
 });
 
@@ -155,7 +155,8 @@ test.each(['Количество товара', 'Закупочная цена �
   (focusedField) => {
     const f = fixture();
     const tree = f.render();
-    const sheet = nodes(tree).find((node) => node.type === 'BottomSheet')!;
+    const sheet = tree as Element;
+    expect(nodes(tree).some((node) => node.type === 'BottomSheet')).toBe(false);
     const accessories = nodes(sheet.props.children).filter((node) => node.type === 'InputAccessoryView');
     expect(accessories).toHaveLength(2);
     const ids = ['Количество товара', 'Закупочная цена за единицу'].map(
@@ -168,7 +169,7 @@ test.each(['Количество товара', 'Закупочная цена �
     }
     const confirmations = accessories.map(
       (accessory) =>
-        nodes(accessory.props.children).find((node) => node.props.accessibilityLabel === 'Добавить позицию в заказ')!,
+        nodes(accessory.props.children).find((node) => node.props.accessibilityLabel === 'Добавить позицию')!,
     );
     expect(confirmations[0].props.onPress).toBe(confirmations[1].props.onPress);
     (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('2,5');
@@ -177,7 +178,7 @@ test.each(['Количество товара', 'Закупочная цена �
       (node) => node.props.nativeID === f.field(tree, focusedField).props.inputAccessoryViewID,
     )!;
     const confirm = nodes(accessory.props.children).find(
-      (node) => node.props.accessibilityLabel === 'Добавить позицию в заказ',
+      (node) => node.props.accessibilityLabel === 'Добавить позицию',
     )!;
     (confirm.props.onPress as () => void)();
     expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 2.5, costPrice: 123.45 });
@@ -196,7 +197,7 @@ test.each(['Количество товара', 'Закупочная цена �
         node.props.nativeID === f.field(tree, focusedField).props.inputAccessoryViewID,
     )!;
     const confirm = nodes(accessory?.props.children).find(
-      (node) => node.props.accessibilityLabel === 'Сохранить позицию в заказе',
+      (node) => node.props.accessibilityLabel === 'Сохранить позицию',
     );
     expect(confirm).toBeDefined();
     (confirm!.props.onPress as () => void)();
@@ -245,4 +246,12 @@ test('half-cent procurement totals are rounded like backend before a bankers-rou
   } finally {
     spy.mockRestore();
   }
+});
+
+test('visual: native compact price label keeps existing accessible input name', () => {
+  const f = fixture({ unit: 'длинная единица товара' });
+  const tree = f.render();
+  expect(text(tree)).toContain('Цена закупки, ₽');
+  expect(text(tree)).not.toContain('Закупочная цена за длинная единица товара');
+  expect(f.field(tree, 'Закупочная цена за единицу').props.accessibilityLabel).toBe('Закупочная цена за единицу');
 });

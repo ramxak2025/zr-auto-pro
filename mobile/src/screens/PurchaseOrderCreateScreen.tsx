@@ -213,6 +213,10 @@ export default function PurchaseOrderCreateScreen() {
     },
     [writeLines],
   );
+  const pickerDrafts = useRef<import('../utils/productPickerSession').ProcurementPickerDrafts>({
+    active: null,
+    entries: {},
+  });
   const pickerBridge: ProductPickerBridge = {
     productLines: lines.map((line) => ({
       productId: line.productId,
@@ -224,6 +228,7 @@ export default function PurchaseOrderCreateScreen() {
     showCostPrice: true,
     priceKind: 'cost',
     purchaseOrder: {
+      drafts: pickerDrafts.current,
       lines: lines.map((line) => ({
         productId: line.productId,
         quantityText: line.quantityText,

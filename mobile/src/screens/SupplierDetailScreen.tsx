@@ -928,9 +928,14 @@ export default function SupplierDetailScreen() {
       <View>
         <ProcurementRecoveryPanel
           recovery={recovery}
-          onRecovered={() => {
+          onRecovered={(record) => {
             void invalidateAll();
-            Alert.alert('Готово', 'Результат возврата восстановлен');
+            Alert.alert(
+              'Готово',
+              record.target.operation === 'delivery-create'
+                ? 'Поставка восстановлена'
+                : 'Результат возврата восстановлен',
+            );
           }}
         />
         <LoadingSpinner />
@@ -941,9 +946,14 @@ export default function SupplierDetailScreen() {
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <ProcurementRecoveryPanel
           recovery={recovery}
-          onRecovered={() => {
+          onRecovered={(record) => {
             void invalidateAll();
-            Alert.alert('Готово', 'Результат возврата восстановлен');
+            Alert.alert(
+              'Готово',
+              record.target.operation === 'delivery-create'
+                ? 'Поставка восстановлена'
+                : 'Результат возврата восстановлен',
+            );
           }}
         />
         <Text style={{ padding: 20, textAlign: 'center', color: palette.text.primary }}>Поставщик не найден</Text>
@@ -959,9 +969,14 @@ export default function SupplierDetailScreen() {
           name title. */}
       <ProcurementRecoveryPanel
         recovery={recovery}
-        onRecovered={() => {
+        onRecovered={(record) => {
           void invalidateAll();
-          Alert.alert('Готово', 'Результат возврата восстановлен');
+          Alert.alert(
+            'Готово',
+            record.target.operation === 'delivery-create'
+              ? 'Поставка восстановлена'
+              : 'Результат возврата восстановлен',
+          );
         }}
       />
       <IosScreenHeader
@@ -1295,6 +1310,18 @@ export default function SupplierDetailScreen() {
               <TouchableOpacity style={[styles.actionBtn, actionBtnDark]} onPress={startNewSupply} activeOpacity={0.8}>
                 <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
                 <Text style={[styles.actionBtnText, actionTextDark]}>Новая поставка</Text>
+              </TouchableOpacity>
+            )}
+            {!isUsedPurchaseSupplier && canManageSuppliers && (
+              <TouchableOpacity
+                style={[styles.actionBtn, actionBtnDark]}
+                accessibilityLabel="Поставка без заказа"
+                onPress={() =>
+                  navigation.navigate('DirectSupplyCreate', { supplierId: id, supplierName: supplier.name })
+                }
+              >
+                <Ionicons name="cube-outline" size={18} color={accentIconColor} />
+                <Text style={[styles.actionBtnText, actionTextDark]}>Поставка без заказа</Text>
               </TouchableOpacity>
             )}
             {/* Подсказка, когда есть оформленные заказы, ожидающие приёмки. */}

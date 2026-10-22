@@ -30,6 +30,7 @@ import ServicesScreen from '../screens/ServicesScreen';
 import SuppliersScreen from '../screens/SuppliersScreen';
 import SupplierDetailScreen from '../screens/SupplierDetailScreen';
 import PurchaseOrdersScreen from '../screens/PurchaseOrdersScreen';
+import DirectSupplyCreateScreen from '../screens/DirectSupplyCreateScreen';
 import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
 import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
 import SupplyReceiveScreen from '../screens/SupplyReceiveScreen';
@@ -272,6 +273,7 @@ export type RootStackParamList = {
    * MoreStack (для PurchaseOrderDetail / Поставщики-в-секции), и в корневом
    * стеке (для SupplierDetail, который перекрывает таб-бар).
    */
+  DirectSupplyCreate: { supplierId: string; supplierName?: string };
   SupplyReceive: { orderId: string; po?: PurchaseOrder };
   /**
    * Шаблоны чеков (round 8 #3) — управление личными шаблонами с папками +
@@ -485,6 +487,7 @@ function MoreStackNavigator() {
           («Принять поставку») и из SupplierDetail-в-секции («Новая поставка»).
           Кредитует склад + ведёт долг/платёж поставщика; экран инвалидирует
           ['products']/['stock-movements']/['supplier-*'] после приёмки. */}
+      <MoreStack.Screen name="DirectSupplyCreate" component={DirectSupplyCreateScreen} />
       <MoreStack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
       <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
       {/* Кассовая смена / Z-отчёт / Инкассация — UNGATED by plan-feature
@@ -1017,6 +1020,7 @@ export default function AppNavigator() {
               (which intentionally covers the tab bar) reaches receiving via
               «Новая поставка». MoreStack has its own copy above for the
               in-section SupplierDetail / PurchaseOrderDetail callers. */}
+          <Stack.Screen name="DirectSupplyCreate" component={DirectSupplyCreateScreen} />
           <Stack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
           {/* Шаблоны чеков на КОРНЕВОМ стеке — для «Управлять» из пикера
               шаблонов Кассы (CheckCreate перекрывает таб-бар, значит и

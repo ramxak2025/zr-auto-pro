@@ -16,17 +16,23 @@ export default function PurchaseOrderLineEditor({
   line,
   onConfirm,
   onCancel,
+  draft,
+  onDraftChange,
 }: {
   product: Product;
+  draft?: { quantityText: string; costPriceText: string };
+  onDraftChange?: (value: { quantityText: string; costPriceText: string }) => void;
   line?: PurchaseOrderPickerLine;
   onConfirm: (value: PurchaseOrderLineValue) => void;
   onCancel: () => void;
 }) {
-  const [quantityText, setQuantityText] = useState(line?.quantityText ?? '1');
-  const [costPriceText, setCostPriceText] = useState(line?.costPriceText ?? String(product.costPrice));
+  const [quantityText, setQuantityText] = useState(draft?.quantityText ?? line?.quantityText ?? '1');
+  const [costPriceText, setCostPriceText] = useState(
+    draft?.costPriceText ?? line?.costPriceText ?? String(product.costPrice),
+  );
   const latest = useRef({
-    quantityText: line?.quantityText ?? '1',
-    costPriceText: line?.costPriceText ?? String(product.costPrice),
+    quantityText: draft?.quantityText ?? line?.quantityText ?? '1',
+    costPriceText: draft?.costPriceText ?? line?.costPriceText ?? String(product.costPrice),
   });
   const [error, setError] = useState('');
   const quantityRef = useRef<HTMLInputElement>(null);
@@ -54,42 +60,41 @@ export default function PurchaseOrderLineEditor({
     }
   };
   return (
-    <section aria-label="Параметры товара в заказе" className="space-y-5">
-      <div>
-        <h3 className="break-words text-base font-semibold text-ink">{product.name}</h3>
-        <p className="mt-2 text-sm text-ink-2">
-          Цена за единицу в этом заказе. Карточка товара и остаток не меняются до приёмки.
-        </p>
+    <section aria-label={`Параметры товара: ${product.name}`} className="space-y-3 rounded-lg bg-surface-2 p-3">
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={`Количество, ${unitLabel(product.unit)}`} htmlFor="po-picker-quantity">
+          <Input
+            ref={quantityRef}
+            id="po-picker-quantity"
+            inputMode="decimal"
+            value={quantityText}
+            onChange={(e) => {
+              latest.current.quantityText = e.target.value;
+              setQuantityText(e.target.value);
+              onDraftChange?.({ ...latest.current });
+              setError('');
+            }}
+          />
+        </Field>
+        <Field label="Цена закупки, ₽" htmlFor="po-picker-cost">
+          <Input
+            id="po-picker-cost"
+            aria-label={`Закупочная цена за ${unitLabel(product.unit)}, ₽`}
+            inputMode="decimal"
+            value={costPriceText}
+            onChange={(e) => {
+              latest.current.costPriceText = e.target.value;
+              setCostPriceText(e.target.value);
+              onDraftChange?.({ ...latest.current });
+              setError('');
+            }}
+          />
+        </Field>
       </div>
-      <Field label={`Количество, ${unitLabel(product.unit)}`} htmlFor="po-picker-quantity">
-        <Input
-          ref={quantityRef}
-          id="po-picker-quantity"
-          inputMode="decimal"
-          value={quantityText}
-          onChange={(e) => {
-            latest.current.quantityText = e.target.value;
-            setQuantityText(e.target.value);
-            setError('');
-          }}
-        />
-      </Field>
-      <Field label={`Закупочная цена за ${unitLabel(product.unit)}, ₽`} htmlFor="po-picker-cost">
-        <Input
-          id="po-picker-cost"
-          inputMode="decimal"
-          value={costPriceText}
-          onChange={(e) => {
-            latest.current.costPriceText = e.target.value;
-            setCostPriceText(e.target.value);
-            setError('');
-          }}
-        />
-      </Field>
       {(line?.receivedQuantity ?? 0) > 0 && (
         <p className="text-xs text-ink-3">Уже принято: {line?.receivedQuantity}. Это минимальное количество.</p>
       )}
-      <div className="flex items-center justify-between gap-3 border-t border-line pt-4">
+      <div className="flex items-center justify-between gap-3 border-t border-line pt-2">
         <span className="text-sm text-ink-2">Итого за позицию</span>
         <strong className="tabular-nums text-ink" aria-live="polite">
           {value ? formatPurchaseOrderMoney(value.quantity * value.costPrice) : '—'}
@@ -100,11 +105,11 @@ export default function PurchaseOrderLineEditor({
           {error}
         </p>
       )}
-      <div className="flex flex-wrap justify-end gap-3">
+      <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" onClick={onCancel}>
           Отмена
         </Button>
-        <Button onClick={confirm}>{line ? 'Сохранить позицию' : 'Добавить в заказ'}</Button>
+        <Button onClick={confirm}>{line ? 'Сохранить' : 'Добавить'}</Button>
       </div>
     </section>
   );

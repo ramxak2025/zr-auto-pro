@@ -9,7 +9,6 @@ import {
   InputAccessoryView,
   Platform,
 } from 'react-native';
-import { BottomSheet } from './BottomSheet';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
 import { unitLabel } from '../utils/units';
@@ -28,6 +27,9 @@ export interface PurchaseOrderLineEditorProps {
   costPriceText: string;
   receivedQuantity?: number;
   existing?: boolean;
+  context?: 'order' | 'delivery';
+  accessoryIdPrefix?: string;
+  onDraftChange?: (draft: { quantityText: string; costPriceText: string }) => void;
   onConfirm: (value: PurchaseOrderLineValue) => void;
   onCancel: () => void;
 }
@@ -66,17 +68,12 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
       Keyboard.dismiss();
     }
   };
+  const accessoryPrefix = props.accessoryIdPrefix ?? 'purchase-order';
   return (
-    <BottomSheet
-      visible
-      onClose={props.onCancel}
-      title={props.existing ? 'Изменить позицию' : 'Товар в заказ'}
-      heightRatio={0.72}
+    <View
+      style={[styles.editor, { backgroundColor: palette.bg.muted }]}
+      accessibilityLabel={`Параметры товара: ${props.name}`}
     >
-      <Text style={[styles.name, { color: palette.text.primary }]}>{props.name}</Text>
-      <Text style={[styles.hint, { color: palette.text.secondary }]}>
-        Цена за единицу в этом заказе. Карточка товара и остаток не меняются до приёмки.
-      </Text>
       <View style={styles.fields}>
         <View style={styles.field}>
           <Text style={[styles.label, { color: palette.text.secondary }]}>Количество, {unitLabel(props.unit)}</Text>
@@ -86,10 +83,11 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
             onChangeText={(text) => {
               latest.current.quantityText = text;
               setQuantityText(text);
+              props.onDraftChange?.({ ...latest.current });
               setError('');
             }}
             keyboardType="decimal-pad"
-            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-quantity-confirm' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? `${accessoryPrefix}-quantity-confirm` : undefined}
             returnKeyType="done"
             onSubmitEditing={confirm}
             selectTextOnFocus
@@ -100,19 +98,18 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
           />
         </View>
         <View style={styles.field}>
-          <Text style={[styles.label, { color: palette.text.secondary }]}>
-            Закупочная цена за {unitLabel(props.unit)}, ₽
-          </Text>
+          <Text style={[styles.label, { color: palette.text.secondary }]}>Цена закупки, ₽</Text>
           <TextInput
             accessibilityLabel="Закупочная цена за единицу"
             value={costPriceText}
             onChangeText={(text) => {
               latest.current.costPriceText = text;
               setCostPriceText(text);
+              props.onDraftChange?.({ ...latest.current });
               setError('');
             }}
             keyboardType="decimal-pad"
-            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-unit-cost-confirm' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? `${accessoryPrefix}-unit-cost-confirm` : undefined}
             returnKeyType="done"
             onSubmitEditing={confirm}
             selectTextOnFocus
@@ -148,13 +145,11 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
           <Text style={[styles.buttonText, { color: palette.text.primary }]}>Отмена</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={confirm} accessibilityRole="button" style={styles.save}>
-          <Text style={[styles.buttonText, { color: colors.white }]}>
-            {props.existing ? 'Сохранить позицию' : 'Добавить в заказ'}
-          </Text>
+          <Text style={[styles.buttonText, { color: colors.white }]}>{props.existing ? 'Сохранить' : 'Добавить'}</Text>
         </TouchableOpacity>
       </View>
       {Platform.OS === 'ios'
-        ? ['purchase-order-quantity-confirm', 'purchase-order-unit-cost-confirm'].map((nativeID) => (
+        ? [`${accessoryPrefix}-quantity-confirm`, `${accessoryPrefix}-unit-cost-confirm`].map((nativeID) => (
             <InputAccessoryView key={nativeID} nativeID={nativeID} backgroundColor={palette.bg.card}>
               <View style={styles.keyboardAccessory}>
                 <TouchableOpacity
@@ -169,7 +164,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
                   onPress={confirm}
                   style={styles.keyboardAction}
                   accessibilityRole="button"
-                  accessibilityLabel={props.existing ? 'Сохранить позицию в заказе' : 'Добавить позицию в заказ'}
+                  accessibilityLabel={props.existing ? 'Сохранить позицию' : 'Добавить позицию'}
                 >
                   <Text style={[styles.buttonText, { color: colors.primary[600] }]}>
                     {props.existing ? 'Сохранить' : 'Добавить'}
@@ -179,7 +174,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
             </InputAccessoryView>
           ))
         : null}
-    </BottomSheet>
+    </View>
   );
 }
 const styles = StyleSheet.create({
@@ -191,10 +186,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing[2],
   },
-  name: { fontSize: 17, fontWeight: '600', marginBottom: spacing[2] },
+  editor: {
+    padding: spacing[3],
+    marginHorizontal: spacing[3],
+    marginBottom: spacing[3],
+    borderRadius: borderRadius.lg,
+  },
   hint: { fontSize: 13, lineHeight: 19, marginBottom: spacing[3] },
-  fields: { gap: spacing[4] },
-  field: { gap: spacing[2] },
+  fields: { flexDirection: 'row', gap: spacing[3] },
+  field: { flex: 1, minWidth: 0, gap: spacing[2] },
   label: { fontSize: 13, fontWeight: '500' },
   input: {
     minHeight: 46,
@@ -209,10 +209,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing[3],
-    marginTop: spacing[5],
+    marginTop: spacing[3],
   },
-  amount: { fontSize: 20, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  actions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[5] },
+  amount: { fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  actions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[3] },
   cancel: {
     flex: 1,
     minHeight: 46,
