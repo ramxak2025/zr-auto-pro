@@ -227,41 +227,41 @@ const PickerProductRow = React.memo(function PickerProductRow({
                 {formatQty(product.stock)} {unitLabel(product.unit)}
               </Text>
             </View>
-            <View style={styles.stepperRow}>
+            {procurement ? (
               <TouchableOpacity
-                onPress={() => onDecrement(product)}
-                disabled={receivedQuantity > 0 && cartQty <= receivedQuantity}
-                accessibilityState={{ disabled: receivedQuantity > 0 && cartQty <= receivedQuantity }}
-                style={[styles.stepBtn, { backgroundColor: palette.bg.muted }]}
-                hitSlop={8}
-                accessibilityLabel={`Убрать: ${product.name}`}
+                style={styles.qtyBadge}
+                onPress={() => onPress(product)}
+                accessibilityRole="button"
+                accessibilityLabel={`Изменить количество и цену: ${product.name}`}
               >
-                <Ionicons name="remove" size={18} color={colors.red[500]} />
+                <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
+                <Ionicons name="pencil" size={10} color={colors.primary[600]} />
               </TouchableOpacity>
-              {procurement ? (
+            ) : (
+              <View style={styles.stepperRow}>
                 <TouchableOpacity
-                  style={styles.qtyBadge}
-                  onPress={() => onPress(product)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Изменить количество и цену: ${product.name}`}
+                  onPress={() => onDecrement(product)}
+                  disabled={receivedQuantity > 0 && cartQty <= receivedQuantity}
+                  accessibilityState={{ disabled: receivedQuantity > 0 && cartQty <= receivedQuantity }}
+                  style={[styles.stepBtn, { backgroundColor: palette.bg.muted }]}
+                  hitSlop={8}
+                  accessibilityLabel={`Убрать: ${product.name}`}
                 >
-                  <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
-                  <Ionicons name="pencil" size={10} color={colors.primary[600]} />
+                  <Ionicons name="remove" size={18} color={colors.red[500]} />
                 </TouchableOpacity>
-              ) : (
                 <View style={styles.qtyBadge}>
                   <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
                 </View>
-              )}
-              <TouchableOpacity
-                onPress={() => onIncrement(product)}
-                style={[styles.stepBtn, { backgroundColor: palette.accent.primarySoft }]}
-                hitSlop={8}
-                accessibilityLabel={`Добавить ещё: ${product.name}`}
-              >
-                <Ionicons name="add" size={18} color={palette.accent.primaryText} />
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  onPress={() => onIncrement(product)}
+                  style={[styles.stepBtn, { backgroundColor: palette.accent.primarySoft }]}
+                  hitSlop={8}
+                  accessibilityLabel={`Добавить ещё: ${product.name}`}
+                >
+                  <Ionicons name="add" size={18} color={palette.accent.primaryText} />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         ) : (
           <View style={styles.productStockWrap}>
@@ -477,18 +477,32 @@ export default function ProductPickerScreen() {
   }, []);
 
   // Явные «+»/«−» степпера — осознанные действия, мимо защиты от дребезга.
-  const handleIncrement = useCallback((product: Product) => {
-    const s = getProductPickerSession();
-    if (!s) return;
-    haptic('tap');
-    s.addProduct(product);
-  }, []);
-  const handleDecrement = useCallback((product: Product) => {
-    const s = getProductPickerSession();
-    if (!s) return;
-    haptic('tap');
-    s.decrementProduct(product.id);
-  }, []);
+  const handleIncrement = useCallback(
+    (product: Product) => {
+      const s = getProductPickerSession();
+      if (!s) return;
+      if (s.purchaseOrder) {
+        handleRowPress(product);
+        return;
+      }
+      haptic('tap');
+      s.addProduct(product);
+    },
+    [handleRowPress],
+  );
+  const handleDecrement = useCallback(
+    (product: Product) => {
+      const s = getProductPickerSession();
+      if (!s) return;
+      if (s.purchaseOrder) {
+        handleRowPress(product);
+        return;
+      }
+      haptic('tap');
+      s.decrementProduct(product.id);
+    },
+    [handleRowPress],
+  );
 
   // Спуск в папку: push НОВОГО инстанса этого же роута (как Склад). push, а
   // не navigate — navigate с теми же params upsert-ит текущий экран и

@@ -156,6 +156,28 @@ jest.mock('../../components/QueryErrorState', () => ({ __esModule: true, default
 jest.mock('../../components/TabBarScrollable', () => ({ TabBarFlashList: 'FlashList' }));
 jest.mock('../../components/PurchaseOrderLineEditor', () => ({ __esModule: true, default: 'LineEditor' }));
 jest.mock('../purchaseOrders/SupplierRequestSheet', () => ({ __esModule: true, default: 'RequestSheet' }));
+jest.mock('../ProductPickerScreen', () => {
+  if (process.env.PROCUREMENT_REPAIR_BASELINE !== '1') return jest.requireActual('../ProductPickerScreen');
+  const mockPath = jest.requireActual('node:path');
+  const mockFilename = require.resolve('../ProductPickerScreen');
+  const mockSource = jest
+    .requireActual('node:child_process')
+    .execFileSync(
+      'git',
+      ['show', 'ffb7f46394a993b71ad6334e4e1a452e5d989f86:mobile/src/screens/ProductPickerScreen.tsx'],
+      { encoding: 'utf8' },
+    );
+  const mockTs = jest.requireActual('typescript');
+  const mockCode = mockTs.transpileModule(mockSource, {
+    fileName: mockFilename,
+    compilerOptions: { module: mockTs.ModuleKind.CommonJS, jsx: mockTs.JsxEmit.ReactJSX, esModuleInterop: true },
+  }).outputText;
+  const mockModule = { exports: {} };
+  const mockRequire = (mockId: string) =>
+    require(mockId.startsWith('.') ? mockPath.resolve(mockPath.dirname(mockFilename), mockId) : mockId);
+  new Function('require', 'module', 'exports', mockCode)(mockRequire, mockModule, mockModule.exports);
+  return mockModule.exports;
+});
 import Direct from '../DirectSupplyCreateScreen';
 import Create from '../PurchaseOrderCreateScreen';
 import Picker from '../ProductPickerScreen';
@@ -484,4 +506,71 @@ test('background folder route unmounts same-product editor and cannot dispatch i
   (old.props.onCancel as () => void)();
   expect(getProductPickerSession()!.purchaseOrder!.drafts.active).toBe(mockProduct.id);
   expect(getProductPickerSession()!.productLines).toHaveLength(0);
+});
+
+test.each(['create', 'direct'] as const)(
+  'repair proof: %s procurement counter actions only open absolute inline editing',
+  (flow) => {
+    if (flow === 'create') openPicker();
+    else {
+      const tree = render('direct');
+      (nodes(tree).find((node) => node.props.accessibilityLabel === 'Добавить товар')!.props.onPress as () => void)();
+    }
+    getProductPickerSession()!.purchaseOrder!.updateLine(mockProduct, { quantity: 2.5, costPrice: 7.25 });
+    render(flow);
+    let pickerRow = row(render('picker'));
+    pickerRow.props.onIncrement(mockProduct);
+    render(flow);
+    expect(getProductPickerSession()!.productLines[0].quantity).toBe(2.5);
+    expect(editor(render('picker')).props.quantityText).toBe('2.5');
+    expect(editor(render('picker')).props.costPriceText).toBe('7.25');
+    pickerRow = row(render('picker'));
+    pickerRow.props.onDecrement(mockProduct);
+    render(flow);
+    expect(getProductPickerSession()!.productLines[0].quantity).toBe(2.5);
+    const Row = (pickerRow.type as unknown as { type: (props: unknown) => React.ReactNode }).type;
+    const controls = nodes(Row(pickerRow.props));
+    expect(controls.some((node) => node.props.accessibilityLabel === `Добавить ещё: ${mockProduct.name}`)).toBe(false);
+    expect(controls.some((node) => node.props.accessibilityLabel === `Убрать: ${mockProduct.name}`)).toBe(false);
+    const badge = controls.find(
+      (node) => node.props.accessibilityLabel === `Изменить количество и цену: ${mockProduct.name}`,
+    )!;
+    expect(badge).toBeDefined();
+    (badge.props.onPress as () => void)();
+    render(flow);
+    expect(getProductPickerSession()!.productLines[0].quantity).toBe(2.5);
+  },
+);
+
+test('selected cash row keeps its actual plus/minus controls and default product callback', () => {
+  const add = jest.fn();
+  const decrement = jest.fn();
+  const cash = {
+    current: {
+      productLines: [{ productId: mockProduct.id, quantity: 2.5, sellPrice: 50 }],
+      addProduct: add,
+      decrementProduct: decrement,
+      showCostPrice: false,
+      warrantyNames: new Set<string>(),
+      warehouseId: null,
+      setWarehouseId: jest.fn(),
+      warehouses: [],
+    } as ProductPickerBridge,
+  };
+  claimProductPickerSession(cash);
+  const cashRow = row(render('picker'));
+  const Row = (cashRow.type as unknown as { type: (props: unknown) => React.ReactNode }).type;
+  const controls = nodes(Row(cashRow.props));
+  const plus = controls.find((node) => node.props.accessibilityLabel === `Добавить ещё: ${mockProduct.name}`)!;
+  const minus = controls.find((node) => node.props.accessibilityLabel === `Убрать: ${mockProduct.name}`)!;
+  expect(plus).toBeDefined();
+  expect(minus).toBeDefined();
+  (plus.props.onPress as () => void)();
+  (minus.props.onPress as () => void)();
+  expect(add).toHaveBeenCalledWith(mockProduct);
+  expect(decrement).toHaveBeenCalledWith(mockProduct.id);
+  expect(
+    controls.some((node) => node.props.accessibilityLabel === `Изменить количество и цену: ${mockProduct.name}`),
+  ).toBe(false);
+  releaseProductPickerSession(cash);
 });

@@ -13,8 +13,14 @@ const baselineFiles = new Set([
 ]);
 function sourceFor(filename) {
   const relative = path.relative(path.resolve(__dirname, '../..'), filename);
-  return process.env.PROCUREMENT_BASELINE === '1' && baselineFiles.has(relative)
-    ? execFileSync('git', ['show', `6666a11db7084ca460fc4111a9c318fed31ffd16:${relative}`], { encoding: 'utf8' })
+  const baseline =
+    process.env.PROCUREMENT_REPAIR_BASELINE === '1'
+      ? 'ffb7f46394a993b71ad6334e4e1a452e5d989f86'
+      : process.env.PROCUREMENT_BASELINE === '1'
+        ? '6666a11db7084ca460fc4111a9c318fed31ffd16'
+        : null;
+  return baseline && baselineFiles.has(relative)
+    ? execFileSync('git', ['show', `${baseline}:${relative}`], { encoding: 'utf8' })
     : fs.readFileSync(filename, 'utf8');
 }
 for (const extension of ['.ts', '.tsx'])
@@ -624,5 +630,114 @@ test('baseline proof: direct selection is absolute and zero-price rows are poste
   } finally {
     Renderer.act(() => tree.unmount());
     directMode = false;
+  }
+});
+
+test('repair proof: close restores exact cached SKU beyond duplicate-name cap after warehouse filter reset', () => {
+  const duplicates = Array.from({ length: 240 }, (_, index) => ({
+    ...product,
+    id: `duplicate-${index}`,
+    barcode: `sku-${index}`,
+    name: 'Одинаковый товар',
+    category: 'Каталог / Масло',
+    warehouseId: 'warehouse-a',
+  }));
+  const target = duplicates[239];
+  let tree;
+  let selectedWarehouse = 'warehouse-a';
+  let closed = 0;
+  const context = { lines: [], onConfirm: () => assert.fail('closing must not confirm a draft') };
+  const make = () =>
+    React.createElement(Drawer, {
+      open: true,
+      products: selectedWarehouse === 'warehouse-a' ? duplicates : [],
+      purchaseOrder: context,
+      onSelectProduct: () => {},
+      onClose: () => closed++,
+      selectedWarehouseId: selectedWarehouse,
+      onSelectWarehouse: (id) => {
+        selectedWarehouse = id;
+        tree.update(make());
+      },
+    });
+  Renderer.act(() => {
+    tree = Renderer.create(make());
+  });
+  try {
+    const search = () => tree.root.findAllByType('input').find((node) => node.props['aria-label'] === 'Поиск товара');
+    Renderer.act(() => setInput(search(), target.barcode));
+    Renderer.act(() =>
+      tree.root
+        .findAllByType('button')
+        .find((node) => text(node).includes(target.name))
+        .props.onClick(),
+    );
+    Renderer.act(() => {
+      setInput(input(tree, 'po-picker-quantity'), '12,5');
+      setInput(input(tree, 'po-picker-cost'), '0');
+    });
+    Renderer.act(() => {
+      selectedWarehouse = 'warehouse-b';
+      tree.update(make());
+    });
+    assert.equal(tree.root.findAllByType(Editor).length, 0, 'warehouse B hides A pending SKU');
+    Renderer.act(() => tree.root.findAllByType('aside')[0].props.onClose());
+    assert.equal(selectedWarehouse, 'warehouse-a');
+    assert.equal(closed, 0);
+    const restored = tree.root.findAllByType(Editor);
+    assert.equal(restored.length, 1, 'exact SKU must restore even beyond first200 duplicates');
+    assert.equal(restored[0].props.product.id, target.id);
+    assert.equal(input(tree, 'po-picker-quantity').props.value, '12,5');
+    assert.equal(input(tree, 'po-picker-cost').props.value, '0');
+    assert.ok(tree.root.findAllByType('input').some((node) => node.props['aria-label'] === 'Поиск товара'));
+  } finally {
+    Renderer.act(() => tree.unmount());
+  }
+});
+
+test('repair proof: same-name restore prioritizes exact cached SKU while query is missing and cancel stays available', async () => {
+  const duplicates = Array.from({ length: 240 }, (_, index) => ({
+    ...product,
+    id: `item-${index}`,
+    barcode: `barcode-${index}`,
+    name: 'Дубликат',
+    warehouseId: 'main',
+  }));
+  const target = duplicates[239];
+  let closed = 0;
+  let tree;
+  const make = (products, isError = false) =>
+    React.createElement(Drawer, {
+      open: true,
+      products,
+      isError,
+      onSelectProduct: () => {},
+      onClose: () => closed++,
+      purchaseOrder: { lines: [], onConfirm: () => assert.fail('no implicit commit') },
+    });
+  Renderer.act(() => {
+    tree = Renderer.create(make(duplicates));
+  });
+  try {
+    const search = tree.root.findAllByType('input').find((node) => node.props['aria-label'] === 'Поиск товара');
+    Renderer.act(() => setInput(search, target.barcode));
+    Renderer.act(() =>
+      tree.root
+        .findAllByType('button')
+        .find((node) => text(node).includes(target.name))
+        .props.onClick(),
+    );
+    Renderer.act(() => setInput(input(tree, 'po-picker-quantity'), '4,25'));
+    Renderer.act(() => tree.root.findAllByType('aside')[0].props.onClose());
+    assert.equal(tree.root.findAllByType(Editor).length, 1, 'name-only search must not hide cached SKU at index239');
+    assert.equal(tree.root.findByType(Editor).props.product.id, target.id);
+    Renderer.act(() => tree.update(make([], true)));
+    assert.equal(tree.root.findAllByType(Editor).length, 1, 'cached draft remains editable when query data disappears');
+    assert.equal(input(tree, 'po-picker-quantity').props.value, '4,25');
+    await click(tree, 'Отменить изменения позиции');
+    Renderer.act(() => tree.root.findAllByType('aside')[0].props.onClose());
+    assert.equal(closed, 1);
+  } finally {
+    Renderer.act(() => tree.unmount());
   }
 });

@@ -21,7 +21,7 @@ import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { ErrorRow } from '../dashboard/shared';
 import { formatQtyUnit } from '../../utils/units';
-import { buildProductFolderLevel } from '../../../../shared/utils/productFolders';
+import { productFolderParts, buildProductFolderLevel } from '../../../../shared/utils/productFolders';
 
 export interface ProductPickerDrawerProps {
   open: boolean;
@@ -78,6 +78,13 @@ export default function ProductPickerDrawer({
   const editingProduct = editor.active;
   const [activePath, setActivePath] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
+  const restoredProductRef = useRef<Product | null>(null);
+  const restoredProduct =
+    restoredProductRef.current &&
+    editingProduct?.id === restoredProductRef.current.id &&
+    editor.drafts.current[restoredProductRef.current.id]
+      ? (products.find((product) => product.id === restoredProductRef.current?.id) ?? restoredProductRef.current)
+      : null;
   const { data: extraFolders } = useQuery({
     queryKey: ['warehouse-categories', selectedWarehouseId || 'main'],
     queryFn: async () => (await warehouseCategoriesApi.getAll(selectedWarehouseId || undefined)).data,
@@ -88,7 +95,7 @@ export default function ProductPickerDrawer({
   useEffect(() => {
     if (open) {
       setSearch('');
-      setActivePath([]);
+      setActivePath(restoredProductRef.current ? productFolderParts(restoredProductRef.current.category) : []);
     }
   }, [open, selectedWarehouseId]);
 
@@ -119,6 +126,7 @@ export default function ProductPickerDrawer({
 
   const handleSelect = (product: Product) => {
     if (purchaseOrder) {
+      if (restoredProductRef.current?.id !== product.id) restoredProductRef.current = null;
       editor.open(product);
       return;
     }
@@ -219,20 +227,31 @@ export default function ProductPickerDrawer({
             onDraftChange={(draft) => {
               Object.assign(editor.drafts.current[product.id], draft);
             }}
-            onCancel={() => editor.cancel(product.id)}
-            onConfirm={(value) => editor.confirm(product, value)}
+            onCancel={() => {
+              if (restoredProductRef.current?.id === product.id) restoredProductRef.current = null;
+              editor.cancel(product.id);
+            }}
+            onConfirm={(value) => {
+              editor.confirm(product, value);
+              restoredProductRef.current = null;
+            }}
           />
         )}
       </li>
     );
   };
 
+  const renderVisibleProduct = (product: Product) =>
+    product.id === restoredProduct?.id ? null : renderProduct(product);
+
   return (
     <Drawer
       open={open}
       onClose={() =>
         editor.close(onClose, (product) => {
-          setSearch(product.name);
+          restoredProductRef.current = product;
+          setSearch('');
+          setActivePath(productFolderParts(product.category));
           if (product.warehouseId) onSelectWarehouse?.(product.warehouseId);
         })
       }
@@ -251,7 +270,14 @@ export default function ProductPickerDrawer({
         {editor.notice && (
           <p role="alert" className="text-sm text-bad-text">
             {editor.notice}
-            <button type="button" className="ml-2 underline" onClick={() => editor.cancel()}>
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={() => {
+                restoredProductRef.current = null;
+                editor.cancel();
+              }}
+            >
               Отменить изменения позиции
             </button>
           </p>
@@ -263,7 +289,10 @@ export default function ProductPickerDrawer({
             size="sm"
             idPrefix="picker-wh"
             value={selectedWarehouseId ?? warehouses![0].id}
-            onChange={(id) => onSelectWarehouse?.(id)}
+            onChange={(id) => {
+              restoredProductRef.current = null;
+              onSelectWarehouse?.(id);
+            }}
             items={warehouses!.map((w) => ({ key: w.id, label: w.name || WAREHOUSE_KIND_LABELS[w.kind] }))}
           />
         )}
@@ -317,6 +346,7 @@ export default function ProductPickerDrawer({
           </nav>
         )}
 
+        {restoredProduct && <ul aria-label="Незавершённая позиция">{renderProduct(restoredProduct)}</ul>}
         {isLoading ? (
           <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -339,7 +369,7 @@ export default function ProductPickerDrawer({
             />
           ) : (
             <ul className="-mx-2 divide-y divide-line">
-              {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+              {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderVisibleProduct)}
               {overflowHint(searchResults.length)}
             </ul>
           )
@@ -372,7 +402,7 @@ export default function ProductPickerDrawer({
             )}
             {currentProducts.length > 0 && (
               <ul className={cn('-mx-2 divide-y divide-line', subfolders.length > 0 && 'border-t border-line pt-1')}>
-                {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+                {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderVisibleProduct)}
                 {overflowHint(currentProducts.length)}
               </ul>
             )}
