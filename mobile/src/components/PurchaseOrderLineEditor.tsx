@@ -89,7 +89,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
               setError('');
             }}
             keyboardType="decimal-pad"
-            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-line-confirm' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-quantity-confirm' : undefined}
             returnKeyType="done"
             onSubmitEditing={confirm}
             selectTextOnFocus
@@ -112,7 +112,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
               setError('');
             }}
             keyboardType="decimal-pad"
-            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-line-confirm' : undefined}
+            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-unit-cost-confirm' : undefined}
             returnKeyType="done"
             onSubmitEditing={confirm}
             selectTextOnFocus
@@ -153,30 +153,32 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
           </Text>
         </TouchableOpacity>
       </View>
-      {Platform.OS === 'ios' ? (
-        <InputAccessoryView nativeID="purchase-order-line-confirm" backgroundColor={palette.bg.card}>
-          <View style={styles.keyboardAccessory}>
-            <TouchableOpacity
-              onPress={props.onCancel}
-              style={styles.keyboardAction}
-              accessibilityRole="button"
-              accessibilityLabel="Отменить изменение позиции"
-            >
-              <Text style={[styles.buttonText, { color: palette.text.secondary }]}>Отмена</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={confirm}
-              style={styles.keyboardAction}
-              accessibilityRole="button"
-              accessibilityLabel={props.existing ? 'Сохранить позицию в заказе' : 'Добавить позицию в заказ'}
-            >
-              <Text style={[styles.buttonText, { color: colors.primary[600] }]}>
-                {props.existing ? 'Сохранить' : 'Добавить'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </InputAccessoryView>
-      ) : null}
+      {Platform.OS === 'ios'
+        ? ['purchase-order-quantity-confirm', 'purchase-order-unit-cost-confirm'].map((nativeID) => (
+            <InputAccessoryView key={nativeID} nativeID={nativeID} backgroundColor={palette.bg.card}>
+              <View style={styles.keyboardAccessory}>
+                <TouchableOpacity
+                  onPress={props.onCancel}
+                  style={styles.keyboardAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="Отменить изменение позиции"
+                >
+                  <Text style={[styles.buttonText, { color: palette.text.secondary }]}>Отмена</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={confirm}
+                  style={styles.keyboardAction}
+                  accessibilityRole="button"
+                  accessibilityLabel={props.existing ? 'Сохранить позицию в заказе' : 'Добавить позицию в заказ'}
+                >
+                  <Text style={[styles.buttonText, { color: colors.primary[600] }]}>
+                    {props.existing ? 'Сохранить' : 'Добавить'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </InputAccessoryView>
+          ))
+        : null}
     </BottomSheet>
   );
 }

@@ -150,45 +150,69 @@ test('received minimum and callback failure preserve draft; retry consumes the s
   expect(onConfirm).toHaveBeenLastCalledWith({ quantity: 3, costPrice: 2 });
 });
 
-test('iOS both decimal fields share a confirm accessory inside the sheet and save latest active input', () => {
-  const f = fixture();
-  const tree = f.render();
-  const sheet = nodes(tree).find((node) => node.type === 'BottomSheet')!;
-  const accessory = nodes(sheet.props.children).find((node) => node.type === 'InputAccessoryView');
-  expect(accessory).toBeDefined();
-  for (const label of ['Количество товара', 'Закупочная цена за единицу']) {
-    expect(f.field(tree, label).props.inputAccessoryViewID).toBe(accessory!.props.nativeID);
-  }
-  (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('2,5');
-  (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('123,45');
-  const confirm = nodes(accessory!.props.children).find(
-    (node) => node.props.accessibilityLabel === 'Добавить позицию в заказ',
-  )!;
-  (confirm.props.onPress as () => void)();
-  expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 2.5, costPrice: 123.45 });
-});
+test.each(['Количество товара', 'Закупочная цена за единицу'])(
+  'iOS %s owns a distinct accessory inside the sheet; each confirms latest active input',
+  (focusedField) => {
+    const f = fixture();
+    const tree = f.render();
+    const sheet = nodes(tree).find((node) => node.type === 'BottomSheet')!;
+    const accessories = nodes(sheet.props.children).filter((node) => node.type === 'InputAccessoryView');
+    expect(accessories).toHaveLength(2);
+    const ids = ['Количество товара', 'Закупочная цена за единицу'].map(
+      (label) => f.field(tree, label).props.inputAccessoryViewID,
+    );
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) {
+      expect(typeof id).toBe('string');
+      expect(accessories.filter((accessory) => accessory.props.nativeID === id)).toHaveLength(1);
+    }
+    const confirmations = accessories.map(
+      (accessory) =>
+        nodes(accessory.props.children).find((node) => node.props.accessibilityLabel === 'Добавить позицию в заказ')!,
+    );
+    expect(confirmations[0].props.onPress).toBe(confirmations[1].props.onPress);
+    (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('2,5');
+    (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('123,45');
+    const accessory = accessories.find(
+      (node) => node.props.nativeID === f.field(tree, focusedField).props.inputAccessoryViewID,
+    )!;
+    const confirm = nodes(accessory.props.children).find(
+      (node) => node.props.accessibilityLabel === 'Добавить позицию в заказ',
+    )!;
+    (confirm.props.onPress as () => void)();
+    expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 2.5, costPrice: 123.45 });
+  },
+);
 
-test('accessory invalid draft remains editable and dismisses keyboard to reveal the error; cancel does not mutate', () => {
-  const f = fixture({ existing: true });
-  let tree = f.render();
-  (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('');
-  const accessory = nodes(tree).find((node) => node.type === 'InputAccessoryView')!;
-  const confirm = nodes(accessory?.props.children).find(
-    (node) => node.props.accessibilityLabel === 'Сохранить позицию в заказе',
-  );
-  expect(confirm).toBeDefined();
-  (confirm!.props.onPress as () => void)();
-  tree = f.render();
-  expect(f.props.onConfirm).not.toHaveBeenCalled();
-  expect(f.field(tree, 'Закупочная цена за единицу').props.value).toBe('');
-  expect(nodes(tree).some((node) => node.props.accessibilityRole === 'alert')).toBe(true);
-  expect(Keyboard.dismiss).toHaveBeenCalled();
-  const cancel = nodes(accessory.props.children).find(
-    (node) => node.props.accessibilityLabel === 'Отменить изменение позиции',
-  )!;
-  (cancel.props.onPress as () => void)();
-  expect(f.props.onCancel).toHaveBeenCalledTimes(1);
-});
+test.each(['Количество товара', 'Закупочная цена за единицу'])(
+  'iOS %s accessory preserves invalid draft, reveals error and cancels without mutation',
+  (focusedField) => {
+    const f = fixture({ existing: true });
+    let tree = f.render();
+    (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('');
+    const accessory = nodes(tree).find(
+      (node) =>
+        node.type === 'InputAccessoryView' &&
+        node.props.nativeID === f.field(tree, focusedField).props.inputAccessoryViewID,
+    )!;
+    const confirm = nodes(accessory?.props.children).find(
+      (node) => node.props.accessibilityLabel === 'Сохранить позицию в заказе',
+    );
+    expect(confirm).toBeDefined();
+    (confirm!.props.onPress as () => void)();
+    tree = f.render();
+    expect(f.props.onConfirm).not.toHaveBeenCalled();
+    expect(f.field(tree, 'Закупочная цена за единицу').props.value).toBe('');
+    expect(nodes(tree).some((node) => node.props.accessibilityRole === 'alert')).toBe(true);
+    expect(Keyboard.dismiss).toHaveBeenCalled();
+    const cancel = nodes(accessory.props.children).find(
+      (node) => node.props.accessibilityLabel === 'Отменить изменение позиции',
+    )!;
+    expect(cancel.props.onPress).toBe(f.props.onCancel);
+    (cancel.props.onPress as () => void)();
+    expect(f.props.onCancel).toHaveBeenCalledTimes(1);
+  },
+);
 
 test('Android done action confirms the latest draft without an iOS accessory', () => {
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
