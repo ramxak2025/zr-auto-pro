@@ -39,7 +39,6 @@ import {
   releaseProductPickerSession,
   type ProductPickerBridge,
 } from '../utils/productPickerSession';
-import QtyInput from '../components/QtyInput';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi, suppliersApi, warehousesApi } from '../api/services';
@@ -54,13 +53,21 @@ import {
   type Supplier,
   type Warehouse,
 } from '../../../shared/types';
-import { formatMoney } from './purchaseOrders/purchaseOrderHelpers';
-import { MIN_QTY, roundQty } from '../utils/units';
+import {
+  MIN_PURCHASE_ORDER_QUANTITY,
+  formatPurchaseOrderMoney as formatMoney,
+  parsePurchaseOrderCost,
+  parsePurchaseOrderQuantity,
+  purchaseOrderLineValue,
+  roundPurchaseOrderQuantity as roundQty,
+  type PurchaseOrderLineValue,
+} from '../../../shared/utils/purchaseOrderInput';
 
 interface DraftLine {
   productId: string;
   name: string;
   quantity: number;
+  quantityText: string;
   /** Free-text cost so decimals (12.5) type cleanly; parsed to a number on save. */
   costText: string;
   /**
@@ -69,11 +76,6 @@ interface DraftLine {
    * receipts, so the UI locks remove and clamps qty ≥ received.
    */
   received: number;
-}
-
-function parseCost(costText: string): number {
-  const n = parseFloat(costText.replace(',', '.'));
-  return Number.isNaN(n) ? 0 : n;
 }
 
 // Высота липкой панели «Создать заказ»: paddingTop (12) + строка «Итого» (~24) +
@@ -104,10 +106,17 @@ export default function PurchaseOrderCreateScreen() {
       productId: it.productId,
       name: it.name,
       quantity: it.quantity,
-      costText: it.costPrice ? String(it.costPrice) : '',
+      quantityText: String(it.quantity),
+      costText: String(it.costPrice),
       received: it.receivedQuantity ?? 0,
     })),
   );
+  const linesRef = useRef(lines);
+  const writeLines = useCallback((change: DraftLine[] | ((previous: DraftLine[]) => DraftLine[])) => {
+    const next = typeof change === 'function' ? change(linesRef.current) : change;
+    linesRef.current = next;
+    setLines(next);
+  }, []);
   const [note, setNote] = useState(seedPo?.note ?? '');
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -135,24 +144,53 @@ export default function PurchaseOrderCreateScreen() {
   });
 
   // ── Lines ──────────────────────────────────────────────────────────────
-  const handleSelectProduct = useCallback((product: Product) => {
-    setLines((prev) => {
-      const existing = prev.find((l) => l.productId === product.id);
-      if (existing) {
-        return prev.map((l) => (l.productId === product.id ? { ...l, quantity: l.quantity + 1 } : l));
-      }
-      return [
-        ...prev,
-        {
+  const handleSelectProduct = useCallback(
+    (product: Product) => {
+      writeLines((prev) => {
+        const existing = prev.find((l) => l.productId === product.id);
+        if (existing) {
+          return prev.map((l) =>
+            l.productId === product.id
+              ? { ...l, quantity: roundQty(l.quantity + 1), quantityText: String(roundQty(l.quantity + 1)) }
+              : l,
+          );
+        }
+        return [
+          ...prev,
+          {
+            productId: product.id,
+            name: product.name,
+            quantity: 1,
+            quantityText: '1',
+            costText: String(product.costPrice),
+            received: 0,
+          },
+        ];
+      });
+    },
+    [writeLines],
+  );
+
+  const updatePickerLine = useCallback(
+    (product: Product, value: PurchaseOrderLineValue) => {
+      const received = linesRef.current.find((line) => line.productId === product.id)?.received ?? 0;
+      if (value.quantity < received) throw new Error(`Уже принято ${received}. Уменьшить количество ниже нельзя.`);
+      writeLines((previous) => {
+        const next: DraftLine = {
           productId: product.id,
           name: product.name,
-          quantity: 1,
-          costText: product.costPrice ? String(product.costPrice) : '',
-          received: 0,
-        },
-      ];
-    });
-  }, []);
+          quantity: value.quantity,
+          quantityText: String(value.quantity),
+          costText: String(value.costPrice),
+          received,
+        };
+        return previous.some((line) => line.productId === product.id)
+          ? previous.map((line) => (line.productId === product.id ? next : line))
+          : [...previous, next];
+      });
+    },
+    [writeLines],
+  );
 
   const { data: warehouses } = useQuery<Warehouse[]>({
     queryKey: ['warehouses'],
@@ -163,25 +201,45 @@ export default function PurchaseOrderCreateScreen() {
     if (!warehouses?.length || warehouses.some((w) => w.id === pickerWarehouseId)) return;
     setPickerWarehouseId((warehouses.find((w) => w.kind === 'main') ?? warehouses[0]).id);
   }, [warehouses, pickerWarehouseId]);
-  const decrementPickerProduct = useCallback((productId: string) => {
-    setLines((prev) =>
-      prev.flatMap((line) => {
-        if (line.productId !== productId) return [line];
-        const quantity = Math.max(line.received, roundQty(line.quantity - 1));
-        return quantity > 0 ? [{ ...line, quantity }] : [];
-      }),
-    );
-  }, []);
+  const decrementPickerProduct = useCallback(
+    (productId: string) => {
+      writeLines((prev) =>
+        prev.flatMap((line) => {
+          if (line.productId !== productId) return [line];
+          const quantity = Math.max(line.received, roundQty(line.quantity - 1));
+          return quantity > 0 ? [{ ...line, quantity, quantityText: String(quantity) }] : [];
+        }),
+      );
+    },
+    [writeLines],
+  );
   const pickerBridge: ProductPickerBridge = {
     productLines: lines.map((line) => ({
       productId: line.productId,
       quantity: line.quantity,
-      sellPrice: parseCost(line.costText),
+      sellPrice: parsePurchaseOrderCost(line.costText) ?? 0,
     })),
     addProduct: handleSelectProduct,
     decrementProduct: decrementPickerProduct,
     showCostPrice: true,
     priceKind: 'cost',
+    purchaseOrder: {
+      lines: lines.map((line) => ({
+        productId: line.productId,
+        quantityText: line.quantityText,
+        costPriceText: line.costText,
+        receivedQuantity: line.received,
+      })),
+      updateLine: updatePickerLine,
+      invalid: lines.some(
+        (line) =>
+          !purchaseOrderLineValue(
+            line.quantityText,
+            line.costText,
+            Math.max(MIN_PURCHASE_ORDER_QUANTITY, line.received),
+          ),
+      ),
+    },
     title: 'Товары в заказ',
     totalLabel: 'В заказе',
     warrantyNames: new Set<string>(),
@@ -200,74 +258,116 @@ export default function PurchaseOrderCreateScreen() {
     navigation.navigate('ProductPicker', {});
   };
 
-  const changeQty = useCallback((productId: string, delta: number) => {
-    haptic('tap');
-    setLines((prev) =>
-      prev.map((l) =>
-        // Степпер ±1 держит целочисленный «пол» 1 (или уже принятое кол-во —
-        // backend запретит опустить ниже приёмки). roundQty гасит float-грязь,
-        // если до этого набрали дробь вручную (0.5 + 1).
-        l.productId === productId
-          ? { ...l, quantity: Math.max(Math.max(1, l.received), roundQty(l.quantity + delta)) }
-          : l,
-      ),
-    );
-  }, []);
-
-  // Ручной ввод количества (QtyInput уже округляет и клампит к min = принятому);
-  // здесь просто фиксируем валидное значение строки.
-  const setLineQty = useCallback((productId: string, qty: number) => {
-    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, quantity: qty } : l)));
-  }, []);
-
-  const changeCost = useCallback((productId: string, costText: string) => {
-    // Разрешаем только цифры, точку и запятую.
-    const cleaned = costText.replace(/[^0-9.,]/g, '');
-    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, costText: cleaned } : l)));
-  }, []);
-
-  const removeLine = useCallback((productId: string) => {
-    setLines((prev) => {
-      const line = prev.find((l) => l.productId === productId);
-      if (line && line.received > 0) {
-        // Защищённая позиция (уже принята) — сервер всё равно откажет, гасим здесь.
-        haptic('warning');
-        Alert.alert(
-          'Нельзя удалить позицию',
-          `По «${line.name}» уже принято ${line.received} шт — её нельзя убрать из заказа.`,
-        );
-        return prev;
-      }
+  const changeQty = useCallback(
+    (productId: string, delta: number) => {
       haptic('tap');
-      return prev.filter((l) => l.productId !== productId);
-    });
-  }, []);
+      writeLines((prev) =>
+        prev.map((l) =>
+          l.productId === productId
+            ? {
+                ...l,
+                quantity: Math.max(Math.max(MIN_PURCHASE_ORDER_QUANTITY, l.received), roundQty(l.quantity + delta)),
+                quantityText: String(
+                  Math.max(Math.max(MIN_PURCHASE_ORDER_QUANTITY, l.received), roundQty(l.quantity + delta)),
+                ),
+              }
+            : l,
+        ),
+      );
+    },
+    [writeLines],
+  );
 
-  const total = useMemo(() => lines.reduce((s, l) => s + l.quantity * parseCost(l.costText), 0), [lines]);
+  const setLineQuantityText = useCallback(
+    (productId: string, quantityText: string) => {
+      const quantity = parsePurchaseOrderQuantity(quantityText);
+      writeLines((previous) =>
+        previous.map((line) =>
+          line.productId === productId
+            ? {
+                ...line,
+                quantityText,
+                quantity: quantity !== null && quantity >= line.received ? quantity : line.quantity,
+              }
+            : line,
+        ),
+      );
+    },
+    [writeLines],
+  );
 
-  const applySuggestionGroup = useCallback((group: PurchaseOrderSuggestionGroup) => {
-    haptic('select');
-    if (group.supplierId) setSupplierId(group.supplierId);
-    setLines(
-      group.items.map((it) => ({
-        productId: it.productId,
-        name: it.name,
-        quantity: Math.max(1, it.suggestedQuantity),
-        costText: it.costPrice ? String(it.costPrice) : '',
-        received: 0,
-      })),
-    );
-    setShowSuggestions(false);
-  }, []);
+  const changeCost = useCallback(
+    (productId: string, costText: string) => {
+      writeLines((previous) => previous.map((line) => (line.productId === productId ? { ...line, costText } : line)));
+    },
+    [writeLines],
+  );
+
+  const removeLine = useCallback(
+    (productId: string) => {
+      writeLines((prev) => {
+        const line = prev.find((l) => l.productId === productId);
+        if (line && line.received > 0) {
+          // Защищённая позиция (уже принята) — сервер всё равно откажет, гасим здесь.
+          haptic('warning');
+          Alert.alert(
+            'Нельзя удалить позицию',
+            `По «${line.name}» уже принято ${line.received} шт — её нельзя убрать из заказа.`,
+          );
+          return prev;
+        }
+        haptic('tap');
+        return prev.filter((l) => l.productId !== productId);
+      });
+    },
+    [writeLines],
+  );
+
+  const total = useMemo(() => {
+    let sum = 0;
+    for (const line of lines) {
+      const value = purchaseOrderLineValue(
+        line.quantityText,
+        line.costText,
+        Math.max(MIN_PURCHASE_ORDER_QUANTITY, line.received),
+      );
+      if (!value) return null;
+      sum += value.quantity * value.costPrice;
+    }
+    return sum;
+  }, [lines]);
+
+  const applySuggestionGroup = useCallback(
+    (group: PurchaseOrderSuggestionGroup) => {
+      haptic('select');
+      if (group.supplierId) setSupplierId(group.supplierId);
+      writeLines(
+        group.items.map((it) => ({
+          productId: it.productId,
+          name: it.name,
+          quantity: Math.max(1, it.suggestedQuantity),
+          quantityText: String(Math.max(1, it.suggestedQuantity)),
+          costText: String(it.costPrice),
+          received: 0,
+        })),
+      );
+      setShowSuggestions(false);
+    },
+    [writeLines],
+  );
 
   // ── Save (create / update) ───────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: () => {
-      const items = lines.map((l) => ({
-        productId: l.productId,
-        quantity: l.quantity,
-        costPrice: parseCost(l.costText),
-      }));
+      const items = linesRef.current.map((line) => {
+        const value = purchaseOrderLineValue(
+          line.quantityText,
+          line.costText,
+          Math.max(MIN_PURCHASE_ORDER_QUANTITY, line.received),
+        );
+        if (!value) throw new Error('Проверьте количество и закупочную цену.');
+        return { productId: line.productId, ...value };
+      });
       const payload = { supplierId, note: note.trim() || undefined, items };
       return isEdit ? purchaseOrdersApi.update(editId as string, payload) : purchaseOrdersApi.create(payload);
     },
@@ -299,7 +399,7 @@ export default function PurchaseOrderCreateScreen() {
     },
   });
 
-  const canSave = !!supplierId && lines.length > 0 && !saveMutation.isPending;
+  const canSave = !!supplierId && lines.length > 0 && total !== null && !saveMutation.isPending;
 
   const handleSave = () => {
     if (!supplierId) {
@@ -310,6 +410,22 @@ export default function PurchaseOrderCreateScreen() {
     if (lines.length === 0) {
       haptic('warning');
       Alert.alert('Добавьте позиции', 'Добавьте хотя бы один товар в заказ.');
+      return;
+    }
+    if (
+      linesRef.current.some(
+        (line) =>
+          !purchaseOrderLineValue(
+            line.quantityText,
+            line.costText,
+            Math.max(MIN_PURCHASE_ORDER_QUANTITY, line.received),
+          ),
+      )
+    ) {
+      Alert.alert(
+        'Проверьте позиции',
+        'Количество должно быть больше нуля, закупочная цена — от 0. Уже принятые позиции нельзя уменьшить.',
+      );
       return;
     }
     haptic('tap');
@@ -484,7 +600,11 @@ export default function PurchaseOrderCreateScreen() {
           ) : (
             <View style={[styles.linesCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
               {lines.map((l, idx) => {
-                const lineTotal = l.quantity * parseCost(l.costText);
+                const value = purchaseOrderLineValue(
+                  l.quantityText,
+                  l.costText,
+                  Math.max(MIN_PURCHASE_ORDER_QUANTITY, l.received),
+                );
                 const locked = l.received > 0;
                 return (
                   <View
@@ -530,37 +650,55 @@ export default function PurchaseOrderCreateScreen() {
                       )}
                     </View>
                     <View style={styles.lineControls}>
-                      {/* Qty stepper — ± кнопки + ручной ввод (в т.ч. дробный). */}
-                      <View style={[styles.stepper, { borderColor: palette.border.subtle }]}>
-                        <TouchableOpacity onPress={() => changeQty(l.productId, -1)} style={styles.stepBtn} hitSlop={6}>
-                          <Ionicons name="remove" size={18} color={palette.text.secondary} />
-                        </TouchableOpacity>
-                        <QtyInput
-                          value={l.quantity}
-                          min={l.received > 0 ? l.received : MIN_QTY}
-                          onCommit={(n) => setLineQty(l.productId, n)}
-                          style={[styles.stepInput, { color: palette.text.primary }]}
-                          placeholderTextColor={palette.text.tertiary}
-                        />
-                        <TouchableOpacity onPress={() => changeQty(l.productId, 1)} style={styles.stepBtn} hitSlop={6}>
-                          <Ionicons name="add" size={18} color={palette.text.secondary} />
-                        </TouchableOpacity>
+                      <View style={{ gap: spacing[1] }}>
+                        <Text style={{ color: palette.text.secondary, fontSize: 12 }}>Количество</Text>
+                        <View style={[styles.stepper, { borderColor: palette.border.subtle }]}>
+                          <TouchableOpacity
+                            accessibilityLabel={`Уменьшить количество ${l.name}`}
+                            onPress={() => changeQty(l.productId, -1)}
+                            style={styles.stepBtn}
+                            hitSlop={6}
+                          >
+                            <Ionicons name="remove" size={18} color={palette.text.secondary} />
+                          </TouchableOpacity>
+                          <TextInput
+                            accessibilityLabel={`Количество — ${l.name}`}
+                            value={l.quantityText}
+                            onChangeText={(text) => setLineQuantityText(l.productId, text)}
+                            style={[styles.stepInput, { color: palette.text.primary }]}
+                            keyboardType="decimal-pad"
+                            selectTextOnFocus
+                          />
+                          <TouchableOpacity
+                            accessibilityLabel={`Увеличить количество ${l.name}`}
+                            onPress={() => changeQty(l.productId, 1)}
+                            style={styles.stepBtn}
+                            hitSlop={6}
+                          >
+                            <Ionicons name="add" size={18} color={palette.text.secondary} />
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                      {/* Cost input */}
-                      <View style={[styles.costWrap, { borderColor: palette.border.subtle }]}>
-                        <TextInput
-                          value={l.costText}
-                          onChangeText={(t) => changeCost(l.productId, t)}
-                          style={[styles.costInput, { color: palette.text.primary }]}
-                          placeholder="Цена"
-                          placeholderTextColor={palette.text.tertiary}
-                          keyboardType="decimal-pad"
-                        />
-                        <Text style={[styles.costCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                      <View style={{ flex: 1, gap: spacing[1] }}>
+                        <Text style={{ color: palette.text.secondary, fontSize: 12 }}>Закупочная цена / ед.</Text>
+                        <View style={[styles.costWrap, { borderColor: palette.border.subtle }]}>
+                          <TextInput
+                            accessibilityLabel={`Закупочная цена за единицу — ${l.name}`}
+                            value={l.costText}
+                            onChangeText={(text) => changeCost(l.productId, text)}
+                            style={[styles.costInput, { color: palette.text.primary }]}
+                            placeholder="0,00"
+                            placeholderTextColor={palette.text.tertiary}
+                            keyboardType="decimal-pad"
+                          />
+                          <Text style={[styles.costCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                        </View>
                       </View>
                     </View>
-                    <Text style={[styles.lineTotal, { color: palette.text.secondary }]}>
-                      {l.quantity} × {formatMoney(parseCost(l.costText))} = {formatMoney(lineTotal)}
+                    <Text style={[styles.lineTotal, { color: value ? palette.text.secondary : colors.red[600] }]}>
+                      {value
+                        ? `${value.quantity} × ${formatMoney(value.costPrice)} = ${formatMoney(value.quantity * value.costPrice)}`
+                        : 'Проверьте количество и закупочную цену'}
                     </Text>
                   </View>
                 );
@@ -572,6 +710,7 @@ export default function PurchaseOrderCreateScreen() {
               (без цен) для отправки в WhatsApp / копирования. */}
           {lines.length > 0 ? (
             <TouchableOpacity
+              disabled={total === null}
               style={[styles.requestBtn, { borderColor: palette.border.strong, backgroundColor: palette.bg.card }]}
               onPress={() => {
                 haptic('tap');
@@ -608,7 +747,9 @@ export default function PurchaseOrderCreateScreen() {
         >
           <View style={styles.totalRow}>
             <Text style={[styles.totalLabel, { color: palette.text.tertiary }]}>Итого</Text>
-            <Text style={[styles.totalValue, { color: palette.text.primary }]}>{formatMoney(total)}</Text>
+            <Text style={[styles.totalValue, { color: palette.text.primary }]}>
+              {total === null ? '—' : formatMoney(total)}
+            </Text>
           </View>
           <TouchableOpacity
             style={[styles.saveBtn, { backgroundColor: canSave ? colors.primary[600] : palette.bg.muted }]}

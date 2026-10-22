@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Package, ShoppingCart, Sparkles, Send } from 'lucide-react';
@@ -18,7 +18,6 @@ import {
   IconButton,
   Input,
   Modal,
-  Money,
   PageHeader,
   QueryState,
   Select,
@@ -29,7 +28,14 @@ import type { DataTableColumn } from '../ui';
 import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
 import type { PurchaseOrder, Product, PurchaseOrderSuggestionGroup, Warehouse } from '../types';
 import { formatQty } from '../utils/units';
-import { parseNumberInput } from '../components/warehouse/format';
+import {
+  MIN_PURCHASE_ORDER_QUANTITY,
+  parsePurchaseOrderCost,
+  parsePurchaseOrderQuantity,
+  purchaseOrderLineValue,
+  formatPurchaseOrderMoney,
+  type PurchaseOrderLineValue,
+} from '../../../shared/utils/purchaseOrderInput';
 
 /** Строка черновика: количество и цена — строки ввода («12,5» печатается чисто), числа — при отправке. */
 interface LineDraft {
@@ -37,11 +43,19 @@ interface LineDraft {
   name: string;
   quantity: string;
   costPrice: string;
+  received: number;
 }
 
-const lineQty = (l: LineDraft): number => parseNumberInput(l.quantity) ?? 0;
-const linePrice = (l: LineDraft): number => parseNumberInput(l.costPrice) ?? 0;
-const lineTotal = (l: LineDraft): number => lineQty(l) * linePrice(l);
+const lineQty = (line: LineDraft): number | null => parsePurchaseOrderQuantity(line.quantity);
+const linePrice = (line: LineDraft): number | null => parsePurchaseOrderCost(line.costPrice);
+const lineTotal = (line: LineDraft): number | null => {
+  const value = purchaseOrderLineValue(
+    line.quantity,
+    line.costPrice,
+    Math.max(MIN_PURCHASE_ORDER_QUANTITY, line.received),
+  );
+  return value ? value.quantity * value.costPrice : null;
+};
 
 export default function PurchaseOrderEditPage() {
   const navigate = useNavigate();
@@ -53,6 +67,12 @@ export default function PurchaseOrderEditPage() {
   const [supplierId, setSupplierId] = useState('');
   const [note, setNote] = useState('');
   const [items, setItems] = useState<LineDraft[]>([]);
+  const itemsRef = useRef(items);
+  const writeItems = useCallback((change: LineDraft[] | ((previous: LineDraft[]) => LineDraft[])) => {
+    const next = typeof change === 'function' ? change(itemsRef.current) : change;
+    itemsRef.current = next;
+    setItems(next);
+  }, []);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerWarehouseId, setPickerWarehouseId] = useState('');
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -130,45 +150,76 @@ export default function PurchaseOrderEditPage() {
     }
     setSupplierId(existing.supplierId);
     setNote(existing.note || '');
-    setItems(
+    writeItems(
       (existing.items || []).map((it) => ({
         productId: it.productId,
         name: it.name,
         quantity: String(it.quantity),
         costPrice: String(it.costPrice),
+        received: it.receivedQuantity ?? 0,
       })),
     );
     setHydrated(true);
-  }, [isEdit, hydrated, existing, navigate]);
+  }, [isEdit, hydrated, existing, navigate, writeItems]);
 
-  const total = useMemo(() => items.reduce((sum, it) => sum + lineTotal(it), 0), [items]);
+  const total = useMemo(() => {
+    let sum = 0;
+    for (const item of items) {
+      const amount = lineTotal(item);
+      if (amount === null) return null;
+      sum += amount;
+    }
+    return sum;
+  }, [items]);
 
   const updateLine = (idx: number, patch: Partial<LineDraft>) => {
-    setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+    writeItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   };
 
   const removeLine = (idx: number) => {
-    setItems((prev) => prev.filter((_, i) => i !== idx));
+    if ((itemsRef.current[idx]?.received ?? 0) > 0) {
+      toast.error('Уже принятую позицию нельзя удалить');
+      return;
+    }
+    writeItems((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const addProduct = (product: Product) => {
-    setItems((prev) => {
+    writeItems((prev) => {
       if (prev.some((it) => it.productId === product.id)) return prev;
       return [
         ...prev,
-        { productId: product.id, name: product.name, quantity: '1', costPrice: String(product.costPrice) },
+        { productId: product.id, name: product.name, quantity: '1', costPrice: String(product.costPrice), received: 0 },
       ];
+    });
+  };
+
+  const updatePickerLine = (product: Product, value: PurchaseOrderLineValue) => {
+    const received = itemsRef.current.find((line) => line.productId === product.id)?.received ?? 0;
+    if (value.quantity < received) throw new Error(`Уже принято ${received}. Уменьшить количество ниже нельзя.`);
+    writeItems((previous) => {
+      const next: LineDraft = {
+        productId: product.id,
+        name: product.name,
+        quantity: String(value.quantity),
+        costPrice: String(value.costPrice),
+        received,
+      };
+      return previous.some((line) => line.productId === product.id)
+        ? previous.map((line) => (line.productId === product.id ? next : line))
+        : [...previous, next];
     });
   };
 
   const applySuggestion = (group: PurchaseOrderSuggestionGroup) => {
     if (group.supplierId) setSupplierId(group.supplierId);
-    setItems(
+    writeItems(
       group.items.map((it) => ({
         productId: it.productId,
         name: it.name,
         quantity: String(it.suggestedQuantity > 0 ? it.suggestedQuantity : 1),
         costPrice: String(it.costPrice),
+        received: 0,
       })),
     );
     setSuggestOpen(false);
@@ -184,8 +235,14 @@ export default function PurchaseOrderEditPage() {
       toast.error('Добавьте хотя бы один товар');
       return false;
     }
-    if (items.some((it) => !(lineQty(it) > 0))) {
-      toast.error('Количество должно быть больше нуля');
+    if (
+      itemsRef.current.some(
+        (it) => !purchaseOrderLineValue(it.quantity, it.costPrice, Math.max(MIN_PURCHASE_ORDER_QUANTITY, it.received)),
+      )
+    ) {
+      toast.error(
+        'Проверьте количество (от 0,001) и закупочную цену (от 0, до 2 знаков). Уже принятое количество нельзя уменьшить.',
+      );
       return false;
     }
     return true;
@@ -194,11 +251,15 @@ export default function PurchaseOrderEditPage() {
   const buildPayload = () => ({
     supplierId,
     note: note.trim() || undefined,
-    items: items.map((it) => ({
-      productId: it.productId,
-      quantity: lineQty(it),
-      costPrice: linePrice(it),
-    })),
+    items: itemsRef.current.map((it) => {
+      const value = purchaseOrderLineValue(
+        it.quantity,
+        it.costPrice,
+        Math.max(MIN_PURCHASE_ORDER_QUANTITY, it.received),
+      );
+      if (!value) throw new Error('Проверьте количество и закупочную цену.');
+      return { productId: it.productId, ...value };
+    }),
   });
 
   // Сохранить черновик (создать или обновить) и вернуть заказ.
@@ -294,7 +355,7 @@ export default function PurchaseOrderEditPage() {
           inputMode="decimal"
           aria-label={`Количество — ${l.name}`}
           value={l.quantity}
-          invalid={!(lineQty(l) > 0)}
+          invalid={lineQty(l) === null || (lineQty(l) ?? 0) < l.received}
           onChange={(e) => updateLine(idx, { quantity: e.target.value })}
           className="text-right tabular-nums"
         />
@@ -312,6 +373,7 @@ export default function PurchaseOrderEditPage() {
           inputMode="decimal"
           aria-label={`Цена закупки — ${l.name}`}
           value={l.costPrice}
+          invalid={linePrice(l) === null}
           onChange={(e) => updateLine(idx, { costPrice: e.target.value })}
           className="text-right tabular-nums"
         />
@@ -323,8 +385,12 @@ export default function PurchaseOrderEditPage() {
       numeric: true,
       hideBelow: 'sm',
       width: 120,
-      render: (l) => <Money value={lineTotal(l)} className="font-medium text-ink" />,
-      footer: () => <Money value={total} />,
+      render: (l) => (
+        <span className="font-medium tabular-nums text-ink">
+          {lineTotal(l) === null ? '—' : formatPurchaseOrderMoney(lineTotal(l) as number)}
+        </span>
+      ),
+      footer: () => <span className="tabular-nums">{total === null ? '—' : formatPurchaseOrderMoney(total)}</span>,
     },
     {
       key: 'remove',
@@ -335,6 +401,7 @@ export default function PurchaseOrderEditPage() {
       render: (l, idx) => (
         <IconButton
           label={`Убрать ${l.name}`}
+          disabled={l.received > 0}
           icon={Trash2}
           size="sm"
           variant="danger"
@@ -352,7 +419,7 @@ export default function PurchaseOrderEditPage() {
         backTo="/purchase-orders"
         subtitle={
           items.length > 0
-            ? `${items.length} поз. на сумму ${formatQty(total)} ₽`
+            ? `${items.length} поз. · ${total === null ? 'проверьте позиции' : formatPurchaseOrderMoney(total)}`
             : 'Черновик: поставщик, позиции, цены закупки'
         }
         actions={
@@ -441,6 +508,15 @@ export default function PurchaseOrderEditPage() {
         onSelectProduct={addProduct}
         closeOnSelect={false}
         priceKind="cost"
+        purchaseOrder={{
+          lines: items.map((line) => ({
+            productId: line.productId,
+            quantityText: line.quantity,
+            costPriceText: line.costPrice,
+            receivedQuantity: line.received,
+          })),
+          onConfirm: updatePickerLine,
+        }}
         isLoading={productsLoading}
         isError={productsError}
         onRetry={() => refetchProducts()}

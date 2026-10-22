@@ -45,6 +45,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import PurchaseOrderLineEditor from '../components/PurchaseOrderLineEditor';
+import { formatPurchaseOrderMoney, parsePurchaseOrderCost } from '../../../shared/utils/purchaseOrderInput';
+import type { ProductPickerBridge } from '../utils/productPickerSession';
 import CachedImage from '../components/CachedImage';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -126,6 +129,9 @@ interface PickerProductRowProps {
   showCostPrice: boolean;
   priceKind: 'sell' | 'cost';
   underWarranty: boolean;
+  procurement?: boolean;
+  costPriceText?: string;
+  receivedQuantity?: number;
   onPress: (product: Product) => void;
   onIncrement: (product: Product) => void;
   onDecrement: (product: Product) => void;
@@ -138,11 +144,15 @@ const PickerProductRow = React.memo(function PickerProductRow({
   showCostPrice,
   priceKind,
   underWarranty,
+  procurement,
+  costPriceText,
+  receivedQuantity = 0,
   onPress,
   onIncrement,
   onDecrement,
   palette,
 }: PickerProductRowProps) {
+  const purchaseCost = costPriceText === undefined ? product.costPrice : parsePurchaseOrderCost(costPriceText);
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
   const photoUrl = getImageUrl((product as { photo?: string }).photo);
   const categoryLeaf = productFolderParts(product.category).pop();
@@ -154,7 +164,9 @@ const PickerProductRow = React.memo(function PickerProductRow({
         { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle },
         pressed && { backgroundColor: palette.bg.muted },
       ]}
-      accessibilityLabel={`Добавить товар: ${product.name}`}
+      accessibilityLabel={
+        procurement ? `Количество и закупочная цена: ${product.name}` : `Добавить товар: ${product.name}`
+      }
     >
       <View style={styles.productRow}>
         {photoUrl ? (
@@ -185,7 +197,11 @@ const PickerProductRow = React.memo(function PickerProductRow({
           ) : null}
           <View style={styles.productPrices}>
             <Text style={[styles.productSellPrice, { color: palette.accent.primaryText }]}>
-              {formatMoney(priceKind === 'cost' ? product.costPrice : product.sellPrice)}
+              {procurement
+                ? purchaseCost === null
+                  ? 'Цена не указана'
+                  : formatPurchaseOrderMoney(purchaseCost)
+                : formatMoney(priceKind === 'cost' ? product.costPrice : product.sellPrice)}
             </Text>
             {showCostPrice && priceKind !== 'cost' ? (
               <Text style={[styles.productCostPrice, { color: palette.text.tertiary }]}>
@@ -213,15 +229,29 @@ const PickerProductRow = React.memo(function PickerProductRow({
             <View style={styles.stepperRow}>
               <TouchableOpacity
                 onPress={() => onDecrement(product)}
+                disabled={receivedQuantity > 0 && cartQty <= receivedQuantity}
+                accessibilityState={{ disabled: receivedQuantity > 0 && cartQty <= receivedQuantity }}
                 style={[styles.stepBtn, { backgroundColor: palette.bg.muted }]}
                 hitSlop={8}
                 accessibilityLabel={`Убрать: ${product.name}`}
               >
                 <Ionicons name="remove" size={18} color={colors.red[500]} />
               </TouchableOpacity>
-              <View style={styles.qtyBadge}>
-                <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
-              </View>
+              {procurement ? (
+                <TouchableOpacity
+                  style={styles.qtyBadge}
+                  onPress={() => onPress(product)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Изменить количество и цену: ${product.name}`}
+                >
+                  <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
+                  <Ionicons name="pencil" size={10} color={colors.primary[600]} />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.qtyBadge}>
+                  <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
+                </View>
+              )}
               <TouchableOpacity
                 onPress={() => onIncrement(product)}
                 style={[styles.stepBtn, { backgroundColor: palette.accent.primarySoft }]}
@@ -303,6 +333,10 @@ export default function ProductPickerScreen() {
 
   const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [editing, setEditing] = useState<{
+    product: Product;
+    updateLine: NonNullable<ProductPickerBridge['purchaseOrder']>['updateLine'];
+  } | null>(null);
   // Round 12 #6в — «пикать подряд»: сканер работает в continuous-режиме,
   // после каждого успешного скана остаётся открытым; пилюля показывает
   // «+1 Название · в чеке N». Счётчик — на сессию сканера (сброс на открытии).
@@ -419,6 +453,11 @@ export default function ProductPickerScreen() {
   const handleRowPress = useCallback((product: Product) => {
     const s = getProductPickerSession();
     if (!s) return;
+    if (s.purchaseOrder) {
+      haptic('tap');
+      setEditing({ product, updateLine: s.purchaseOrder.updateLine });
+      return;
+    }
     const now = Date.now();
     const last = lastTapRef.current.get(product.id) ?? 0;
     if (now - last < ROW_TAP_DEBOUNCE_MS) return; // случайный двойной тап
@@ -476,6 +515,13 @@ export default function ProductPickerScreen() {
       if (match) {
         const s = getProductPickerSession();
         if (s) {
+          if (s.purchaseOrder) {
+            setShowScanner(false);
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            setLocalSearch(needle);
+            setDebouncedSearch(needle);
+            return;
+          }
           haptic('success');
           s.addProduct(match);
           scanAddCountRef.current += 1;
@@ -513,6 +559,7 @@ export default function ProductPickerScreen() {
   const sessionWarrantyNames = session?.warrantyNames;
   const sessionShowCostPrice = !!session?.showCostPrice;
   const priceKind = session?.priceKind ?? 'sell';
+  const procurement = session?.purchaseOrder;
   const renderItem = useCallback(
     ({ item }: { item: PickerListRow }) => {
       if (item.type === 'folder') {
@@ -537,6 +584,9 @@ export default function ProductPickerScreen() {
           showCostPrice={sessionShowCostPrice}
           priceKind={priceKind}
           underWarranty={underWarranty}
+          procurement={!!procurement}
+          costPriceText={procurement?.lines.find((line) => line.productId === item.product.id)?.costPriceText}
+          receivedQuantity={procurement?.lines.find((line) => line.productId === item.product.id)?.receivedQuantity}
           onPress={handleRowPress}
           onIncrement={handleIncrement}
           onDecrement={handleDecrement}
@@ -550,6 +600,7 @@ export default function ProductPickerScreen() {
       sessionWarrantyNames,
       sessionShowCostPrice,
       priceKind,
+      procurement,
       handleRowPress,
       handleIncrement,
       handleDecrement,
@@ -764,7 +815,11 @@ export default function ProductPickerScreen() {
                 {session?.totalLabel ?? 'В чеке'}
               </Text>
               <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
-                {formatMoney(cartTotals.sum)}
+                {procurement
+                  ? procurement.invalid
+                    ? 'Проверьте позиции'
+                    : formatPurchaseOrderMoney(cartTotals.sum)
+                  : formatMoney(cartTotals.sum)}
               </Text>
             </View>
           </View>
@@ -780,6 +835,29 @@ export default function ProductPickerScreen() {
         </TouchableOpacity>
       </View>
 
+      {editing && (
+        <PurchaseOrderLineEditor
+          key={editing.product.id}
+          name={editing.product.name}
+          unit={editing.product.unit}
+          quantityText={procurement?.lines.find((line) => line.productId === editing.product.id)?.quantityText ?? '1'}
+          costPriceText={
+            procurement?.lines.find((line) => line.productId === editing.product.id)?.costPriceText ??
+            String(editing.product.costPrice)
+          }
+          receivedQuantity={
+            procurement?.lines.find((line) => line.productId === editing.product.id)?.receivedQuantity ?? 0
+          }
+          existing={procurement?.lines.some((line) => line.productId === editing.product.id)}
+          onCancel={() => setEditing(null)}
+          onConfirm={(value) => {
+            if (getProductPickerSession()?.purchaseOrder?.updateLine !== editing.updateLine)
+              throw new Error('Заказ был закрыт. Откройте выбор товаров заново.');
+            editing.updateLine(editing.product, value);
+            setEditing(null);
+          }}
+        />
+      )}
       {/* Сканер штрих-кода — общий компонент (Склад/Инвентаризация), здесь в
           continuous-режиме (round 12 #6в): успешный скан добавляет товар в чек
           и оставляет камеру открытой («пикать подряд»), пилюля показывает
@@ -790,7 +868,11 @@ export default function ProductPickerScreen() {
         onScanned={handleScanned}
         continuous
         statusText={scanFeedback}
-        hint="Наведите камеру на штрих-код — товар добавится в чек"
+        hint={
+          procurement
+            ? 'Найдите товар по штрих-коду, затем укажите количество и цену'
+            : 'Наведите камеру на штрих-код — товар добавится в чек'
+        }
       />
     </View>
   );

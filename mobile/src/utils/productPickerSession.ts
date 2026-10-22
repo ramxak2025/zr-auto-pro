@@ -22,12 +22,19 @@
  * закрывает себя.
  */
 import type { Product, Warehouse, CheckProductLine } from '../../../shared/types';
+import type { PurchaseOrderLineValue, PurchaseOrderPickerLine } from '../../../shared/utils/purchaseOrderInput';
 
 export interface ProductPickerBridge {
   /** Текущие строки товаров чека — источник qty-бейджей и нижнего бара. */
   productLines: Pick<CheckProductLine, 'productId' | 'quantity' | 'sellPrice'>[];
   /** Контекст закупки использует тот же пикер с закупочной ценой. */
   priceKind?: 'sell' | 'cost';
+  /** Opt-in supplier-order editing; absent for cash and other picker clients. */
+  purchaseOrder?: {
+    invalid?: boolean;
+    lines: PurchaseOrderPickerLine[];
+    updateLine: (product: Product, value: PurchaseOrderLineValue) => void;
+  };
   title?: string;
   totalLabel?: string;
   /** Добавить товар (комплекты разворачивает сама Касса — addProductLine). */
