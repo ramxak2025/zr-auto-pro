@@ -4,6 +4,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { actorPointId } from '../common/point-scope';
+import { ParseUuidParam } from '../common/parse-uuid.pipe';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
@@ -66,7 +67,7 @@ export class PurchaseOrdersController {
   // ─── Order (draft → ordered) ───────────────────────────────────────────
   @RequirePermission('suppliers_manage')
   @Post(':id/order')
-  order(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  order(@CurrentUser() user: JwtPayload, @Param('id', ParseUuidParam) id: string) {
     return this.purchaseOrders.markOrdered(id, user.tenantID, actorPointId(user));
   }
 

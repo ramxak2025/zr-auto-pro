@@ -30,6 +30,7 @@ import type { PurchaseOrder, PurchaseOrderItem, PurchaseReceiptContext } from '.
 import { formatMoney, formatDateTime, formatDateShort, formatDayKey } from '../../../shared/utils/formatters';
 import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { formatQty } from '../utils/units';
+import { PurchaseOrderIdentityError } from '../utils/purchaseOrderIdentity';
 import { parseNumberInput } from '../components/warehouse/format';
 import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
@@ -129,7 +130,8 @@ export default function PurchaseOrderDetailPage() {
       invalidateAfterMutation(res.data);
       toast.success('Заказ оформлен');
     },
-    onError: () => toast.error('Не удалось оформить заказ'),
+    onError: (error) =>
+      toast.error(error instanceof PurchaseOrderIdentityError ? error.message : 'Не удалось оформить заказ'),
   });
 
   const cancelMutation = useMutation({

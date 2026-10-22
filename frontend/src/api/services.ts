@@ -1,5 +1,6 @@
 import { createStarterCatalogsApi } from '../../../shared/api/starterCatalogs';
 import api from './axios';
+import { assertPurchaseOrderId } from '../utils/purchaseOrderIdentity';
 import {
   createAuthApi,
   createVinApi,
@@ -170,7 +171,16 @@ export const cashShiftsApi = createCashShiftsApi(api);
 export const debtsApi = createDebtsApi(api);
 export const installmentsApi = createInstallmentsApi(api);
 export const loyaltyApi = createLoyaltyApi(api);
-export const purchaseOrdersApi = createPurchaseOrdersApi(api);
+const purchaseOrders = createPurchaseOrdersApi(api);
+export const purchaseOrdersApi = {
+  ...purchaseOrders,
+  order: async (id: string) => {
+    assertPurchaseOrderId(id);
+    const res = await purchaseOrders.order(id);
+    assertPurchaseOrderId(res.data?.id);
+    return res;
+  },
+};
 export const adminApi = createAdminApi(api);
 // Self-service registration (migration 123). `registrationApi.submit` is PUBLIC
 // (unauthenticated, from the login screen). The superadmin review methods

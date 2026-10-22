@@ -79,6 +79,7 @@ jobs:
           node --test
           --test-concurrency=1
           test/supplier-receipts-returns.test.cjs
+          test/purchase-order-order.test.cjs
           test/attendance-nfc.test.cjs
           test/public-booking.test.cjs
           test/oct8-ordinary-live.test.cjs

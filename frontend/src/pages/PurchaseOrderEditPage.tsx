@@ -28,6 +28,7 @@ import type { DataTableColumn } from '../ui';
 import ProductPickerDrawer from '../components/checks/ProductPickerDrawer';
 import type { PurchaseOrder, Product, PurchaseOrderSuggestionGroup, Warehouse } from '../types';
 import { formatQty } from '../utils/units';
+import { assertPurchaseOrderId, PurchaseOrderIdentityError } from '../utils/purchaseOrderIdentity';
 import {
   MIN_PURCHASE_ORDER_QUANTITY,
   parsePurchaseOrderCost,
@@ -265,11 +266,12 @@ export default function PurchaseOrderEditPage() {
   // Сохранить черновик (создать или обновить) и вернуть заказ.
   const persist = async (): Promise<PurchaseOrder> => {
     const payload = buildPayload();
-    if (isEdit) {
-      const res = await purchaseOrdersApi.update(id as string, payload);
-      return res.data;
-    }
-    const res = await purchaseOrdersApi.create(payload);
+    if (isEdit) assertPurchaseOrderId(id);
+    const res = isEdit
+      ? await purchaseOrdersApi.update(id as string, payload)
+      : await purchaseOrdersApi.create(payload);
+    // A successful HTTP response alone does not prove that it contains an order.
+    assertPurchaseOrderId(res.data?.id);
     return res.data;
   };
 
@@ -281,7 +283,8 @@ export default function PurchaseOrderEditPage() {
       toast.success('Черновик сохранён');
       navigate(`/purchase-orders/${po.id}`);
     },
-    onError: () => toast.error('Не удалось сохранить заказ'),
+    onError: (error) =>
+      toast.error(error instanceof PurchaseOrderIdentityError ? error.message : 'Не удалось сохранить заказ'),
   });
 
   const orderMutation = useMutation({
@@ -296,7 +299,8 @@ export default function PurchaseOrderEditPage() {
       toast.success('Заказ оформлен');
       navigate(`/purchase-orders/${po.id}`);
     },
-    onError: () => toast.error('Не удалось оформить заказ'),
+    onError: (error) =>
+      toast.error(error instanceof PurchaseOrderIdentityError ? error.message : 'Не удалось оформить заказ'),
   });
 
   const isBusy = saveDraftMutation.isPending || orderMutation.isPending;
