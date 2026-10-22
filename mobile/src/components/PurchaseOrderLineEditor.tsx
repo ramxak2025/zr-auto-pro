@@ -1,5 +1,14 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Keyboard } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Keyboard,
+  InputAccessoryView,
+  Platform,
+} from 'react-native';
 import { BottomSheet } from './BottomSheet';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
@@ -44,6 +53,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
             ? `Уже принято ${minimum}. Уменьшить количество ниже нельзя.`
             : 'Укажите закупочную цену от 0, до 2 знаков после запятой.',
       );
+      Keyboard.dismiss();
       return;
     }
     saving.current = true;
@@ -53,6 +63,7 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
     } catch (cause) {
       saving.current = false;
       setError(cause instanceof Error ? cause.message : 'Не удалось изменить позицию. Повторите.');
+      Keyboard.dismiss();
     }
   };
   return (
@@ -78,6 +89,9 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
               setError('');
             }}
             keyboardType="decimal-pad"
+            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-line-confirm' : undefined}
+            returnKeyType="done"
+            onSubmitEditing={confirm}
             selectTextOnFocus
             style={[
               styles.input,
@@ -98,6 +112,9 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
               setError('');
             }}
             keyboardType="decimal-pad"
+            inputAccessoryViewID={Platform.OS === 'ios' ? 'purchase-order-line-confirm' : undefined}
+            returnKeyType="done"
+            onSubmitEditing={confirm}
             selectTextOnFocus
             style={[
               styles.input,
@@ -136,10 +153,42 @@ export default function PurchaseOrderLineEditor(props: PurchaseOrderLineEditorPr
           </Text>
         </TouchableOpacity>
       </View>
+      {Platform.OS === 'ios' ? (
+        <InputAccessoryView nativeID="purchase-order-line-confirm" backgroundColor={palette.bg.card}>
+          <View style={styles.keyboardAccessory}>
+            <TouchableOpacity
+              onPress={props.onCancel}
+              style={styles.keyboardAction}
+              accessibilityRole="button"
+              accessibilityLabel="Отменить изменение позиции"
+            >
+              <Text style={[styles.buttonText, { color: palette.text.secondary }]}>Отмена</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={confirm}
+              style={styles.keyboardAction}
+              accessibilityRole="button"
+              accessibilityLabel={props.existing ? 'Сохранить позицию в заказе' : 'Добавить позицию в заказ'}
+            >
+              <Text style={[styles.buttonText, { color: colors.primary[600] }]}>
+                {props.existing ? 'Сохранить' : 'Добавить'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      ) : null}
     </BottomSheet>
   );
 }
 const styles = StyleSheet.create({
+  keyboardAccessory: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: spacing[3] },
+  keyboardAction: {
+    minHeight: 44,
+    minWidth: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing[2],
+  },
   name: { fontSize: 17, fontWeight: '600', marginBottom: spacing[2] },
   hint: { fontSize: 13, lineHeight: 19, marginBottom: spacing[3] },
   fields: { gap: spacing[4] },

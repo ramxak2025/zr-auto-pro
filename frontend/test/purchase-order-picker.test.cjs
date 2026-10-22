@@ -311,3 +311,27 @@ test('cash/default drawer retains immediate add+close and selected-item disablin
   assert.equal(tree.root.findAllByType('button').find((b) => text(b).includes(product.name)).props.disabled, true);
   Renderer.act(() => tree.unmount());
 });
+
+test('procurement totals pre-round backend cents even on an Intl host with bankers rounding', () => {
+  const originalFormat = Intl.NumberFormat;
+  const received = [];
+  Intl.NumberFormat = function () {
+    return {
+      format(value) {
+        received.push(value);
+        const scaled = value * 100;
+        const floor = Math.floor(scaled);
+        const cents = scaled - floor === 0.5 ? floor + (floor % 2) : Math.round(scaled);
+        return (cents / 100).toFixed(2);
+      },
+    };
+  };
+  try {
+    const { formatPurchaseOrderMoney } = require('../../shared/utils/purchaseOrderInput');
+    const outputs = [formatPurchaseOrderMoney(2.5 * 650.25), formatPurchaseOrderMoney(2.5 * 123.45)];
+    assert.deepEqual(received, [1625.63, 308.63]);
+    assert.deepEqual(outputs, ['1625.63', '308.63']);
+  } finally {
+    Intl.NumberFormat = originalFormat;
+  }
+});

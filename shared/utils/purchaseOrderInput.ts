@@ -42,5 +42,5 @@ export function formatPurchaseOrderMoney(value: number): string {
     currency: 'RUB',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(Math.round(value * 100) / 100);
 }

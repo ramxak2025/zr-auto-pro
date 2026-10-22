@@ -1,5 +1,6 @@
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, Keyboard } from 'react-native';
+import { formatPurchaseOrderMoney } from '../../../../shared/utils/purchaseOrderInput';
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
 let mockIndex = 0;
@@ -28,12 +29,13 @@ jest.mock('react-native', () => ({
   TouchableOpacity: 'TouchableOpacity',
   Keyboard: { dismiss: jest.fn() },
   Platform: { OS: 'ios' },
+  InputAccessoryView: 'InputAccessoryView',
   StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 },
 }));
 jest.mock('../BottomSheet', () => ({ BottomSheet: 'BottomSheet' }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({
-    bg: { muted: '#eee' },
+    bg: { muted: '#eee', card: '#fff' },
     text: { primary: '#111', secondary: '#555' },
     border: { subtle: '#ccc' },
   }),
@@ -78,6 +80,8 @@ beforeEach(() => {
   mockStates.length = 0;
   mockRefs.length = 0;
   mockIndex = 0;
+  Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+  jest.clearAllMocks();
 });
 for (const platform of ['ios', 'android'])
   test(`${platform} inert native host: confirm reads last focused keyboard values with comma and zero price`, () => {
@@ -144,4 +148,77 @@ test('received minimum and callback failure preserve draft; retry consumes the s
   expect(f.field(tree, 'Количество товара').props.value).toBe('3');
   f.press(tree, 'Сохранить позицию');
   expect(onConfirm).toHaveBeenLastCalledWith({ quantity: 3, costPrice: 2 });
+});
+
+test('iOS both decimal fields share a confirm accessory inside the sheet and save latest active input', () => {
+  const f = fixture();
+  const tree = f.render();
+  const sheet = nodes(tree).find((node) => node.type === 'BottomSheet')!;
+  const accessory = nodes(sheet.props.children).find((node) => node.type === 'InputAccessoryView');
+  expect(accessory).toBeDefined();
+  for (const label of ['Количество товара', 'Закупочная цена за единицу']) {
+    expect(f.field(tree, label).props.inputAccessoryViewID).toBe(accessory!.props.nativeID);
+  }
+  (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('2,5');
+  (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('123,45');
+  const confirm = nodes(accessory!.props.children).find(
+    (node) => node.props.accessibilityLabel === 'Добавить позицию в заказ',
+  )!;
+  (confirm.props.onPress as () => void)();
+  expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 2.5, costPrice: 123.45 });
+});
+
+test('accessory invalid draft remains editable and dismisses keyboard to reveal the error; cancel does not mutate', () => {
+  const f = fixture({ existing: true });
+  let tree = f.render();
+  (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('');
+  const accessory = nodes(tree).find((node) => node.type === 'InputAccessoryView')!;
+  const confirm = nodes(accessory?.props.children).find(
+    (node) => node.props.accessibilityLabel === 'Сохранить позицию в заказе',
+  );
+  expect(confirm).toBeDefined();
+  (confirm!.props.onPress as () => void)();
+  tree = f.render();
+  expect(f.props.onConfirm).not.toHaveBeenCalled();
+  expect(f.field(tree, 'Закупочная цена за единицу').props.value).toBe('');
+  expect(nodes(tree).some((node) => node.props.accessibilityRole === 'alert')).toBe(true);
+  expect(Keyboard.dismiss).toHaveBeenCalled();
+  const cancel = nodes(accessory.props.children).find(
+    (node) => node.props.accessibilityLabel === 'Отменить изменение позиции',
+  )!;
+  (cancel.props.onPress as () => void)();
+  expect(f.props.onCancel).toHaveBeenCalledTimes(1);
+});
+
+test('Android done action confirms the latest draft without an iOS accessory', () => {
+  Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+  const f = fixture();
+  const tree = f.render();
+  expect(nodes(tree).some((node) => node.type === 'InputAccessoryView')).toBe(false);
+  for (const label of ['Количество товара', 'Закупочная цена за единицу']) {
+    expect(f.field(tree, label).props.returnKeyType).toBe('done');
+    expect(f.field(tree, label).props.onSubmitEditing).toEqual(expect.any(Function));
+    expect(f.field(tree, label).props.inputAccessoryViewID).toBeUndefined();
+  }
+  (f.field(tree, 'Количество товара').props.onChangeText as (value: string) => void)('0,001');
+  (f.field(tree, 'Закупочная цена за единицу').props.onChangeText as (value: string) => void)('0');
+  (f.field(tree, 'Закупочная цена за единицу').props.onSubmitEditing as () => void)();
+  expect(f.props.onConfirm).toHaveBeenCalledWith({ quantity: 0.001, costPrice: 0 });
+});
+
+test('half-cent procurement totals are rounded like backend before a bankers-rounding Intl host receives them', () => {
+  const format = jest.fn((value: number) => {
+    const scaled = value * 100;
+    const floor = Math.floor(scaled);
+    const cents = scaled - floor === 0.5 ? floor + (floor % 2) : Math.round(scaled);
+    return (cents / 100).toFixed(2);
+  });
+  const spy = jest.spyOn(Intl, 'NumberFormat').mockImplementation(() => ({ format }) as unknown as Intl.NumberFormat);
+  try {
+    const outputs = [formatPurchaseOrderMoney(2.5 * 650.25), formatPurchaseOrderMoney(2.5 * 123.45)];
+    expect(format.mock.calls.map(([value]) => value)).toEqual([1625.63, 308.63]);
+    expect(outputs).toEqual(['1625.63', '308.63']);
+  } finally {
+    spy.mockRestore();
+  }
 });
