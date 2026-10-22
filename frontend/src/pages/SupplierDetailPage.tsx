@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback, type FormEvent } from 'react';
+import { loadProductCatalog } from '../../../shared/api/productCatalog';
+import {
+  purchaseOrderLineValue,
+  parsePurchaseOrderCost,
+  formatPurchaseOrderMoney,
+  type PurchaseOrderLineValue,
+} from '../../../shared/utils/purchaseOrderInput';
+import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Minus, Truck, CreditCard, Package, User, Trash2, Undo2, Wallet } from 'lucide-react';
@@ -220,7 +227,7 @@ export default function SupplierDetailPage() {
   // opens, eliminating the "sometimes empty" bug when cache was stale.
   const productsQuery = useQuery({
     queryKey: ['products', 'all', 5000],
-    queryFn: async () => asList<Product>((await productsApi.getAll({ limit: 5000 })).data),
+    queryFn: () => loadProductCatalog(productsApi.getAll),
     enabled: isDeliveryModalOpen || showDeliveryPicker,
     refetchOnMount: 'always',
     staleTime: 0,
@@ -323,7 +330,13 @@ export default function SupplierDetailPage() {
     items: [],
     comment: '',
   };
-  const [deliveryForm, setDeliveryForm] = useState<DeliveryFormData>(emptyDeliveryForm);
+  const [deliveryForm, setDeliveryFormState] = useState<DeliveryFormData>(emptyDeliveryForm);
+  const deliveryFormRef = useRef(deliveryForm);
+  const setDeliveryForm = (change: DeliveryFormData | ((previous: DeliveryFormData) => DeliveryFormData)) => {
+    const next = typeof change === 'function' ? change(deliveryFormRef.current) : change;
+    deliveryFormRef.current = next;
+    setDeliveryFormState(next);
+  };
 
   const deliveryProductIdsKey = [...new Set(deliveryForm.items.map((item) => item.productId))].sort().join(',');
   const deliveryPurchaseContext = useQuery<PurchaseReceiptContext[]>({
@@ -348,37 +361,33 @@ export default function SupplierDetailPage() {
     setIsDeliveryModalOpen(true);
   };
 
-  const handleDeliveryProductSelected = (product: Product) => {
+  const handleDeliveryProductSelected = (product: Product, value: PurchaseOrderLineValue) => {
     setDeliveryForm((prev) => {
-      const existing = prev.items.findIndex((i) => i.productId === product.id);
-      if (existing !== -1) {
-        const updated = [...prev.items];
-        updated[existing] = { ...updated[existing], quantity: updated[existing].quantity + 1 };
-        return { ...prev, items: updated };
-      }
+      const existing = prev.items.find((line) => line.productId === product.id);
+      const line = {
+        productId: product.id,
+        quantity: value.quantity,
+        price: String(value.costPrice),
+        sellPrice: existing?.sellPrice ?? '',
+      };
       return {
         ...prev,
-        items: [
-          ...prev.items,
-          {
-            productId: product.id,
-            quantity: 1,
-            price: String(product.costPrice ?? 0),
-            sellPrice: product.sellPrice == null ? '' : String(product.sellPrice),
-          },
-        ],
+        items: existing
+          ? prev.items.map((item) => (item.productId === product.id ? line : item))
+          : [...prev.items, line],
       };
     });
   };
 
   const removeDeliveryItem = (index: number) => {
-    setDeliveryForm({ ...deliveryForm, items: deliveryForm.items.filter((_, i) => i !== index) });
+    setDeliveryForm((previous) => ({ ...previous, items: previous.items.filter((_, i) => i !== index) }));
   };
 
   const updateDeliveryItem = (index: number, patch: Partial<DeliveryItemForm>) => {
-    const updated = [...deliveryForm.items];
-    updated[index] = { ...updated[index], ...patch };
-    setDeliveryForm({ ...deliveryForm, items: updated });
+    setDeliveryForm((previous) => ({
+      ...previous,
+      items: previous.items.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+    }));
   };
 
   const createDeliveryMutation = useMutation({
@@ -391,6 +400,15 @@ export default function SupplierDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
       queryClient.invalidateQueries({ queryKey: ['supplier', id] });
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      for (const key of [
+        'products',
+        'all-products-check',
+        'stock-movements',
+        'journal-warehouse-docs',
+        'low-stock',
+        'warehouse-analytics',
+      ])
+        void queryClient.invalidateQueries({ queryKey: [key] });
       setIsDeliveryModalOpen(false);
     },
     onError: (err: any) => {
@@ -489,39 +507,51 @@ export default function SupplierDetailPage() {
     deliveryReturnMutation.mutate({ ...payload });
   };
 
-  const deliveryTotal =
-    sumReceiptLineCents(deliveryForm.items.map((item) => ({ quantity: item.quantity, unitPrice: itemPrice(item) }))) /
-    100;
+  const deliveryTotal = deliveryForm.items.some((item) => !purchaseOrderLineValue(String(item.quantity), item.price))
+    ? null
+    : sumReceiptLineCents(deliveryForm.items.map((item) => ({ quantity: item.quantity, unitPrice: itemPrice(item) }))) /
+      100;
 
   const handleDeliverySubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (createDeliveryMutation.isPending) return;
-    const invalidRetail = deliveryForm.items.find((item) => {
+    if (
+      createDeliveryMutation.isPending ||
+      recovery.busy ||
+      recovery.loading ||
+      recovery.error ||
+      recovery.pending.length ||
+      !canManage ||
+      !recovery.isCurrent()
+    )
+      return;
+    const invalidRetail = deliveryFormRef.current.items.find((item) => {
       if (item.sellPrice.trim() === '') return false;
-      const parsed = parseNumberInput(item.sellPrice);
-      return parsed === null || parsed < 0;
+      const parsed = parsePurchaseOrderCost(item.sellPrice);
+      return parsed === null;
     });
     if (invalidRetail) {
       toast.error('Проверьте розничную цену: укажите число или очистите поле, чтобы сохранить текущую цену');
       return;
     }
-    const validItems = deliveryForm.items
-      .map((item) => ({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: itemPrice(item),
-        ...(item.sellPrice.trim() !== '' ? { sellPrice: parseNumberInput(item.sellPrice) as number } : {}),
-      }))
-      .filter((item) => item.productId && item.quantity > 0 && item.price > 0);
-    if (validItems.length === 0) {
-      toast.error('Добавьте хотя бы один товар с ценой');
+    const source = deliveryFormRef.current;
+    if (
+      !source.items.length ||
+      source.items.some((item) => !purchaseOrderLineValue(String(item.quantity), item.price))
+    ) {
+      toast.error('Проверьте все позиции: количество от 0,001, цена от 0, до двух знаков после запятой');
       return;
     }
+    const validItems = source.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      price: parsePurchaseOrderCost(item.price) as number,
+      ...(item.sellPrice.trim() !== '' ? { sellPrice: parsePurchaseOrderCost(item.sellPrice) as number } : {}),
+    }));
     const payload = {
       supplierId: id as string,
-      date: deliveryForm.date,
+      date: source.date,
       items: validItems,
-      comment: deliveryForm.comment,
+      comment: source.comment,
     };
     createDeliveryMutation.mutate({ ...payload });
   };
@@ -779,6 +809,8 @@ export default function SupplierDetailPage() {
                 'supplier-financial-returns',
                 'products',
                 'stock-movements',
+                'all-products-check',
+                'journal-warehouse-docs',
               ])
                 void queryClient.invalidateQueries({ queryKey: [key] });
               toast.success('Результат операции восстановлен');
@@ -1031,6 +1063,8 @@ export default function SupplierDetailPage() {
               'supplier-financial-returns',
               'products',
               'stock-movements',
+              'all-products-check',
+              'journal-warehouse-docs',
             ])
               void queryClient.invalidateQueries({ queryKey: [key] });
             toast.success('Результат операции восстановлен');
@@ -1401,7 +1435,12 @@ export default function SupplierDetailPage() {
             >
               Отмена
             </Button>
-            <Button type="submit" form="delivery-form" loading={createDeliveryMutation.isPending}>
+            <Button
+              type="submit"
+              form="delivery-form"
+              loading={createDeliveryMutation.isPending}
+              disabled={recovery.busy || recovery.loading || !!recovery.error || recovery.pending.length > 0}
+            >
               Создать поставку
             </Button>
           </>
@@ -1413,7 +1452,7 @@ export default function SupplierDetailPage() {
               id="delivery-date"
               type="date"
               value={deliveryForm.date}
-              onChange={(e) => setDeliveryForm({ ...deliveryForm, date: e.target.value })}
+              onChange={(e) => setDeliveryForm((previous) => ({ ...previous, date: e.target.value }))}
               className="sm:w-48"
             />
           </Field>
@@ -1485,16 +1524,17 @@ export default function SupplierDetailPage() {
                           inputMode="decimal"
                           aria-label={`Цена за единицу — ${name}`}
                           value={item.price}
-                          invalid={!(itemPrice(item) > 0)}
+                          invalid={parsePurchaseOrderCost(item.price) === null}
                           onChange={(e) => updateDeliveryItem(index, { price: e.target.value })}
                           className="w-24 text-right tabular-nums"
                         />
                         <span className="whitespace-nowrap text-xs text-ink-3">₽/{unitLabel(product?.unit)}</span>
                       </div>
-                      <Money
-                        value={item.quantity * itemPrice(item)}
-                        className="w-24 text-right text-sm font-semibold text-ink"
-                      />
+                      <span className="w-24 text-right text-sm font-semibold tabular-nums text-ink">
+                        {parsePurchaseOrderCost(item.price) === null
+                          ? '—'
+                          : formatPurchaseOrderMoney(item.quantity * itemPrice(item))}
+                      </span>
                       <IconButton
                         label={`Убрать ${name}`}
                         icon={Trash2}
@@ -1551,14 +1591,16 @@ export default function SupplierDetailPage() {
               id="delivery-comment"
               rows={2}
               value={deliveryForm.comment}
-              onChange={(e) => setDeliveryForm({ ...deliveryForm, comment: e.target.value })}
+              onChange={(e) => setDeliveryForm((previous) => ({ ...previous, comment: e.target.value }))}
               placeholder="Примечание к поставке…"
             />
           </Field>
 
           <div className="flex items-center justify-between rounded-lg bg-surface-2 px-3 py-2 text-sm">
             <span className="text-ink-3">Итого по поставке</span>
-            <Money value={deliveryTotal} className="font-semibold text-ink" />
+            <span className="font-semibold tabular-nums text-ink">
+              {deliveryTotal === null ? '—' : formatPurchaseOrderMoney(deliveryTotal)}
+            </span>
           </div>
         </form>
       </Modal>
@@ -1567,9 +1609,20 @@ export default function SupplierDetailPage() {
         open={showDeliveryPicker}
         onClose={() => setShowDeliveryPicker(false)}
         title="Товар в поставку"
-        subtitle="Повторный выбор увеличивает количество на 1"
+        subtitle="Количество и закупочная цена прямо в строке товара"
         products={products}
-        onSelect={handleDeliveryProductSelected}
+        onSelect={() => {}}
+        purchaseOrder={{
+          context: 'delivery',
+          lines: deliveryForm.items.map((line) => ({
+            productId: line.productId,
+            quantityText: String(line.quantity),
+            costPriceText: line.price,
+            receivedQuantity: 0,
+          })),
+          onConfirm: handleDeliveryProductSelected,
+        }}
+        closeOnSelect={false}
         priceKind="cost"
         isLoading={productsQuery.isLoading}
         isError={productsQuery.isError}

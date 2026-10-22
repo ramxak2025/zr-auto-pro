@@ -7,7 +7,11 @@ import {
   type ProductPickerBridge,
 } from '../../utils/productPickerSession';
 type Store = { states: unknown[]; refs: { current: unknown }[] };
-const mockStores: Record<string, Store> = { create: { states: [], refs: [] }, picker: { states: [], refs: [] } };
+const mockStores: Record<string, Store> = {
+  create: { states: [], refs: [] },
+  picker: { states: [], refs: [] },
+  direct: { states: [], refs: [] },
+};
 let mockStore = mockStores.create;
 let mockIndex = 0;
 let mockRoute: { params: { supplierId?: string; editId?: string; po?: PurchaseOrder } } = {
@@ -17,6 +21,8 @@ let mockSave: { mutationFn: () => Promise<unknown>; onError: (error: unknown) =>
 const mockCreate = jest.fn(async (payload: unknown) => ({ data: { id: 'saved', payload } }));
 const mockUpdate = jest.fn(async (_id: string, payload: unknown) => ({ data: { id: 'saved', payload } }));
 const mockNavigate = jest.fn();
+const mockBack = jest.fn();
+const mockInvalidate = jest.fn();
 const mockPalette = {
   mode: 'light',
   bg: { canvas: '#fff', card: '#fff', muted: '#eee', elevated: '#fff' },
@@ -35,6 +41,32 @@ const mockProduct = {
   minStock: 0,
   warehouseId: 'main',
 } as Product;
+let mockPickerFocused = true;
+let mockCatalogueAvailable = true;
+let mockOwned = true;
+const mockExecute = jest.fn(async (_target: unknown, _payload?: object) => ({ data: { id: 'saved' } }));
+const mockRecovery = {
+  pending: [] as unknown[],
+  loading: false,
+  error: null as string | null,
+  busy: false,
+  isCurrent: () => mockOwned,
+  owns: () => mockOwned,
+  execute: mockExecute,
+  refresh: jest.fn(),
+  resume: jest.fn(),
+};
+let mockRecoveryFilter: unknown;
+jest.mock('../../hooks/useProcurementRecovery', () => ({
+  useProcurementRecovery: (filter: unknown) => {
+    mockRecoveryFilter = filter;
+    return mockRecovery;
+  },
+}));
+jest.mock('../../contexts/AuthContext', () => ({ useAuth: () => ({ hasPermission: () => true }) }));
+jest.mock('../../contexts/TenantTimezoneContext', () => ({ useTenantTimezone: () => 'Europe/Moscow' }));
+jest.mock('../../components/ProcurementRecoveryPanel', () => ({ ProcurementRecoveryPanel: 'RecoveryPanel' }));
+jest.mock('../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useState: (initial: unknown) => {
@@ -74,11 +106,12 @@ jest.mock('react-native', () => ({
   Dimensions: { get: () => ({ width: 390, height: 844 }) },
 }));
 jest.mock('@react-navigation/native', () => ({
-  useRoute: () => (mockStore === mockStores.create ? mockRoute : { params: {} }),
-  useNavigation: () => ({ navigate: mockNavigate, goBack: jest.fn(), pop: jest.fn(), push: jest.fn() }),
+  useIsFocused: () => mockPickerFocused,
+  useRoute: () => (mockStore !== mockStores.picker ? mockRoute : { params: {} }),
+  useNavigation: () => ({ navigate: mockNavigate, goBack: mockBack, pop: jest.fn(), push: jest.fn() }),
 }));
 jest.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: jest.fn() }),
+  useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
   useMutation: (options: typeof mockSave) => {
     mockSave = options;
     return { isPending: false, mutate: jest.fn() };
@@ -86,7 +119,9 @@ jest.mock('@tanstack/react-query', () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
     data:
       queryKey[0] === 'all-products-check'
-        ? [mockProduct]
+        ? mockCatalogueAvailable
+          ? [mockProduct]
+          : []
         : queryKey[0] === 'suppliers'
           ? [{ id: 'supplier', name: 'Поставщик' }]
           : queryKey[0] === 'warehouses'
@@ -94,6 +129,7 @@ jest.mock('@tanstack/react-query', () => ({
             : [],
   }),
 }));
+jest.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: 'KeyboardAvoidingView' }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 20, bottom: 34 }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../contexts/ThemeContext', () => ({ useColors: () => mockPalette }));
@@ -120,6 +156,7 @@ jest.mock('../../components/QueryErrorState', () => ({ __esModule: true, default
 jest.mock('../../components/TabBarScrollable', () => ({ TabBarFlashList: 'FlashList' }));
 jest.mock('../../components/PurchaseOrderLineEditor', () => ({ __esModule: true, default: 'LineEditor' }));
 jest.mock('../purchaseOrders/SupplierRequestSheet', () => ({ __esModule: true, default: 'RequestSheet' }));
+import Direct from '../DirectSupplyCreateScreen';
 import Create from '../PurchaseOrderCreateScreen';
 import Picker from '../ProductPickerScreen';
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
@@ -137,10 +174,10 @@ const text = (value: React.ReactNode): string =>
       : React.isValidElement(value)
         ? text((value as Element).props.children)
         : '';
-const render = (key: 'create' | 'picker') => {
+const render = (key: 'create' | 'picker' | 'direct') => {
   mockStore = mockStores[key];
   mockIndex = 0;
-  return key === 'create' ? Create() : Picker();
+  return key === 'create' ? Create() : key === 'direct' ? Direct() : Picker();
 };
 function openPicker() {
   const tree = render('create');
@@ -148,19 +185,24 @@ function openPicker() {
   if (!button) throw new Error('add product button missing');
   (button.props.onPress as () => void)();
 }
-function row(tree: React.ReactNode) {
+function catalogueRow(tree: React.ReactNode) {
   const list = nodes(tree).find((node) => node.type === 'FlashList');
   if (!list) throw new Error('catalogue missing');
-  return (
-    list.props.renderItem as (arg: unknown) => React.ReactElement<{
-      onPress: (p: Product) => void;
-      onIncrement: (p: Product) => void;
-      onDecrement: (p: Product) => void;
-    }>
-  )({ item: { type: 'product', key: 'product', product: mockProduct } });
+  return (list.props.renderItem as (arg: unknown) => React.ReactElement)({
+    item: { type: 'product', key: 'product', product: mockProduct },
+  });
+}
+function row(tree: React.ReactNode) {
+  const element = nodes(catalogueRow(tree)).find((node) => node.props.product === mockProduct)!;
+  return element as React.ReactElement<{
+    product: Product;
+    onPress: (p: Product) => void;
+    onIncrement: (p: Product) => void;
+    onDecrement: (p: Product) => void;
+  }>;
 }
 function editor(tree: React.ReactNode) {
-  const found = nodes(tree).find((n) => n.type === 'LineEditor');
+  const found = nodes(catalogueRow(tree)).find((node) => node.type === 'LineEditor');
   if (!found) throw new Error('line editor missing');
   return found;
 }
@@ -171,6 +213,16 @@ beforeEach(() => {
   }
   mockIndex = 0;
   mockRoute = { params: { supplierId: 'supplier' } };
+  mockPickerFocused = true;
+  mockCatalogueAvailable = true;
+  mockOwned = true;
+  mockRecovery.pending = [];
+  mockRecovery.error = null;
+  mockRecovery.busy = false;
+  mockRecovery.loading = false;
+  mockExecute.mockClear();
+  mockBack.mockClear();
+  mockInvalidate.mockClear();
   mockCreate.mockClear();
   mockUpdate.mockClear();
 });
@@ -259,7 +311,9 @@ test('cash opt-out still adds immediately, quick plus/minus remain direct, stale
     } as ProductPickerBridge,
   };
   claimProductPickerSession(cash);
-  const cashRow = row(render('picker'));
+  const cashTree = render('picker');
+  expect((cashTree as Element).type).toBe('View');
+  const cashRow = row(cashTree);
   cashRow.props.onPress(mockProduct);
   cashRow.props.onIncrement(mockProduct);
   cashRow.props.onDecrement(mockProduct);
@@ -274,8 +328,160 @@ test('cash opt-out still adds immediately, quick plus/minus remain direct, stale
   const edit = editor(render('picker'));
   claimProductPickerSession(cash);
   expect(() => (edit.props.onConfirm as (v: unknown) => void)({ quantity: 2, costPrice: 10 })).toThrow(
-    'Заказ был закрыт',
+    'Документ был закрыт',
   );
   expect(mockCreate).not.toHaveBeenCalled();
   releaseProductPickerSession(cash);
+});
+
+test('direct receipt uses durable supplier target, exact latest fields/zero/retail omission and per-line cents', async () => {
+  let tree = render('direct');
+  expect(mockRecoveryFilter).toEqual({ operation: 'delivery-create', sourceId: 'supplier', contextId: 'supplier' });
+  (nodes(tree).find((node) => node.props.accessibilityLabel === 'Добавить товар')!.props.onPress as () => void)();
+  const procurement = getProductPickerSession()!.purchaseOrder!;
+  procurement.updateLine(mockProduct, { quantity: 2.5, costPrice: 123.45 });
+  procurement.updateLine({ ...mockProduct, id: 'product2', name: 'Масло' }, { quantity: 2.5, costPrice: 123.45 });
+  tree = render('direct');
+  expect(text(tree)).toContain('617,26');
+  const submit = nodes(tree).find((node) => node.props.accessibilityLabel === 'Принять поставку без оплаты')!;
+  const price = nodes(tree).find((node) => node.props.accessibilityLabel === 'Цена закупки — Шланг')!;
+  (price.props.onChangeText as (text: string) => void)('0');
+  await (submit.props.onPress as () => Promise<void>)();
+  expect(mockExecute).toHaveBeenCalledWith(
+    { operation: 'delivery-create', sourceId: 'supplier', contextId: 'supplier' },
+    expect.objectContaining({
+      supplierId: 'supplier',
+      items: [
+        { productId: 'product', quantity: 2.5, price: 0 },
+        { productId: 'product2', quantity: 2.5, price: 123.45 },
+      ],
+    }),
+  );
+  expect(mockCreate).not.toHaveBeenCalled();
+});
+
+test('direct receipt rejects entire invalid form; pending/storage/owner prevent a new write and retain draft', async () => {
+  let tree = render('direct');
+  (nodes(tree).find((node) => node.props.accessibilityLabel === 'Добавить товар')!.props.onPress as () => void)();
+  getProductPickerSession()!.purchaseOrder!.updateLine(mockProduct, { quantity: 1, costPrice: 0 });
+  tree = render('direct');
+  (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Цена закупки — Шланг')!.props.onChangeText as (
+      text: string,
+    ) => void
+  )('12abc');
+  await (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Принять поставку без оплаты')!.props
+      .onPress as () => Promise<void>
+  )();
+  expect(mockExecute).not.toHaveBeenCalled();
+  tree = render('direct');
+  expect(nodes(tree).some((node) => node.props.value === '12abc')).toBe(true);
+  for (const gate of ['pending', 'storage', 'owner']) {
+    mockRecovery.pending = gate === 'pending' ? [{}] : [];
+    mockRecovery.error = gate === 'storage' ? 'storage failure' : null;
+    mockOwned = gate !== 'owner';
+    tree = render('direct');
+    await (
+      nodes(tree).find((node) => node.props.accessibilityLabel === 'Принять поставку без оплаты')!.props
+        .onPress as () => Promise<void>
+    )();
+    expect(mockExecute).not.toHaveBeenCalled();
+  }
+});
+
+test('inline native pending draft survives folder route and query absence; explicit hint cancel releases close', () => {
+  openPicker();
+  row(render('picker')).props.onPress(mockProduct);
+  const edit = editor(render('picker'));
+  (edit.props.onDraftChange as (value: unknown) => void)({ quantityText: '12,5', costPriceText: '0' });
+  const store = getProductPickerSession()!.purchaseOrder!.drafts;
+  mockStores.picker.states.length = 0;
+  mockStores.picker.refs.length = 0;
+  const tree = render('picker');
+  expect(editor(tree).props.quantityText).toBe('12,5');
+  mockCatalogueAvailable = false;
+  const missing = render('picker');
+  (nodes(missing).find((node) => node.props.accessibilityLabel === 'Готово')!.props.onPress as () => void)();
+  const guarded = render('picker');
+  const cancel = nodes(guarded).find((node) => node.props.accessibilityLabel === 'Отменить изменения позиции')!;
+  expect(cancel).toBeDefined();
+  (cancel.props.onPress as () => void)();
+  expect(Object.keys(store.entries)).toHaveLength(0);
+  expect(getProductPickerSession()!.productLines).toHaveLength(0);
+});
+
+test('old native inline toolbar cannot confirm or cancel another active row', () => {
+  openPicker();
+  const pickerRow = row(render('picker'));
+  pickerRow.props.onPress(mockProduct);
+  const oldEditor = editor(render('picker'));
+  pickerRow.props.onPress({ ...mockProduct, id: 'other' });
+  expect(() => (oldEditor.props.onConfirm as (value: unknown) => void)({ quantity: 9, costPrice: 2 })).toThrow();
+  (oldEditor.props.onCancel as () => void)();
+  expect(getProductPickerSession()!.purchaseOrder!.drafts.active).toBe('other');
+  expect(getProductPickerSession()!.productLines).toHaveLength(0);
+});
+
+test('direct recovery and fresh success invalidate the same receipt keys; stale owner produces no side effects', async () => {
+  let tree = render('direct');
+  const recovered = nodes(tree).find((node) => node.type === 'RecoveryPanel')!.props.onRecovered as () => void;
+  mockOwned = false;
+  recovered();
+  expect(mockInvalidate).not.toHaveBeenCalled();
+  expect(mockBack).not.toHaveBeenCalled();
+  mockOwned = true;
+  recovered();
+  const recoveredKeys = mockInvalidate.mock.calls.map(([options]) => options.queryKey);
+  expect(recoveredKeys).toEqual([
+    ['supplier', 'supplier'],
+    ['supplier-deliveries', 'supplier'],
+    ['supplier-payments', 'supplier'],
+    ['suppliers'],
+    ['products'],
+    ['all-products-check'],
+    ['stock-movements'],
+    ['journal-warehouse-docs'],
+    ['low-stock'],
+    ['warehouse-analytics'],
+  ]);
+  expect(mockBack).toHaveBeenCalledTimes(1);
+  mockInvalidate.mockClear();
+  mockBack.mockClear();
+  (nodes(tree).find((node) => node.props.accessibilityLabel === 'Добавить товар')!.props.onPress as () => void)();
+  getProductPickerSession()!.purchaseOrder!.updateLine(mockProduct, { quantity: 1, costPrice: 0 });
+  tree = render('direct');
+  await (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Принять поставку без оплаты')!.props
+      .onPress as () => Promise<void>
+  )();
+  expect(mockInvalidate.mock.calls.map(([options]) => options.queryKey)).toEqual(recoveredKeys);
+  expect(mockBack).toHaveBeenCalledTimes(1);
+  mockInvalidate.mockClear();
+  mockBack.mockClear();
+  mockExecute.mockImplementationOnce(async () => {
+    mockOwned = false;
+    throw new Error('fixture stale failure');
+  });
+  await (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Принять поставку без оплаты')!.props
+      .onPress as () => Promise<void>
+  )();
+  expect(mockInvalidate).not.toHaveBeenCalled();
+  expect(mockBack).not.toHaveBeenCalled();
+});
+
+test('background folder route unmounts same-product editor and cannot dispatch its captured keyboard action', () => {
+  openPicker();
+  row(render('picker')).props.onPress(mockProduct);
+  const old = editor(render('picker'));
+  mockPickerFocused = false;
+  const background = render('picker');
+  expect(nodes(catalogueRow(background)).some((node) => node.type === 'LineEditor')).toBe(false);
+  (old.props.onDraftChange as (value: unknown) => void)({ quantityText: '99', costPriceText: '1' });
+  expect(getProductPickerSession()!.purchaseOrder!.drafts.entries[mockProduct.id].quantityText).toBe('1');
+  expect(() => (old.props.onConfirm as (value: unknown) => void)({ quantity: 99, costPrice: 1 })).toThrow();
+  (old.props.onCancel as () => void)();
+  expect(getProductPickerSession()!.purchaseOrder!.drafts.active).toBe(mockProduct.id);
+  expect(getProductPickerSession()!.productLines).toHaveLength(0);
 });

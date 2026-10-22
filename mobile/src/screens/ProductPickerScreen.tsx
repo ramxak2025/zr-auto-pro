@@ -42,12 +42,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, RefreshControl } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import PurchaseOrderLineEditor from '../components/PurchaseOrderLineEditor';
 import { formatPurchaseOrderMoney, parsePurchaseOrderCost } from '../../../shared/utils/purchaseOrderInput';
-import type { ProductPickerBridge } from '../utils/productPickerSession';
 import CachedImage from '../components/CachedImage';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -61,6 +61,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import {
+  notifyProcurementDrafts,
   getProductPickerSession,
   getProductPickerSessionVersion,
   subscribeProductPickerSession,
@@ -287,6 +288,9 @@ type PickerListRow =
 export default function ProductPickerScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const isFocused = useIsFocused();
+  const focusedRef = useRef(isFocused);
+  focusedRef.current = isFocused;
   const palette = useColors();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
@@ -296,7 +300,7 @@ export default function ProductPickerScreen() {
   const isRoot = depth === 0;
 
   // ── Сессия Кассы (см. utils/productPickerSession.ts) ─────────────────────
-  useSyncExternalStore(subscribeProductPickerSession, getProductPickerSessionVersion);
+  const sessionVersion = useSyncExternalStore(subscribeProductPickerSession, getProductPickerSessionVersion);
   const session = getProductPickerSession();
   const title = isRoot ? (session?.title ?? 'Товары') : folderPath[folderPath.length - 1];
 
@@ -333,10 +337,7 @@ export default function ProductPickerScreen() {
 
   const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
-  const [editing, setEditing] = useState<{
-    product: Product;
-    updateLine: NonNullable<ProductPickerBridge['purchaseOrder']>['updateLine'];
-  } | null>(null);
+  const [closeNotice, setCloseNotice] = useState('');
   // Round 12 #6в — «пикать подряд»: сканер работает в continuous-режиме,
   // после каждого успешного скана остаётся открытым; пилюля показывает
   // «+1 Название · в чеке N». Счётчик — на сессию сканера (сброс на открытии).
@@ -455,7 +456,16 @@ export default function ProductPickerScreen() {
     if (!s) return;
     if (s.purchaseOrder) {
       haptic('tap');
-      setEditing({ product, updateLine: s.purchaseOrder.updateLine });
+      const store = s.purchaseOrder.drafts;
+      const line = s.purchaseOrder.lines.find((line) => line.productId === product.id);
+      store.entries[product.id] ??= {
+        product,
+        quantityText: line?.quantityText ?? '1',
+        costPriceText: line?.costPriceText ?? String(product.costPrice),
+      };
+      store.active = product.id;
+      setCloseNotice('');
+      notifyProcurementDrafts(s.purchaseOrder.updateLine);
       return;
     }
     const now = Date.now();
@@ -494,10 +504,34 @@ export default function ProductPickerScreen() {
   // «Готово» / «X»: размотать ВСЕ уровни пикера одним pop(depth + 1) — под
   // ними лежит Касса (таб или пушнутый edit-CheckCreate), popToTop нельзя:
   // он снёс бы и пушнутый CheckCreate.
+  const canClose = useCallback(() => {
+    const current = getProductPickerSession();
+    const procurement = current?.purchaseOrder;
+    const pending =
+      procurement &&
+      ((procurement.drafts.active && procurement.drafts.entries[procurement.drafts.active]) ||
+        Object.values(procurement.drafts.entries)[0]);
+    if (!pending || !procurement) return true;
+    procurement.drafts.active = pending.product.id;
+    if (pending.product.warehouseId) current?.setWarehouseId(pending.product.warehouseId);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setLocalSearch(pending.product.name);
+    setDebouncedSearch(pending.product.name);
+    setCloseNotice('Добавьте позицию или отмените изменения перед закрытием.');
+    notifyProcurementDrafts(procurement.updateLine);
+    return false;
+  }, []);
   const handleDone = useCallback(() => {
+    if (!canClose()) return;
     haptic('tap');
     navigation.pop(depth + 1);
-  }, [navigation, depth]);
+  }, [navigation, depth, canClose]);
+  useEffect(() => {
+    if (!isRoot || !session?.purchaseOrder) return;
+    return navigation.addListener('beforeRemove', (event: { preventDefault: () => void }) => {
+      if (focusedRef.current && !canClose()) event.preventDefault();
+    });
+  }, [navigation, isRoot, session?.purchaseOrder, canClose]);
 
   // Round 12 #6в: скан в Кассе = МГНОВЕННОЕ добавление в чек. Exact-match по
   // загруженному списку склада (тот же источник, что и строки пикера); попал —
@@ -577,24 +611,73 @@ export default function ProductPickerScreen() {
       const underWarranty = sessionWarrantyNames
         ? sessionWarrantyNames.has(item.product.name.trim().toLowerCase())
         : false;
+      const draft = procurement?.drafts.entries[item.product.id];
+      const expanded = isFocused && !!draft && procurement?.drafts.active === item.product.id;
       return (
-        <PickerProductRow
-          product={item.product}
-          cartQty={qty}
-          showCostPrice={sessionShowCostPrice}
-          priceKind={priceKind}
-          underWarranty={underWarranty}
-          procurement={!!procurement}
-          costPriceText={procurement?.lines.find((line) => line.productId === item.product.id)?.costPriceText}
-          receivedQuantity={procurement?.lines.find((line) => line.productId === item.product.id)?.receivedQuantity}
-          onPress={handleRowPress}
-          onIncrement={handleIncrement}
-          onDecrement={handleDecrement}
-          palette={palette}
-        />
+        <View>
+          <PickerProductRow
+            product={item.product}
+            cartQty={qty}
+            showCostPrice={sessionShowCostPrice}
+            priceKind={priceKind}
+            underWarranty={underWarranty}
+            procurement={!!procurement}
+            costPriceText={procurement?.lines.find((line) => line.productId === item.product.id)?.costPriceText}
+            receivedQuantity={procurement?.lines.find((line) => line.productId === item.product.id)?.receivedQuantity}
+            onPress={handleRowPress}
+            onIncrement={handleIncrement}
+            onDecrement={handleDecrement}
+            palette={palette}
+          />
+          {expanded && procurement && (
+            <PurchaseOrderLineEditor
+              key={item.product.id}
+              name={item.product.name}
+              unit={item.product.unit}
+              quantityText={draft.quantityText}
+              costPriceText={draft.costPriceText}
+              receivedQuantity={
+                procurement.lines.find((line) => line.productId === item.product.id)?.receivedQuantity ?? 0
+              }
+              existing={procurement.lines.some((line) => line.productId === item.product.id)}
+              context={procurement.context}
+              accessoryIdPrefix={`procurement-${route.key}-${item.product.id}`}
+              onDraftChange={(value) => {
+                if (
+                  focusedRef.current &&
+                  getProductPickerSession()?.purchaseOrder?.updateLine === procurement.updateLine &&
+                  procurement.drafts.active === item.product.id
+                )
+                  Object.assign(draft, value);
+              }}
+              onCancel={() => {
+                if (!focusedRef.current || procurement.drafts.active !== item.product.id) return;
+                delete procurement.drafts.entries[item.product.id];
+                procurement.drafts.active = null;
+                setCloseNotice('');
+                notifyProcurementDrafts(procurement.updateLine);
+              }}
+              onConfirm={(value) => {
+                if (
+                  !focusedRef.current ||
+                  getProductPickerSession()?.purchaseOrder?.updateLine !== procurement.updateLine ||
+                  procurement.drafts.active !== item.product.id
+                )
+                  throw new Error('Документ был закрыт. Откройте выбор товаров заново.');
+                procurement.updateLine(item.product, value);
+                delete procurement.drafts.entries[item.product.id];
+                procurement.drafts.active = null;
+                setCloseNotice('');
+                notifyProcurementDrafts(procurement.updateLine);
+              }}
+            />
+          )}
+        </View>
       );
     },
     [
+      isFocused,
+      route.key,
       enterFolder,
       cartMap,
       sessionWarrantyNames,
@@ -629,9 +712,13 @@ export default function ProductPickerScreen() {
   const queryResolvedEmpty = Array.isArray(allProducts) && allProducts.length === 0;
 
   if (!session) return null; // закрываемся в effect выше
+  const ScreenContainer = session.purchaseOrder ? KeyboardAvoidingView : View;
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.bg.canvas, paddingTop: insets.top }]}>
+    <ScreenContainer
+      behavior={session.purchaseOrder ? 'padding' : undefined}
+      style={[styles.container, { backgroundColor: palette.bg.canvas, paddingTop: insets.top }]}
+    >
       {/* ── Шапка: X (корень) / назад-шеврон (глубже) + заголовок + свитчер
              склада (только корень). ────────────────────────────────────── */}
       <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
@@ -744,6 +831,30 @@ export default function ProductPickerScreen() {
         ) : null}
       </View>
 
+      {closeNotice ? (
+        <View style={{ padding: spacing[3] }}>
+          <Text accessibilityRole="alert" style={{ color: palette.text.primary }}>
+            {closeNotice}
+          </Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Отменить изменения позиции"
+            onPress={() => {
+              const current = getProductPickerSession()?.purchaseOrder;
+              if (!current) return;
+              const id = current.drafts.active ?? Object.keys(current.drafts.entries)[0];
+              if (id) delete current.drafts.entries[id];
+              current.drafts.active = null;
+              setCloseNotice('');
+              notifyProcurementDrafts(current.updateLine);
+            }}
+          >
+            <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>
+              Отменить изменения позиции
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       {/* ── Тело: скелетон → ошибка (без кеша) → FlashList папки+товары ──── */}
       <View style={styles.body}>
         {showInitialSkeleton ? (
@@ -760,6 +871,7 @@ export default function ProductPickerScreen() {
           </View>
         ) : (
           <FlashList
+            extraData={sessionVersion}
             data={listRows}
             renderItem={renderItem}
             keyExtractor={keyExtractor}
@@ -835,29 +947,6 @@ export default function ProductPickerScreen() {
         </TouchableOpacity>
       </View>
 
-      {editing && (
-        <PurchaseOrderLineEditor
-          key={editing.product.id}
-          name={editing.product.name}
-          unit={editing.product.unit}
-          quantityText={procurement?.lines.find((line) => line.productId === editing.product.id)?.quantityText ?? '1'}
-          costPriceText={
-            procurement?.lines.find((line) => line.productId === editing.product.id)?.costPriceText ??
-            String(editing.product.costPrice)
-          }
-          receivedQuantity={
-            procurement?.lines.find((line) => line.productId === editing.product.id)?.receivedQuantity ?? 0
-          }
-          existing={procurement?.lines.some((line) => line.productId === editing.product.id)}
-          onCancel={() => setEditing(null)}
-          onConfirm={(value) => {
-            if (getProductPickerSession()?.purchaseOrder?.updateLine !== editing.updateLine)
-              throw new Error('Заказ был закрыт. Откройте выбор товаров заново.');
-            editing.updateLine(editing.product, value);
-            setEditing(null);
-          }}
-        />
-      )}
       {/* Сканер штрих-кода — общий компонент (Склад/Инвентаризация), здесь в
           continuous-режиме (round 12 #6в): успешный скан добавляет товар в чек
           и оставляет камеру открытой («пикать подряд»), пилюля показывает
@@ -874,7 +963,7 @@ export default function ProductPickerScreen() {
             : 'Наведите камеру на штрих-код — товар добавится в чек'
         }
       />
-    </View>
+    </ScreenContainer>
   );
 }
 

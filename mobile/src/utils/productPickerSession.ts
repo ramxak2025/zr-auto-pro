@@ -24,6 +24,11 @@
 import type { Product, Warehouse, CheckProductLine } from '../../../shared/types';
 import type { PurchaseOrderLineValue, PurchaseOrderPickerLine } from '../../../shared/utils/purchaseOrderInput';
 
+export interface ProcurementPickerDrafts {
+  active: string | null;
+  entries: Record<string, { product: Product; quantityText: string; costPriceText: string }>;
+}
+
 export interface ProductPickerBridge {
   /** Текущие строки товаров чека — источник qty-бейджей и нижнего бара. */
   productLines: Pick<CheckProductLine, 'productId' | 'quantity' | 'sellPrice'>[];
@@ -32,6 +37,8 @@ export interface ProductPickerBridge {
   /** Opt-in supplier-order editing; absent for cash and other picker clients. */
   purchaseOrder?: {
     invalid?: boolean;
+    context?: 'order' | 'delivery';
+    drafts: ProcurementPickerDrafts;
     lines: PurchaseOrderPickerLine[];
     updateLine: (product: Product, value: PurchaseOrderLineValue) => void;
   };
@@ -96,4 +103,11 @@ export function subscribeProductPickerSession(cb: () => void): () => void {
   return () => {
     listeners.delete(cb);
   };
+}
+
+/** Draft-only edits notify all mounted folder routes without changing document lines. */
+export function notifyProcurementDrafts(
+  updateLine: NonNullable<ProductPickerBridge['purchaseOrder']>['updateLine'],
+): void {
+  if (ownerRef?.current.purchaseOrder?.updateLine === updateLine) emit();
 }

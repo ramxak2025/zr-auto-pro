@@ -1,10 +1,9 @@
-import PurchaseOrderLineEditor from '../purchaseOrders/PurchaseOrderLineEditor';
 import {
-  parsePurchaseOrderCost,
-  formatPurchaseOrderMoney,
-  type PurchaseOrderPickerLine,
-  type PurchaseOrderLineValue,
-} from '../../../../shared/utils/purchaseOrderInput';
+  useProcurementPickerDrafts,
+  type ProcurementPickerOptions,
+} from '../purchaseOrders/useProcurementPickerDrafts';
+import PurchaseOrderLineEditor from '../purchaseOrders/PurchaseOrderLineEditor';
+import { parsePurchaseOrderCost, formatPurchaseOrderMoney } from '../../../../shared/utils/purchaseOrderInput';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, FolderOpen, Package, Search } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -33,10 +32,7 @@ export interface ProductPickerDrawerProps {
   onRetry?: () => void;
   onSelectProduct: (product: Product) => void;
   priceKind?: 'sell' | 'cost';
-  purchaseOrder?: {
-    lines: PurchaseOrderPickerLine[];
-    onConfirm: (product: Product, value: PurchaseOrderLineValue) => void;
-  };
+  purchaseOrder?: ProcurementPickerOptions;
   selectedIds?: string[];
   closeOnSelect?: boolean;
   /** Склады для переключателя; при 0–1 складе переключатель скрыт. */
@@ -78,7 +74,8 @@ export default function ProductPickerDrawer({
   onSelectWarehouse,
 }: ProductPickerDrawerProps) {
   const [search, setSearch] = useState('');
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const editor = useProcurementPickerDrafts(purchaseOrder);
+  const editingProduct = editor.active;
   const [activePath, setActivePath] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const { data: extraFolders } = useQuery({
@@ -95,9 +92,6 @@ export default function ProductPickerDrawer({
     }
   }, [open, selectedWarehouseId]);
 
-  useEffect(() => {
-    if (!open) setEditingProduct(null);
-  }, [open]);
   useEffect(() => {
     if (open && !editingProduct) searchRef.current?.focus();
   }, [open, editingProduct]);
@@ -125,7 +119,7 @@ export default function ProductPickerDrawer({
 
   const handleSelect = (product: Product) => {
     if (purchaseOrder) {
-      setEditingProduct(product);
+      editor.open(product);
       return;
     }
     onSelectProduct(product);
@@ -149,6 +143,7 @@ export default function ProductPickerDrawer({
         <button
           type="button"
           onClick={() => handleSelect(product)}
+          aria-expanded={purchaseOrder ? editingProduct?.id === product.id : undefined}
           disabled={!purchaseOrder && selectedIds.includes(product.id)}
           className={cn(
             'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-surface-3',
@@ -215,6 +210,19 @@ export default function ProductPickerDrawer({
             />
           )}
         </button>
+        {purchaseOrder && editingProduct?.id === product.id && (
+          <PurchaseOrderLineEditor
+            key={product.id}
+            product={product}
+            line={purchaseOrder.lines.find((line) => line.productId === product.id)}
+            draft={editor.drafts.current[product.id]}
+            onDraftChange={(draft) => {
+              Object.assign(editor.drafts.current[product.id], draft);
+            }}
+            onCancel={() => editor.cancel(product.id)}
+            onConfirm={(value) => editor.confirm(product, value)}
+          />
+        )}
       </li>
     );
   };
@@ -222,8 +230,13 @@ export default function ProductPickerDrawer({
   return (
     <Drawer
       open={open}
-      onClose={onClose}
-      title={editingProduct ? 'Позиция заказа' : 'Добавить товар'}
+      onClose={() =>
+        editor.close(onClose, (product) => {
+          setSearch(product.name);
+          if (product.warehouseId) onSelectWarehouse?.(product.warehouseId);
+        })
+      }
+      title="Добавить товар"
       subtitle={
         activePath.length > 0
           ? activePath.join(' / ')
@@ -234,151 +247,146 @@ export default function ProductPickerDrawer({
       size="lg"
       initialFocusRef={searchRef}
     >
-      {editingProduct && purchaseOrder ? (
-        <PurchaseOrderLineEditor
-          key={editingProduct.id}
-          product={editingProduct}
-          line={purchaseOrder.lines.find((line) => line.productId === editingProduct.id)}
-          onCancel={() => setEditingProduct(null)}
-          onConfirm={(value) => {
-            purchaseOrder.onConfirm(editingProduct, value);
-            setEditingProduct(null);
-          }}
-        />
-      ) : (
-        <div className="space-y-3">
-          {showWarehouses && (
-            <Tabs
-              aria-label="Склад"
-              variant="pills"
-              size="sm"
-              idPrefix="picker-wh"
-              value={selectedWarehouseId ?? warehouses![0].id}
-              onChange={(id) => onSelectWarehouse?.(id)}
-              items={warehouses!.map((w) => ({ key: w.id, label: w.name || WAREHOUSE_KIND_LABELS[w.kind] }))}
-            />
-          )}
-
-          <Input
-            ref={searchRef}
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
-            aria-label="Поиск товара"
-            leftIcon={Search}
-            autoComplete="off"
+      <div className="space-y-3">
+        {editor.notice && (
+          <p role="alert" className="text-sm text-bad-text">
+            {editor.notice}
+            <button type="button" className="ml-2 underline" onClick={() => editor.cancel()}>
+              Отменить изменения позиции
+            </button>
+          </p>
+        )}
+        {showWarehouses && (
+          <Tabs
+            aria-label="Склад"
+            variant="pills"
+            size="sm"
+            idPrefix="picker-wh"
+            value={selectedWarehouseId ?? warehouses![0].id}
+            onChange={(id) => onSelectWarehouse?.(id)}
+            items={warehouses!.map((w) => ({ key: w.id, label: w.name || WAREHOUSE_KIND_LABELS[w.kind] }))}
           />
+        )}
 
-          {!searching && activePath.length > 0 && (
-            <nav aria-label="Папка" className="flex flex-wrap items-center gap-1 text-xs text-ink-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={ChevronLeft}
-                className="-ml-2"
-                onClick={() => setActivePath((prev) => prev.slice(0, -1))}
-              >
-                Назад
-              </Button>
-              <button
-                type="button"
-                onClick={() => setActivePath([])}
-                className={cn('rounded px-1 hover:text-ink', focusRing)}
-              >
-                Товары
-              </button>
-              {activePath.map((seg, idx) => (
-                <span key={idx} className="flex items-center gap-1">
-                  <ChevronRight className="h-3 w-3 text-ink-4" aria-hidden="true" />
-                  <button
-                    type="button"
-                    onClick={() => setActivePath(activePath.slice(0, idx + 1))}
-                    className={cn(
-                      'rounded px-1 hover:text-ink',
-                      focusRing,
-                      idx === activePath.length - 1 && 'font-medium text-ink',
-                    )}
-                    aria-current={idx === activePath.length - 1 ? 'location' : undefined}
-                  >
-                    {seg}
-                  </button>
-                </span>
-              ))}
-            </nav>
-          )}
+        <Input
+          ref={searchRef}
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
+          aria-label="Поиск товара"
+          leftIcon={Search}
+          autoComplete="off"
+        />
 
-          {isLoading ? (
-            <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <li key={i} className="flex items-center gap-3 px-2 py-2">
-                  <Skeleton className="h-10 w-10" />
-                  <Skeleton variant="text" className="flex-1" />
-                  <Skeleton variant="text" className="w-16" />
-                </li>
-              ))}
+        {!searching && activePath.length > 0 && (
+          <nav aria-label="Папка" className="flex flex-wrap items-center gap-1 text-xs text-ink-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={ChevronLeft}
+              className="-ml-2"
+              onClick={() => setActivePath((prev) => prev.slice(0, -1))}
+            >
+              Назад
+            </Button>
+            <button
+              type="button"
+              onClick={() => setActivePath([])}
+              className={cn('rounded px-1 hover:text-ink', focusRing)}
+            >
+              Товары
+            </button>
+            {activePath.map((seg, idx) => (
+              <span key={idx} className="flex items-center gap-1">
+                <ChevronRight className="h-3 w-3 text-ink-4" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => setActivePath(activePath.slice(0, idx + 1))}
+                  className={cn(
+                    'rounded px-1 hover:text-ink',
+                    focusRing,
+                    idx === activePath.length - 1 && 'font-medium text-ink',
+                  )}
+                  aria-current={idx === activePath.length - 1 ? 'location' : undefined}
+                >
+                  {seg}
+                </button>
+              </span>
+            ))}
+          </nav>
+        )}
+
+        {isLoading ? (
+          <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <li key={i} className="flex items-center gap-3 px-2 py-2">
+                <Skeleton className="h-10 w-10" />
+                <Skeleton variant="text" className="flex-1" />
+                <Skeleton variant="text" className="w-16" />
+              </li>
+            ))}
+          </ul>
+        ) : isError ? (
+          <ErrorRow message="Не удалось загрузить товары" onRetry={onRetry} />
+        ) : searching ? (
+          searchResults.length === 0 ? (
+            <EmptyState
+              compact
+              icon={Package}
+              title="Ничего не найдено"
+              description="Попробуйте другое название или категорию"
+            />
+          ) : (
+            <ul className="-mx-2 divide-y divide-line">
+              {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+              {overflowHint(searchResults.length)}
             </ul>
-          ) : isError ? (
-            <ErrorRow message="Не удалось загрузить товары" onRetry={onRetry} />
-          ) : searching ? (
-            searchResults.length === 0 ? (
+          )
+        ) : (
+          <>
+            {subfolders.length > 0 && (
+              <ul className="-mx-2">
+                {subfolders.map((folder) => (
+                  <li key={folder.name}>
+                    <button
+                      type="button"
+                      onClick={() => setActivePath((prev) => [...prev, folder.name])}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface-3',
+                        focusRing,
+                      )}
+                    >
+                      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-warn-soft">
+                        <FolderOpen className="h-4 w-4 text-warn" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{folder.name}</span>
+                      <Badge size="sm" className="tabular-nums">
+                        {folder.count}
+                      </Badge>
+                      <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {currentProducts.length > 0 && (
+              <ul className={cn('-mx-2 divide-y divide-line', subfolders.length > 0 && 'border-t border-line pt-1')}>
+                {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+                {overflowHint(currentProducts.length)}
+              </ul>
+            )}
+            {subfolders.length === 0 && currentProducts.length === 0 && (
               <EmptyState
                 compact
                 icon={Package}
-                title="Ничего не найдено"
-                description="Попробуйте другое название или категорию"
+                title={activePath.length > 0 ? 'В этой папке нет товаров' : 'На складе нет товаров'}
+                description={activePath.length > 0 ? undefined : 'Добавьте товары в разделе «Склад»'}
               />
-            ) : (
-              <ul className="-mx-2 divide-y divide-line">
-                {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
-                {overflowHint(searchResults.length)}
-              </ul>
-            )
-          ) : (
-            <>
-              {subfolders.length > 0 && (
-                <ul className="-mx-2">
-                  {subfolders.map((folder) => (
-                    <li key={folder.name}>
-                      <button
-                        type="button"
-                        onClick={() => setActivePath((prev) => [...prev, folder.name])}
-                        className={cn(
-                          'flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface-3',
-                          focusRing,
-                        )}
-                      >
-                        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-warn-soft">
-                          <FolderOpen className="h-4 w-4 text-warn" aria-hidden="true" />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{folder.name}</span>
-                        <Badge size="sm" className="tabular-nums">
-                          {folder.count}
-                        </Badge>
-                        <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {currentProducts.length > 0 && (
-                <ul className={cn('-mx-2 divide-y divide-line', subfolders.length > 0 && 'border-t border-line pt-1')}>
-                  {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
-                  {overflowHint(currentProducts.length)}
-                </ul>
-              )}
-              {subfolders.length === 0 && currentProducts.length === 0 && (
-                <EmptyState
-                  compact
-                  icon={Package}
-                  title={activePath.length > 0 ? 'В этой папке нет товаров' : 'На складе нет товаров'}
-                  description={activePath.length > 0 ? undefined : 'Добавьте товары в разделе «Склад»'}
-                />
-              )}
-            </>
-          )}
-        </div>
-      )}
+            )}
+          </>
+        )}
+      </div>
     </Drawer>
   );
 }
