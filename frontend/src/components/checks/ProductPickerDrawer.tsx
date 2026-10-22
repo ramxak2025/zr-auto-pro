@@ -1,3 +1,10 @@
+import PurchaseOrderLineEditor from '../purchaseOrders/PurchaseOrderLineEditor';
+import {
+  parsePurchaseOrderCost,
+  formatPurchaseOrderMoney,
+  type PurchaseOrderPickerLine,
+  type PurchaseOrderLineValue,
+} from '../../../../shared/utils/purchaseOrderInput';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, FolderOpen, Package, Search } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -26,6 +33,10 @@ export interface ProductPickerDrawerProps {
   onRetry?: () => void;
   onSelectProduct: (product: Product) => void;
   priceKind?: 'sell' | 'cost';
+  purchaseOrder?: {
+    lines: PurchaseOrderPickerLine[];
+    onConfirm: (product: Product, value: PurchaseOrderLineValue) => void;
+  };
   selectedIds?: string[];
   closeOnSelect?: boolean;
   /** Склады для переключателя; при 0–1 складе переключатель скрыт. */
@@ -59,6 +70,7 @@ export default function ProductPickerDrawer({
   onRetry,
   onSelectProduct,
   priceKind = 'sell',
+  purchaseOrder,
   selectedIds = [],
   closeOnSelect = true,
   warehouses,
@@ -66,6 +78,7 @@ export default function ProductPickerDrawer({
   onSelectWarehouse,
 }: ProductPickerDrawerProps) {
   const [search, setSearch] = useState('');
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [activePath, setActivePath] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const { data: extraFolders } = useQuery({
@@ -81,6 +94,13 @@ export default function ProductPickerDrawer({
       setActivePath([]);
     }
   }, [open, selectedWarehouseId]);
+
+  useEffect(() => {
+    if (!open) setEditingProduct(null);
+  }, [open]);
+  useEffect(() => {
+    if (open && !editingProduct) searchRef.current?.focus();
+  }, [open, editingProduct]);
 
   // Дерево папок из путей категорий — как в прежнем пикере.
   const { subfolders, currentProducts } = useMemo(
@@ -104,6 +124,10 @@ export default function ProductPickerDrawer({
   }, [products, search]);
 
   const handleSelect = (product: Product) => {
+    if (purchaseOrder) {
+      setEditingProduct(product);
+      return;
+    }
     onSelectProduct(product);
     if (closeOnSelect) onClose();
   };
@@ -125,12 +149,12 @@ export default function ProductPickerDrawer({
         <button
           type="button"
           onClick={() => handleSelect(product)}
-          disabled={selectedIds.includes(product.id)}
+          disabled={!purchaseOrder && selectedIds.includes(product.id)}
           className={cn(
             'flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-surface-3',
             focusRing,
             !inStock && 'opacity-70',
-            selectedIds.includes(product.id) && 'opacity-50',
+            !purchaseOrder && selectedIds.includes(product.id) && 'opacity-50',
           )}
         >
           <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-3">
@@ -175,11 +199,21 @@ export default function ProductPickerDrawer({
           <Badge tone={inStock ? 'ok' : 'bad'} size="sm" className="tabular-nums">
             {inStock ? formatQtyUnit(product.stock, product.unit) : 'Нет'}
           </Badge>
-          {selectedIds.includes(product.id) && <Badge size="sm">Добавлен</Badge>}
-          <Money
-            value={priceKind === 'cost' ? product.costPrice : product.sellPrice}
-            className="w-24 text-right text-sm font-semibold text-ink"
-          />
+          {selectedIds.includes(product.id) && <Badge size="sm">{purchaseOrder ? 'Изменить' : 'Добавлен'}</Badge>}
+          {purchaseOrder ? (
+            <span className="w-24 text-right text-sm font-semibold text-ink">
+              {(() => {
+                const line = purchaseOrder.lines.find((line) => line.productId === product.id);
+                const cost = line ? parsePurchaseOrderCost(line.costPriceText) : product.costPrice;
+                return cost === null ? '—' : formatPurchaseOrderMoney(cost);
+              })()}
+            </span>
+          ) : (
+            <Money
+              value={priceKind === 'cost' ? product.costPrice : product.sellPrice}
+              className="w-24 text-right text-sm font-semibold text-ink"
+            />
+          )}
         </button>
       </li>
     );
@@ -189,149 +223,162 @@ export default function ProductPickerDrawer({
     <Drawer
       open={open}
       onClose={onClose}
-      title="Добавить товар"
+      title={editingProduct ? 'Позиция заказа' : 'Добавить товар'}
       subtitle={
         activePath.length > 0
           ? activePath.join(' / ')
           : priceKind === 'cost'
-            ? 'Закупочная цена — из карточки товара'
+            ? 'Выберите товар и задайте количество и цену'
             : 'Выберите товар со склада'
       }
       size="lg"
       initialFocusRef={searchRef}
     >
-      <div className="space-y-3">
-        {showWarehouses && (
-          <Tabs
-            aria-label="Склад"
-            variant="pills"
-            size="sm"
-            idPrefix="picker-wh"
-            value={selectedWarehouseId ?? warehouses![0].id}
-            onChange={(id) => onSelectWarehouse?.(id)}
-            items={warehouses!.map((w) => ({ key: w.id, label: w.name || WAREHOUSE_KIND_LABELS[w.kind] }))}
-          />
-        )}
-
-        <Input
-          ref={searchRef}
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
-          aria-label="Поиск товара"
-          leftIcon={Search}
-          autoComplete="off"
+      {editingProduct && purchaseOrder ? (
+        <PurchaseOrderLineEditor
+          key={editingProduct.id}
+          product={editingProduct}
+          line={purchaseOrder.lines.find((line) => line.productId === editingProduct.id)}
+          onCancel={() => setEditingProduct(null)}
+          onConfirm={(value) => {
+            purchaseOrder.onConfirm(editingProduct, value);
+            setEditingProduct(null);
+          }}
         />
-
-        {!searching && activePath.length > 0 && (
-          <nav aria-label="Папка" className="flex flex-wrap items-center gap-1 text-xs text-ink-3">
-            <Button
-              variant="ghost"
+      ) : (
+        <div className="space-y-3">
+          {showWarehouses && (
+            <Tabs
+              aria-label="Склад"
+              variant="pills"
               size="sm"
-              icon={ChevronLeft}
-              className="-ml-2"
-              onClick={() => setActivePath((prev) => prev.slice(0, -1))}
-            >
-              Назад
-            </Button>
-            <button
-              type="button"
-              onClick={() => setActivePath([])}
-              className={cn('rounded px-1 hover:text-ink', focusRing)}
-            >
-              Товары
-            </button>
-            {activePath.map((seg, idx) => (
-              <span key={idx} className="flex items-center gap-1">
-                <ChevronRight className="h-3 w-3 text-ink-4" aria-hidden="true" />
-                <button
-                  type="button"
-                  onClick={() => setActivePath(activePath.slice(0, idx + 1))}
-                  className={cn(
-                    'rounded px-1 hover:text-ink',
-                    focusRing,
-                    idx === activePath.length - 1 && 'font-medium text-ink',
-                  )}
-                  aria-current={idx === activePath.length - 1 ? 'location' : undefined}
-                >
-                  {seg}
-                </button>
-              </span>
-            ))}
-          </nav>
-        )}
-
-        {isLoading ? (
-          <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <li key={i} className="flex items-center gap-3 px-2 py-2">
-                <Skeleton className="h-10 w-10" />
-                <Skeleton variant="text" className="flex-1" />
-                <Skeleton variant="text" className="w-16" />
-              </li>
-            ))}
-          </ul>
-        ) : isError ? (
-          <ErrorRow message="Не удалось загрузить товары" onRetry={onRetry} />
-        ) : searching ? (
-          searchResults.length === 0 ? (
-            <EmptyState
-              compact
-              icon={Package}
-              title="Ничего не найдено"
-              description="Попробуйте другое название или категорию"
+              idPrefix="picker-wh"
+              value={selectedWarehouseId ?? warehouses![0].id}
+              onChange={(id) => onSelectWarehouse?.(id)}
+              items={warehouses!.map((w) => ({ key: w.id, label: w.name || WAREHOUSE_KIND_LABELS[w.kind] }))}
             />
-          ) : (
-            <ul className="-mx-2 divide-y divide-line">
-              {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
-              {overflowHint(searchResults.length)}
+          )}
+
+          <Input
+            ref={searchRef}
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={hasCells ? 'Название, категория или ячейка…' : 'Название или категория…'}
+            aria-label="Поиск товара"
+            leftIcon={Search}
+            autoComplete="off"
+          />
+
+          {!searching && activePath.length > 0 && (
+            <nav aria-label="Папка" className="flex flex-wrap items-center gap-1 text-xs text-ink-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={ChevronLeft}
+                className="-ml-2"
+                onClick={() => setActivePath((prev) => prev.slice(0, -1))}
+              >
+                Назад
+              </Button>
+              <button
+                type="button"
+                onClick={() => setActivePath([])}
+                className={cn('rounded px-1 hover:text-ink', focusRing)}
+              >
+                Товары
+              </button>
+              {activePath.map((seg, idx) => (
+                <span key={idx} className="flex items-center gap-1">
+                  <ChevronRight className="h-3 w-3 text-ink-4" aria-hidden="true" />
+                  <button
+                    type="button"
+                    onClick={() => setActivePath(activePath.slice(0, idx + 1))}
+                    className={cn(
+                      'rounded px-1 hover:text-ink',
+                      focusRing,
+                      idx === activePath.length - 1 && 'font-medium text-ink',
+                    )}
+                    aria-current={idx === activePath.length - 1 ? 'location' : undefined}
+                  >
+                    {seg}
+                  </button>
+                </span>
+              ))}
+            </nav>
+          )}
+
+          {isLoading ? (
+            <ul className="space-y-1" aria-busy="true" aria-label="Загрузка товаров">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <li key={i} className="flex items-center gap-3 px-2 py-2">
+                  <Skeleton className="h-10 w-10" />
+                  <Skeleton variant="text" className="flex-1" />
+                  <Skeleton variant="text" className="w-16" />
+                </li>
+              ))}
             </ul>
-          )
-        ) : (
-          <>
-            {subfolders.length > 0 && (
-              <ul className="-mx-2">
-                {subfolders.map((folder) => (
-                  <li key={folder.name}>
-                    <button
-                      type="button"
-                      onClick={() => setActivePath((prev) => [...prev, folder.name])}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface-3',
-                        focusRing,
-                      )}
-                    >
-                      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-warn-soft">
-                        <FolderOpen className="h-4 w-4 text-warn" aria-hidden="true" />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{folder.name}</span>
-                      <Badge size="sm" className="tabular-nums">
-                        {folder.count}
-                      </Badge>
-                      <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {currentProducts.length > 0 && (
-              <ul className={cn('-mx-2 divide-y divide-line', subfolders.length > 0 && 'border-t border-line pt-1')}>
-                {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
-                {overflowHint(currentProducts.length)}
-              </ul>
-            )}
-            {subfolders.length === 0 && currentProducts.length === 0 && (
+          ) : isError ? (
+            <ErrorRow message="Не удалось загрузить товары" onRetry={onRetry} />
+          ) : searching ? (
+            searchResults.length === 0 ? (
               <EmptyState
                 compact
                 icon={Package}
-                title={activePath.length > 0 ? 'В этой папке нет товаров' : 'На складе нет товаров'}
-                description={activePath.length > 0 ? undefined : 'Добавьте товары в разделе «Склад»'}
+                title="Ничего не найдено"
+                description="Попробуйте другое название или категорию"
               />
-            )}
-          </>
-        )}
-      </div>
+            ) : (
+              <ul className="-mx-2 divide-y divide-line">
+                {searchResults.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+                {overflowHint(searchResults.length)}
+              </ul>
+            )
+          ) : (
+            <>
+              {subfolders.length > 0 && (
+                <ul className="-mx-2">
+                  {subfolders.map((folder) => (
+                    <li key={folder.name}>
+                      <button
+                        type="button"
+                        onClick={() => setActivePath((prev) => [...prev, folder.name])}
+                        className={cn(
+                          'flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-surface-3',
+                          focusRing,
+                        )}
+                      >
+                        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-warn-soft">
+                          <FolderOpen className="h-4 w-4 text-warn" aria-hidden="true" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{folder.name}</span>
+                        <Badge size="sm" className="tabular-nums">
+                          {folder.count}
+                        </Badge>
+                        <ChevronRight className="h-4 w-4 text-ink-4" aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {currentProducts.length > 0 && (
+                <ul className={cn('-mx-2 divide-y divide-line', subfolders.length > 0 && 'border-t border-line pt-1')}>
+                  {currentProducts.slice(0, MAX_VISIBLE_ROWS).map(renderProduct)}
+                  {overflowHint(currentProducts.length)}
+                </ul>
+              )}
+              {subfolders.length === 0 && currentProducts.length === 0 && (
+                <EmptyState
+                  compact
+                  icon={Package}
+                  title={activePath.length > 0 ? 'В этой папке нет товаров' : 'На складе нет товаров'}
+                  description={activePath.length > 0 ? undefined : 'Добавьте товары в разделе «Склад»'}
+                />
+              )}
+            </>
+          )}
+        </div>
+      )}
     </Drawer>
   );
 }
