@@ -3,7 +3,8 @@ import { Link, useNavigate, useNavigationType, useParams, useSearchParams } from
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import LearningShell, { LearningBreadcrumb } from './LearningShell';
 import LearningImage from './LearningImage';
-import { learningAssets } from './assets';
+import { getLearningAsset } from './assets';
+import { platformLabels, learningTopics } from './topics';
 import { learningLessons, lessonHref, resolveLearningStep } from './content';
 import { saveLearningProgress } from './progress';
 
@@ -17,13 +18,18 @@ export default function LearningLessonPage() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const previousStep = useRef({ slug, index });
+  const catalogParams = new URLSearchParams(params);
+  catalogParams.delete('step');
+  const catalogHref = `/obuchenie${catalogParams.size ? `?${catalogParams}` : ''}`;
+  const stepHref = (step: number) => lessonHref(lesson?.slug ?? '', step, params);
 
   useEffect(() => {
     if (!lesson) return;
     const canonical = String(index + 1);
-    if (params.get('step') !== canonical) {
+    if (params.get('step') !== canonical || (params.has('platform') && params.get('platform') !== lesson.platform)) {
       const next = new URLSearchParams(params);
       next.set('step', canonical);
+      if (params.has('platform')) next.set('platform', lesson.platform);
       setParams(next, { replace: true });
     }
     saveLearningProgress(lesson.slug, index + 1);
@@ -57,15 +63,18 @@ export default function LearningLessonPage() {
   return (
     <LearningShell title={lesson.title}>
       <LearningBreadcrumb title={lesson.title} />
+      <p className="learning-lesson-context">
+        {platformLabels[lesson.platform]} · {learningTopics.find((topic) => topic.id === lesson.topic)?.title}
+      </p>
       <div className="learning-lesson-heading">
         <h1>{lesson.title}</h1>
         <span>
           Шаг {index + 1} из {lesson.steps.length}
         </span>
       </div>
-      <div className="learning-workspace">
+      <div className={`learning-workspace${lesson.platform === 'desktop' ? ' is-desktop' : ''}`}>
         <aside className="learning-rail">
-          <Link to="/obuchenie" className="learning-rail-back">
+          <Link to={catalogHref} className="learning-rail-back">
             <ArrowLeft size={16} aria-hidden="true" />
             Все уроки
           </Link>
@@ -73,7 +82,7 @@ export default function LearningLessonPage() {
             <ol>
               {lesson.steps.map((item, i) => (
                 <li key={`${lesson.slug}-${i}`}>
-                  <Link to={lessonHref(lesson.slug, i + 1)} aria-current={i === index ? 'step' : undefined}>
+                  <Link to={stepHref(i + 1)} aria-current={i === index ? 'step' : undefined}>
                     <span>{i + 1}</span>
                     {item.title}
                   </Link>
@@ -84,7 +93,13 @@ export default function LearningLessonPage() {
           {lesson.prerequisite && <p>{lesson.prerequisite}</p>}
         </aside>
         <div className="learning-stage" ref={stageRef}>
-          <LearningImage key={step.asset} assetId={step.asset} hotspot={step.hotspot} />
+          <LearningImage
+            key={step.asset}
+            assetId={step.asset}
+            hotspot={step.hotspot}
+            annotation={step.annotation}
+            stepNumber={index + 1}
+          />
           <p>Учебный экран · тестовые данные</p>
         </div>
         <section className="learning-instruction" aria-labelledby="learning-step-title">
@@ -100,6 +115,7 @@ export default function LearningLessonPage() {
             <p>{step.result}</p>
           </div>
           {step.note && <p className="learning-step-note">{step.note}</p>}
+          {lesson.availability && <p className="learning-step-note">{lesson.availability}</p>}
           {index === 0 && lesson.prerequisite && (
             <details className="learning-prerequisite">
               <summary>Перед началом</summary>
@@ -108,12 +124,12 @@ export default function LearningLessonPage() {
           )}
           <nav className="learning-step-controls" aria-label="Переход между шагами">
             {index > 0 ? (
-              <Link className="learning-button" to={lessonHref(lesson.slug, index)}>
+              <Link className="learning-button" to={stepHref(index)}>
                 <ArrowLeft size={18} aria-hidden="true" />
                 <span>Назад</span>
               </Link>
             ) : (
-              <Link className="learning-button" to="/obuchenie">
+              <Link className="learning-button" to={catalogHref}>
                 <ArrowLeft size={18} aria-hidden="true" />
                 <span>Уроки</span>
               </Link>
@@ -124,14 +140,14 @@ export default function LearningLessonPage() {
                 className="learning-button learning-primary"
                 onClick={() => {
                   saveLearningProgress(lesson.slug, index + 1, true);
-                  navigate('/obuchenie');
+                  navigate(catalogHref);
                 }}
               >
                 Завершить
                 <Check size={18} aria-hidden="true" />
               </button>
             ) : (
-              <Link className="learning-button learning-primary" to={lessonHref(lesson.slug, index + 2)}>
+              <Link className="learning-button learning-primary" to={stepHref(index + 2)}>
                 Дальше
                 <ArrowRight size={18} aria-hidden="true" />
               </Link>
@@ -139,11 +155,11 @@ export default function LearningLessonPage() {
           </nav>
           <nav className="learning-thumbnails" aria-label="Быстрый выбор шага">
             {lesson.steps.map((item, i) => {
-              const asset = learningAssets[item.asset];
+              const asset = getLearningAsset(item.asset);
               return (
                 <Link
                   key={i}
-                  to={lessonHref(lesson.slug, i + 1)}
+                  to={stepHref(i + 1)}
                   aria-current={i === index ? 'step' : undefined}
                   aria-label={`Шаг ${i + 1}: ${item.title}`}
                 >

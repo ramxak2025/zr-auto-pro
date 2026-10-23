@@ -1,11 +1,16 @@
-import type { LearningAsset, LearningCaptureId } from './assets';
+import type { LearningAsset, LearningImageId } from './assets';
+import type { LearningAnnotation } from './annotation';
+import { desktopLearningLessons } from './desktop-content';
+import { rankLearningLessons, MAX_LEARNING_QUERY_LENGTH } from './search';
+import type { LearningPlatform, LearningTopic } from './topics';
 
 export interface LearningStep {
   title: string;
   action: string;
   result: string;
-  asset: LearningCaptureId;
+  asset: LearningImageId;
   hotspot?: LearningAsset['hotspot'];
+  annotation?: LearningAnnotation;
   note?: string;
 }
 
@@ -14,6 +19,10 @@ export interface LearningLesson {
   title: string;
   description: string;
   category: string;
+  platform: LearningPlatform;
+  topic: LearningTopic;
+  availability?: string;
+  featureIds?: string[];
   prerequisite?: string;
   steps: LearningStep[];
 }
@@ -22,6 +31,8 @@ export interface LearningLesson {
 export const learningLessons: LearningLesson[] = [
   {
     slug: 'pervye-shagi',
+    platform: 'mobile',
+    topic: 'company',
     title: 'Освоиться в приложении',
     category: 'Начало',
     description: 'Главные разделы и данные компании.',
@@ -52,6 +63,8 @@ export const learningLessons: LearningLesson[] = [
   },
   {
     slug: 'dobavit-klienta',
+    platform: 'mobile',
+    topic: 'clients',
     title: 'Добавить клиента',
     category: 'Клиенты',
     description: 'Сохранить имя, при необходимости — телефон, и найти клиента в списке.',
@@ -103,6 +116,8 @@ export const learningLessons: LearningLesson[] = [
   },
   {
     slug: 'dobavit-uslugu',
+    platform: 'mobile',
+    topic: 'stock',
     title: 'Добавить услугу',
     category: 'Услуги',
     description: 'Создать услугу с фиксированной ценой.',
@@ -145,6 +160,8 @@ export const learningLessons: LearningLesson[] = [
   },
   {
     slug: 'sozdat-chek',
+    platform: 'mobile',
+    topic: 'work',
     title: 'Оформить чек',
     category: 'Касса',
     description: 'Продажа в кассе: клиент, услуга и наличная оплата.',
@@ -227,6 +244,8 @@ export const learningLessons: LearningLesson[] = [
   },
   {
     slug: 'nayti-chek',
+    platform: 'mobile',
+    topic: 'work',
     title: 'Найти оформленный чек',
     category: 'Касса',
     description: 'Открыть журнал и проверить детали.',
@@ -253,10 +272,14 @@ export const learningLessons: LearningLesson[] = [
       },
     ],
   },
+  ...desktopLearningLessons,
 ];
 
-export function lessonHref(slug: string, step = 1): string {
-  return `/obuchenie/${slug}?step=${step}`;
+export function lessonHref(slug: string, step = 1, context?: URLSearchParams): string {
+  const params = new URLSearchParams(context);
+  if (params.has('q')) params.set('q', (params.get('q') ?? '').slice(0, MAX_LEARNING_QUERY_LENGTH));
+  params.set('step', String(step));
+  return `/obuchenie/${slug}?${params}`;
 }
 
 export function resolveLearningStep(value: string | null, count: number): number {
@@ -265,17 +288,5 @@ export function resolveLearningStep(value: string | null, count: number): number
 }
 
 export function searchLessons(query: string, category = ''): LearningLesson[] {
-  const normalize = (text: string) => text.toLocaleLowerCase('ru').replace(/ё/g, 'е');
-  const words = normalize(query).trim().split(/\s+/).filter(Boolean);
-  return learningLessons.filter((lesson) => {
-    const text = normalize(
-      [
-        lesson.title,
-        lesson.description,
-        lesson.category,
-        ...lesson.steps.flatMap((step) => [step.title, step.action, step.result]),
-      ].join(' '),
-    );
-    return (!category || lesson.category === category) && words.every((word) => text.includes(word));
-  });
+  return rankLearningLessons(learningLessons, query, { category }).map((result) => result.lesson);
 }
