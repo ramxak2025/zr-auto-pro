@@ -1,3 +1,5 @@
+import { desktopLearningAssets, type DesktopCaptureId, type DesktopLearningAsset } from './desktop-assets';
+
 export const learningCaptureIds = [
   'home-navigation',
   'more-menu',
@@ -25,6 +27,14 @@ export const learningCaptureIds = [
 ] as const;
 
 export type LearningCaptureId = (typeof learningCaptureIds)[number];
+export type LearningImageId = LearningCaptureId | DesktopCaptureId;
+export type LearningImageAsset = LearningAsset | DesktopLearningAsset;
+
+export function getLearningAsset(id: LearningImageId): LearningImageAsset | undefined {
+  return id.startsWith('desktop-')
+    ? desktopLearningAssets[id as DesktopCaptureId]
+    : learningAssets[id as LearningCaptureId];
+}
 
 /** Genuine full-frame app captures from the designated training account. Private evidence stays private. */
 export interface LearningAsset {
