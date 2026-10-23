@@ -72,7 +72,7 @@ export default function GlassTabBar() {
   const onHome = pathname === '/';
   const onTarify = pathname === '/tarify';
   const onVoprosy = pathname === '/voprosy';
-  const onFeature = pathname.startsWith('/f/');
+  const onFeature = pathname.startsWith('/f/') || pathname === '/obuchenie' || pathname.startsWith('/obuchenie/');
   const [sheetOpen, setSheetOpen] = useState(false);
   const sectionsBtnRef = useRef<HTMLButtonElement>(null);
 

@@ -22,6 +22,7 @@ const PRODUCT_LINKS = [
   { label: 'Возможности', to: '/#features' },
   { label: 'Тарифы', to: '/tarify' },
   { label: 'Вопросы и ответы', to: '/voprosy' },
+  { label: 'Обучение', to: '/obuchenie' },
   { label: 'Войти', to: '/login' },
 ] as const;
 

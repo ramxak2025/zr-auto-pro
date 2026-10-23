@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { LayoutGrid, MessageCircle, X } from 'lucide-react';
+import { BookOpen, LayoutGrid, MessageCircle, X } from 'lucide-react';
 import { features } from '../content';
 import { getWhatsAppUrl } from '../config';
 import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS } from '../icons';
@@ -188,6 +188,14 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
         </div>
 
         <div className="mt-2 min-h-0 overflow-y-auto px-4 pb-3 [overscroll-behavior-y:contain]">
+          <Link
+            to="/obuchenie"
+            onClick={onClose}
+            className="mb-4 flex min-h-[52px] items-center gap-3 rounded-2xl bg-primary-50 px-3 text-sm font-semibold text-primary-700"
+          >
+            <BookOpen className="h-5 w-5" aria-hidden />
+            Обучение · пошаговые уроки
+          </Link>
           {GROUPED_FEATURES.map((group, gi) => (
             <div key={group.title} className={gi === 0 ? undefined : 'mt-4'}>
               {/* slate-500: 12px uppercase = «обычный» текст по WCAG, нужен AA 4.5:1 (slate-400 давал ~2.6:1) */}

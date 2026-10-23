@@ -508,6 +508,9 @@ test('public contracts remain reachable during pending staff restore, while priv
       '/f/sklad',
       '/tarify',
       '/voprosy',
+      '/obuchenie',
+      '/obuchenie/dobavit-klienta',
+      '/obuchenie/not-a-lesson',
       '/review/fixture',
       '/book/fixture',
       '/nfc/attendance',
@@ -522,18 +525,27 @@ test('public contracts remain reachable during pending staff restore, while priv
           : [node.props.path, ...React.Children.toArray(node.props.children).flatMap(collect)];
       assert.ok(
         collect(element).includes(
-          pathname === '/f/sklad'
-            ? '/f/:slug'
-            : pathname === '/review/fixture'
-              ? '/review/:token'
-              : pathname === '/book/fixture'
-                ? '/book/:slug'
-                : pathname,
+          pathname.startsWith('/obuchenie/')
+            ? '/obuchenie/:lesson'
+            : pathname === '/f/sklad'
+              ? '/f/:slug'
+              : pathname === '/review/fixture'
+                ? '/review/:token'
+                : pathname === '/book/fixture'
+                  ? '/book/:slug'
+                  : pathname,
         ),
         pathname,
       );
     }
-    for (const pathname of ['/motivation', '/dashboard', '/company-settings', '/unknown-private-route']) {
+    for (const pathname of [
+      '/motivation',
+      '/dashboard',
+      '/company-settings',
+      '/unknown-private-route',
+      '/obuchenie/a/extra',
+      '/knowledge',
+    ]) {
       global.window.location.pathname = pathname;
       h.pendingApp();
     }
