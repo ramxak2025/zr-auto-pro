@@ -23,6 +23,7 @@ export interface LearningLesson {
   topic: LearningTopic;
   availability?: string;
   featureIds?: string[];
+  searchTasks?: { aliases: string[]; step: number }[];
   prerequisite?: string;
   steps: LearningStep[];
 }

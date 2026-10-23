@@ -23,19 +23,21 @@ const stopWords = new Set([
   'пожалуйста',
 ]);
 const synonymGroups = [
-  ['оприходовать', 'оприходование', 'поставка', 'приёмка', 'поступление', 'приход'],
-  ['продажа', 'чек', 'заказнаряд', 'касса'],
+  ['оприходовать', 'оприходование', 'принять', 'принимать', 'поставка', 'приёмка', 'поступление', 'приход'],
+  ['продажа', 'чек', 'заказнаряд', 'касса', 'выручка'],
   ['мастер', 'сотрудник', 'персонал', 'исполнитель'],
   ['прибыль', 'деньги', 'денег', 'доход', 'финансы'],
   ['клиент', 'покупатель'],
+  ['масло', 'масел'],
+  ['ремонт', 'обслуживание', 'заказнаряд', 'чек'],
   ['добавить', 'создать', 'добавление', 'создание'],
 ];
 
 function stem(word: string): string {
-  return word.length < 5
+  return word.length < 4
     ? word
     : word.replace(
-        /(иями|ами|ями|ого|ему|ому|ить|ать|ять|еть|ов|ев|ей|ия|ие|ий|ый|ой|ая|ую|ам|ям|ах|ях|ом|ем|ы|и|а|я|у|ю|е|ь)$/u,
+        /(иями|ами|ями|ии|ого|ему|ому|ить|ать|ять|еть|ов|ев|ей|ия|ие|ий|ый|ой|ая|ую|ам|ям|ах|ях|ом|ем|ы|и|а|я|у|ю|е|ь)$/u,
         '',
       );
 }
@@ -105,10 +107,18 @@ export function rankLearningLessons(
     ];
     let best: LearningSearchResult | undefined;
     for (const [index, step] of lesson.steps.entries()) {
-      const fields = [...common, [step.title, 8], [step.action, 7], [step.result, 2], [step.note ?? '', 1]] as [
-        string,
-        number,
-      ][];
+      // Reviewed task names point to the workflow entry, rather than incidental Create/Cancel copy.
+      const taskNames = (lesson.searchTasks ?? [])
+        .filter((task) => task.step === index + 1)
+        .flatMap((task) => task.aliases.map((alias): [string, number] => [alias, 14]));
+      const fields = [
+        ...common,
+        ...taskNames,
+        [step.title, 8],
+        [step.action, 7],
+        [step.result, 2],
+        [step.note ?? '', 1],
+      ] as [string, number][];
       const scores = words.map((word) =>
         Math.max(
           0,
@@ -119,7 +129,18 @@ export function rankLearningLessons(
         ),
       );
       if (scores.some((score) => score === 0)) continue;
-      const score = scores.reduce((sum, value) => sum + value, 0);
+      // A literal control/action phrase beats words scattered across unrelated fields.
+      const phrase = words.join(' ');
+      const phraseBonus =
+        words.length < 2
+          ? 0
+          : Math.max(
+              0,
+              ...fields.map(([value, weight]) =>
+                (' ' + learningSearchWords(value).join(' ') + ' ').includes(' ' + phrase + ' ') ? weight * 0.6 : 0,
+              ),
+            );
+      const score = scores.reduce((sum, value) => sum + value, 0) + phraseBonus;
       if (!best || score > best.score) best = { lesson, step: index + 1, score };
     }
     if (best) results.push(best);

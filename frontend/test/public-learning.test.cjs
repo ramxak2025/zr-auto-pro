@@ -80,7 +80,16 @@ function loadLearning({ realShell = false } = {}) {
   };
 }
 
+const layoutFrames = new Map();
+let nextLayoutFrame = 0;
 function browser(storage = new Map()) {
+  layoutFrames.clear();
+  global.requestAnimationFrame = (callback) => {
+    const id = ++nextLayoutFrame;
+    layoutFrames.set(id, callback);
+    return id;
+  };
+  global.cancelAnimationFrame = (id) => layoutFrames.delete(id);
   global.window = {
     pageScrollCalls: [],
     scrollTo: (options) => window.pageScrollCalls.push(options),
@@ -93,7 +102,12 @@ function browser(storage = new Map()) {
   return storage;
 }
 const allText = (node) => (typeof node === 'string' ? node : (node?.children ?? []).map(allText).join(' '));
-async function mount(h, initial, previousEntries = []) {
+async function mount(
+  h,
+  initial,
+  previousEntries = [],
+  { imageReady = true, viewportWidth = 800, viewportHeight = 600 } = {},
+) {
   let navigate;
   let location;
   let tree;
@@ -102,6 +116,7 @@ async function mount(h, initial, previousEntries = []) {
   const focusCalls = [];
   const scrollCalls = [];
   const viewportScrollCalls = [];
+  const mockedNodes = [];
   let dialogOpen = false;
   function Probe() {
     navigate = Router.useNavigate();
@@ -125,24 +140,42 @@ async function mount(h, initial, previousEntries = []) {
         ),
       ),
       {
-        createNodeMock: (element) => ({
-          clientWidth: 800,
-          clientHeight: 600,
-          scrollTo: (options) => viewportScrollCalls.push({ element, options }),
-          focus: (options) => {
-            focusCount++;
-            focusTargets.push(element.props['aria-label'] ?? element.type);
-            focusCalls.push({ element, options });
-          },
-          scrollIntoView: (options) => scrollCalls.push({ element, options }),
-          showModal: () => {
-            assert.equal(element.type, 'dialog');
-            dialogOpen = true;
-          },
-          close: () => {
-            dialogOpen = false;
-          },
-        }),
+        createNodeMock: (element) => {
+          const events = new Map();
+          const node = {
+            element,
+            events,
+            complete: imageReady,
+            naturalWidth: imageReady ? (element.props.width ?? 0) : 0,
+            clientWidth: element.type === 'img' ? element.props.width : viewportWidth,
+            clientHeight: element.type === 'img' ? element.props.height : viewportHeight,
+            getBoundingClientRect: () => ({
+              width: element.props.width ?? viewportWidth,
+              height: element.props.height ?? viewportHeight,
+            }),
+            addEventListener: (name, handler) => {
+              if (!events.has(name)) events.set(name, new Set());
+              events.get(name).add(handler);
+            },
+            removeEventListener: (name, handler) => events.get(name)?.delete(handler),
+            scrollTo: (options) => viewportScrollCalls.push({ element, options }),
+            focus: (options) => {
+              focusCount++;
+              focusTargets.push(element.props['aria-label'] ?? element.type);
+              focusCalls.push({ element, options });
+            },
+            scrollIntoView: (options) => scrollCalls.push({ element, options }),
+            showModal: () => {
+              assert.equal(element.type, 'dialog');
+              dialogOpen = true;
+            },
+            close: () => {
+              dialogOpen = false;
+            },
+          };
+          mockedNodes.push(node);
+          return node;
+        },
       },
     );
   });
@@ -160,6 +193,14 @@ async function mount(h, initial, previousEntries = []) {
     focusCalls,
     scrollCalls,
     viewportScrollCalls,
+    mockedNodes,
+    async flushLayout() {
+      await Renderer.act(async () => {
+        const callbacks = [...layoutFrames.values()];
+        layoutFrames.clear();
+        callbacks.forEach((callback) => callback());
+      });
+    },
     get dialogOpen() {
       return dialogOpen;
     },
@@ -332,6 +373,7 @@ function assertDesktopAsset(id, asset) {
     'publish only asset metadata, never private pipeline proof',
   );
   assert.doesNotMatch(JSON.stringify(asset), /\/Users\/|private-oct|capture\/shots|Bearer |password|tenantId|userId/i);
+  assert.doesNotMatch(asset.alt + ' ' + asset.provenance.screen, /Root viewed|\b(?:privacy|approved|raw|proof)\b/i);
   if (asset.hotspot) assertHotspot(asset.hotspot, id);
 }
 
@@ -380,6 +422,13 @@ test('catalog IDs, platform links and effective rich targets cover every registe
       assert.ok(lesson.featureIds.length > 0);
       assert.equal(new Set(lesson.featureIds).size, lesson.featureIds.length);
       for (const id of lesson.featureIds) assert.match(id, /^[a-z][a-z_]*$/);
+      for (const task of lesson.searchTasks ?? []) {
+        assert.ok(Number.isInteger(task.step) && task.step >= 1 && task.step <= lesson.steps.length);
+        assert.ok(
+          task.aliases.length > 0 &&
+            task.aliases.every((alias) => alias.trim() && alias.length <= h.MAX_LEARNING_QUERY_LENGTH),
+        );
+      }
     }
     for (const [index, step] of lesson.steps.entries()) {
       assert.equal(
@@ -732,15 +781,15 @@ test('stale resumed progress uses the last valid step and its matching screensho
 test('search finds actions and handles ё/е; topic and query live in URL and empty results recover', async () => {
   browser();
   const h = loadLearning();
-  assert.ok(h.searchLessons('расчет').length === 0);
+  assert.deepEqual(h.searchLessons('расчет'), h.searchLessons('расчёт'));
   assert.ok(h.searchLessons('Ещё').length > 0);
-  const page = await mount(h, '/obuchenie?q=клиент&topic=Клиенты');
+  const page = await mount(h, '/obuchenie?platform=mobile&q=клиент&topic=Клиенты');
   try {
     assert.equal(
       page.tree.root.findAll((item) => item.type === 'a' && item.props.className === 'learning-lesson-row').length,
       1,
     );
-    await page.go('/obuchenie?q=продажа');
+    await page.go('/obuchenie?platform=mobile&q=продажа');
     const sales = page.tree.root.findAll((item) => item.type === 'a' && item.props.className === 'learning-lesson-row');
     assert.ok(sales.length >= 1);
     assert.equal(new URL(sales[0].props.href, 'https://example.test').pathname, '/obuchenie/sozdat-chek');
@@ -896,9 +945,9 @@ function addDesktopFixture(h) {
 test('ranked search normalizes Russian, bounded typos and synonyms, requires every word, and chooses the matching step', () => {
   const h = loadLearning();
   const desktop = addDesktopFixture(h);
-  const synonym = h.rankLearningLessons(h.learningLessons, 'как оприходовать поставку', { platform: 'desktop' });
+  const synonym = h.rankLearningLessons([desktop], 'как оприходовать поставку', { platform: 'desktop' });
   assert.equal(synonym[0].lesson.slug, desktop.slug);
-  const typo = h.rankLearningLessons(h.learningLessons, 'принятое количетсво', { topic: 'stock' });
+  const typo = h.rankLearningLessons([desktop], 'принятое количетсво', { topic: 'stock' });
   assert.equal(typo[0].step, 2);
   assert.equal(typo[0].lesson.slug, desktop.slug);
   assert.deepEqual(h.rankLearningLessons(h.learningLessons, 'принятое несуществующее'), []);
@@ -939,12 +988,15 @@ test('desktop search filters survive direct best-step navigation, Next and Back 
   const page = await mount(h, '/obuchenie?platform=desktop&group=stock&q=принятое%20количество');
   try {
     const rows = page.tree.root.findAllByType('a').filter((node) => node.props.className === 'learning-lesson-row');
-    assert.equal(rows.length, 1);
-    const target = new URL(rows[0].props.href, 'https://example.test');
+    const row = rows.find(
+      (node) => new URL(node.props.href, 'https://example.test').pathname === `/obuchenie/${desktop.slug}`,
+    );
+    assert.ok(row, 'matching fixture remains reachable among real catalog results');
+    const target = new URL(row.props.href, 'https://example.test');
     assert.equal(target.searchParams.get('step'), '2');
-    assert.match(allText(rows[0]), /Компьютер/);
-    assert.match(allText(rows[0]), /Шаг\s+2\s*:\s+Укажите количество/);
-    await page.go(rows[0].props.href);
+    assert.match(allText(row), /Компьютер/);
+    assert.match(allText(row), /Шаг\s+2\s*:\s+Укажите количество/);
+    await page.go(row.props.href);
     assert.equal(page.location.pathname, `/obuchenie/${desktop.slug}`);
     assert.equal(page.location.search.includes('platform=desktop'), true);
     assert.ok(page.tree.root.findByProps({ className: 'learning-workspace is-desktop' }));
@@ -989,12 +1041,12 @@ test('platform controls are explicit, default to all, and old topic links keep w
     await page.go('/obuchenie?topic=Клиенты');
     assert.equal(
       page.tree.root.findAllByType('a').filter((node) => node.props.className === 'learning-lesson-row').length,
-      1,
+      h.learningLessons.filter((lesson) => lesson.topic === 'clients').length,
     );
     await page.go('/obuchenie?topic=Касса');
     assert.equal(
       page.tree.root.findAllByType('a').filter((node) => node.props.className === 'learning-lesson-row').length,
-      2,
+      h.learningLessons.filter((lesson) => lesson.category === 'Касса').length,
     );
   } finally {
     page.destroy();
@@ -1084,6 +1136,7 @@ test('desktop natural-size zoom opens centered on the step target and closes wit
     await Renderer.act(async () => page.tree.root.findByProps({ className: 'learning-image-button' }).props.onClick());
     assert.equal(page.dialogOpen, true);
     assert.equal(page.tree.root.findByType('dialog').props.className, 'learning-image-dialog is-desktop');
+    await page.flushLayout();
     assert.equal(page.viewportScrollCalls.length, 1);
     assert.equal(page.viewportScrollCalls[0].element.props.className, 'learning-dialog-image');
     assert.deepEqual(page.viewportScrollCalls[0].options, { left: 1140, top: 680, behavior: 'instant' });
@@ -1125,12 +1178,22 @@ test('ordinary Russian task questions keep meaningful words and show the matchin
     steps: [{ ...desktop.steps[0], title: 'Откройте зарплату', action: 'Проверьте начисления за период.' }],
   };
   h.learningLessons.push(product, salary);
-  assert.equal(h.rankLearningLessons(h.learningLessons, 'как добавить товар')[0].lesson.slug, product.slug);
-  assert.equal(h.rankLearningLessons(h.learningLessons, 'где посмотреть зарплату')[0].lesson.slug, salary.slug);
-  assert.equal(h.rankLearningLessons(h.learningLessons, 'где посмотреть зарплту')[0].lesson.slug, salary.slug);
+  assert.equal(h.rankLearningLessons([desktop, product, salary], 'как добавить товар')[0].lesson.slug, product.slug);
+  assert.equal(
+    h.rankLearningLessons([desktop, product, salary], 'где посмотреть зарплату')[0].lesson.slug,
+    salary.slug,
+  );
+  assert.equal(h.rankLearningLessons([desktop, product, salary], 'где посмотреть зарплту')[0].lesson.slug, salary.slug);
   const page = await mount(h, '/obuchenie?platform=desktop&q=принятое%20количество');
   try {
-    const row = page.tree.root.findAllByType('a').find((node) => node.props.className === 'learning-lesson-row');
+    const row = page.tree.root
+      .findAllByType('a')
+      .find(
+        (node) =>
+          node.props.className === 'learning-lesson-row' &&
+          new URL(node.props.href, 'https://example.test').pathname === `/obuchenie/${desktop.slug}`,
+      );
+    assert.ok(row);
     assert.match(allText(row), /Введите принятое количество товара/);
   } finally {
     page.destroy();
@@ -1158,6 +1221,191 @@ test('genuine desktop overview search opens its client-link step and advances to
     assert.equal(image().findByType('img').props.src, h.desktopAssets['desktop-clients-overview'].src);
     assert.match(allText(page.tree.toJSON()), /поле поиска клиентов/);
     assert.deepEqual(h.readLearningProgress().lessons['dobavit-klienta'], { step: 6, complete: true });
+  } finally {
+    page.destroy();
+  }
+});
+
+// Tenant navigation inventory; internal platform/manager consoles are deliberately outside this catalog.
+test('desktop task guides cover the exact 31 tenant feature IDs', () => {
+  const h = loadLearning();
+  const expected = [
+    'dashboard',
+    'cash_register_work_order',
+    'appointments',
+    'work_board',
+    'work_order_journal',
+    'clients',
+    'cars',
+    'calls',
+    'marketing',
+    'warehouse',
+    'services',
+    'suppliers',
+    'purchase_orders',
+    'equipment',
+    'cashflow',
+    'cash_shift',
+    'installments',
+    'expenses',
+    'planning',
+    'salary',
+    'reports',
+    'schedule',
+    'employees',
+    'motivation',
+    'users',
+    'branches',
+    'knowledge_base',
+    'company_settings',
+    'integrations',
+    'notifications',
+    'tariff_subscription',
+  ];
+  const covered = new Set(
+    h.learningLessons.filter((lesson) => lesson.platform === 'desktop').flatMap((lesson) => lesson.featureIds),
+  );
+  assert.deepEqual([...covered].sort(), expected.sort());
+});
+
+test('real catalog task questions rank the relevant guide and link directly to its matching action', async () => {
+  const cases = [
+    ['принять товар без заказа', 'desktop-oformit-postavku-bez-zakaza', 2],
+    ['процент с продажи масел', 'desktop-nastroit-motivaciyu-na-tovary', 3],
+    ['фикс мастеру', 'desktop-dobavit-uslugu-s-fiksirovannoy-cenoy', 8],
+    ['история ремонта клиента', 'desktop-otkryt-chek-iz-istorii-klienta', 1],
+    ['цена от до', 'desktop-dobavit-uslugu-s-diapazonom-ceny', 3],
+    ['цены и себестоимость шаблона', 'desktop-proverit-tseny-v-shablone', 2],
+    ['как добавить товар', 'desktop-dobavit-tovar-s-cenami', 1],
+    ['где посмотреть зарплату', 'desktop-proverit-zarplatu-i-podgotovit-vyplatu', 1],
+  ];
+  browser();
+  const h = loadLearning();
+  const page = await mount(h, '/obuchenie');
+  try {
+    for (const [query, slug, step] of cases) {
+      const ranked = h.rankLearningLessons(h.learningLessons, query, { platform: 'desktop' });
+      assert.equal(ranked[0]?.lesson.slug, slug, query);
+      assert.equal(ranked[0]?.step, step, query);
+      await page.go('/obuchenie?' + new URLSearchParams({ platform: 'desktop', q: query }));
+      const row = page.tree.root.findAllByType('a').find((node) => node.props.className === 'learning-lesson-row');
+      const url = new URL(row.props.href, 'https://example.test');
+      assert.equal(url.pathname, '/obuchenie/' + slug, query);
+      assert.equal(url.searchParams.get('step'), String(step), query);
+      assert.equal(url.searchParams.get('platform'), 'desktop');
+      assert.equal(url.searchParams.get('q'), query);
+      assert.ok(
+        allText(row).includes(ranked[0].lesson.steps[step - 1].action),
+        'visible result explains the matched action',
+      );
+    }
+    assert.deepEqual(h.rankLearningLessons(h.learningLessons, 'процент с продажи несуществующего'), []);
+  } finally {
+    page.destroy();
+  }
+});
+
+test('task creation searches open the start of the intended workflow, not incidental Create or Cancel text', async () => {
+  browser();
+  const h = loadLearning();
+  const cases = [
+    ['как создать шаблон чека', 'desktop-sohranit-shablon-cheka'],
+    ['добавить сотрудника', 'desktop-podgotovit-dostup-sotrudniku'],
+    ['создать сотрудника', 'desktop-podgotovit-dostup-sotrudniku'],
+  ];
+  const page = await mount(h, '/obuchenie');
+  try {
+    for (const [query, slug] of cases) {
+      const best = h.rankLearningLessons(h.learningLessons, query, { platform: 'desktop' })[0];
+      assert.equal(best?.lesson.slug, slug, query);
+      assert.equal(best?.step, 1, query);
+      await page.go('/obuchenie?' + new URLSearchParams({ platform: 'desktop', q: query }));
+      const row = page.tree.root.findAllByType('a').find((node) => node.props.className === 'learning-lesson-row');
+      const url = new URL(row.props.href, 'https://example.test');
+      assert.equal(url.pathname, '/obuchenie/' + slug);
+      assert.equal(url.searchParams.get('step'), '1');
+    }
+    assert.deepEqual(h.rankLearningLessons(h.learningLessons, 'создать шаблон несуществующее'), []);
+    assert.deepEqual(h.rankLearningLessons(h.learningLessons, 'создать сотрудника', { platform: 'mobile' }), []);
+  } finally {
+    page.destroy();
+  }
+});
+
+test('cold narrow desktop zoom waits for loaded image layout, centers once, and never snaps back on later events', async () => {
+  browser();
+  const h = loadLearning();
+  addDesktopFixture(h);
+  const page = await mount(h, '/obuchenie/desktop-test-priemka?platform=desktop&step=2', [], {
+    imageReady: false,
+    viewportWidth: 369,
+    viewportHeight: 700,
+  });
+  try {
+    await Renderer.act(async () => page.tree.root.findByProps({ className: 'learning-image-button' }).props.onClick());
+    await page.flushLayout();
+    assert.equal(
+      page.viewportScrollCalls.length,
+      0,
+      'an unloaded image must not clamp the initial scroll to its empty layout',
+    );
+    const image = page.mockedNodes.filter((node) => node.element.type === 'img').at(-1);
+    image.complete = true;
+    image.naturalWidth = image.element.props.width;
+    await Renderer.act(async () => image.events.get('load')?.forEach((handler) => handler()));
+    await page.flushLayout();
+    assert.equal(page.viewportScrollCalls.length, 1);
+    assert.deepEqual(page.viewportScrollCalls[0].options, { left: 1571, top: 580, behavior: 'instant' });
+    const viewport = page.mockedNodes.find((node) => node.element.props.className === 'learning-dialog-image');
+    viewport.scrollLeft = 25;
+    await Renderer.act(async () => {
+      viewport.events.get('wheel')?.forEach((handler) => handler());
+      image.events.get('load')?.forEach((handler) => handler());
+    });
+    await page.flushLayout();
+    assert.equal(page.viewportScrollCalls.length, 1, 'late load/resize notifications must not undo manual pan');
+    await Renderer.act(async () => page.tree.root.findByType('dialog').props.onCancel({ preventDefault() {} }));
+    assert.equal(document.body.style.overflow, '');
+    assert.match(page.focusTargets.at(-1), /^Увеличить скриншот:/);
+    await Renderer.act(async () => page.tree.root.findByProps({ className: 'learning-image-button' }).props.onClick());
+    const nextImage = page.mockedNodes.filter((node) => node.element.type === 'img').at(-1);
+    const nextViewport = page.mockedNodes
+      .filter((node) => node.element.props.className === 'learning-dialog-image')
+      .at(-1);
+    await Renderer.act(async () => nextViewport.events.get('wheel')?.forEach((handler) => handler()));
+    nextImage.complete = true;
+    nextImage.naturalWidth = nextImage.element.props.width;
+    await Renderer.act(async () => nextImage.events.get('load')?.forEach((handler) => handler()));
+    await page.flushLayout();
+    assert.equal(page.viewportScrollCalls.length, 1, 'manual pan before a delayed image load also wins');
+  } finally {
+    page.destroy();
+  }
+});
+
+test('catalog search and topic controls precede the optional featured lesson; row markers identify platform or completion', async () => {
+  const storage = browser();
+  const h = loadLearning();
+  storage.set(h.LEARNING_PROGRESS_KEY, JSON.stringify({ lessons: { 'dobavit-klienta': { step: 6, complete: true } } }));
+  const page = await mount(h, '/obuchenie');
+  try {
+    const nodes = page.tree.root.findAll((node) => typeof node.type === 'string');
+    const feature = nodes.findIndex((node) => node.props['aria-labelledby'] === 'learning-start-title');
+    assert.ok(feature > nodes.findIndex((node) => node.type === 'input' && node.props['aria-label'] === 'Найти урок'));
+    assert.ok(feature > nodes.findIndex((node) => node.props['aria-label'] === 'Темы обучения'));
+    const rows = page.tree.root.findAllByType('a').filter((node) => node.props.className === 'learning-lesson-row');
+    for (const row of rows) {
+      const slug = new URL(row.props.href, 'https://example.test').pathname.split('/').at(-1);
+      const lesson = h.learningLessons.find((item) => item.slug === slug);
+      const marker = row.findByProps({
+        className: 'learning-lesson-marker' + (slug === 'dobavit-klienta' ? ' is-complete' : ''),
+      });
+      assert.equal(
+        marker.props['aria-label'],
+        slug === 'dobavit-klienta' ? 'Пройден' : lesson.platform === 'desktop' ? 'Компьютер' : 'Приложение',
+      );
+      assert.equal(allText(marker).trim(), '');
+    }
   } finally {
     page.destroy();
   }

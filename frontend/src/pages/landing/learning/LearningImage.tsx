@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ImageOff, Maximize2, MousePointer2, X } from 'lucide-react';
 import { getLearningAsset, type LearningImageAsset, type LearningImageId } from './assets';
 import {
@@ -14,12 +14,16 @@ function Screenshot({
   hotspot,
   annotation,
   stepNumber,
+  imageRef,
+  eager = false,
 }: {
   asset: LearningImageAsset;
   onError: () => void;
   hotspot?: LearningTarget;
   annotation?: LearningAnnotation;
   stepNumber: number;
+  imageRef?: RefObject<HTMLImageElement>;
+  eager?: boolean;
 }) {
   const frameRef = useRef<HTMLSpanElement>(null);
   const [frame, setFrame] = useState({ width: asset.width, height: asset.height });
@@ -38,11 +42,12 @@ function Screenshot({
   return (
     <span className="learning-image-content" ref={frameRef}>
       <img
+        ref={imageRef}
         src={asset.src}
         width={asset.width}
         height={asset.height}
         alt={asset.alt}
-        loading="lazy"
+        loading={eager ? 'eager' : 'lazy'}
         decoding="async"
         onError={onError}
       />
@@ -99,6 +104,7 @@ export default function LearningImage({
   const [expanded, setExpanded] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const zoomImageRef = useRef<HTMLImageElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
   const focusRetryAfterFailure = useRef(false);
@@ -131,13 +137,44 @@ export default function LearningImage({
   useEffect(() => {
     if (!expanded || asset?.provenance.platform !== 'desktop') return;
     const viewport = viewportRef.current;
-    if (!viewport) return;
-    // Center the step once on opening at natural scale; manual scroll does not update these dependencies.
-    const position = learningZoomScroll(hotspot ?? asset.hotspot, asset, {
-      width: viewport.clientWidth,
-      height: viewport.clientHeight,
-    });
-    viewport.scrollTo({ ...position, behavior: 'instant' });
+    const image = zoomImageRef.current;
+    if (!viewport || !image) return;
+    let finished = false;
+    let frame = 0;
+    // Before load, width:auto can have no natural scrollable width. Wait for pixels and dialog layout.
+    const center = () => {
+      frame = 0;
+      if (finished || !image.complete || !image.naturalWidth || !viewport.clientWidth || !viewport.clientHeight) return;
+      const size = image.getBoundingClientRect();
+      if (!size.width || !size.height) return;
+      const position = learningZoomScroll(hotspot ?? asset.hotspot, size, {
+        width: viewport.clientWidth,
+        height: viewport.clientHeight,
+      });
+      viewport.scrollTo({ ...position, behavior: 'instant' });
+      finished = true;
+      observer?.disconnect();
+    };
+    const schedule = () => {
+      if (!finished && !frame) frame = requestAnimationFrame(center);
+    };
+    const stop = () => {
+      finished = true;
+      if (frame) cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
+    observer?.observe(viewport);
+    image.addEventListener('load', schedule);
+    // A deliberate pan before loading wins too; late image/resize events never move the user back.
+    const panEvents = ['pointerdown', 'touchstart', 'wheel', 'keydown'] as const;
+    panEvents.forEach((event) => viewport.addEventListener(event, stop, { passive: true }));
+    schedule();
+    return () => {
+      stop();
+      image.removeEventListener('load', schedule);
+      panEvents.forEach((event) => viewport.removeEventListener(event, stop));
+    };
   }, [expanded, asset, hotspot]);
 
   useEffect(() => {
@@ -226,6 +263,8 @@ export default function LearningImage({
           </div>
           <div className="learning-dialog-image" ref={viewportRef}>
             <Screenshot
+              imageRef={zoomImageRef}
+              eager
               asset={asset}
               hotspot={hotspot}
               annotation={annotation}

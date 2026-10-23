@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Check, Search, X } from 'lucide-react';
+import { ArrowRight, Check, Monitor, Search, Smartphone, X } from 'lucide-react';
 import LearningShell, { LearningBreadcrumb } from './LearningShell';
 import LearningImage from './LearningImage';
 import { learningLessons, lessonHref, resolveLearningStep } from './content';
@@ -60,9 +60,7 @@ export default function LearningCenterPage() {
       <LearningBreadcrumb />
       <div className="learning-index-heading">
         <h1>
-          Разберитесь в Autexa.
-          <br />
-          <span>Шаг за шагом.</span>
+          Разберитесь в Autexa. <span>Шаг за шагом.</span>
         </h1>
         <p>Найдите свою задачу. Откройте нужный шаг и повторяйте действия по настоящим экранам Autexa.</p>
       </div>
@@ -78,31 +76,6 @@ export default function LearningCenterPage() {
           </button>
         ))}
       </nav>
-      {featured && !query && !group && !category && (
-        <section
-          className={`learning-feature${featured.platform === 'desktop' ? ' is-desktop' : ''}`}
-          aria-labelledby="learning-start-title"
-        >
-          <div className="learning-feature-copy">
-            <h2 id="learning-start-title">{featuredHeading}</h2>
-            <p>{featuredDescription}</p>
-            <Link className="learning-button learning-primary" to={lessonHref(featured.slug, featuredStep, params)}>
-              {featuredAction}
-              <ArrowRight size={19} aria-hidden="true" />
-            </Link>
-            <span className="learning-feature-caption">Шагов: {featured.steps.length}</span>
-          </div>
-          <div className="learning-feature-screen">
-            <LearningImage
-              assetId={featured.steps[featuredStep - 1].asset}
-              hotspot={featured.steps[featuredStep - 1].hotspot}
-              annotation={featured.steps[featuredStep - 1].annotation}
-              stepNumber={featuredStep}
-              preview
-            />
-          </div>
-        </section>
-      )}
       <section className="learning-catalog" aria-labelledby="learning-lessons-title">
         <div className="learning-catalog-head">
           <h2 id="learning-lessons-title">Чему научимся</h2>
@@ -151,6 +124,31 @@ export default function LearningCenterPage() {
             );
           })}
         </nav>
+        {featured && !query && !group && !category && (
+          <section
+            className={`learning-feature${featured.platform === 'desktop' ? ' is-desktop' : ''}`}
+            aria-labelledby="learning-start-title"
+          >
+            <div className="learning-feature-copy">
+              <h2 id="learning-start-title">{featuredHeading}</h2>
+              <p>{featuredDescription}</p>
+              <Link className="learning-button learning-primary" to={lessonHref(featured.slug, featuredStep, params)}>
+                {featuredAction}
+                <ArrowRight size={19} aria-hidden="true" />
+              </Link>
+              <span className="learning-feature-caption">Шагов: {featured.steps.length}</span>
+            </div>
+            <div className="learning-feature-screen">
+              <LearningImage
+                assetId={featured.steps[featuredStep - 1].asset}
+                hotspot={featured.steps[featuredStep - 1].hotspot}
+                annotation={featured.steps[featuredStep - 1].annotation}
+                stepNumber={featuredStep}
+                preview
+              />
+            </div>
+          </section>
+        )}
         {(query || group || category) && (
           <p className="learning-search-result" role="status">
             Найдено уроков: {found.length}
@@ -172,7 +170,7 @@ export default function LearningCenterPage() {
                   <h3 id={`learning-topic-${topic.id}`}>{topic.title}</h3>
                   <p>{topic.description}</p>
                 </div>
-                <ol className="learning-lesson-list">
+                <ul className="learning-lesson-list">
                   {tasks.map(({ lesson, step: matchedStep }) => {
                     const saved = progress.lessons[lesson.slug];
                     const complete = saved?.complete;
@@ -181,8 +179,18 @@ export default function LearningCenterPage() {
                     return (
                       <li key={lesson.slug}>
                         <Link to={lessonHref(lesson.slug, linkedStep, params)} className="learning-lesson-row">
-                          <span className={`learning-lesson-number ${complete ? 'is-complete' : ''}`}>
-                            {complete ? <Check size={20} aria-label="Пройден" /> : learningLessons.indexOf(lesson) + 1}
+                          <span
+                            className={`learning-lesson-marker${complete ? ' is-complete' : ''}`}
+                            role="img"
+                            aria-label={complete ? 'Пройден' : platformLabels[lesson.platform]}
+                          >
+                            {complete ? (
+                              <Check size={20} aria-hidden="true" />
+                            ) : lesson.platform === 'desktop' ? (
+                              <Monitor size={20} aria-hidden="true" />
+                            ) : (
+                              <Smartphone size={20} aria-hidden="true" />
+                            )}
                           </span>
                           <span className="learning-lesson-row-copy">
                             <strong>{lesson.title}</strong>
@@ -205,7 +213,7 @@ export default function LearningCenterPage() {
                       </li>
                     );
                   })}
-                </ol>
+                </ul>
               </section>
             );
           })}
