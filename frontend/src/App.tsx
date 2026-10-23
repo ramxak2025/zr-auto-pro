@@ -64,6 +64,8 @@ const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
 const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDetailPage'));
 const TarifyPage = lazyWithRetry(() => import('./pages/landing/TarifyPage'));
 const VoprosyPage = lazyWithRetry(() => import('./pages/landing/VoprosyPage'));
+const LearningCenterPage = lazyWithRetry(() => import('./pages/landing/learning/LearningCenterPage'));
+const LearningLessonPage = lazyWithRetry(() => import('./pages/landing/learning/LearningLessonPage'));
 const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
 const RegisterPage = lazyWithRetry(() => import('./pages/RegisterPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
@@ -247,7 +249,6 @@ export default function App() {
               forwards a validated bearer after an explicit app-open action. */}
           <Route path="/nfc/attendance" element={<NfcAttendanceLandingPage />} />
           <Route path="/book/:slug" element={<PublicBookingPage />} />
-          <Route path="/:publicCode" element={<PublicBookingPage />} />
 
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />
@@ -278,7 +279,11 @@ export default function App() {
 
             {/* Все вопросы и ответы — по образцу /tarify */}
             <Route path="/voprosy" element={<VoprosyPage />} />
+            <Route path="/obuchenie" element={<LearningCenterPage />} />
+            <Route path="/obuchenie/:lesson" element={<LearningLessonPage />} />
           </Route>
+
+          <Route path="/:publicCode" element={<PublicBookingPage />} />
 
           {/* Public: Login */}
           <Route path="/login" element={user ? <Navigate to={homePathFor(user.role)} replace /> : <LoginPage />} />
