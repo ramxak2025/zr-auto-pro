@@ -116,6 +116,7 @@ export async function reconcileMotivationProductLines<T extends ProductInput>(
 interface Snapshot {
   product_id: string;
   decision: 'revenue_v2' | 'margin_v1' | 'none';
+  before_discount: boolean;
   rule_id: string | null;
   percent: string;
   qty: string;
@@ -301,7 +302,8 @@ export async function snapshotCheckMotivation(
       const current = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.product_id === productId);
       let decision = old?.decision,
         ruleId = old?.rule_id ?? null,
-        rate = old?.percent ?? '0';
+        rate = old?.percent ?? '0',
+        beforeDiscount = old?.before_discount ?? false;
       if (!old) {
         const productLine = current[0]?.line;
         if (!productLine) throw new Error('Missing product decision');
@@ -316,6 +318,7 @@ export async function snapshotCheckMotivation(
             : 'none';
         ruleId = rule?.id || null;
         rate = decision === 'revenue_v2' ? rule!.percent : '0';
+        beforeDiscount = rule?.before_discount ?? false;
       }
       const saved: SavedLine[] = current.map(({ line, index }) => ({
         id: line.id,
@@ -339,10 +342,12 @@ export async function snapshotCheckMotivation(
       }
       const qty = current.reduce((sum, { line }) => sum + scaled(line.quantity, 3), 0n);
       const base =
-        check.payment_method === 'warranty' ? 0n : saved.reduce((sum, line) => sum + BigInt(line.netCents), 0n);
+        check.payment_method === 'warranty'
+          ? 0n
+          : saved.reduce((sum, line) => sum + BigInt(beforeDiscount ? line.grossCents! : line.netCents), 0n);
       await client.query(
-        `INSERT INTO check_motivation_snapshots(tenant_id,check_id,product_id,decision,rule_id,percent,qty,revenue_base,sale_lines,accrued_at,product_name)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
+        `INSERT INTO check_motivation_snapshots(tenant_id,check_id,product_id,decision,rule_id,percent,qty,revenue_base,sale_lines,accrued_at,product_name,before_discount)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)
         ON CONFLICT(tenant_id,check_id,product_id) DO UPDATE SET qty=EXCLUDED.qty,revenue_base=EXCLUDED.revenue_base,sale_lines=EXCLUDED.sale_lines`,
         [
           tenant,
@@ -356,6 +361,7 @@ export async function snapshotCheckMotivation(
           JSON.stringify(saved),
           check.motivation_v2_posted_at,
           old?.product_name || current[0]?.line.name || null,
+          beforeDiscount,
         ],
       );
     }
@@ -421,7 +427,7 @@ export async function writeRevenueAccruals(client: PoolClient, tenant: string, c
   }
 }
 
-/** Only sold quantities returned at their saved net basis reduce the new bonus. */
+/** Only sold quantities returned at their saved rule basis reduce the new bonus. */
 export async function returnRevenueMotivation(
   client: PoolClient,
   tenant: string,
@@ -451,7 +457,8 @@ export async function returnRevenueMotivation(
       const qty = scaled(line.quantity, 3),
         wanted = scaled(move.quantity, 3),
         units = wanted > qty ? qty : wanted;
-      if (qty > 0n) returnedBase += roundRatio(BigInt(line.netCents) * units, qty);
+      if (qty > 0n)
+        returnedBase += roundRatio(BigInt(snapshot.before_discount ? line.grossCents! : line.netCents) * units, qty);
       returnedQty += units;
     }
     const base = scaled(snapshot.revenue_base, 2),
