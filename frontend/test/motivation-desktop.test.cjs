@@ -106,6 +106,11 @@ function mountComposer() {
       return {
         data: {
           rules: [],
+          ...((input.dryRun ? ['missing-preview', 'wrong-preview'] : ['missing-apply', 'wrong-apply']).includes(mode)
+            ? mode.startsWith('wrong')
+              ? { beforeDiscount: !input.beforeDiscount }
+              : {}
+            : { beforeDiscount: input.beforeDiscount }),
           requestId: input.requestId,
           coveredProductCount: 8,
           affectedProductCount: 6,
@@ -124,12 +129,24 @@ function mountComposer() {
   loaded.require = (name) => {
     if (name === '@tanstack/react-query')
       return {
+        useQueryClient: () => ({ invalidateQueries: () => {} }),
         useQuery: (opts) =>
           opts.queryKey[0] === 'warehouses'
             ? { data: [{ id: 'w1', name: 'Основной', kind: 'main' }] }
             : { data: choices },
       };
     if (name === '../../api/services') return { motivationApi: api };
+    if (name === '../Switch')
+      return {
+        default: ({ checked, onChange, label, ...props }) =>
+          React.createElement('button', {
+            ...props,
+            role: 'switch',
+            'aria-label': label,
+            'aria-checked': checked,
+            onClick: () => onChange(!checked),
+          }),
+      };
     if (name === '../../ui')
       return {
         Card: (p) => React.createElement('section', p),
@@ -250,11 +267,13 @@ test('409 invalidates review and never automatically reapplies; renewed preview 
   renderer.act(() => ui.root.unmount());
 });
 
-function mountPage(permissions) {
+function mountPage(permissions, beforeDiscount) {
+  let patchMode = 'normal';
   const queryOptions = [];
   const requests = [];
   const rule = {
     id: 'rule1',
+    beforeDiscount,
     target: { kind: 'product', productId: 'p0' },
     productName: 'Масло',
     percent: 8,
@@ -277,6 +296,7 @@ function mountPage(permissions) {
       employeeName: 'Мастер',
       qty: 1,
       scheme: 'revenue_v2',
+      beforeDiscount,
       calculationBase: 'revenue',
       baseAmount: 100,
       percent: 10,
@@ -313,13 +333,38 @@ function mountPage(permissions) {
     if (name === '../api/services')
       return {
         motivationApi: {
-          patchRule: async (...args) => requests.push(['patch', ...args]),
+          patchRule: async (...args) => {
+            requests.push(['patch', ...args]);
+            return {
+              data: {
+                ...rule,
+                beforeDiscount:
+                  patchMode === 'missing'
+                    ? undefined
+                    : patchMode === 'wrong'
+                      ? !args[1].beforeDiscount
+                      : args[1].beforeDiscount,
+                revision: rule.revision + 1,
+              },
+            };
+          },
           setPromo: async (...args) => requests.push(['legacy', ...args]),
           getAccrualsV2: async (params) => {
             requests.push(['ledger', params]);
             return { data: rows };
           },
         },
+      };
+    if (name === '../components/Switch')
+      return {
+        default: ({ checked, onChange, label, ...props }) =>
+          React.createElement('button', {
+            ...props,
+            role: 'switch',
+            'aria-label': label,
+            'aria-checked': checked,
+            onClick: () => onChange(!checked),
+          }),
       };
     if (name === '../contexts/AuthContext')
       return { useAuth: () => ({ hasPermission: (key) => permissions.includes(key) }) };
@@ -357,7 +402,17 @@ function mountPage(permissions) {
   renderer.act(() => {
     root = renderer.create(React.createElement(loaded.exports.default));
   });
-  return { root, queryOptions, requests };
+  return {
+    root,
+    queryOptions,
+    requests,
+    setPatchMode: (mode) => {
+      patchMode = mode;
+    },
+    setRuleRevision: (revision) => {
+      rule.revision = revision;
+    },
+  };
 }
 test('personal ledger cannot request other employees or configuration and shows equal shares with cents', async () => {
   const ui = mountPage(['salary_view']);
@@ -378,7 +433,11 @@ test('rule editor sends expected revision; legacy editing preserves rate, activi
   renderer.act(() => edit[0].props.onClick());
   let save = ui.root.root.findAllByType('button').find((b) => b.children.join('') === 'Сохранить');
   await renderer.act(async () => save.props.onClick());
-  assert.deepEqual(ui.requests[0], ['patch', 'rule1', { expectedRevision: 7, percent: 8, active: false }]);
+  assert.deepEqual(ui.requests[0], [
+    'patch',
+    'rule1',
+    { expectedRevision: 7, percent: 8, active: false, beforeDiscount: false },
+  ]);
   edit = ui.root.root.findAllByType('button').filter((b) => b.children.join('') === 'Изменить');
   renderer.act(() => edit[1].props.onClick());
   save = ui.root.root.findAllByType('button').find((b) => b.children.join('') === 'Сохранить');
@@ -439,3 +498,124 @@ for (const status of [408, 503]) {
     renderer.act(() => ui.root.unmount());
   });
 }
+
+test('discount basis defaults OFF, invalidates review when changed and freezes the reviewed flag for apply/retry', async () => {
+  const ui = mountComposer();
+  ui.selectProduct(0);
+  const toggle = () => ui.root.root.findAllByType('button').find((b) => b.props.role === 'switch');
+  assert.equal(toggle().props['aria-checked'], false);
+  await ui.click('Предварительный просмотр');
+  assert.equal(ui.calls[0].beforeDiscount, false);
+  renderer.act(() => toggle().props.onClick());
+  assert.equal(ui.button('Применить правило'), undefined);
+  await ui.click('Предварительный просмотр');
+  assert.equal(ui.calls[1].beforeDiscount, true);
+  assert.notEqual(ui.calls[1].requestId, ui.calls[0].requestId);
+  ui.setMode('transport');
+  await ui.click('Применить правило');
+  assert.equal(toggle().props.disabled, true);
+  ui.setMode('normal');
+  await ui.click('Повторить сохранение');
+  assert.deepEqual(ui.calls[2], ui.calls[3]);
+  assert.equal(ui.calls[3].beforeDiscount, true);
+  renderer.act(() => ui.root.unmount());
+});
+
+test('rule editing loads and saves its basis while the ledger displays the saved basis', async () => {
+  const ui = mountPage(['motivation_manage'], true);
+  assert.ok(JSON.stringify(ui.root.toJSON()).includes('до скидки'));
+  const edit = ui.root.root.findAllByType('button').find((b) => b.children.join('') === 'Изменить');
+  renderer.act(() => edit.props.onClick());
+  const toggle = () => ui.root.root.findAllByType('button').find((b) => b.props.role === 'switch');
+  assert.equal(toggle().props['aria-checked'], true);
+  renderer.act(() => toggle().props.onClick());
+  const save = ui.root.root.findAllByType('button').find((b) => b.children.join('') === 'Сохранить');
+  await renderer.act(async () => save.props.onClick());
+  assert.equal(ui.requests[0][2].beforeDiscount, false);
+  renderer.act(() => ui.root.unmount());
+  const history = mountPage(['salary_view'], true);
+  assert.ok(JSON.stringify(history.root.toJSON()).includes('Выручка до скидки'));
+  renderer.act(() => history.root.unmount());
+});
+
+for (const beforeDiscount of [false, true])
+  for (const mode of ['missing', 'wrong']) {
+    test(`bulk refuses ${mode} basis acknowledgement for ${beforeDiscount} preview and freezes unconfirmed apply`, async () => {
+      const ui = mountComposer();
+      ui.selectProduct(0);
+      const toggle = () => ui.root.root.findAllByType('button').find((b) => b.props.role === 'switch');
+      if (beforeDiscount) renderer.act(() => toggle().props.onClick());
+      ui.setMode(`${mode}-preview`);
+      await ui.click('Предварительный просмотр');
+      assert.equal(ui.button('Применить правило'), undefined);
+      assert.equal(ui.getSaved(), undefined);
+      assert.ok(JSON.stringify(ui.root.toJSON()).includes('Сервер не подтвердил'));
+      assert.equal(toggle().props.disabled, false);
+      ui.setMode('normal');
+      await ui.click('Предварительный просмотр');
+      ui.setMode(`${mode}-apply`);
+      await ui.click('Применить правило');
+      assert.equal(ui.getSaved(), undefined);
+      assert.equal(toggle().props.disabled, true);
+      assert.equal(ui.button('Закрыть').props.disabled, true);
+      assert.ok(ui.button('Повторить сохранение'));
+      const uncertain = ui.calls.at(-1);
+      ui.setMode('normal');
+      await ui.click('Повторить сохранение');
+      assert.deepEqual(ui.calls.at(-1), uncertain);
+      assert.equal(ui.getSaved().beforeDiscount, beforeDiscount);
+      renderer.act(() => ui.root.unmount());
+    });
+    test(`PATCH ${beforeDiscount} requires a refreshed revision after ${mode} basis acknowledgement`, async () => {
+      const ui = mountPage(['motivation_manage'], !beforeDiscount);
+      const button = (label) => ui.root.root.findAllByType('button').find((b) => b.children.join('') === label);
+      renderer.act(() => button('Изменить').props.onClick());
+      const toggle = ui.root.root.findAllByType('button').find((b) => b.props.role === 'switch');
+      renderer.act(() => toggle.props.onClick());
+      ui.setPatchMode(mode);
+      await renderer.act(async () => button('Сохранить').props.onClick());
+      assert.ok(JSON.stringify(ui.root.toJSON()).includes('Сервер не подтвердил'));
+      assert.equal(button('Сохранить').props.disabled, true);
+      await renderer.act(async () => button('Сохранить').props.onClick());
+      assert.equal(ui.requests.filter((r) => r[0] === 'patch').length, 1);
+      renderer.act(() => button('Отмена').props.onClick());
+      renderer.act(() => button('Изменить').props.onClick());
+      assert.equal(button('Сохранить').props.disabled, true);
+      ui.setRuleRevision(8);
+      renderer.act(() => button('Отмена').props.onClick());
+      renderer.act(() => button('Изменить').props.onClick());
+      ui.setPatchMode('normal');
+      await renderer.act(async () => button('Сохранить').props.onClick());
+      assert.equal(ui.requests.at(-1)[2].expectedRevision, 8);
+      renderer.act(() => ui.root.unmount());
+    });
+  }
+
+for (const beforeDiscount of [false, true])
+  for (const status of [400, 409]) {
+    test(`uncertain outcome survives HTTP ${status} retry for basis ${beforeDiscount} until the original request is acknowledged`, async () => {
+      const ui = mountComposer();
+      ui.selectProduct(0);
+      const toggle = () => ui.root.root.findAllByType('button').find((b) => b.props.role === 'switch');
+      if (beforeDiscount) renderer.act(() => toggle().props.onClick());
+      await ui.click('Предварительный просмотр');
+      ui.setMode('missing-apply');
+      await ui.click('Применить правило');
+      const original = ui.calls.at(-1);
+      assert.equal(ui.getSaved(), undefined);
+      assert.equal(toggle().props.disabled, true);
+      ui.setMode(status);
+      await ui.click('Повторить сохранение');
+      assert.deepEqual(ui.calls.at(-1), original);
+      assert.equal(ui.getSaved(), undefined);
+      assert.equal(toggle().props.disabled, true);
+      assert.equal(ui.button('Закрыть').props.disabled, true);
+      assert.equal(ui.button('Предварительный просмотр'), undefined);
+      assert.ok(ui.button('Повторить сохранение'));
+      ui.setMode('normal');
+      await ui.click('Повторить сохранение');
+      assert.deepEqual(ui.calls.at(-1), original);
+      assert.equal(ui.getSaved().beforeDiscount, beforeDiscount);
+      renderer.act(() => ui.root.unmount());
+    });
+  }

@@ -8,10 +8,11 @@ import {
   Keyboard,
   InputAccessoryView,
   Platform,
+  Switch,
 } from 'react-native';
 import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { randomUUID } from 'expo-crypto';
 import type { MotivationBulkInput, MotivationBulkResult } from '../../../../shared/types';
@@ -46,23 +47,38 @@ interface Props {
 
 /** One native presentation; review is an inline step, never another modal. */
 export default function MotivationBulkComposer(props: Props) {
+  const closeBlocked = useRef(false);
   return (
     <RNModal
       visible={props.visible}
       animationType="slide"
       presentationStyle="fullScreen"
-      onRequestClose={props.onClose}
+      onRequestClose={() => {
+        if (!closeBlocked.current) props.onClose();
+      }}
       onDismiss={props.onDismiss}
     >
       <KeyboardProvider>
-        <MotivationBulkForm key={props.sessionId} {...props} />
+        <MotivationBulkForm
+          key={props.sessionId}
+          {...props}
+          onCloseBlockedChange={(blocked) => {
+            closeBlocked.current = blocked;
+          }}
+        />
       </KeyboardProvider>
     </RNModal>
   );
 }
 
-export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 'sessionId' | 'onDismiss'>) {
+export function MotivationBulkForm({
+  visible,
+  onClose,
+  onSaved,
+  onCloseBlockedChange,
+}: Omit<Props, 'sessionId' | 'onDismiss'> & { onCloseBlockedChange?: (blocked: boolean) => void }) {
   const palette = useColors();
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const [warehouseId, setWarehouseId] = useState<string | null | undefined>(undefined);
   const [warehousesOpen, setWarehousesOpen] = useState(false);
@@ -71,10 +87,16 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
   const [searchFocused, setSearchFocused] = useState(false);
   const [selected, setSelected] = useState<MotivationChoice[]>([]);
   const [percent, setPercent] = useState('10');
+  const [beforeDiscount, setBeforeDiscount] = useState(false);
   const [preview, setPreview] = useState<MotivationBulkResult | null>(null);
   const [replacements, setReplacements] = useState<NonNullable<MotivationBulkInput['replaceLegacyPromos']>>([]);
   const [reviewing, setReviewing] = useState(false);
   const [pending, setPending] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const locked = pending || uncertain;
+  useEffect(() => {
+    onCloseBlockedChange?.(locked);
+  }, [locked, onCloseBlockedChange]);
   const [error, setError] = useState('');
   const busy = useRef(false);
   const active = useRef(visible);
@@ -85,6 +107,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
     };
   }, [visible]);
   const request = useRef<MotivationBulkInput | null>(null);
+  const applyRequest = useRef<MotivationBulkInput | null>(null);
   const generation = useRef(0);
   const warehouses = useQuery({
     queryKey: ['warehouses'],
@@ -125,24 +148,25 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
   const blockedExceptions = (preview?.legacyExceptions ?? []).filter(
     (exception) => !!exception.replacementBlockedReason,
   );
-  const replacementDisabled = pending || (!replacements.length && !replaceableExceptions.length);
+  const replacementDisabled = locked || (!replacements.length && !replaceableExceptions.length);
   const invalidate = () => {
     generation.current += 1;
     request.current = null;
+    applyRequest.current = null;
     setPreview(null);
     setError('');
   };
   const changeSelection = (choice: MotivationChoice) => {
-    if (busy.current) return;
+    if (busy.current || uncertain) return;
     invalidate();
     setReplacements([]);
     setSelected((previous) => toggleMotivationChoice(previous, choice));
   };
   const close = () => {
-    if (!busy.current) onClose();
+    if (!busy.current && !uncertain) onClose();
   };
   const run = async (apply: boolean) => {
-    if (busy.current || !selected.length || numericPercent === null) return;
+    if (busy.current || !selected.length || numericPercent === null || (apply && !preview)) return;
     busy.current = true;
     setPending(true);
     Keyboard.dismiss();
@@ -154,15 +178,30 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
       request.current = {
         targets: effectiveTargets,
         percent: numericPercent,
+        beforeDiscount,
         active: true,
         requestId: randomUUID(),
         replaceLegacyPromos: replacements,
       };
     const input: MotivationBulkInput = apply
-      ? { ...request.current, dryRun: false, previewRevision: preview?.previewRevision }
+      ? (applyRequest.current ?? { ...request.current, dryRun: false, previewRevision: preview?.previewRevision })
       : { ...request.current, dryRun: true };
+    if (apply) applyRequest.current = input;
+    const wasUncertain = uncertain;
     try {
       const result = (await motivationApi.bulkRules(input)).data;
+      if (result?.beforeDiscount !== input.beforeDiscount) {
+        if (apply) void queryClient.invalidateQueries({ queryKey: ['motivation'] });
+        if (!active.current || generation.current !== currentGeneration) return;
+        setError('Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором');
+        if (apply) setUncertain(true);
+        else {
+          request.current = null;
+          setPreview(null);
+        }
+        return;
+      }
+      setUncertain(false);
       if (apply) {
         // Refresh configuration even if navigation hid this presentation;
         // a late success must never close a later, newly opened composer.
@@ -175,18 +214,22 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
       if (!active.current || generation.current !== currentGeneration) return;
       const failure = motivationError(cause, 'Не удалось сохранить правило. Повторите попытку.');
       setError(failure.message);
-      if (failure.stale) {
+      const status = (cause as { response?: { status?: number } })?.response?.status;
+      const definiteRejection = typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
+      if (!wasUncertain && (failure.stale || definiteRejection)) {
         request.current = null;
+        applyRequest.current = null;
         setPreview(null);
         setReplacements([]);
-      }
+        setUncertain(false);
+      } else if (apply) setUncertain(true);
     } finally {
       busy.current = false;
       setPending(false);
     }
   };
   const changeReplacements = () => {
-    if (busy.current) return;
+    if (busy.current || uncertain) return;
     const next = replacements.length
       ? []
       : replaceableExceptions.map(({ productId, updatedAt }) => ({ productId, updatedAt }));
@@ -288,7 +331,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
         onBack={
           reviewing
             ? () => {
-                if (!busy.current) setReviewing(false);
+                if (!busy.current && !uncertain) setReviewing(false);
               }
             : close
         }
@@ -297,7 +340,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
             accessibilityRole="button"
             accessibilityLabel="Закрыть выбор"
             onPress={close}
-            disabled={pending}
+            disabled={locked}
             style={styles.iconButton}
           >
             <Ionicons name="close" size={24} color={palette.text.secondary} />
@@ -320,7 +363,8 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
               </Text>
               <Text color={palette.text.secondary}>Только для новых продаж. Старые чеки не изменятся.</Text>
               <Text color={palette.text.secondary}>
-                После скидки на товары. Себестоимость и услуги в расчёт не входят.
+                {beforeDiscount ? 'До скидки на товары.' : 'После скидки на товары.'} Себестоимость и услуги в расчёт не
+                входят.
               </Text>
               <Text color={palette.text.secondary}>
                 Бонус делится поровну между назначенными исполнителями. Пока исполнителей нет, начислений нет.
@@ -367,7 +411,7 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Убрать ${choice.title}`}
-                disabled={pending}
+                disabled={locked}
                 style={styles.iconButton}
                 onPress={() => changeSelection(choice)}
               >
@@ -569,7 +613,9 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
                   inputAccessoryViewID={Platform.OS === 'ios' ? 'motivation-bulk-percent-done' : undefined}
                   style={[textVariantStyles.title3, styles.percentInput, { color: palette.text.primary }]}
                   maxLength={6}
+                  editable={!locked}
                   onChangeText={(value) => {
+                    if (locked) return;
                     invalidate();
                     setPercent(value);
                   }}
@@ -578,6 +624,26 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
               </View>
             </View>
           ) : null}
+          <View style={styles.percentRow}>
+            <Text color={palette.text.primary} style={styles.grow}>
+              Считать процент до скидки
+            </Text>
+            <Switch
+              accessibilityLabel="Считать процент до скидки"
+              testID="before-discount"
+              value={beforeDiscount}
+              disabled={locked}
+              onValueChange={(value) => {
+                if (busy.current || uncertain) return;
+                invalidate();
+                setBeforeDiscount(value);
+              }}
+            />
+          </View>
+          <Text variant="footnote" color={palette.text.secondary}>
+            {beforeDiscount ? 'Скидка не уменьшает бонус.' : 'Скидка уменьшает бонус.'} При цене 1 000 ₽, скидке 200 ₽ и
+            ставке 8%: {beforeDiscount ? '80 ₽' : '64 ₽'}.
+          </Text>
           {numericPercent === null ? (
             <Text variant="footnote" color={palette.mode === 'dark' ? colors.red[400] : colors.red[600]}>
               Введите процент больше 0 и не больше 100, до двух знаков после запятой.
@@ -589,7 +655,13 @@ export function MotivationBulkForm({ visible, onClose, onSaved }: Omit<Props, 's
             </Text>
           ) : null}
           {action(
-            pending ? 'Подождите…' : reviewing && preview ? 'Сохранить правило' : 'Проверить правило',
+            pending
+              ? 'Подождите…'
+              : uncertain
+                ? 'Повторить сохранение'
+                : reviewing && preview
+                  ? 'Сохранить правило'
+                  : 'Проверить правило',
             () => {
               void run(reviewing && !!preview);
             },

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Coins, Plus } from 'lucide-react';
@@ -8,6 +8,7 @@ import { motivationApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantCalendar } from '../hooks/useTenantTimezone';
 import { Button, Card, ConfirmDialog, Input, PageHeader, SegmentedControl, Select } from '../ui';
+import Switch from '../components/Switch';
 import MotivationBulkComposer from '../components/motivation/MotivationBulkComposer';
 import { motivationError, parseMotivationPercent } from '../components/motivation/selection';
 
@@ -29,9 +30,11 @@ export default function MotivationPage() {
   const { today, timeZone } = useTenantCalendar();
   const [tab, setTab] = useState<'rules' | 'accruals'>(canManage ? 'rules' : 'accruals');
   const [composer, setComposer] = useState(false);
+  const unconfirmedRuleRevisions = useRef(new Map<string, number>());
   const [editor, setEditor] = useState<Editor | null>(null);
   const [percent, setPercent] = useState('');
   const [active, setActive] = useState(true);
+  const [beforeDiscount, setBeforeDiscount] = useState(false);
   const [pending, setPending] = useState(false);
   const [editError, setEditError] = useState('');
   const [conflict, setConflict] = useState(false);
@@ -65,8 +68,11 @@ export default function MotivationPage() {
     setEditor(next);
     setPercent(String(next.value.percent));
     setActive(next.value.active);
-    setConflict(false);
-    setEditError('');
+    setBeforeDiscount(next.kind === 'rule' && next.value.beforeDiscount === true);
+    const unconfirmed =
+      next.kind === 'rule' && next.value.revision <= (unconfirmedRuleRevisions.current.get(next.value.id) ?? 0);
+    setConflict(unconfirmed);
+    setEditError(unconfirmed ? 'Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором' : '');
   };
   const saveEditor = async () => {
     const parsed = parseMotivationPercent(percent);
@@ -74,13 +80,21 @@ export default function MotivationPage() {
     setPending(true);
     setEditError('');
     try {
-      if (editor.kind === 'rule')
-        await motivationApi.patchRule(editor.value.id, {
+      if (editor.kind === 'rule') {
+        const response = await motivationApi.patchRule(editor.value.id, {
           expectedRevision: editor.value.revision,
+          beforeDiscount,
           percent: parsed,
           active,
         });
-      else
+        if (response.data?.beforeDiscount !== beforeDiscount) {
+          setEditError('Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором');
+          unconfirmedRuleRevisions.current.set(editor.value.id, editor.value.revision);
+          setConflict(true);
+          refresh();
+          return;
+        }
+      } else
         await motivationApi.setPromo({
           productId: editor.value.productId,
           percent: parsed,
@@ -144,8 +158,8 @@ export default function MotivationPage() {
         }
       />
       <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
-        Новые правила начисляют процент от выручки товаров после скидки. Бонус делится поровну между подтверждёнными
-        исполнителями. Изменения действуют только для новых продаж.
+        Новые правила начисляют процент от продажи товаров — до или после скидки по настройке правила. Бонус делится
+        поровну между подтверждёнными исполнителями. Изменения действуют только для новых продаж.
       </p>
       {canManage && (
         <SegmentedControl
@@ -182,6 +196,23 @@ export default function MotivationPage() {
               ? 'Старое правило: процент от маржи. Схема расчёта сохраняется.'
               : 'Процент от выручки. Изменение касается только новых продаж.'}
           </p>
+          {editor.kind === 'rule' && (
+            <div className="mt-4 space-y-2">
+              <div className="flex max-w-md items-center justify-between gap-3">
+                <span className="text-sm text-ink">Считать процент до скидки</span>
+                <Switch
+                  label="Считать процент до скидки"
+                  checked={beforeDiscount}
+                  onChange={setBeforeDiscount}
+                  disabled={pending || conflict}
+                />
+              </div>
+              <p className="text-xs text-ink-3">
+                {beforeDiscount ? 'Скидка не уменьшает бонус.' : 'Скидка уменьшает бонус.'} Себестоимость и услуги в
+                расчёт не входят.
+              </p>
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap items-end gap-4">
             <label htmlFor="motivation-edit-percent" className="block max-w-52 text-sm font-medium text-ink">
               Процент
@@ -270,7 +301,9 @@ export default function MotivationPage() {
                 </p>
               </div>
               <div className="text-right text-sm">
-                <p className="font-semibold tabular-nums text-ink">{rule.percent}% от выручки</p>
+                <p className="font-semibold tabular-nums text-ink">
+                  {rule.percent}% от выручки {rule.beforeDiscount ? 'до скидки' : 'после скидки'}
+                </p>
                 <p className="text-xs text-ink-3">{rule.active ? 'Активно' : 'Приостановлено'}</p>
               </div>
               <Button
@@ -421,7 +454,9 @@ export default function MotivationPage() {
                       <td className="whitespace-nowrap px-5 py-3">
                         <p className="tabular-nums text-ink">{money(row.baseAmount)}</p>
                         <p className="mt-1 text-xs text-ink-3">
-                          {row.scheme === 'revenue_v2' ? 'Выручка после скидки' : 'Маржа · прежняя схема'}
+                          {row.scheme === 'revenue_v2'
+                            ? `Выручка ${row.beforeDiscount ? 'до скидки' : 'после скидки'}`
+                            : 'Маржа · прежняя схема'}
                         </p>
                       </td>
                       <td className="px-5 py-3 tabular-nums text-ink-2">{row.percent}%</td>

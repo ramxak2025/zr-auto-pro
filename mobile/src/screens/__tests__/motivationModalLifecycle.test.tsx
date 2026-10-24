@@ -108,7 +108,7 @@ jest.mock('@tanstack/react-query', () => ({
       queryKey[1] === 'rules' ? { rules: mockRules, legacyPromos: mockPromos, previewRevision: 'r1' } : mockAccruals,
     isLoading: false,
     isError: false,
-    refetch: jest.fn(),
+    refetch: async () => ({ data: { rules: mockRules, legacyPromos: mockPromos } }),
   }),
   useMutation: (options: {
     mutationFn: (input: unknown) => Promise<unknown>;
@@ -184,6 +184,9 @@ beforeEach(() => {
   mockPatch.mockResolvedValue({ data: {} });
   Platform.OS = 'ios';
   jest.clearAllMocks();
+  mockPatch.mockImplementation(async (_id: string, input: { beforeDiscount?: boolean }) => ({
+    data: { beforeDiscount: input.beforeDiscount },
+  }));
   mockSetPromo.mockImplementation(async (input: { productId: string; percent: number; active: boolean }) => {
     mockPromos = [...mockPromos, { ...input, productName: input.productId } as MotivationPromo];
     return { data: {} };
@@ -312,7 +315,12 @@ it('updates a sales rule with its exact revision and keeps the old check promise
   expect(save.props.disabled).toBe(false);
   (save.props.onPress as () => void)();
   await flush();
-  expect(mockPatch).toHaveBeenCalledWith('r1', { expectedRevision: 7, percent: 8, active: true });
+  expect(mockPatch).toHaveBeenCalledWith('r1', {
+    expectedRevision: 7,
+    percent: 8,
+    active: true,
+    beforeDiscount: false,
+  });
   expect(ruleModal().props.visible).toBe(false);
 });
 
@@ -392,3 +400,82 @@ it('employee filter scroll does not grow vertically and its chips wrap with a mi
   expect(chipStyle.height).toBeUndefined();
   expect(nodes(rendered).find((node) => node.type === 'Text')!.props.numberOfLines).toBeUndefined();
 });
+
+it('loads before-discount basis in the rule editor and sends the changed boolean', async () => {
+  mockRules = [
+    {
+      id: 'r1',
+      target: { kind: 'product', productId: 'p1' },
+      productName: 'Basis test',
+      calculationBase: 'revenue',
+      percent: 8,
+      active: true,
+      beforeDiscount: true,
+      revision: 7,
+      createdAt: '',
+      updatedAt: '',
+    },
+  ];
+  const row = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node).includes('Basis test'))!;
+  (row.props.onPress as () => void)();
+  const toggle = nodes(render()).find(
+    (node) => node.type === 'Switch' && node.props.accessibilityLabel === 'Считать процент до скидки',
+  )!;
+  expect(toggle.props.value).toBe(true);
+  (toggle.props.onValueChange as (value: boolean) => void)(false);
+  const save = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Сохранить')!;
+  (save.props.onPress as () => void)();
+  await flush();
+  expect(mockPatch).toHaveBeenCalledWith('r1', {
+    expectedRevision: 7,
+    percent: 8,
+    active: true,
+    beforeDiscount: false,
+  });
+});
+
+for (const beforeDiscount of [false, true])
+  for (const ack of ['missing', 'wrong']) {
+    it(`keeps PATCH ${beforeDiscount} open after ${ack} acknowledgement until a new revision is loaded`, async () => {
+      mockRules = [
+        {
+          id: 'ack-rule',
+          target: { kind: 'product', productId: 'p1' },
+          productName: 'Ack rule',
+          calculationBase: 'revenue',
+          percent: 8,
+          active: true,
+          beforeDiscount: !beforeDiscount,
+          revision: 7,
+          createdAt: '',
+          updatedAt: '',
+        },
+      ];
+      const row = nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node).includes('Ack rule'))!;
+      (row.props.onPress as () => void)();
+      const toggle = nodes(render()).find(
+        (node) => node.type === 'Switch' && node.props.accessibilityLabel === 'Считать процент до скидки',
+      )!;
+      (toggle.props.onValueChange as (value: boolean) => void)(beforeDiscount);
+      mockPatch.mockResolvedValueOnce({ data: ack === 'missing' ? {} : { beforeDiscount: !beforeDiscount } });
+      const save = () =>
+        nodes(render()).find((node) => node.type === 'TouchableOpacity' && words(node) === 'Сохранить')!;
+      (save().props.onPress as () => void)();
+      await flush();
+      expect(words(render())).toContain('Сервер не подтвердил');
+      expect(save().props.disabled).toBe(true);
+      (save().props.onPress as () => void)();
+      await flush();
+      expect(mockPatch).toHaveBeenCalledTimes(1);
+      const reload = nodes(render()).find(
+        (node) => node.type === 'TouchableOpacity' && words(node) === 'Загрузить текущую версию',
+      )!;
+      await (reload.props.onPress as () => Promise<void>)();
+      expect(save().props.disabled).toBe(true);
+      mockRules = [{ ...mockRules[0], revision: 8, beforeDiscount }];
+      await (reload.props.onPress as () => Promise<void>)();
+      (save().props.onPress as () => void)();
+      await flush();
+      expect(mockPatch.mock.calls.at(-1)![1].expectedRevision).toBe(8);
+    });
+  }
