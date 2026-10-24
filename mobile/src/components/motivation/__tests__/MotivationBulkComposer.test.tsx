@@ -17,6 +17,7 @@ const mockFolders = jest.fn();
 const mockSaved = jest.fn();
 const mockClose = jest.fn();
 const mockRetry = jest.fn();
+const mockInvalidate = jest.fn();
 let mockError = false;
 let mockCatalog: Record<string, ReturnType<typeof buildMotivationChoices>> = {};
 let mockCatalogQuery: { queryFn: () => Promise<unknown> };
@@ -55,6 +56,7 @@ jest.mock('react-native', () => ({
   View: 'View',
   Pressable: 'Pressable',
   TextInput: 'TextInput',
+  Switch: 'Switch',
   StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 }));
 jest.mock('react-native-keyboard-controller', () => ({
@@ -85,6 +87,7 @@ jest.mock('../../QueryErrorState', () => ({ __esModule: true, default: 'QueryErr
 jest.mock('../../Skeleton', () => ({ ListSkeleton: 'Skeleton' }));
 jest.mock('../../TabBarScrollable', () => ({ TabBarFlashList: 'FlashList', TabBarScrollView: 'ScrollView' }));
 jest.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
   useQuery: (options: { queryKey: string[]; queryFn: () => Promise<unknown> }) => {
     if (options.queryKey[0] === 'warehouses')
       return {
@@ -149,6 +152,7 @@ const change = (label: string, value: string) =>
   )(value);
 const result = (input: MotivationBulkInput): MotivationBulkResult => ({
   rules: [],
+  beforeDiscount: input.beforeDiscount,
   coveredProductCount: input.targets.length,
   affectedProductCount: input.targets.length,
   legacyExceptions: [],
@@ -364,7 +368,12 @@ it('forwards native dismissal without a timer and keeps selection/review inside 
     onDismiss,
   });
   expect(wrapper.props.onDismiss).toBe(onDismiss);
-  expect(wrapper.props.onRequestClose).toBe(mockClose);
+  (wrapper.props.onRequestClose as () => void)();
+  expect(mockClose).toHaveBeenCalledTimes(1);
+  const form = nodes(wrapper).find((node) => node.type === moduleUnderTest.MotivationBulkForm)!;
+  (form.props.onCloseBlockedChange as (blocked: boolean) => void)(true);
+  (wrapper.props.onRequestClose as () => void)();
+  expect(mockClose).toHaveBeenCalledTimes(1);
   expect(nodes(wrapper).filter((node) => node.type === 'RNModal')).toHaveLength(1);
 });
 
@@ -544,3 +553,101 @@ it('decimal keyboard has an iOS native Done accessory in this same form and Andr
     find((node) => node.props.accessibilityLabel === 'Общий процент от продажи').props.inputAccessoryViewID,
   ).toBeUndefined();
 });
+
+it('defaults discount basis OFF and requires a new reviewed request after toggling it', async () => {
+  choose(0);
+  const toggle = () => find((node) => node.props.testID === 'before-discount');
+  expect(toggle().props.value).toBe(false);
+  await submit();
+  const original = mockBulk.mock.calls[0][0] as MotivationBulkInput;
+  expect(original.beforeDiscount).toBe(false);
+  (toggle().props.onValueChange as (value: boolean) => void)(true);
+  expect(words(render())).toContain('Проверить правило');
+  await submit();
+  const renewed = mockBulk.mock.calls[1][0] as MotivationBulkInput;
+  expect(renewed.beforeDiscount).toBe(true);
+  expect(renewed.dryRun).toBe(true);
+  expect(renewed.requestId).not.toBe(original.requestId);
+  await submit();
+  expect(mockBulk.mock.calls[2][0]).toEqual({ ...renewed, dryRun: false, previewRevision: 'revision-1' });
+});
+
+for (const beforeDiscount of [false, true])
+  for (const ack of ['missing', 'wrong']) {
+    it(`refuses ${ack} acknowledgement for ${beforeDiscount} preview and preserves unconfirmed apply identity`, async () => {
+      choose(0);
+      const toggle = () => find((node) => node.props.testID === 'before-discount');
+      if (beforeDiscount) (toggle().props.onValueChange as (value: boolean) => void)(true);
+      const incompatible = (input: MotivationBulkInput) => {
+        const response = result(input);
+        if (ack === 'missing') delete response.beforeDiscount;
+        else response.beforeDiscount = !input.beforeDiscount;
+        return { data: response };
+      };
+      mockBulk.mockImplementationOnce(async (input: MotivationBulkInput) => incompatible(input));
+      await submit();
+      expect(mockSaved).not.toHaveBeenCalled();
+      expect(words(render())).toContain('Сервер не подтвердил');
+      expect(words(render())).toContain('Проверить правило');
+      await submit();
+      mockBulk.mockImplementationOnce(async (input: MotivationBulkInput) => incompatible(input));
+      await submit();
+      expect(mockSaved).not.toHaveBeenCalled();
+      expect(toggle().props.disabled).toBe(true);
+      const closeChoice = () =>
+        nodes(find((node) => node.type === 'Header').props.trailing as React.ReactNode).find(
+          (node) => node.props.accessibilityLabel === 'Закрыть выбор',
+        )!;
+      expect(closeChoice().props.disabled).toBe(true);
+      expect(words(render())).toContain('Повторить сохранение');
+      (closeChoice().props.onPress as () => void)();
+      expect(mockClose).not.toHaveBeenCalled();
+      const input = mockBulk.mock.calls.at(-1)![0] as MotivationBulkInput;
+      await submit();
+      expect(mockBulk.mock.calls.at(-1)![0]).toEqual(input);
+      expect(mockSaved).toHaveBeenCalledTimes(1);
+    });
+  }
+
+it('keeps a definite rejected apply editable and requires a fresh preview UUID', async () => {
+  choose(0);
+  await submit();
+  mockBulk.mockRejectedValueOnce({ response: { status: 400, data: { message: 'Проверьте параметры' } } });
+  await submit();
+  const rejected = mockBulk.mock.calls.at(-1)![0] as MotivationBulkInput;
+  expect(mockSaved).not.toHaveBeenCalled();
+  expect(find((node) => node.props.testID === 'before-discount').props.disabled).toBe(false);
+  expect(words(render())).toContain('Проверить правило');
+  await submit();
+  const renewed = mockBulk.mock.calls.at(-1)![0] as MotivationBulkInput;
+  expect(renewed.dryRun).toBe(true);
+  expect(renewed.requestId).not.toBe(rejected.requestId);
+});
+
+for (const beforeDiscount of [false, true])
+  for (const status of [400, 409]) {
+    it(`uncertain outcome survives HTTP ${status} retry for basis ${beforeDiscount} until the original request is acknowledged`, async () => {
+      choose(0);
+      const toggle = () => find((node) => node.props.testID === 'before-discount');
+      if (beforeDiscount) (toggle().props.onValueChange as (value: boolean) => void)(true);
+      await submit();
+      mockBulk.mockImplementationOnce(async (input: MotivationBulkInput) => {
+        const response = result(input);
+        delete response.beforeDiscount;
+        return { data: response };
+      });
+      await submit();
+      const original = mockBulk.mock.calls.at(-1)![0] as MotivationBulkInput;
+      expect(mockSaved).not.toHaveBeenCalled();
+      expect(toggle().props.disabled).toBe(true);
+      mockBulk.mockRejectedValueOnce({ response: { status, data: { message: 'Повтор отклонён' } } });
+      await submit();
+      expect(mockBulk.mock.calls.at(-1)![0]).toEqual(original);
+      expect(mockSaved).not.toHaveBeenCalled();
+      expect(toggle().props.disabled).toBe(true);
+      expect(words(render())).toContain('Повторить сохранение');
+      await submit();
+      expect(mockBulk.mock.calls.at(-1)![0]).toEqual(original);
+      expect(mockSaved).toHaveBeenCalledTimes(1);
+    });
+  }

@@ -141,9 +141,11 @@ export default function MotivationScreen() {
   const [bulkSession, setBulkSession] = useState(0);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
+  const unconfirmedRuleRevisions = useRef(new Map<string, number>());
   const [ruleEditor, setRuleEditor] = useState<MotivationRule | null>(null);
   const [rulePercent, setRulePercent] = useState('');
   const [ruleActive, setRuleActive] = useState(true);
+  const [ruleBeforeDiscount, setRuleBeforeDiscount] = useState(false);
   const [ruleVisible, setRuleVisible] = useState(false);
   const [ruleError, setRuleError] = useState('');
   const [ruleConflict, setRuleConflict] = useState(false);
@@ -228,13 +230,28 @@ export default function MotivationScreen() {
       if (remove) return motivationApi.deleteRule(ruleEditor.id, ruleEditor.revision);
       const percent = parseMotivationPercent(rulePercent);
       if (percent === null) throw new Error('Введите процент больше 0 и не больше 100');
-      return motivationApi.patchRule(ruleEditor.id, {
+      const input = {
         expectedRevision: ruleEditor.revision,
         percent,
         active: ruleActive,
-      });
+        beforeDiscount: ruleBeforeDiscount,
+      };
+      const response = await motivationApi.patchRule(ruleEditor.id, input);
+      return {
+        ...response,
+        basisConfirmed: response.data?.beforeDiscount === input.beforeDiscount,
+        basisRuleId: ruleEditor.id,
+        basisRevision: input.expectedRevision,
+      };
     },
-    onSuccess: () => {
+    onSuccess: (response) => {
+      if (response && 'basisConfirmed' in response && !response.basisConfirmed) {
+        unconfirmedRuleRevisions.current.set(response.basisRuleId, response.basisRevision);
+        setRuleError('Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором');
+        setRuleConflict(true);
+        refreshConfiguration();
+        return;
+      }
       closePresentation();
       refreshConfiguration();
     },
@@ -403,8 +420,14 @@ export default function MotivationScreen() {
                   setRuleEditor(rule);
                   setRulePercent(String(rule.percent));
                   setRuleActive(rule.active);
-                  setRuleError('');
-                  setRuleConflict(false);
+                  setRuleBeforeDiscount(rule.beforeDiscount === true);
+                  const unconfirmed = rule.revision <= (unconfirmedRuleRevisions.current.get(rule.id) ?? 0);
+                  setRuleError(
+                    unconfirmed
+                      ? 'Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором'
+                      : '',
+                  );
+                  setRuleConflict(unconfirmed);
                   setRuleVisible(true);
                 }}
                 style={styles.promoRow}
@@ -423,7 +446,9 @@ export default function MotivationScreen() {
                   <Text variant="footnote" color={palette.text.secondary}>
                     {rule.target.kind === 'folder'
                       ? `${rule.warehouseName || 'Склад'} · С подпапками и будущими товарами`
-                      : 'От продажи после скидки'}
+                      : 'От продажи'}
+                    {' · '}
+                    {rule.beforeDiscount ? 'До скидки' : 'После скидки'}
                   </Text>
                   {!rule.active ? (
                     <Text variant="footnote" color={palette.text.tertiary}>
@@ -611,7 +636,8 @@ export default function MotivationScreen() {
         <Text style={[styles.ruleText, { color: palette.text.secondary }]}>
           Исполнители получают{' '}
           <Text style={{ color: palette.text.primary, fontWeight: fontWeight.bold }}>% от продажи</Text> выбранных
-          товаров после скидки. Бонус делится поровну и попадает в зарплату. Старые правила от маржи сохраняются.
+          товаров — до или после скидки по настройке правила. Бонус делится поровну и попадает в зарплату. Старые
+          правила от маржи сохраняются.
         </Text>
       </View>
 
@@ -667,7 +693,7 @@ export default function MotivationScreen() {
               {ruleEditor.target.kind === 'folder' ? ruleEditor.target.path : ruleEditor.productName || 'Товар'}
             </Text>
             <Text color={palette.text.secondary}>
-              Процент от продажи товаров после скидки. Только для новых продаж. Старые чеки не изменятся.
+              Процент от продажи товаров. Только для новых продаж. Старые чеки не изменятся.
             </Text>
             <TextInput
               accessibilityLabel="Процент от продажи"
@@ -680,6 +706,21 @@ export default function MotivationScreen() {
                 { color: palette.text.primary, backgroundColor: palette.bg.muted, minHeight: 48 },
               ]}
             />
+            <View style={styles.toggleRow}>
+              <Text color={palette.text.primary} style={{ flex: 1 }}>
+                Считать процент до скидки
+              </Text>
+              <Switch
+                accessibilityLabel="Считать процент до скидки"
+                value={ruleBeforeDiscount}
+                onValueChange={setRuleBeforeDiscount}
+                disabled={ruleMutation.isPending || ruleConflict}
+              />
+            </View>
+            <Text variant="footnote" color={palette.text.secondary}>
+              {ruleBeforeDiscount ? 'Скидка не уменьшает бонус.' : 'Скидка уменьшает бонус.'} Себестоимость и услуги в
+              расчёт не входят.
+            </Text>
             <View style={styles.toggleRow}>
               <Text color={palette.text.primary}>Правило активно</Text>
               <Switch value={ruleActive} onValueChange={setRuleActive} disabled={ruleMutation.isPending} />
@@ -699,8 +740,14 @@ export default function MotivationScreen() {
                     setRuleEditor(current);
                     setRulePercent(String(current.percent));
                     setRuleActive(current.active);
-                    setRuleError('');
-                    setRuleConflict(false);
+                    setRuleBeforeDiscount(current.beforeDiscount === true);
+                    const unconfirmed = current.revision <= (unconfirmedRuleRevisions.current.get(current.id) ?? 0);
+                    setRuleError(
+                      unconfirmed
+                        ? 'Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором'
+                        : '',
+                    );
+                    setRuleConflict(unconfirmed);
                   } else setRuleError('Правило удалено или недоступно. Закройте редактор и повторите загрузку.');
                 }}
               >
@@ -719,7 +766,9 @@ export default function MotivationScreen() {
                   backgroundColor: ruleMutation.isPending || ruleConflict ? palette.bg.muted : palette.accent.primary,
                 },
               ]}
-              onPress={() => ruleMutation.mutate(false)}
+              onPress={() => {
+                if (!ruleConflict) ruleMutation.mutate(false);
+              }}
             >
               <Text color={ruleMutation.isPending || ruleConflict ? palette.text.secondary : colors.white}>
                 {ruleMutation.isPending ? 'Подождите…' : 'Сохранить'}
@@ -921,7 +970,10 @@ const AccrualRow = React.memo(function AccrualRow({ accrual, palette }: AccrualR
         </Text>
         <Text style={[styles.accrualMeta, { color: palette.text.tertiary }]}>
           {accrual.checkNumber ? `Чек №${accrual.checkNumber}` : 'Чек'} · {accrual.percent}%{' '}
-          {accrual.calculationBase === 'revenue' ? 'от продажи' : 'от маржи'} · {formatAccrualDate(accrual.accruedAt)}
+          {accrual.calculationBase === 'revenue'
+            ? `от продажи ${accrual.beforeDiscount ? 'до скидки' : 'после скидки'}`
+            : 'от маржи'}{' '}
+          · {formatAccrualDate(accrual.accruedAt)}
         </Text>
         <Text variant="footnote" color={palette.text.secondary}>
           База: {formatMoney(accrual.baseAmount)}

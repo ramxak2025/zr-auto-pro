@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Folder, Package, Search, X } from 'lucide-react';
 import { loadProductCatalog } from '../../../../shared/api/productCatalog';
 import type { MotivationBulkInput, MotivationBulkResult, MotivationLegacyException } from '../../../../shared/types';
 import { motivationApi, productsApi, warehouseCategoriesApi, warehousesApi } from '../../api/services';
 import { Button, Card, Input, SegmentedControl, Select } from '../../ui';
+import Switch from '../Switch';
 import { focusRing } from '../../ui/tokens';
 import {
   buildMotivationChoices,
@@ -25,11 +26,13 @@ export default function MotivationBulkComposer({
   onSaved: (result: MotivationBulkResult) => void;
   onClose: () => void;
 }) {
+  const queryClient = useQueryClient();
   const [warehouseId, setWarehouseId] = useState<string | undefined>();
   const [segment, setSegment] = useState<'products' | 'folders'>('products');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<MotivationChoice[]>([]);
   const [percent, setPercent] = useState('10');
+  const [beforeDiscount, setBeforeDiscount] = useState(false);
   const [preview, setPreview] = useState<MotivationBulkResult | null>(null);
   const [legacyReview, setLegacyReview] = useState<MotivationLegacyException[]>([]);
   const [replacements, setReplacements] = useState<NonNullable<MotivationBulkInput['replaceLegacyPromos']>>([]);
@@ -82,6 +85,7 @@ export default function MotivationBulkComposer({
           replacements,
         ),
         percent: numericPercent,
+        beforeDiscount,
         active: true,
         requestId: crypto.randomUUID(),
         replaceLegacyPromos: replacements,
@@ -90,8 +94,20 @@ export default function MotivationBulkComposer({
       ? (applyRequest.current ?? { ...request.current, dryRun: false, previewRevision: preview?.previewRevision })
       : { ...request.current, dryRun: true };
     if (apply) applyRequest.current = input;
+    const wasUncertain = uncertain;
     try {
       const result = (await motivationApi.bulkRules(input)).data;
+      if (result?.beforeDiscount !== input.beforeDiscount) {
+        setError('Сервер не подтвердил выбранный способ расчёта. Обновите настройки перед повтором');
+        if (apply) {
+          setUncertain(true);
+          void queryClient.invalidateQueries({ queryKey: ['motivation'] });
+        } else {
+          setPreview(null);
+          request.current = null;
+        }
+        return;
+      }
       setUncertain(false);
       if (apply) onSaved(result);
       else {
@@ -101,12 +117,12 @@ export default function MotivationBulkComposer({
     } catch (cause) {
       const failure = motivationError(cause, 'Не удалось выполнить запрос. Повторите попытку.');
       setError(failure.message);
-      if (failure.stale) {
+      if (!wasUncertain && failure.stale) {
         invalidate();
         setReplacements([]);
         setError(`${failure.message} Проверьте выбор и выполните предварительный просмотр заново.`);
         setUncertain(false);
-      } else if (failure.definiteRejection) {
+      } else if (!wasUncertain && failure.definiteRejection) {
         invalidate();
         setUncertain(false);
         setError(`${failure.message} Проверьте выбор и повторите предварительный просмотр.`);
@@ -267,9 +283,25 @@ export default function MotivationBulkComposer({
               Введите процент больше 0 и не больше 100, до двух знаков после запятой.
             </p>
           )}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium text-ink">Считать процент до скидки</span>
+            <Switch
+              label="Считать процент до скидки"
+              checked={beforeDiscount}
+              disabled={locked}
+              onChange={(value) => {
+                invalidate();
+                setBeforeDiscount(value);
+              }}
+            />
+          </div>
+          <p className="text-xs leading-relaxed text-ink-3">
+            {beforeDiscount ? 'Скидка не уменьшает бонус.' : 'Скидка уменьшает бонус.'} Например, при цене 1 000 ₽,
+            скидке 200 ₽ и ставке 8%: {beforeDiscount ? '80 ₽' : '64 ₽'}.
+          </p>
           <p id="motivation-basis" className="text-xs leading-relaxed text-ink-3">
-            Выручка от товаров после скидки. Несколько подтверждённых исполнителей делят бонус поровну, с точностью до
-            копейки. Кассир не получает бонус за приём оплаты.
+            Выручка от товаров {beforeDiscount ? 'до скидки' : 'после скидки'}. Несколько подтверждённых исполнителей
+            делят бонус поровну, с точностью до копейки. Кассир не получает бонус за приём оплаты.
           </p>
           <p className="text-xs leading-relaxed text-ink-3">
             Правила действуют только для новых продаж. Старые чеки и начисления не пересчитываются.
@@ -277,6 +309,9 @@ export default function MotivationBulkComposer({
           {preview && (
             <div className="space-y-3 border-t border-line pt-4" aria-live="polite">
               <h3 className="text-sm font-semibold text-ink">Предварительный просмотр</h3>
+              <p className="text-sm text-ink-2">
+                {numericPercent}% от продажи {beforeDiscount ? 'до скидки' : 'после скидки'}
+              </p>
               <p className="text-sm text-ink-2">
                 Охвачено товаров: <strong>{preview.coveredProductCount}</strong>
                 <br />
