@@ -9,6 +9,7 @@ export interface RuleRow {
   product_id: string | null;
   category_id: string | null;
   percent: string;
+  before_discount: boolean;
   active: boolean;
   revision: number;
   created_at: Date;
@@ -91,6 +92,7 @@ export function mapRule(rule: RuleRow) {
         : { kind: 'folder' as const, warehouseId: rule.warehouse_id, categoryId: rule.category_id!, path: rule.path! },
     calculationBase: 'revenue' as const,
     percent: Number(rule.percent),
+    beforeDiscount: rule.before_discount,
     active: rule.active,
     revision: rule.revision,
     createdAt: rule.created_at.toISOString(),

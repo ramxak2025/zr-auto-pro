@@ -36,7 +36,10 @@ test('actual PG: legacy API can update a preserved exception without rewriting p
     const updated = await run(() => legacy.setPromo(tenant, { productId: p.productId, percent: 40 }));
     assert.equal(updated.percent, 40);
     assert.deepEqual(await accruals(paid.id), history, 'configuration changes must not rewrite paid history');
-    await assert.rejects(run(() => legacy.clearPromo(tenant, p.productId)), (e) => e.getStatus() === 409);
+    await assert.rejects(
+      run(() => legacy.clearPromo(tenant, p.productId)),
+      (e) => e.getStatus() === 409,
+    );
     assert.deepEqual(await accruals(paid.id), history);
     assert.deepEqual(await q('SELECT * FROM motivation_rules WHERE tenant_id=$1', [tenant]), rulesBefore);
     const fresh = (await accruals((await create([p])).id))[0];
@@ -765,11 +768,17 @@ test(
 );
 
 async function fixture(work) {
-  assert.equal(live, 'postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test');
+  assert.ok(
+    [
+      'postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test',
+      'postgresql://oct24_fixture:oct24_fixture_only@127.0.0.1:55444/autexa_oct24_motivation',
+    ].includes(live),
+    'Explicit disposable motivation fixture only',
+  );
   const admin = new Pool({ connectionString: live, max: 4, statement_timeout: 8000 });
   const appUrl = new URL(live);
   appUrl.username = 'autexa_app';
-  appUrl.password = 'oct8_app_fixture_only';
+  appUrl.password = appUrl.port === '55444' ? 'oct24_app_fixture_only' : 'oct8_app_fixture_only';
   const pool = new TenantAwarePool(
     admin,
     new Pool({ connectionString: appUrl.toString(), max: 4, statement_timeout: 8000 }),
@@ -1295,6 +1304,314 @@ test(
         oldOnly = await run(() => legacy.listAccruals(tenant, {}));
       assert.ok(mixed.some((r) => r.scheme === 'margin_v1') && mixed.some((r) => r.scheme === 'revenue_v2'));
       assert.ok(oldOnly.every((r) => r.marginBase > 0));
+    });
+  },
+);
+
+test(
+  'actual PG: basis choice pays gross or net after allocating discount over the entire basket',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, create, accruals, q, tenant, wh }) => {
+      const on = await product('Gross', 1000, 900, wh.id, 'Basis');
+      const off = await product('Net', 1000, 1, wh.id, 'Other');
+      const none = await product('No rule', 1000);
+      await bulk([{ kind: 'folder', warehouseId: wh.id, path: 'Basis' }], 8, { beforeDiscount: true });
+      await bulk([{ kind: 'product', productId: off.productId }], 8, { beforeDiscount: false });
+      for (const [p, expected] of [
+        [on, 80],
+        [off, 64],
+      ]) {
+        const check = await create([p], { discount: 200 });
+        assert.equal(Number((await accruals(check.id))[0].amount), expected);
+      }
+      const mixed = await create([on, off], { discount: 400 });
+      const rows = await accruals(mixed.id);
+      assert.equal(Number(rows.find((r) => r.product_id === on.productId).amount), 80);
+      assert.equal(Number(rows.find((r) => r.product_id === off.productId).amount), 64);
+      assert.equal(Number((await accruals((await create([off, none], { discount: 400 })).id))[0].amount), 64);
+      for (const p of [on, off]) {
+        assert.equal(Number((await accruals((await create([p])).id))[0].amount), 80);
+        const fullDiscount = await accruals((await create([p], { discount: 1000 })).id);
+        assert.equal(
+          fullDiscount.reduce((sum, r) => sum + Number(r.amount), 0),
+          p === on ? 80 : 0,
+        );
+        assert.equal((await accruals((await create([p], { paymentMethod: 'warranty' })).id)).length, 0);
+        assert.equal((await accruals((await create([p], { assigneeIds: [] })).id)).length, 0);
+      }
+      const snap = (
+        await q('SELECT * FROM check_motivation_snapshots WHERE tenant_id=$1 AND check_id=$2 AND product_id=$3', [
+          tenant,
+          mixed.id,
+          on.productId,
+        ])
+      )[0];
+      assert.equal(snap.before_discount, true);
+      assert.equal(snap.sale_lines[0].grossCents, '100000');
+      assert.equal(snap.sale_lines[0].netCents, '80000');
+    });
+  },
+);
+
+test(
+  'actual PG: winning whole rule controls basis including deepest folder, direct override and pause',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, create, accruals, wh }) => {
+      const p = await product('Hierarchy basis', 1000, 900, wh.id, 'Parent/Child');
+      const folder = (path) => ({ kind: 'folder', warehouseId: wh.id, path });
+      const amount = async () =>
+        (await accruals((await create([p], { discount: 200 })).id)).reduce((sum, r) => sum + Number(r.amount), 0);
+      await bulk([folder('Parent')], 8, { beforeDiscount: true });
+      assert.equal(await amount(), 80);
+      await bulk([folder('Parent/Child')], 8, { beforeDiscount: false });
+      assert.equal(await amount(), 64);
+      await bulk([{ kind: 'product', productId: p.productId }], 8, { beforeDiscount: true });
+      assert.equal(await amount(), 80);
+      await bulk([{ kind: 'product', productId: p.productId }], 8, { active: false });
+      assert.equal(await amount(), 0);
+    });
+  },
+);
+
+test(
+  'actual PG: saved basis survives config/catalog changes, edits, deletion, restore and draft posting boundary',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, create, accruals, run, rules, legacy, checks, tenant, actor, edit, q }) => {
+      const p = await product('History basis', 1000);
+      const selected = [{ kind: 'product', productId: p.productId }];
+      const result = await bulk(selected, 8, { beforeDiscount: true });
+      const check = await create([p], { discount: 200 });
+      const snapshot = (await q('SELECT * FROM check_motivation_snapshots WHERE check_id=$1', [check.id]))[0];
+      const draft = await create([p], { isDeferred: true, discount: 200 });
+      const current = await run(() =>
+        rules.change(tenant, result.result.rules[0].id, { expectedRevision: 1, beforeDiscount: false, percent: 10 }),
+      );
+      await run(() => checks.acceptPayment(draft.id, tenant, actor.role, {}, actor.userID, actor));
+      assert.equal(Number((await accruals(draft.id))[0].amount), 80, 'draft sees 800 * 10% at posting');
+      const mixed = await run(() => legacy.listAccruals(tenant, {}, true));
+      assert.equal(mixed.find((r) => r.checkId === check.id).beforeDiscount, true, 'ledger reads historical flag');
+      assert.equal(mixed.find((r) => r.checkId === draft.id).beforeDiscount, false);
+      await run(() => rules.change(tenant, current.id, { expectedRevision: current.revision }, true));
+      await q("UPDATE products SET sell_price=9999,category='Elsewhere' WHERE id=$1", [p.productId]);
+      await edit(check, { comment: 'Unchanged sale edit' });
+      assert.equal(Number((await accruals(check.id))[0].amount), 80);
+      await run(() => checks.remove(check.id, tenant, actor.role, actor.userID, actor));
+      await run(() => checks.restore(check.id, tenant, actor));
+      assert.equal(Number((await accruals(check.id))[0].amount), 80);
+      const saved = (await q('SELECT * FROM check_motivation_snapshots WHERE check_id=$1', [check.id]))[0];
+      for (const field of ['before_discount', 'percent', 'decision', 'rule_id'])
+        assert.equal(saved[field], snapshot[field]);
+      assert.equal(saved.accrued_at.toISOString(), snapshot.accrued_at.toISOString());
+    });
+  },
+);
+
+for (const beforeDiscount of [false, true]) {
+  test(
+    `actual PG: ${beforeDiscount ? 'gross' : 'net'} saved basis handles fractional duplicate lines, performer kopecks and returns`,
+    options,
+    async () => {
+      await fixture(
+        async ({ product, bulk, create, accruals, run, returns, tenant, owner, actor, q, first, second, checks }) => {
+          const p = await product('Return basis', 1000);
+          await bulk([{ kind: 'product', productId: p.productId }], 8, { beforeDiscount });
+          const check = await create([{ ...p, quantity: 2 }], { discount: 400 });
+          const line = (await q('SELECT id FROM check_product_lines WHERE check_id=$1', [check.id]))[0];
+          await run(() =>
+            returns.createReturn(
+              tenant,
+              owner,
+              check.id,
+              {
+                destination: 'warehouse',
+                scope: 'partial',
+                refundAmount: 1,
+                lines: [{ productLineId: line.id, quantity: 0.5 }],
+              },
+              actor,
+            ),
+          );
+          assert.equal(Number((await accruals(check.id))[0].amount), beforeDiscount ? 120 : 96);
+          const full = await create([p], { discount: 200 });
+          await run(() =>
+            returns.createReturn(tenant, owner, full.id, { destination: 'warehouse', scope: 'full' }, actor),
+          );
+          assert.equal((await accruals(full.id)).length, 0);
+          await assert.rejects(
+            run(() => checks.remove(full.id, tenant, actor.role, actor.userID, actor)),
+            (e) => e.getStatus() === 400,
+          );
+          assert.equal(
+            (await q('SELECT before_discount FROM check_motivation_snapshots WHERE check_id=$1', [full.id]))[0]
+              .before_discount,
+            beforeDiscount,
+          );
+          const odd = await product('Odd cents', 1.01, 0);
+          await bulk([{ kind: 'product', productId: odd.productId }], 8, { beforeDiscount });
+          const split = await create(
+            [
+              { ...odd, quantity: 0.5 },
+              { ...odd, quantity: 0.5 },
+            ],
+            { discount: 0.03, assigneeIds: [second, first] },
+          );
+          const rows = await accruals(split.id);
+          assert.equal(
+            rows.reduce((sum, r) => sum + Math.round(Number(r.amount) * 100), 0),
+            8,
+          );
+          assert.ok(rows.every((r) => Number(r.amount) === 0.04));
+        },
+      );
+    },
+  );
+}
+
+test(
+  'actual PG: optional basis validates booleans, preserves omitted patches/bulk and participates in revision and receipts',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, run, rules, tenant, q }) => {
+      const p = await product('Compatibility');
+      const targets = [{ kind: 'product', productId: p.productId }];
+      const created = await bulk(targets, 8, { beforeDiscount: true });
+      let rule = created.result.rules[0];
+      assert.equal(rule.beforeDiscount, true);
+      rule = await run(() => rules.change(tenant, rule.id, { expectedRevision: rule.revision, percent: 9 }));
+      assert.equal(rule.beforeDiscount, true);
+      rule = (await bulk(targets)).result.rules[0];
+      assert.equal(rule.beforeDiscount, true);
+      for (const beforeDiscount of [null, 'true', 1, 0]) {
+        await assert.rejects(
+          run(() => rules.bulk(tenant, { targets, percent: 8, requestId: randomUUID(), beforeDiscount, dryRun: true })),
+          (e) => e.getStatus() === 400,
+        );
+        await assert.rejects(
+          run(() => rules.change(tenant, rule.id, { expectedRevision: rule.revision, beforeDiscount })),
+          (e) => e.getStatus() === 400,
+        );
+      }
+      const input = { targets, percent: 8, requestId: randomUUID(), beforeDiscount: false };
+      const preview = await run(() => rules.bulk(tenant, { ...input, dryRun: true }));
+      await assert.rejects(
+        run(() => rules.bulk(tenant, { ...input, beforeDiscount: true, previewRevision: preview.previewRevision })),
+        (e) => e.getStatus() === 409,
+      );
+      const changed = await run(() =>
+        rules.change(tenant, rule.id, { expectedRevision: rule.revision, beforeDiscount: false }),
+      );
+      assert.equal(changed.revision, rule.revision + 1);
+      await assert.rejects(
+        run(() => rules.bulk(tenant, { ...input, previewRevision: preview.previewRevision })),
+        (e) => e.getStatus() === 409,
+      );
+      const applied = await bulk(targets, 8, { beforeDiscount: true });
+      assert.deepEqual(await run(() => rules.bulk(tenant, applied.apply)), applied.result);
+      await assert.rejects(
+        run(() => rules.bulk(tenant, { ...applied.apply, beforeDiscount: false })),
+        (e) => e.getStatus() === 409,
+      );
+      // Replay a receipt hashed with the old parser, where the flag did not exist.
+      const oldInput = { targets, percent: 8, requestId: randomUUID() };
+      const oldParsed = {
+        targets,
+        percent: 8,
+        active: undefined,
+        dryRun: false,
+        requestId: oldInput.requestId,
+        previewRevision: undefined,
+        replaceLegacyPromos: [],
+      };
+      const { digest } = require('../dist/motivation/motivation-rules');
+      const oldResult = { requestId: oldInput.requestId, historicalReceipt: true };
+      await q('INSERT INTO motivation_bulk_receipts(tenant_id,request_id,payload_hash,result) VALUES($1,$2,$3,$4)', [
+        tenant,
+        oldInput.requestId,
+        digest(oldParsed),
+        oldResult,
+      ]);
+      assert.deepEqual(await run(() => rules.bulk(tenant, oldInput)), oldResult);
+      await assert.rejects(
+        run(() => rules.bulk(tenant, { ...oldInput, beforeDiscount: false })),
+        (e) => e.getStatus() === 409,
+      );
+      const fresh = await product('Default off');
+      assert.equal(
+        (await bulk([{ kind: 'product', productId: fresh.productId }])).result.rules[0].beforeDiscount,
+        false,
+      );
+    });
+  },
+);
+
+test(
+  'actual PG: product rounding and performer split stay stable; old net snapshots need no gross field',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, create, accruals, q, first, second, owner, tenant, run, returns, actor }) => {
+      const p = await product('Three kopecks', 0.03, 0);
+      await bulk([{ kind: 'product', productId: p.productId }], 50, { beforeDiscount: true });
+      const check = await create([p], { assigneeIds: [second, owner, first] });
+      const recipients = [first, second, owner].sort();
+      const rows = await accruals(check.id);
+      // Zero shares are omitted from the ledger; the stable first two UUIDs own the kopecks.
+      assert.deepEqual(
+        rows.map((r) => [r.employee_id, Number(r.amount)]),
+        recipients.slice(0, 2).map((id) => [id, 0.01]),
+      );
+      const duplicate = await product('Duplicate kopeck', 0.01, 0);
+      await bulk([{ kind: 'product', productId: duplicate.productId }], 50, { beforeDiscount: true });
+      assert.equal(Number((await accruals((await create([duplicate, duplicate])).id))[0].amount), 0.01);
+      const old = await product('Saved old net', 1000, 0);
+      await bulk([{ kind: 'product', productId: old.productId }], 8);
+      const historical = await create([old], { discount: 200 });
+      const line = (await q('SELECT id FROM check_product_lines WHERE check_id=$1', [historical.id]))[0];
+      await q(
+        "UPDATE check_motivation_snapshots SET sale_lines=(SELECT jsonb_agg(value - 'grossCents') FROM jsonb_array_elements(sale_lines)) WHERE check_id=$1",
+        [historical.id],
+      );
+      await q('UPDATE products SET sell_price=9999 WHERE id=$1', [old.productId]);
+      await run(() =>
+        returns.createReturn(
+          tenant,
+          owner,
+          historical.id,
+          {
+            destination: 'warehouse',
+            scope: 'partial',
+            refundAmount: 1,
+            lines: [{ productLineId: line.id, quantity: 0.25 }],
+          },
+          actor,
+        ),
+      );
+      assert.equal(Number((await accruals(historical.id))[0].amount), 48);
+    });
+  },
+);
+
+test(
+  'actual PG: explicit boolean basis is acknowledged by preview, apply and stored receipt; omission stays absent',
+  options,
+  async () => {
+    await fixture(async ({ product, bulk, run, rules, tenant }) => {
+      const p = await product('Acknowledged basis');
+      const targets = [{ kind: 'product', productId: p.productId }];
+      for (const beforeDiscount of [false, true]) {
+        const applied = await bulk(targets, 8, { beforeDiscount });
+        assert.equal(applied.preview.beforeDiscount, beforeDiscount);
+        assert.equal(applied.result.beforeDiscount, beforeDiscount);
+        const replay = await run(() => rules.bulk(tenant, applied.apply));
+        assert.deepEqual(replay, applied.result);
+        assert.equal(replay.beforeDiscount, beforeDiscount);
+      }
+      const oldClient = await bulk(targets);
+      assert.equal(Object.hasOwn(oldClient.preview, 'beforeDiscount'), false);
+      assert.equal(Object.hasOwn(oldClient.result, 'beforeDiscount'), false);
+      assert.deepEqual(await run(() => rules.bulk(tenant, oldClient.apply)), oldClient.result);
     });
   },
 );

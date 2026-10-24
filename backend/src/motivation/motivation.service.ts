@@ -151,7 +151,7 @@ export class MotivationService {
     }
     const { rows } = await this.pool.query(
       `SELECT ma.*, u.full_name AS employee_name, u.avatar AS employee_avatar, p.name AS product_name, c.number AS check_number,
-              ms.product_name AS snapshot_product_name
+              ms.product_name AS snapshot_product_name, ms.before_discount AS snapshot_before_discount
          FROM motivation_accruals ma
          LEFT JOIN users u ON u.id = ma.employee_id
          LEFT JOIN products p ON p.id = ma.product_id
@@ -168,6 +168,7 @@ export class MotivationService {
             ...this.mapAccrual(r),
             ...(r.scheme === 'revenue_v2'
               ? {
+                  beforeDiscount: r.snapshot_before_discount === true,
                   productId: r.snapshot_product_id,
                   productName: r.snapshot_product_name ?? r.product_name ?? undefined,
                 }

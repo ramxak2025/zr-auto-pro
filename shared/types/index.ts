@@ -3754,6 +3754,8 @@ export interface MotivationRule {
   id: string;
   target: MotivationTarget;
   calculationBase: 'revenue';
+  /** Missing on older servers means after discount. */
+  beforeDiscount?: boolean;
   percent: number;
   active: boolean;
   revision: number;
@@ -3782,6 +3784,7 @@ export interface MotivationLegacyException {
 }
 
 export interface MotivationBulkInput {
+  beforeDiscount?: boolean;
   targets: MotivationTarget[];
   percent: number;
   active?: boolean;
@@ -3794,6 +3797,8 @@ export interface MotivationBulkInput {
 }
 
 export interface MotivationBulkResult {
+  /** Explicit acknowledgement of the requested basis; absent on older servers/receipts. */
+  beforeDiscount?: boolean;
   rules: MotivationRule[];
   coveredProductCount: number;
   /** Unique products whose effective new rule is in this batch, excluding preserved exceptions. */
@@ -3805,6 +3810,7 @@ export interface MotivationBulkResult {
 }
 
 export interface MotivationRulePatch {
+  beforeDiscount?: boolean;
   expectedRevision: number;
   percent?: number;
   active?: boolean;
@@ -3829,6 +3835,8 @@ export interface MotivationApiError {
 export interface MotivationAccrualV2 extends MotivationAccrual {
   scheme: 'margin_v1' | 'revenue_v2';
   calculationBase: 'margin' | 'revenue';
+  /** Historical basis from the sale snapshot, independent of the current rule. */
+  beforeDiscount?: boolean;
   baseAmount: number;
   revenueBase: number | null;
   shareIndex: number;

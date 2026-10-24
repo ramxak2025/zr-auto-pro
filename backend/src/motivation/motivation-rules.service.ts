@@ -28,6 +28,7 @@ interface Target {
 interface BulkInput {
   targets: Target[];
   percent: number;
+  beforeDiscount?: boolean;
   active?: boolean;
   dryRun?: boolean;
   requestId: string;
@@ -92,6 +93,7 @@ function parseBulk(value: unknown): BulkInput {
   const obj = record(value);
   if (!Array.isArray(obj.targets) || !obj.targets.length || obj.targets.length > 1000)
     invalid('Выберите от 1 до 1000 товаров или папок');
+  if (obj.beforeDiscount !== undefined && typeof obj.beforeDiscount !== 'boolean') invalid('Некорректная база расчёта');
   if (obj.active !== undefined && typeof obj.active !== 'boolean') invalid('Некорректная активность акции');
   if (obj.dryRun !== undefined && typeof obj.dryRun !== 'boolean') invalid('Некорректный режим просмотра');
   if (obj.previewRevision !== undefined && typeof obj.previewRevision !== 'string')
@@ -120,6 +122,7 @@ function parseBulk(value: unknown): BulkInput {
   return {
     targets,
     percent: percent(obj.percent),
+    ...(obj.beforeDiscount === undefined ? {} : { beforeDiscount: obj.beforeDiscount as boolean }),
     active: obj.active as boolean | undefined,
     dryRun: obj.dryRun as boolean | undefined,
     requestId: uuid(obj.requestId),
@@ -241,6 +244,7 @@ export class MotivationRulesService {
       const selection = {
         targets: input.targets.map((t) => ({ ...t })),
         percent: input.percent,
+        ...(input.beforeDiscount === undefined ? {} : { beforeDiscount: input.beforeDiscount }),
         active,
         replaceLegacyPromos: input.replaceLegacyPromos,
       };
@@ -312,6 +316,7 @@ export class MotivationRulesService {
           product_id: t.productId || null,
           category_id: t.categoryId || null,
           percent: String(input.percent),
+          before_discount: input.beforeDiscount ?? existing?.before_discount ?? false,
           active,
           revision: (existing?.revision || 0) + 1,
           created_at: existing?.created_at || new Date(),
@@ -390,20 +395,29 @@ export class MotivationRulesService {
           );
           const result = existing
             ? await client.query<{ id: string }>(
-                `UPDATE motivation_rules SET percent=$3,active=$4,revision=revision+1,updated_at=clock_timestamp()
+                `UPDATE motivation_rules SET percent=$3,active=$4,before_discount=$5,revision=revision+1,updated_at=clock_timestamp()
                 WHERE tenant_id=$1 AND id=$2 RETURNING id`,
-                [tenant, existing.id, input.percent, active],
+                [tenant, existing.id, input.percent, active, input.beforeDiscount ?? existing.before_discount],
               )
             : await client.query<{ id: string }>(
-                `INSERT INTO motivation_rules(tenant_id,target_kind,product_id,category_id,percent,active)
-                VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
-                [tenant, t.kind, t.productId || null, t.categoryId || null, input.percent, active],
+                `INSERT INTO motivation_rules(tenant_id,target_kind,product_id,category_id,percent,active,before_discount)
+                VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+                [
+                  tenant,
+                  t.kind,
+                  t.productId || null,
+                  t.categoryId || null,
+                  input.percent,
+                  active,
+                  input.beforeDiscount ?? false,
+                ],
               );
           ids.push(result.rows[0].id);
         }
         actualRules = (await readRules(client, tenant)).filter((r) => ids.includes(r.id)).map(mapRule);
       }
       const result = {
+        ...(input.beforeDiscount === undefined ? {} : { beforeDiscount: input.beforeDiscount }),
         rules: actualRules,
         coveredProductCount: covered.length,
         affectedProductCount,
@@ -433,6 +447,8 @@ export class MotivationRulesService {
     const revision = Number(body.expectedRevision);
     if (!Number.isInteger(revision) || revision < 1) invalid('Укажите версию правила');
     if (body.active !== undefined && typeof body.active !== 'boolean') invalid('Некорректная активность акции');
+    if (body.beforeDiscount !== undefined && typeof body.beforeDiscount !== 'boolean')
+      invalid('Некорректная база расчёта');
     const rate = body.percent === undefined ? undefined : percent(body.percent);
     const client = await this.pool.connect();
     try {
@@ -444,8 +460,8 @@ export class MotivationRulesService {
       if (remove) await client.query('DELETE FROM motivation_rules WHERE tenant_id=$1 AND id=$2', [tenant, id]);
       else
         await client.query(
-          `UPDATE motivation_rules SET percent=$3,active=$4,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2`,
-          [tenant, id, rate ?? row.percent, body.active ?? row.active],
+          `UPDATE motivation_rules SET percent=$3,active=$4,before_discount=$5,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2`,
+          [tenant, id, rate ?? row.percent, body.active ?? row.active, body.beforeDiscount ?? row.before_discount],
         );
       const result = remove
         ? { message: 'Удалено' }
