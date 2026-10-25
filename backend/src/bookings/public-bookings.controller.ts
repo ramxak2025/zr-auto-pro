@@ -110,7 +110,7 @@ export class BookingPublicationController {
   }
   @Get('requests')
   @RequirePermission('bookings_access')
-  requests(@CurrentUser() actor: JwtPayload, @Query() query: { status?: string }) {
+  requests(@CurrentUser() actor: JwtPayload, @Query() query: { status?: string; page?: string }) {
     return this.service.requests(actor, query);
   }
   @Post('requests/:id/approve')
