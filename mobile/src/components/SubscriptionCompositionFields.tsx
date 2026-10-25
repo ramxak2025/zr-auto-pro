@@ -106,7 +106,7 @@ const styles = StyleSheet.create({
   input: { minHeight: 48, fontSize: 17, borderWidth: 1, borderRadius: borderRadius.md, paddingHorizontal: spacing[3] },
   team: { gap: spacing[2] },
   compactRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  compactInput: { width: 88, textAlign: 'center', fontWeight: '600' },
+  compactInput: { width: 88, textAlign: 'right', fontWeight: '600' },
   presets: { flexDirection: 'row', gap: spacing[1.5] },
-  preset: { flex: 1, minHeight: 44, justifyContent: 'center', alignItems: 'center', borderRadius: borderRadius.md },
+  preset: { flex: 1, minHeight: 48, justifyContent: 'center', alignItems: 'center', borderRadius: borderRadius.md },
 });

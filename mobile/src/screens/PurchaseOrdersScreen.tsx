@@ -1,3 +1,4 @@
+import { useRoute, type RouteProp } from '@react-navigation/native';
 /**
  * PurchaseOrdersScreen — «Заказы поставщикам».
  *
@@ -130,7 +131,14 @@ export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: 
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('suppliers_manage');
 
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const route = useRoute<RouteProp<{ Filters: { status?: StatusFilter } }, 'Filters'>>();
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(route.params?.status ?? 'all');
+  React.useEffect(() => {
+    if (route.params?.status) {
+      setStatusFilter(route.params.status);
+      navigation.setParams({ status: undefined });
+    }
+  }, [route.params?.status, navigation]);
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [showSupplierDropdown, setShowSupplierDropdown] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

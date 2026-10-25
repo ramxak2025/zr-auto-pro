@@ -10,12 +10,12 @@
  * Reads (`installmentsApi.list`) are open to any tenant user; the write actions
  * downstream are role-gated AND enforced server-side.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useRoute, type RouteProp, useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { ListSkeleton } from '../components/Skeleton';
@@ -31,7 +31,7 @@ import { haptic } from '../platform/haptics';
 import type { InstallmentPlan } from '../../../shared/types';
 import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
-type Filter = 'open' | 'closed';
+type Filter = 'open' | 'closed' | 'overdue';
 
 export default function InstallmentsScreen() {
   const navigation = useNavigation<any>();
@@ -39,7 +39,14 @@ export default function InstallmentsScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const { hasPermission } = useAuth();
-  const [filter, setFilter] = useState<Filter>('open');
+  const route = useRoute<RouteProp<{ Filters: { status?: Filter } }, 'Filters'>>();
+  const [filter, setFilter] = useState<Filter>(route.params?.status ?? 'open');
+  useEffect(() => {
+    if (route.params?.status) {
+      setFilter(route.params.status);
+      navigation.setParams({ status: undefined });
+    }
+  }, [route.params?.status, navigation]);
   const [refreshing, setRefreshing] = useState(false);
 
   // Настройки напоминаний + write-действия — ключ debts_manage (сервер:
@@ -129,6 +136,7 @@ export default function InstallmentsScreen() {
           [
             { key: 'open', label: 'Открытые', icon: 'time-outline' },
             { key: 'closed', label: 'Закрытые', icon: 'checkmark-done-outline' },
+            { key: 'overdue', label: 'Просроченные', icon: 'alert-circle-outline' },
           ] as const
         ).map((seg) => {
           const active = filter === seg.key;
@@ -188,12 +196,20 @@ export default function InstallmentsScreen() {
         <ListSkeleton count={6} />
       ) : sorted.length === 0 ? (
         <EmptyState
-          icon={filter === 'open' ? 'card' : 'check'}
-          title={filter === 'open' ? 'Открытых рассрочек нет' : 'Закрытых рассрочек нет'}
+          icon={filter === 'closed' ? 'check' : 'card'}
+          title={
+            filter === 'overdue'
+              ? 'Просроченных рассрочек нет'
+              : filter === 'open'
+                ? 'Открытых рассрочек нет'
+                : 'Закрытых рассрочек нет'
+          }
           description={
-            filter === 'open'
-              ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
-              : 'Здесь появятся полностью погашенные рассрочки.'
+            filter === 'overdue'
+              ? 'Платежей с прошедшей датой нет.'
+              : filter === 'open'
+                ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
+                : 'Здесь появятся полностью погашенные рассрочки.'
           }
         />
       ) : (

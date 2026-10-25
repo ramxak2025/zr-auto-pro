@@ -68,6 +68,7 @@ jest.mock('../../api/services', () => ({
     close: jest.fn(async () => ({})),
   },
   cashShiftsApi: { open: jest.fn() },
+  salaryApi: { getTodayEarnings: jest.fn(async () => ({ data: { employees: [], total: 0 } })) },
 }));
 jest.mock('../../api/axios', () => ({ getImageUrl: jest.fn() }));
 const mockRefreshUser = jest.fn(async () => undefined);
@@ -75,12 +76,16 @@ let mockUser: {
   id: string;
   fullName: string;
   role: UserRole;
-  permissions: { company_manage: boolean };
+  permissions: { company_manage: boolean; salary_view_all?: boolean };
   tenant?: { id: string; shiftsEnabled?: boolean; attendanceMode?: 'admin' | 'manual' | 'nfc' };
 };
 let mockShifts: { id: string; openedAt: string; closedAt: string | null }[] = [];
 jest.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: mockUser, refreshUser: mockRefreshUser }),
+  useAuth: () => ({
+    user: mockUser,
+    refreshUser: mockRefreshUser,
+    hasPermission: (key: string) => (key === 'salary_view_all' ? mockUser.permissions.salary_view_all === true : false),
+  }),
 }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => jest.requireActual('../../theme/palette').getPalette('light'),
@@ -267,5 +272,21 @@ it.each([true, false])(
       expect(invalidated.some((queryKey) => queryKey[0] === key)).toBe(false);
     }
     expectNoCompanyRequests();
+  },
+);
+
+it.each([true, false])(
+  'master salary_view_all=%s keeps own dashboard and only granted team scope can fetch',
+  (allowed) => {
+    mockUser.permissions.salary_view_all = allowed;
+    const tree = DashboardScreen();
+    expect(elements(tree).some((e) => typeof e.type === 'function' && e.type.name === 'MasterDashboard')).toBe(true);
+    const team = elements(tree).find((e) => typeof e.type === 'function' && e.type.name === 'TodayEarningsCard');
+    expect(team).toBeDefined();
+    if (!team || typeof team.type !== 'function') throw new Error('Team permission gate must be mounted for a master');
+    const rendered = (team.type as () => React.ReactNode)();
+    expect(rendered === null).toBe(!allowed);
+    const query = mockUseQuery.mock.calls.find(([options]) => options.queryKey[0] === 'salary-today-earnings');
+    expect(query?.[0].enabled).toBe(allowed);
   },
 );

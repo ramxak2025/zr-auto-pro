@@ -298,7 +298,10 @@ const words = (node: React.ReactNode): string =>
       : '';
 const render = <T,>(screen: () => T): T => {
   mockIndex = 0;
-  const result = screen();
+  let result = screen();
+  // Follow the route-mode wrapper so assertions still exercise the real warehouse handlers.
+  while (React.isValidElement(result) && typeof result.type === 'function')
+    result = (result.type as (props: unknown) => T)(result.props);
   while (mockEffects.length) mockEffects.shift()!();
   return result;
 };

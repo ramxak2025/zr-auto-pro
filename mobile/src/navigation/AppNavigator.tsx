@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StackActions, CommonActions, useNavigation } from '@react-navigation/native';
+import { StackActions, CommonActions, useNavigation, type NavigatorScreenParams } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -300,12 +300,21 @@ export type RootStackParamList = {
   NfcTags: undefined;
 };
 
+/** The dashboard's nested destinations. Registered names are verified against the navigator JSX by router tests. */
+export type DashboardMoreStackParamList = {
+  PublicBookingRequests: { pendingOnly?: boolean } | undefined;
+  PurchaseOrders: { status?: PurchaseOrder['status'] } | undefined;
+  Installments: { status?: 'open' | 'closed' | 'overdue' } | undefined;
+};
+export type DashboardChecksStackParamList = {
+  ChecksHome: { deferredOnly?: boolean; deferredMasterId?: string } | undefined;
+};
 export type TabParamList = {
   Dashboard: undefined;
-  Products: undefined;
+  Products: NavigatorScreenParams<ProductsStackParamList> | undefined;
   NewCheck: undefined;
-  Checks: undefined;
-  MoreTab: undefined;
+  Checks: NavigatorScreenParams<DashboardChecksStackParamList> | undefined;
+  MoreTab: NavigatorScreenParams<DashboardMoreStackParamList> | undefined;
   /**
    * Round 14, режим «Кассир»: доп. табы кассирского состава. Зарегистрированы
    * ВСЕГДА (react-navigation не терпит динамической регистрации) — но бар
@@ -330,6 +339,7 @@ export type ProductsStackParamList = {
   ProductsHome:
     | {
         activePath?: string[];
+        lowStock?: boolean;
         editProduct?: Product;
         storageCellId?: string;
         storageCellCode?: string;

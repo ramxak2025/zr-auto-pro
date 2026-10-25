@@ -186,7 +186,11 @@ const nodes = (node: React.ReactNode): Element[] =>
       : [];
 const render = (screen = ProductsScreen) => {
   mockIndex = 0;
-  return screen();
+  let result = screen();
+  // Follow the route-mode wrapper so assertions still exercise the real folder handlers.
+  while (React.isValidElement(result) && typeof result.type === 'function')
+    result = (result.type as (props: unknown) => React.ReactElement)(result.props);
+  return result;
 };
 const action = (tree: React.ReactNode) => nodes(tree).find((node) => node.props.accessibilityLabel === 'Новая папка');
 const open = (screen = ProductsScreen) => {

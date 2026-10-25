@@ -1,3 +1,5 @@
+import type { ProductsStackParamList } from '../navigation/AppNavigator';
+import LowStockView from './dashboard/LowStockView';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
@@ -23,7 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, type RouteProp, type NavigationProp, useNavigation } from '@react-navigation/native';
 import { useProductPhotoPicker } from '../hooks/useProductPhotoPicker';
 import { productsApi, warehouseCategoriesApi, uploadsApi, warehousesApi, stockMovementsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -407,7 +409,7 @@ const ProductRow = React.memo(function ProductRow({
   );
 });
 
-export default function ProductsScreen() {
+function ProductsScreenContents() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const insetsBottom = useSafeAreaInsets().bottom;
@@ -5283,3 +5285,13 @@ const styles = StyleSheet.create({
   },
   pricelessCtaText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.amber[700] },
 });
+
+export default function ProductsScreen() {
+  const route = useRoute<RouteProp<ProductsStackParamList, 'ProductsHome'>>();
+  const navigation = useNavigation<NavigationProp<ProductsStackParamList, 'ProductsHome'>>();
+  return route.params?.lowStock ? (
+    <LowStockView onExit={() => navigation.setParams({ lowStock: undefined })} />
+  ) : (
+    <ProductsScreenContents />
+  );
+}

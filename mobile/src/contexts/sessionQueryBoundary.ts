@@ -1,3 +1,4 @@
+import { attachDashboardRefresh } from '../../../shared/utils/dashboardQueries';
 import type { QueryClient } from '@tanstack/react-query';
 import { captureDataSession } from './dataSession';
 
@@ -6,6 +7,7 @@ import { captureDataSession } from './dataSession';
  * Capture ownership at creation, preserve it across observer option changes,
  * and reject a paused mutation before it can dispatch under a new bearer. */
 export function attachSessionMutationBoundary(client: QueryClient): () => void {
+  const detachDashboard = attachDashboardRefresh(client);
   const leases = new WeakMap<object, ReturnType<typeof captureDataSession>>();
   const wrapped = new WeakSet<object>();
   const cache = client.getMutationCache();
@@ -44,6 +46,7 @@ export function attachSessionMutationBoundary(client: QueryClient): () => void {
       }
   });
   return () => {
+    detachDashboard();
     unsubscribe();
     if (cache.config.onError === guardedError) cache.config.onError = originalError;
   };

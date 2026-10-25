@@ -89,10 +89,10 @@ beforeEach(() => {
   mockQuote.isError = false;
   mockQuote.isFetching = false;
 });
-it('starts from actual team size and preserves explicit selections below included when comparing', async () => {
-  expect(render().employees).toBe('2');
+it('prefills included capacity until manually edited and then preserves explicit selections', async () => {
+  expect(render().employees).toBe('5');
   render().setPlan('max');
-  expect(render().employees).toBe('2');
+  expect(render().employees).toBe('50');
   render().setEmployees('3');
   render().setPoints('2');
   render().setPlan('baza');
@@ -136,7 +136,7 @@ it('keeps invalid and below-usage inputs editable; a server usage increase canno
   render().setPoints('2');
   expect(render().valid).toBe(true);
 });
-it('obtains inactive current-plan metadata from its quote without inventing features', () => {
+it('never feeds an inactive or unknown assigned plan into the new constructor', () => {
   const sub = { ...subscription(1), planId: 'disabled', planName: 'Прежний MAX', plans: [] };
   mockQuote.data = {
     planId: 'disabled',
@@ -145,9 +145,10 @@ it('obtains inactive current-plan metadata from its quote without inventing feat
     quote: { period: 'monthly', employees: 1, points: 1 },
   } as SubscriptionQuotePreview;
   expect(render(sub).employees).toBe('1');
-  expect(render(sub).name).toBe('Прежний MAX');
+  expect(render(sub).name).toBeUndefined();
+  expect(mockOptions.enabled).toBe(false);
   expect(render(sub).plan).toBeUndefined();
-  expect(render(sub).ready).toBe(true);
+  expect(render(sub).ready).toBe(false);
 });
 
 it('separates calculator keys by current data owner and generation without changing quote selection', () => {
@@ -210,7 +211,7 @@ it('hides old or loading quotes and never treats invalid counts as a computed pr
     planId: 'pro',
     pricing: SUBSCRIPTION_PLAN_PRICING.pro,
     usage: sub.usage,
-    quote: { period: 'monthly', employees: 2, points: 1 },
+    quote: { period: 'monthly', employees: 5, points: 1 },
   } as SubscriptionQuotePreview;
   expect(render(sub).ready).toBe(true);
   mockQuote.isFetching = true;
@@ -239,10 +240,39 @@ it('keeps individual server pricing and legacy failures separate from public pla
       : plan,
   );
   expect(render(sub).pricing?.monthlyPrice).toBe(7777);
-  expect(render(sub).employees).toBe('2');
+  expect(render(sub).employees).toBe('17');
   expect(render(sub).plan?.features).toEqual(['private']);
   mockQuote.isError = true;
   mockQuote.error = { response: { status: 400, data: { code: 'LEGACY_PLAN' } } };
   expect(render(sub).message).toContain('недоступен');
   expect(render(sub).ready).toBe(false);
+});
+
+it('clears touched draft and server minima on data owner or generation changes', () => {
+  render().setEmployees('006');
+  render().setPoints('02');
+  render().setPlan('max');
+  render().setPeriod('yearly');
+  expect(render().employees).toBe('006');
+  setDataSession({ tenantId: 'another', userId: 'other-owner', pointId: 'other-point' });
+  expect(render().employees).toBe('5');
+  expect(render().points).toBe('1');
+  expect(render().period).toBe('monthly');
+  expect(render().planId).toBe('pro');
+});
+it('active custom without pricing requires explicit choice and preserves manual six across PRO, MAX and BAZA', () => {
+  const sub = {
+    ...subscription(),
+    planId: 'custom',
+    currentPlan: { ...plans[1], id: 'custom', pricing: null, isActive: true },
+  } as SubscriptionInfo;
+  expect(render(sub).planId).toBeUndefined();
+  expect(mockOptions.enabled).toBe(false);
+  render(sub).setPlan('pro');
+  expect(render(sub).employees).toBe('5');
+  render(sub).setEmployees('6');
+  render(sub).setPlan('max');
+  expect(render(sub).employees).toBe('6');
+  render(sub).setPlan('baza');
+  expect(render(sub).employees).toBe('6');
 });

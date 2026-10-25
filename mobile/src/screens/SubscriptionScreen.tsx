@@ -19,11 +19,17 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
 import SubscriptionCompositionFields from '../components/SubscriptionCompositionFields';
-import { planCompositionLabel, planIncludedLabel, subscriptionContactText } from '../utils/subscriptionPricingText';
+import {
+  planCompositionLabel,
+  planIncludedLabel,
+  subscriptionContactText,
+  subscriptionMoney,
+} from '../utils/subscriptionPricingText';
+import { assignedSubscriptionPlan, subscriptionOffers } from '../../../shared/utils/subscriptionPresentation';
 import { useSubscriptionCalculator } from './subscription/useSubscriptionCalculator';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ALL_FEATURES } from '../../../shared/constants/features';
 import type { SubscriptionInfo } from '../../../shared/types';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
@@ -38,6 +44,7 @@ export default function SubscriptionScreen() {
   const isIos = Platform.OS === 'ios';
   const [refreshing, setRefreshing] = React.useState(false);
   const [showFeatures, setShowFeatures] = React.useState(false);
+  const [showConditions, setShowConditions] = React.useState(false);
   const {
     data: sub,
     isLoading,
@@ -49,20 +56,17 @@ export default function SubscriptionScreen() {
     enabled: allowed,
   });
   const calc = useSubscriptionCalculator(sub, allowed);
-  const plans = sub?.plans ?? [];
-  const current = calc.planId === sub?.planId;
-  const features = calc.plan?.features ?? (current ? sub?.features : undefined);
-  const choices =
-    plans.some((p) => p.id === sub?.planId) || !sub?.planId
-      ? plans.map((p) => ({ id: p.id, name: p.name, info: planIncludedLabel(p) }))
-      : [
-          {
-            id: sub.planId,
-            name: sub.planName ?? 'Текущий тариф',
-            info: current && calc.pricing ? planIncludedLabel({ pricing: calc.pricing }) : 'Текущий тариф',
-          },
-          ...plans.map((p) => ({ id: p.id, name: p.name, info: planIncludedLabel(p) })),
-        ];
+  const currentPlan = assignedSubscriptionPlan(sub);
+  const archived = currentPlan?.isActive === false;
+  const choices = subscriptionOffers(sub);
+  const endDate = sub?.subscriptionEnd ? new Date(sub.subscriptionEnd) : undefined;
+  const endLabel =
+    sub?.subscriptionEnd === null
+      ? 'Без ограничения срока'
+      : endDate && !Number.isNaN(endDate.getTime())
+        ? endDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+        : 'Срок не указан';
+  const status = sub?.status === 'suspended' ? 'Приостановлена' : sub?.status === 'expired' ? 'Истекла' : 'Активна';
   const refresh = async () => {
     setRefreshing(true);
     try {
@@ -72,8 +76,9 @@ export default function SubscriptionScreen() {
       setRefreshing(false);
     }
   };
-  const contact = (planName?: string) => {
-    const message = subscriptionContactText(planName, calc.ready ? calc.quote.data : undefined);
+  const contact = () => {
+    if (isIos || !calc.ready) return;
+    const message = subscriptionContactText(calc.name, calc.quote.data);
     void Linking.openURL(`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(message)}`);
   };
   const button = (label: string, action: () => void, selected = false) => (
@@ -82,17 +87,24 @@ export default function SubscriptionScreen() {
       onPress={action}
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      style={[styles.choice, { backgroundColor: selected ? palette.accent.primarySoft : palette.bg.muted }]}
+      style={[styles.choice, { backgroundColor: selected ? palette.bg.card : palette.bg.muted }]}
     >
       <Text
         style={{
-          color: selected ? palette.accent.primaryText : palette.text.primary,
-          fontWeight: selected ? '600' : '400',
+          color: selected ? palette.accent.primaryText : palette.text.secondary,
+          fontSize: fontSize.sm,
+          fontWeight: selected ? fontWeight.semibold : fontWeight.normal,
         }}
       >
         {label}
       </Text>
     </TouchableOpacity>
+  );
+  const row = (label: string, value: string) => (
+    <View key={label} style={[styles.row, { borderTopColor: palette.border.subtle }]}>
+      <Text style={[styles.rowLabel, { color: palette.text.secondary }]}>{label}</Text>
+      <Text style={[styles.rowValue, { color: palette.text.primary }]}>{value}</Text>
+    </View>
   );
   if (!allowed)
     return (
@@ -113,138 +125,236 @@ export default function SubscriptionScreen() {
         }
       >
         {isError ? (
-          <View>
-            <Text style={{ color: palette.text.secondary }}>Не удалось загрузить подписку.</Text>
+          <View style={[styles.section, { backgroundColor: palette.bg.card }]}>
+            <Text style={[styles.body, { color: palette.text.secondary }]}>Не удалось загрузить подписку.</Text>
             {button('Повторить', () => {
               void refetch();
             })}
           </View>
-        ) : null}
-        <View style={styles.status}>
-          <Text style={[styles.statusTitle, { color: palette.text.primary }]}>
-            {sub?.tenantName ?? 'Организация'} · {sub?.planName ?? 'Тариф не назначен'}
-          </Text>
-          <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
-            Оплачено до:{' '}
-            {sub?.subscriptionEnd ? new Date(sub.subscriptionEnd).toLocaleDateString('ru-RU') : 'не указано'}
-          </Text>
-          <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>
-            Фактически: сотрудники — {sub?.usage?.employees ?? sub?.currentUsers ?? 0}, включая владельца · Филиалы —{' '}
-            {sub?.usage?.activePoints ?? 0}
-          </Text>
-          {sub?.subscriptionNote ? <Text style={{ color: palette.text.secondary }}>{sub.subscriptionNote}</Text> : null}
-        </View>
-        {choices.length ? (
-          <View style={[styles.calculator, { backgroundColor: palette.bg.card }]}>
-            <Text style={[styles.title, { color: palette.text.primary }]}>Расчёт стоимости</Text>
-            <SubscriptionCompositionFields
-              employees={calc.employees}
-              points={calc.points}
-              onEmployees={calc.setEmployees}
-              onPoints={calc.setPoints}
-              employeePresets
-              minimumEmployees={calc.actualEmployees}
-              inputAccessoryViewID={isIos ? 'subscription-calculator-done' : undefined}
-            />
-            <View style={styles.choices}>
-              {choices.map((plan) => (
-                <TouchableOpacity
-                  key={plan.id}
-                  onPress={() => calc.setPlan(plan.id)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Тариф ${plan.name}: ${plan.info}`}
-                  accessibilityState={{ selected: calc.planId === plan.id }}
-                  style={[
-                    styles.planChoice,
-                    { backgroundColor: calc.planId === plan.id ? palette.accent.primarySoft : palette.bg.muted },
-                  ]}
-                >
-                  <Text
-                    style={{
-                      color: calc.planId === plan.id ? palette.accent.primaryText : palette.text.primary,
-                      fontWeight: '600',
-                    }}
-                    numberOfLines={2}
-                  >
-                    {plan.name}
-                  </Text>
-                  <Text style={{ color: palette.text.secondary, fontSize: 12 }} numberOfLines={2}>
-                    {plan.info}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+        ) : sub ? (
+          <>
+            <View style={styles.sectionHeading}>
+              <Text style={[styles.heading, { color: palette.text.primary }]}>Текущая подписка</Text>
+              <Text style={[styles.status, { color: palette.text.secondary }]}>{status}</Text>
             </View>
-            <View style={styles.choices}>
-              {button('Месяц', () => calc.setPeriod('monthly'), calc.period === 'monthly')}
-              {button('Год', () => calc.setPeriod('yearly'), calc.period === 'yearly')}
-            </View>
-            {calc.message ? <Text style={{ color: palette.text.secondary }}>{calc.message}</Text> : null}
-            {calc.unsupportedPoints && calc.maxPlan
-              ? button('Рассчитать MAX', () => {
-                  if (calc.maxPlan) calc.setPlan(calc.maxPlan.id);
-                })
-              : null}
-            {calc.quote.isFetching && calc.valid ? (
-              <Text style={{ color: palette.text.secondary }}>Считаем стоимость…</Text>
-            ) : calc.ready && calc.quote.data ? (
-              <SubscriptionQuoteBreakdown preview={calc.quote.data} compact />
-            ) : !calc.message ? (
-              <Text style={{ color: palette.text.secondary }}>
-                {calc.planId ? 'Укажите состав для расчёта.' : 'Выберите тариф.'}
-              </Text>
-            ) : null}
-            {calc.quote.isError && !calc.unsupportedPoints
-              ? button('Повторить расчёт', () => {
-                  void calc.quote.refetch();
-                })
-              : null}
-            <TouchableOpacity
-              style={[styles.details, { borderTopColor: palette.border.subtle }]}
-              onPress={() => setShowFeatures((shown) => !shown)}
-              accessibilityRole="button"
-              accessibilityLabel="Условия и возможности тарифа"
-              accessibilityState={{ expanded: showFeatures }}
-            >
-              <Text style={{ color: palette.accent.primaryText }}>Условия и возможности</Text>
-              <Ionicons
-                name={showFeatures ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={palette.accent.primaryText}
-              />
-            </TouchableOpacity>
-            {showFeatures ? (
-              <View style={styles.conditions}>
-                {calc.plan ? (
-                  <Text style={{ color: palette.text.secondary }}>{planCompositionLabel(calc.plan)}</Text>
-                ) : calc.pricing ? (
-                  <Text style={{ color: palette.text.secondary }}>
-                    {planCompositionLabel({ pricing: calc.pricing })}
-                  </Text>
+            <View style={[styles.section, { backgroundColor: palette.bg.card }]} accessibilityLabel="Текущая подписка">
+              <View style={styles.planHeader}>
+                <Text style={[styles.planName, { color: palette.text.primary }]}>
+                  {sub.planName ?? 'Тариф не назначен'}
+                </Text>
+                {archived ? (
+                  <View style={[styles.badge, { backgroundColor: palette.bg.muted }]}>
+                    <Text style={[styles.caption, { color: palette.text.secondary }]}>Архивный тариф</Text>
+                  </View>
                 ) : null}
-                {features?.length ? (
-                  features.map((key) => (
-                    <Text key={key} style={{ color: palette.text.secondary }}>
-                      {ALL_FEATURES.find((feature) => feature.key === key)?.label ?? key}
-                    </Text>
-                  ))
-                ) : (
-                  <Text style={{ color: palette.text.secondary }}>Список возможностей не указан.</Text>
-                )}
               </View>
-            ) : null}
-            <Text style={{ color: palette.text.secondary, fontSize: 12 }}>
-              Расчёт для сравнения. Подписка не меняется.
-            </Text>
-          </View>
-        ) : null}
-        {!isIos ? (
-          <TouchableOpacity
-            style={styles.payment}
-            onPress={() => contact(calc.ready && !current ? (calc.name ?? undefined) : undefined)}
-            accessibilityRole="button"
-          >
-            <Text style={styles.paymentText}>Связаться для оплаты</Text>
-          </TouchableOpacity>
+              <Text style={[styles.body, { color: palette.text.secondary }]}>{sub.tenantName}</Text>
+              {archived ? (
+                <Text style={[styles.body, { color: palette.text.secondary }]}>
+                  У вас сохранены условия прежнего тарифа. Ниже можно рассчитать новый.
+                </Text>
+              ) : null}
+              <View>
+                {row('Доступ до', endLabel)}
+                {row(
+                  'Месячная ставка',
+                  sub.monthlyPrice != null ? subscriptionMoney(sub.monthlyPrice) : 'Ставка не указана',
+                )}
+                {row(
+                  'Сотрудники',
+                  `${sub.usage?.employees ?? sub.currentUsers} · лимит ${sub.maxUsers ?? 'не указан'}`,
+                )}
+                {row('Действующие филиалы', String(sub.usage?.activePoints ?? 'Не указано'))}
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowFeatures((shown) => !shown)}
+                accessibilityRole="button"
+                accessibilityLabel="Возможности текущего тарифа"
+                accessibilityState={{ expanded: showFeatures }}
+                style={[styles.disclosure, { borderTopColor: palette.border.subtle }]}
+              >
+                <Text style={[styles.body, styles.flex, { color: palette.accent.primaryText }]}>
+                  Возможности текущего тарифа
+                </Text>
+                <Ionicons
+                  name={showFeatures ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={palette.accent.primaryText}
+                />
+              </TouchableOpacity>
+              {showFeatures ? (
+                <View style={styles.conditions}>
+                  {sub.features?.length ? (
+                    sub.features.map((key) => (
+                      <Text key={key} style={[styles.body, { color: palette.text.secondary }]}>
+                        {ALL_FEATURES.find((feature) => feature.key === key)?.label ?? key}
+                      </Text>
+                    ))
+                  ) : (
+                    <Text style={[styles.body, { color: palette.text.secondary }]}>Список возможностей не указан.</Text>
+                  )}
+                </View>
+              ) : null}
+              {sub.subscriptionNote ? (
+                <Text style={[styles.body, { color: palette.text.secondary }]}>{sub.subscriptionNote}</Text>
+              ) : null}
+            </View>
+            <View style={styles.builderHeading}>
+              <Text style={[styles.heading, { color: palette.text.primary }]}>Соберите новый тариф</Text>
+              <Text style={[styles.body, { color: palette.text.secondary }]}>
+                Подберите состав и период. Расчёт не меняет вашу подписку.
+              </Text>
+            </View>
+            {choices.length ? (
+              <>
+                <View style={[styles.section, { backgroundColor: palette.bg.card }]}>
+                  <Text style={[styles.label, { color: palette.text.primary }]}>Тариф для расчёта</Text>
+                  {choices.map((plan) => (
+                    <TouchableOpacity
+                      key={plan.id}
+                      onPress={() => calc.setPlan(plan.id)}
+                      accessibilityRole="radio"
+                      accessibilityLabel={`Тариф ${plan.name}: ${planIncludedLabel(plan)}`}
+                      accessibilityState={{ checked: calc.planId === plan.id }}
+                      style={[styles.planChoice, { borderTopColor: palette.border.subtle }]}
+                    >
+                      <View style={styles.flex}>
+                        <Text style={[styles.label, { color: palette.text.primary }]}>{plan.name}</Text>
+                        <Text style={[styles.caption, { color: palette.text.secondary }]}>
+                          {planIncludedLabel(plan)}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={calc.planId === plan.id ? 'radio-button-on' : 'radio-button-off'}
+                        size={23}
+                        color={calc.planId === plan.id ? palette.accent.primary : palette.text.secondary}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                  {calc.pricing ? (
+                    <Text style={[styles.caption, { color: palette.text.secondary }]}>
+                      Включено {calc.pricing.includedEmployees} сотрудников · дополнительных{' '}
+                      {/^\d+$/.test(calc.employees)
+                        ? Math.max(0, Number(calc.employees) - calc.pricing.includedEmployees)
+                        : '—'}
+                      .
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={[styles.section, { backgroundColor: palette.bg.card }]}>
+                  <Text style={[styles.label, { color: palette.text.primary }]}>Состав команды</Text>
+                  <SubscriptionCompositionFields
+                    employees={calc.employees}
+                    points={calc.points}
+                    onEmployees={calc.setEmployees}
+                    onPoints={calc.setPoints}
+                    employeePresets
+                    minimumEmployees={calc.actualEmployees}
+                    inputAccessoryViewID={isIos ? 'subscription-calculator-done' : undefined}
+                  />
+                  <Text style={[styles.caption, { color: palette.text.secondary }]}>
+                    Сейчас работает: {sub.usage?.employees ?? sub.currentUsers} сотрудников, включая владельца ·
+                    филиалов {sub.usage?.activePoints ?? 1}.
+                  </Text>
+                </View>
+                <View style={[styles.section, { backgroundColor: palette.bg.card }]}>
+                  <Text style={[styles.label, { color: palette.text.primary }]}>Период расчёта</Text>
+                  <View style={[styles.segmented, { backgroundColor: palette.bg.muted }]}>
+                    {button('Месяц', () => calc.setPeriod('monthly'), calc.period === 'monthly')}
+                    {button('Год · 12 за 10', () => calc.setPeriod('yearly'), calc.period === 'yearly')}
+                  </View>
+                  <View style={[styles.result, { borderTopColor: palette.border.subtle }]}>
+                    <Text style={[styles.label, { color: palette.text.primary }]}>
+                      Ваш расчёт{calc.name ? ` · ${calc.name}` : ''}
+                    </Text>
+                    {calc.message ? (
+                      <Text accessibilityLiveRegion="polite" style={[styles.body, { color: palette.text.secondary }]}>
+                        {calc.message}
+                      </Text>
+                    ) : calc.quote.isFetching && calc.valid && calc.planId ? (
+                      <Text style={[styles.body, { color: palette.text.secondary }]}>Считаем стоимость…</Text>
+                    ) : calc.ready && calc.quote.data ? (
+                      <SubscriptionQuoteBreakdown preview={calc.quote.data} compact informational={isIos} />
+                    ) : (
+                      <Text style={[styles.body, { color: palette.text.secondary }]}>
+                        {calc.planId
+                          ? 'Укажите состав для расчёта.'
+                          : 'Выберите тариф, чтобы увидеть стоимость нового состава.'}
+                      </Text>
+                    )}
+                    {calc.unsupportedPoints && calc.maxPlan
+                      ? button('Рассчитать MAX', () => {
+                          if (calc.maxPlan) calc.setPlan(calc.maxPlan.id);
+                        })
+                      : calc.quote.isError && calc.planId
+                        ? button('Повторить расчёт', () => {
+                            void calc.quote.refetch();
+                          })
+                        : null}
+                  </View>
+                  {calc.plan ? (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => setShowConditions((shown) => !shown)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Условия выбранного тарифа"
+                        accessibilityState={{ expanded: showConditions }}
+                        style={[styles.disclosure, { borderTopColor: palette.border.subtle }]}
+                      >
+                        <Text style={[styles.body, styles.flex, { color: palette.accent.primaryText }]}>
+                          Условия выбранного тарифа
+                        </Text>
+                        <Ionicons
+                          name={showConditions ? 'chevron-up' : 'chevron-down'}
+                          size={18}
+                          color={palette.accent.primaryText}
+                        />
+                      </TouchableOpacity>
+                      {showConditions ? (
+                        <View style={styles.conditions}>
+                          <Text style={[styles.body, { color: palette.text.secondary }]}>
+                            {planCompositionLabel(calc.plan)}
+                          </Text>
+                          {calc.plan.features?.map((key) => (
+                            <Text key={key} style={[styles.body, { color: palette.text.secondary }]}>
+                              {ALL_FEATURES.find((feature) => feature.key === key)?.label ?? key}
+                            </Text>
+                          ))}
+                        </View>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {!isIos ? (
+                    <TouchableOpacity
+                      disabled={!calc.ready}
+                      onPress={contact}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: !calc.ready }}
+                      style={[
+                        styles.contact,
+                        { backgroundColor: palette.accent.primary, opacity: calc.ready ? 1 : 0.45 },
+                      ]}
+                    >
+                      <Text style={[styles.label, { color: palette.text.inverse }]}>Обсудить этот расчёт</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <Text style={[styles.caption, { color: palette.text.secondary }]}>
+                    {isIos
+                      ? 'Информационный расчёт. Условия и срок текущей подписки сохраняются.'
+                      : 'Обсуждение в WhatsApp. Условия и срок текущей подписки сохраняются до согласования изменений.'}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <View style={[styles.section, { backgroundColor: palette.bg.card }]}>
+                <Text style={[styles.label, { color: palette.text.primary }]}>Нет доступных тарифов для расчёта</Text>
+                <Text style={[styles.body, { color: palette.text.secondary }]}>Текущие условия показаны выше.</Text>
+                {button('Обновить данные', () => {
+                  void refetch();
+                })}
+              </View>
+            )}
+          </>
         ) : null}
       </KeyboardAwareScroll>
       {isIos ? (
@@ -256,7 +366,7 @@ export default function SubscriptionScreen() {
               accessibilityRole="button"
               accessibilityLabel="Скрыть клавиатуру"
             >
-              <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Готово</Text>
+              <Text style={[styles.label, { color: palette.accent.primaryText }]}>Готово</Text>
             </TouchableOpacity>
           </View>
         </InputAccessoryView>
@@ -266,47 +376,79 @@ export default function SubscriptionScreen() {
 }
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  keyboardAccessory: { alignItems: 'flex-end' },
-  keyboardDone: { minHeight: 44, paddingHorizontal: spacing[4], justifyContent: 'center' },
-  content: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[4] },
-  status: { gap: spacing[1] },
-  statusTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  calculator: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[2] },
-  title: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },
-  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  choice: {
-    flex: 1,
-    minHeight: 44,
-    paddingHorizontal: spacing[3],
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: borderRadius.md,
-  },
-  planChoice: {
-    flex: 1,
-    minWidth: 80,
-    minHeight: 62,
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[2],
-    justifyContent: 'center',
-    borderRadius: borderRadius.md,
-    gap: 3,
-  },
-  details: {
-    minHeight: 44,
+  content: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
+  sectionHeading: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing[2],
+    paddingHorizontal: spacing[1],
+  },
+  heading: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold },
+  status: { fontSize: fontSize.sm },
+  section: { padding: spacing[4], borderRadius: borderRadius.xl, gap: spacing[3] },
+  builderHeading: { paddingTop: spacing[5], paddingHorizontal: spacing[1], gap: spacing[1] },
+  planHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing[2] },
+  planName: { fontSize: fontSize['2xl'], fontWeight: fontWeight.semibold, flexShrink: 1 },
+  badge: { borderRadius: borderRadius.sm, paddingVertical: spacing[1], paddingHorizontal: spacing[2] },
+  body: { fontSize: fontSize.base, lineHeight: 23 },
+  caption: { fontSize: fontSize.sm, lineHeight: 20 },
+  label: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  flex: { flex: 1 },
+  row: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  conditions: { gap: spacing[2], paddingBottom: spacing[2] },
-  payment: {
+  rowLabel: { fontSize: fontSize.sm, flexShrink: 1 },
+  rowValue: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    textAlign: 'right',
+    marginLeft: 'auto',
+    fontVariant: ['tabular-nums'],
+    flexShrink: 1,
+  },
+  disclosure: {
     minHeight: 48,
+    paddingTop: spacing[2],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  conditions: { gap: spacing[2] },
+  planChoice: {
+    minHeight: 64,
+    paddingVertical: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  segmented: { flexDirection: 'row', gap: spacing[1], padding: spacing[1], borderRadius: borderRadius.lg },
+  choice: {
+    flex: 1,
+    minHeight: 48,
+    padding: spacing[2],
     borderRadius: borderRadius.md,
-    backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  paymentText: { color: colors.white, fontWeight: fontWeight.semibold },
-  message: { padding: spacing[4] },
+  result: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing[4], gap: spacing[3] },
+  contact: {
+    minHeight: 48,
+    borderRadius: borderRadius.lg,
+    padding: spacing[3],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  keyboardAccessory: { alignItems: 'flex-end' },
+  keyboardDone: { minHeight: 44, paddingHorizontal: spacing[4], justifyContent: 'center' },
+  message: { textAlign: 'center', padding: spacing[6] },
 });

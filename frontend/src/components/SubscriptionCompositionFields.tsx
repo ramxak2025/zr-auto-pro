@@ -10,6 +10,7 @@ export default function SubscriptionCompositionFields({
   onEmployeesChange,
   onPointsChange,
   employeePresets = false,
+  largeInputs = false,
 }: {
   employees: string;
   points: string;
@@ -18,6 +19,7 @@ export default function SubscriptionCompositionFields({
   onEmployeesChange: (value: string) => void;
   onPointsChange: (value: string) => void;
   employeePresets?: boolean;
+  largeInputs?: boolean;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -47,6 +49,7 @@ export default function SubscriptionCompositionFields({
         return (
           <Field key={label} label={label} error={error} hint={note}>
             <Input
+              className={largeInputs ? 'min-h-[44px] text-right tabular-nums' : undefined}
               aria-label={label}
               inputMode="numeric"
               value={value}

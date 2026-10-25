@@ -1,3 +1,4 @@
+import { AttentionCard, TodayEarningsCard } from '../components/dashboard/TodayWidgets';
 import { Link } from 'react-router-dom';
 import { BarChart3, FileText, Search } from 'lucide-react';
 import { format } from 'date-fns';
@@ -77,6 +78,8 @@ function AdminDashboard() {
     return (
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
         <div className="space-y-5 xl:col-span-2">
+          <AttentionCard />
+          <TodayEarningsCard />
           <StaffTodayCard />
           <DeferredChecksCard />
         </div>
@@ -97,6 +100,8 @@ function AdminDashboard() {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
         <div className="space-y-5 xl:col-span-2">
           <RevenueChart />
+          <AttentionCard />
+          <TodayEarningsCard />
           <StaffTodayCard />
           <DeferredChecksCard />
         </div>
@@ -143,6 +148,8 @@ export default function DashboardPage() {
       {isMaster ? (
         <>
           <MasterDashboard />
+          <TodayEarningsCard />
+          <AttentionCard />
           <DeferredChecksCard />
         </>
       ) : (

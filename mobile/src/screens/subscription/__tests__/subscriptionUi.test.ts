@@ -12,6 +12,7 @@ import {
   subscriptionContactText,
   subscriptionMoney,
 } from '../../../utils/subscriptionPricingText';
+import { assignedSubscriptionPlan, subscriptionOffers } from '../../../../../shared/utils/subscriptionPresentation';
 import type { SubscriptionQuotePreview } from '../../../../../shared/types';
 type Element = { type: unknown; props: Record<string, unknown> & { children?: unknown[] } };
 const createElement = (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => ({
@@ -165,6 +166,7 @@ function screen(
   os = 'ios',
   overrides: Record<string, unknown> = {},
   subscriptionOverrides: Record<string, unknown> = {},
+  runtime: Record<string, unknown> = {},
 ) {
   const plans = Object.values(SUBSCRIPTION_PLAN_PRICING).map((pricing) => ({
     id: pricing.code,
@@ -207,7 +209,7 @@ function screen(
     plan: plans[2],
     ...overrides,
   };
-  const flags = [false, false];
+  const flags = [false, false, false];
   let stateIndex = 0;
   const components = Object.fromEntries(
     [
@@ -242,14 +244,18 @@ function screen(
     useNavigation: () => ({ goBack: jest.fn() }),
     useQueryClient: () => ({}),
     useColors: () => palette,
-    useAuth: () => ({ hasPermission: () => true }),
-    useQuery: () => ({ data: sub, isLoading: false, isError: false }),
+    useAuth: () => ({ hasPermission: () => runtime.allowed !== false }),
+    useQuery: () => ({ data: sub, isLoading: false, isError: false, refetch: jest.fn(), ...runtime }),
     useSubscriptionCalculator: () => calc,
     styles: {},
     planCompositionLabel,
     planIncludedLabel,
+    assignedSubscriptionPlan,
+    subscriptionOffers,
+    subscriptionMoney,
     spacing: {},
     fontSize: {},
+    fontWeight: { semibold: '600', normal: '400' },
     ALL_FEATURES: [{ key: 'private', label: 'Индивидуальная возможность' }],
     subscriptionContactText,
     WHATSAPP_PHONE: 'phone',
@@ -269,21 +275,23 @@ function screen(
   };
 }
 it.each(['ios', 'android'])(
-  'employees precede explicit plan choice, with read-only iOS and preserved keyboard affordances (%s)',
+  'current plan precedes a separate new constructor, with read-only iOS and keyboard affordances (%s)',
   (os) => {
     const h = screen(os),
       result = h.render(),
       list = nodes(result),
       copy = text(result);
-    expect(copy).toContain('Расчёт стоимости');
+    expect(copy).toContain('Текущая подписка');
+    expect(copy).toContain('Соберите новый тариф');
     expect(copy).not.toContain('веб-версии');
     const employeePosition = list.findIndex((node) => node.type === 'SubscriptionCompositionFields');
     const planPosition = list.findIndex((node) => String(node.props.accessibilityLabel ?? '').startsWith('Тариф '));
-    expect(employeePosition).toBeLessThan(planPosition);
+    expect(planPosition).toBeLessThan(employeePosition);
     expect(list[employeePosition].props.employeePresets).toBe(true);
     expect(list.find((node) => node.type === 'SubscriptionQuoteBreakdown')?.props.compact).toBe(true);
     expect(copy.includes('Подключить')).toBe(false);
-    expect(copy.includes('Связаться для оплаты')).toBe(os === 'android');
+    expect(copy.includes('Обсудить этот расчёт')).toBe(os === 'android');
+    expect(list.find((node) => node.type === 'SubscriptionQuoteBreakdown')?.props.informational).toBe(os === 'ios');
     const scroll = list.find((node) => node.type === 'KeyboardAwareScroll');
     expect(scroll?.props.extraKeyboardBottomOffset).toBe(48);
     expect(scroll?.props.reserveTabBar).not.toBe(false);
@@ -328,40 +336,51 @@ it.each([
 ])('does not show stale pricing while a selection is invalid, loading or unknown', (state) => {
   expect(nodes(screen('ios', state).render()).some((node) => node.type === 'SubscriptionQuoteBreakdown')).toBe(false);
 });
-it('discloses only the selected custom server features and rates, with archived current metadata supported', () => {
-  const pricing = {
-    ...SUBSCRIPTION_PLAN_PRICING.max,
+it('current assigned archive and its features stay separate from selected custom plan conditions', () => {
+  const custom = {
+    id: 'max',
     name: 'Индивидуальный',
-    includedEmployees: 9,
-    extraEmployeeMonthlyPrice: 123,
+    isActive: true,
+    features: ['selected'],
+    pricing: { ...SUBSCRIPTION_PLAN_PRICING.max, includedEmployees: 9, extraEmployeeMonthlyPrice: 123 },
   };
   const h = screen(
     'ios',
-    { plan: undefined, pricing, planId: 'archived', name: 'Индивидуальный' },
-    { planId: 'archived', planName: 'Индивидуальный', plans: [], features: ['private'] },
+    { plan: custom, pricing: custom.pricing },
+    {
+      currentPlan: { ...custom, id: 'pro', isActive: false },
+      features: ['private'],
+      monthlyPrice: 0,
+      maxUsers: 7,
+      subscriptionEnd: null,
+    },
   );
-  expect(text(h.render())).not.toContain('Индивидуальная возможность');
-  (
-    nodes(h.render()).find((node) => node.props.accessibilityLabel === 'Условия и возможности тарифа')!.props
-      .onPress as () => void
-  )();
-  const copy = text(h.render());
-  expect(copy).toContain('Индивидуальная возможность');
-  expect(copy).toContain(subscriptionMoney(123));
-  expect(copy).toContain('Сотрудников включено: 9');
-  expect(copy).not.toContain('всё включено');
+  expect(text(h.render())).toContain('Архивный тариф');
+  expect(text(h.render())).toContain('Без ограничения срока');
+  expect(text(h.render())).toContain(subscriptionMoney(0));
+  const currentAction = nodes(h.render()).find(
+    (node) => node.props.accessibilityLabel === 'Возможности текущего тарифа',
+  )!;
+  (currentAction.props.onPress as () => void)();
+  expect(text(h.render())).toContain('Индивидуальная возможность');
+  const selectedAction = nodes(h.render()).find(
+    (node) => node.props.accessibilityLabel === 'Условия выбранного тарифа',
+  )!;
+  (selectedAction.props.onPress as () => void)();
+  expect(text(h.render())).toContain(subscriptionMoney(123));
+  expect(text(h.render())).toContain('Сотрудников включено: 9');
+  expect(h.sub.planId).toBe('pro');
 });
-it('legacy tariffs without a composition quote receive no displayed annual discount or reused invoice', () => {
-  const h = screen('ios', {
-    ready: false,
-    plan: undefined,
-    pricing: undefined,
-    period: 'yearly',
-    message: 'Для этого тарифа расчёт по составу недоступен.',
-  });
+it('legacy current plan receives no reused invoice or guessed archive while new offers remain available', () => {
+  const h = screen(
+    'ios',
+    { ready: false, plan: undefined, pricing: undefined, planId: undefined, period: 'yearly', message: '' },
+    { planId: 'legacy', planName: 'Прежний', currentPlan: undefined },
+  );
   const tree = h.render();
   expect(nodes(tree).some((node) => node.type === 'SubscriptionQuoteBreakdown')).toBe(false);
-  expect(text(tree)).not.toContain('12 за 10');
+  expect(text(tree)).not.toContain('Архивный тариф');
+  expect(text(tree)).toContain('Выберите тариф');
 });
 it('Android draft text carries selected composition and exact annual invoice without sending it', () => {
   const copy = subscriptionContactText('MAX', preview());
@@ -409,53 +428,73 @@ it('uses server allowances and monthly addon rates in details without declaring 
   expect(copy).toContain('Сотрудников включено: 1');
   expect(copy).toContain('при помесячной оплате');
 });
-it.each<[string, string, boolean]>([
-  ['android', 'unassigned', false],
-  ['android', 'empty catalog', true],
-  ['ios', 'unassigned', false],
-  ['ios', 'empty catalog', true],
-])('contact remains available only via Linking on %s with %s', (os, _scenario, empty) => {
-  const h = screen(
-    os,
-    { planId: undefined, name: undefined, plan: undefined, ready: false },
-    { planId: null, planName: null, ...(empty ? { plans: [] } : {}) },
-  );
-  const tree = h.render();
-  const actions = nodes(tree).filter(
-    (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Связаться для оплаты',
-  );
-  expect(actions).toHaveLength(os === 'android' ? 1 : 0);
-  if (os === 'android') {
-    (actions[0].props.onPress as () => void)();
-    expect(h.link).toHaveBeenCalledTimes(1);
-    const target = new URL(h.link.mock.calls[0][0] as string);
-    expect(target.origin).toBe('https://wa.me');
-    expect(target.searchParams.get('text')).toBe('Здравствуйте! Хочу оплатить подписку.');
-    expect(h.choose).not.toHaveBeenCalled();
-    expect(h.calc.setPeriod).not.toHaveBeenCalled();
-    expect(h.calc.setEmployees).not.toHaveBeenCalled();
-    expect(h.calc.setPoints).not.toHaveBeenCalled();
-  } else {
+it.each(['ios', 'android'])('empty and unassigned state cannot send an incomplete quote on %s', (os) => {
+  for (const empty of [false, true]) {
+    const h = screen(
+      os,
+      { planId: undefined, name: undefined, plan: undefined, ready: false },
+      { planId: null, planName: null, ...(empty ? { plans: [] } : {}) },
+    );
+    const actions = nodes(h.render()).filter(
+      (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Обсудить этот расчёт',
+    );
+    expect(actions).toHaveLength(os === 'android' && !empty ? 1 : 0);
+    if (actions[0]) {
+      expect(actions[0].props.disabled).toBe(true);
+      (actions[0].props.onPress as () => void)();
+    }
     expect(h.link).not.toHaveBeenCalled();
-    expect(text(tree)).not.toContain('Подключить');
+    expect(h.choose).not.toHaveBeenCalled();
   }
 });
-
-it.each([true, false])('Android contact includes selected quote only when valid=%s', (ready) => {
+it.each([true, false])('Android contact uses exact selected quote only when ready=%s', (ready) => {
   const h = screen('android', { ready });
-  const actions = nodes(h.render()).filter(
-    (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Связаться для оплаты',
-  );
-  expect(actions).toHaveLength(1);
-  (actions[0].props.onPress as () => void)();
-  const copy = new URL(h.link.mock.calls[0][0] as string).searchParams.get('text')!;
+  const action = nodes(h.render()).find(
+    (node) => node.type === 'TouchableOpacity' && text(node.props.children) === 'Обсудить этот расчёт',
+  )!;
+  expect(action.props.disabled).toBe(!ready);
+  (action.props.onPress as () => void)();
   if (ready) {
+    const copy = new URL(h.link.mock.calls[0][0] as string).searchParams.get('text')!;
     expect(copy).toContain('тариф "MAX"');
     expect(copy).toContain('Сотрудники: 2');
     expect(copy).toContain('К оплате:');
-  } else {
-    expect(copy).toBe('Здравствуйте! Хочу оплатить подписку.');
-  }
+  } else expect(h.link).not.toHaveBeenCalled();
   expect(h.choose).not.toHaveBeenCalled();
-  expect(h.calc.setPeriod).not.toHaveBeenCalled();
+});
+it.each([
+  [{}, {}, {}],
+  [{ ready: false, plan: undefined }, { planId: 'legacy', currentPlan: undefined }, {}],
+  [{ ready: false }, { plans: [] }, {}],
+  [
+    { ready: false, message: 'Ошибка расчёта', quote: { isError: true, isFetching: false, refetch: jest.fn() } },
+    {},
+    {},
+  ],
+  [{ ready: false, quote: { isError: false, isFetching: true } }, {}, {}],
+  [{}, {}, { isError: true }],
+  [{}, {}, { allowed: false }],
+])(
+  'iOS never offers an external purchase action in normal, legacy, empty, loading, error or denied state',
+  (calc, sub, runtime) => {
+    const h = screen('ios', calc, sub, runtime);
+    const copy = text(h.render());
+    expect(copy).not.toMatch(/WhatsApp|Связаться|Обсудить этот расчёт|оплатить|Подключить/);
+    for (const action of nodes(h.render()).filter((node) => typeof node.props.onPress === 'function'))
+      (action.props.onPress as () => void)();
+    expect(h.link).not.toHaveBeenCalled();
+  },
+);
+it('unknown end, explicit custom active and mismatched current metadata never imply archive', () => {
+  for (const metadata of [undefined, { id: 'pro', isActive: true }, { id: 'another', isActive: false }]) {
+    const h = screen('ios', {}, { currentPlan: metadata, subscriptionEnd: undefined });
+    expect(text(h.render())).not.toContain('Архивный тариф');
+    expect(text(h.render())).toContain('Срок не указан');
+  }
+});
+it('iOS annual breakdown labels a calculation instead of a payable invoice', () => {
+  const render = quoteRenderer();
+  const tree = render({ preview: preview(), informational: true } as Parameters<typeof render>[0]);
+  expect(text(tree)).toContain('Расчёт за 12 месяцев');
+  expect(text(tree)).not.toContain('К оплате');
 });

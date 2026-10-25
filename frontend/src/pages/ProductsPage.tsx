@@ -1,3 +1,4 @@
+import LowStockView from './LowStockPage';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -114,7 +115,7 @@ const FOLDER_BUTTON_CLS = cn(
 // Страница
 // ---------------------------------------------------------------------------
 
-export default function ProductsPage() {
+function ProductsPageContents() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   // Волна «права как в Битрикс24»: только матрица. Байпас superadmin/director —
@@ -1984,4 +1985,9 @@ export default function ProductsPage() {
 /** Значение KPI-плитки: деньги через shared formatMoney (Money), без сокращений. */
 function MoneyValue({ value }: { value: number }) {
   return <Money value={value} />;
+}
+
+export default function ProductsPage() {
+  const [params] = useUrlParams();
+  return params.get('lowStock') === 'true' ? <LowStockView /> : <ProductsPageContents />;
 }

@@ -16,20 +16,29 @@ function load(relative, mocks = {}) {
   const original = m.require.bind(m);
   m.require = (id) => (id in mocks ? mocks[id] : original(id));
   m._compile(
-    ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-      fileName: filename,
-      compilerOptions: {
-        module: ts.ModuleKind.CommonJS,
-        target: ts.ScriptTarget.ES2020,
-        jsx: ts.JsxEmit.ReactJSX,
-        esModuleInterop: true,
+    ts.transpileModule(
+      fs.readFileSync(
+        process.env.SUBSCRIPTION_BASELINE_PAGE && relative.endsWith('/TariffPage.tsx')
+          ? process.env.SUBSCRIPTION_BASELINE_PAGE
+          : filename,
+        'utf8',
+      ),
+      {
+        fileName: filename,
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          target: ts.ScriptTarget.ES2020,
+          jsx: ts.JsxEmit.ReactJSX,
+          esModuleInterop: true,
+        },
       },
-    }).outputText,
+    ).outputText,
     filename,
   );
   return m.exports;
 }
 const helper = load('../../shared/utils/subscriptionPricing.ts');
+const presentation = load('../../shared/utils/subscriptionPresentation.ts');
 const textUtils = load('../src/utils/subscriptionPricingText.ts', {
   '../../../shared/utils/subscriptionPricing': helper,
 });
@@ -42,58 +51,50 @@ const Composition = load('../src/components/SubscriptionCompositionFields.tsx', 
 const Breakdown = load('../src/components/SubscriptionQuoteBreakdown.tsx', {
   '../utils/subscriptionPricingText': textUtils,
 });
-const pricing = {
-  ...helper.SUBSCRIPTION_PLAN_PRICING.pro,
-  monthlyPrice: 7000,
-  extraEmployeeMonthlyPrice: 600,
-  name: 'PRO особый',
-};
-const plans = [
-  { id: 'current', name: 'PRO особый', isActive: false, features: [], monthlyPrice: 7000, maxUsers: 5, pricing },
-  {
-    id: 'max',
-    name: 'MAX',
-    isActive: true,
-    features: [],
-    monthlyPrice: 15000,
-    maxUsers: 50,
-    pricing: helper.SUBSCRIPTION_PLAN_PRICING.max,
-  },
-  { id: 'legacy', name: 'Прежний', isActive: true, features: [], monthlyPrice: 1234, maxUsers: 3 },
-];
-let calls = [],
-  hideCurrent = false;
+const plans = Object.values(helper.SUBSCRIPTION_PLAN_PRICING).map((pricing) => ({
+  id: pricing.code,
+  name: pricing.name,
+  pricing,
+  isActive: true,
+  features: ['catalog-feature'],
+  monthlyPrice: pricing.monthlyPrice,
+  maxUsers: pricing.includedEmployees,
+}));
+let calls, current, allow, token, quoteMode, releaseQuote;
 const usage = { employees: 2, activePoints: 1, billablePoints: 1 };
-const get = async () => ({
-  data: {
-    tenantName: 'Сервис',
-    planId: 'current',
-    planName: 'PRO особый',
-    status: 'active',
-    monthlyPrice: 7000,
-    currentUsers: 2,
-    maxUsers: 5,
-    features: [],
-    usage,
-    plans: hideCurrent ? plans.slice(1) : plans,
-  },
+const fixture = () => ({
+  tenantName: 'Сервис',
+  planId: 'old-pro',
+  planName: 'PRO',
+  currentPlan: { ...plans[1], id: 'old-pro', isActive: false },
+  status: 'active',
+  monthlyPrice: 0,
+  subscriptionEnd: null,
+  currentUsers: 2,
+  maxUsers: 7,
+  features: ['actual-feature'],
+  usage,
+  plans,
 });
+const get = async () => ({ data: current });
 const quote = async (params) => {
   calls.push(params);
+  if (quoteMode === 'deferred')
+    await new Promise((resolve) => {
+      releaseQuote = resolve;
+    });
+  if (quoteMode === 'error') throw { response: { status: 503, data: {} } };
   const plan = plans.find((p) => p.id === params.planId);
-  if (!plan.pricing) throw { response: { status: 400, data: { code: 'LEGACY_PLAN' } } };
-  const result = helper.calculateSubscriptionQuote(plan.pricing, {
-    period: params.period,
-    employees: params.employees,
-    points: params.points,
-  });
+  if (!plan?.pricing) throw { response: { status: 400, data: { code: 'LEGACY_PLAN' } } };
+  const result = helper.calculateSubscriptionQuote(plan.pricing, params);
   if (!result.ok) throw { response: { status: 400, data: { code: result.code } } };
   return { data: { planId: plan.id, pricing: plan.pricing, usage, quote: result.quote, quoteToken: 'token' } };
 };
 const Page = load('../src/pages/TariffPage.tsx', {
-  '../contexts/AuthContext': { useAuth: () => ({ token: 'session' }) },
+  '../contexts/AuthContext': { useAuth: () => ({ token, hasPermission: () => allow }) },
   '../../../shared/api/createServices': { createSubscriptionApi: () => ({ get, quote }) },
   '../api/axios': { createSessionBoundClient: () => ({}) },
+  '../../../shared/utils/subscriptionPresentation': presentation,
   '../utils/subscriptionPricingText': textUtils,
   '../components/SubscriptionCompositionFields': Composition,
   '../components/SubscriptionQuoteBreakdown': Breakdown,
@@ -105,10 +106,9 @@ const Page = load('../src/pages/TariffPage.tsx', {
       ]),
     ),
     buttonClasses: () => '',
-    cn: () => '',
   },
   '../components/dashboard/shared': { MiniStat: host('MiniStat') },
-  '../utils/featureGroups': { FEATURE_GROUPS: [] },
+  '../utils/featureGroups': { FEATURE_GROUPS: [{ items: [{ key: 'actual-feature', label: 'Текущая возможность' }] }] },
   '../config/contacts': { getWhatsAppChatUrl: (text) => 'https://wa.me/?text=' + encodeURIComponent(text) },
 }).default;
 const settle = async (condition) => {
@@ -121,188 +121,179 @@ const settle = async (condition) => {
 function mount() {
   const client = new Query.QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   let tree;
+  const render = () => React.createElement(Query.QueryClientProvider, { client }, React.createElement(Page));
   Renderer.act(() => {
-    tree = Renderer.create(React.createElement(Query.QueryClientProvider, { client }, React.createElement(Page)));
+    tree = Renderer.create(render());
   });
   return {
     tree,
     client,
+    rerender: () => Renderer.act(() => tree.update(render())),
     close() {
       Renderer.act(() => tree.unmount());
       client.clear();
     },
   };
 }
-const input = (tree, label) =>
-  label === 'Тариф для расчёта'
-    ? tree.root.findByType('select')
-    : tree.root.findAllByType('Input').find((node) => node.props['aria-label'] === label);
+const input = (tree, label) => tree.root.findAllByType('Input').find((node) => node.props['aria-label'] === label);
 const fill = (tree, label, value) => Renderer.act(() => input(tree, label).props.onChange({ target: { value } }));
-const contents = (tree) => {
-  const text = (node) =>
-    node == null
-      ? ''
-      : Array.isArray(node)
-        ? node.map(text).join('')
-        : typeof node === 'object'
-          ? text(node.children)
-          : String(node);
-  return text(tree.toJSON()).replace(/\s/g, '');
-};
+const select = (tree, id) =>
+  Renderer.act(() =>
+    tree.root
+      .findAllByType('input')
+      .find((node) => node.props.value === id)
+      .props.onChange(),
+  );
+const button = (tree, label) => tree.root.findAllByType('button').find((node) => node.children.join('') === label);
+const text = (node) =>
+  node == null
+    ? ''
+    : Array.isArray(node)
+      ? node.map(text).join('')
+      : typeof node === 'object'
+        ? text(node.children)
+        : String(node);
+const contents = (tree) => text(tree.toJSON()).replace(/\s/g, '');
+const price = (tree) => tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' });
+const currentCard = (tree) =>
+  tree.root.findAllByType('Card').find((node) => node.props['aria-label'] === 'Текущая подписка');
 test.beforeEach(() => {
   calls = [];
-  hideCurrent = false;
+  current = fixture();
+  allow = true;
+  token = 'ownerA';
+  quoteMode = 'success';
+  releaseQuote = undefined;
 });
-test('tenant forecast uses server pricing, inactive current plan, selected counts and informational API only', async () => {
-  const form = mount();
+test('assigned archived PRO is explicit; current zero rate, null end, limits/features stay immutable during new comparison', async () => {
+  const f = mount();
   try {
-    await settle(() => contents(form.tree).includes('7000'));
-    assert.equal(input(form.tree, 'Всего сотрудников')?.props.value, '2');
-    fill(form.tree, 'Всего сотрудников', '6');
-    await settle(() => calls.at(-1)?.employees === 6 && contents(form.tree).includes('7600'));
-    assert.ok(contents(form.tree).includes('Сейчассотрудников:2'));
-    assert.ok(contents(form.tree).includes('Врасчётесотрудников:6'));
-    assert.ok(contents(form.tree).includes('архивный'));
-    const yearly = form.tree.root.findAllByType('button').find((n) => n.children.join('') === 'Год · 12 за 10');
-    Renderer.act(() => yearly.props.onClick());
-    await settle(() => contents(form.tree).includes('≈6333,33') && contents(form.tree).includes('76000'));
-    fill(form.tree, 'Тариф для расчёта', 'max');
-    await settle(() => calls.at(-1)?.planId === 'max');
-    assert.equal(input(form.tree, 'Всего сотрудников')?.props.value, '6');
-    fill(form.tree, 'Всего филиалов', '2');
-    await settle(() => calls.at(-1)?.points === 2);
-    fill(form.tree, 'Тариф для расчёта', 'current');
-    await settle(() => !form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length);
-    assert.equal(input(form.tree, 'Всего филиалов')?.props.value, '2');
-    for (const invalid of ['', '-1', '1.5', '9007199254740992', '1']) {
-      fill(form.tree, 'Всего сотрудников', invalid);
-      assert.equal(form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length, 0);
-    }
+    await settle(() => !!input(f.tree, 'Всего сотрудников'));
+    assert.ok(contents(f.tree).includes('Архивныйтариф'), 'assigned inactive plan needs explicit archive label');
+    assert.equal(calls.length, 0);
+    assert.equal(price(f.tree).length, 0);
+    const before = text(currentCard(f.tree));
+    assert.ok(contents(f.tree).includes('Безограничениясрока'));
+    assert.ok(contents(f.tree).includes('Месячнаяставка0₽'));
+    assert.ok(contents(f.tree).includes('2·лимит7'));
+    assert.ok(contents(f.tree).includes('Текущаявозможность'));
+    select(f.tree, 'pro');
+    await settle(() => price(f.tree).length > 0);
+    assert.equal(input(f.tree, 'Всего сотрудников').props.value, '5');
+    fill(f.tree, 'Всего сотрудников', '6');
+    await settle(() => contents(f.tree).includes('5490'));
+    Renderer.act(() => button(f.tree, 'Год · 12 за 10').props.onClick());
+    await settle(() => contents(f.tree).includes('54900'));
+    assert.ok(contents(f.tree).includes('Архивныйтариф'));
+    assert.equal(f.client.getQueryData(['subscription']).planId, 'old-pro');
+    assert.ok(contents(f.tree).includes('Месячнаяставка0₽'));
+    assert.ok(contents(f.tree).includes('2·лимит7'));
+    const link = f.tree.root.findByType('a');
+    assert.ok(decodeURIComponent(link.props.href).includes('54'));
+    assert.equal(text(currentCard(f.tree)), before);
   } finally {
-    form.close();
+    f.close();
   }
 });
-test('current plan missing from active list keeps actual usage default from server quote metadata', async () => {
-  hideCurrent = true;
-  const form = mount();
+test('untouched capacity defaults follow plan; raw manually entered composition and period survive plan changes', async () => {
+  current = { ...fixture(), planId: 'pro', currentPlan: plans[1] };
+  const f = mount();
   try {
-    await settle(() => input(form.tree, 'Всего сотрудников')?.props.value === '2');
-    assert.ok(contents(form.tree).includes('PROособый'));
-    assert.equal(calls.at(-1).employees, 2);
-  } finally {
-    form.close();
-  }
-});
-test('legacy plan selection retains manual terms without an annual discount quote', async () => {
-  const form = mount();
-  try {
-    await settle(() => calls.length > 0);
-    fill(form.tree, 'Тариф для расчёта', 'legacy');
-    await settle(() => contents(form.tree).includes('годоваяскидкакнимавтоматическинеприменяется'));
-    assert.equal(form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length, 0);
-  } finally {
-    form.close();
-  }
-});
-
-test('tenant comparisons never expand actual composition to included allowances and keep catalogue collapsed', async () => {
-  const form = mount();
-  try {
-    await settle(() => calls.at(-1)?.employees === 2);
-    fill(form.tree, 'Тариф для расчёта', 'max');
-    await settle(() => calls.at(-1)?.planId === 'max');
-    assert.equal(input(form.tree, 'Всего сотрудников').props.value, '2');
-    assert.equal(calls.at(-1).employees, 2);
-    assert.ok(!contents(form.tree).includes('50сотрудниковMAX'));
-    const catalogue = form.tree.root
-      .findAllByType('details')
-      .find((node) =>
-        node
-          .findAllByType('summary')
-          .some((summary) => summary.children.some((child) => child === 'Сравнить все возможности тарифов')),
-      );
-    assert.ok(catalogue);
-    assert.ok(!catalogue.props.open);
-  } finally {
-    form.close();
-  }
-});
-
-test('multiple branches offer an explicit MAX forecast while preserving composition, period and assigned plan', async () => {
-  const form = mount();
-  try {
-    await settle(() => calls.at(-1)?.employees === 2);
-    fill(form.tree, 'Всего сотрудников', '6');
-    const yearly = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Год · 12 за 10');
-    Renderer.act(() => yearly.props.onClick());
-    fill(form.tree, 'Всего филиалов', '2');
-    await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
-    assert.equal(form.tree.root.findAllByProps({ 'data-testid': 'subscription-monthly-display' }).length, 0);
-    assert.equal(input(form.tree, 'Тариф для расчёта').props.value, 'current');
-    const max = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Рассчитать MAX');
-    assert.ok(max, 'unsupported branch count must offer explicit MAX calculation');
-    Renderer.act(() => max.props.onClick());
-    await settle(() => calls.at(-1)?.planId === 'max' && contents(form.tree).includes('180000'));
+    await settle(() => calls.at(-1)?.employees === 5);
+    select(f.tree, 'max');
+    await settle(() => calls.at(-1)?.employees === 50);
+    fill(f.tree, 'Всего сотрудников', '006');
+    fill(f.tree, 'Всего филиалов', '02');
+    select(f.tree, 'baza');
+    await settle(() => contents(f.tree).includes('Длянесколькихфилиалов'));
+    assert.equal(input(f.tree, 'Всего сотрудников').props.value, '006');
+    assert.equal(input(f.tree, 'Всего филиалов').props.value, '02');
+    Renderer.act(() => button(f.tree, 'Год · 12 за 10').props.onClick());
+    await settle(() => !!button(f.tree, 'Рассчитать MAX'));
+    Renderer.act(() => button(f.tree, 'Рассчитать MAX').props.onClick());
+    await settle(() => calls.at(-1)?.planId === 'max' && contents(f.tree).includes('180000'));
     assert.deepEqual(calls.at(-1), { period: 'yearly', planId: 'max', employees: 6, points: 2 });
-    assert.equal(input(form.tree, 'Всего сотрудников').props.value, '6');
-    assert.equal(input(form.tree, 'Всего филиалов').props.value, '2');
-    assert.equal(form.client.getQueryData(['subscription']).planId, 'current');
-    assert.ok(contents(form.tree).includes('15000'));
+    assert.equal(input(f.tree, 'Всего сотрудников').props.value, '006');
   } finally {
-    form.close();
+    f.close();
   }
 });
-
-test('archived current plan absent from catalogue can recover from server UNPRICED_POINTS, including zero MAX branch rate', async () => {
-  const originalPricing = plans[1].pricing;
-  try {
-    for (const rate of [3000, 0]) {
-      hideCurrent = true;
-      plans[1].pricing = { ...originalPricing, extraPointMonthlyPrice: rate };
-      const form = mount();
-      try {
-        await settle(() => calls.at(-1)?.planId === 'current');
-        fill(form.tree, 'Всего филиалов', '2');
-        await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
-        const button = form.tree.root
-          .findAllByType('button')
-          .find((node) => node.children.join('') === 'Рассчитать MAX');
-        assert.ok(button, 'server error supports recovery without a catalogue row for the assigned plan');
-        Renderer.act(() => button.props.onClick());
-        await settle(() => calls.at(-1)?.planId === 'max' && contents(form.tree).includes(String(15000 + rate)));
-        assert.equal(calls.at(-1).employees, 2);
-        assert.equal(calls.at(-1).points, 2);
-        assert.equal(form.client.getQueryData(['subscription']).planId, 'current');
-      } finally {
-        form.close();
-      }
+test('catalogue absence and active custom without pricing never become archive; unassigned can explicitly calculate', async () => {
+  for (const variant of [
+    { currentPlan: undefined },
+    { currentPlan: { ...plans[1], id: 'old-pro', pricing: null, isActive: true } },
+    { currentPlan: null, planId: null, planName: null },
+  ]) {
+    current = { ...fixture(), ...variant };
+    calls = [];
+    const f = mount();
+    try {
+      await settle(() => !!input(f.tree, 'Всего сотрудников'));
+      assert.ok(!contents(f.tree).includes('Архивныйтариф'));
+      assert.equal(calls.length, 0);
+      select(f.tree, 'max');
+      await settle(() => calls.at(-1)?.planId === 'max');
+      assert.equal(input(f.tree, 'Всего сотрудников').props.value, '50');
+    } finally {
+      f.close();
     }
-  } finally {
-    plans[1].pricing = originalPricing;
   }
 });
-
-test('MAX with an individually unset branch rate retains Retry instead of offering a no-op MAX action', async () => {
-  const originalPricing = plans[1].pricing;
-  plans[1].pricing = { ...originalPricing, extraPointMonthlyPrice: null };
-  const form = mount();
+test('old payload explicit false fallback works; active same-name catalogue row cannot hide assigned archive', async () => {
+  current.currentPlan = undefined;
+  current.plans = [{ ...plans[1], id: 'old-pro', isActive: false }, ...plans];
+  const f = mount();
   try {
-    await settle(() => calls.at(-1)?.planId === 'current');
-    fill(form.tree, 'Тариф для расчёта', 'max');
-    fill(form.tree, 'Всего филиалов', '2');
-    await settle(() => contents(form.tree).includes('Расчётвыбранногосоставанедоступен'));
-    assert.equal(
-      form.tree.root.findAllByType('button').filter((node) => node.children.join('') === 'Рассчитать MAX').length,
-      0,
-    );
-    const retry = form.tree.root.findAllByType('button').find((node) => node.children.join('') === 'Повторить расчёт');
-    assert.ok(retry);
-    const before = calls.length;
-    Renderer.act(() => retry.props.onClick());
-    await settle(() => calls.length > before);
-    assert.equal(calls.at(-1).planId, 'max');
+    await settle(() => !!input(f.tree, 'Всего сотрудников'));
+    assert.ok(contents(f.tree).includes('Архивныйтариф'));
+    assert.equal(calls.length, 0);
   } finally {
-    form.close();
-    plans[1].pricing = originalPricing;
+    f.close();
+  }
+});
+test('invalid, pending and failed quotes never expose old money or an enabled contact; retry recovers', async () => {
+  const f = mount();
+  try {
+    await settle(() => !!input(f.tree, 'Всего сотрудников'));
+    select(f.tree, 'pro');
+    await settle(() => price(f.tree).length > 0);
+    for (const value of ['', '-1', '1.5', '9007199254740992', '1']) {
+      fill(f.tree, 'Всего сотрудников', value);
+      assert.equal(price(f.tree).length, 0);
+      assert.equal(f.tree.root.findAllByType('a').length, 0);
+    }
+    quoteMode = 'deferred';
+    fill(f.tree, 'Всего сотрудников', '6');
+    await settle(() => !!releaseQuote);
+    assert.equal(price(f.tree).length, 0);
+    assert.equal(f.tree.root.findAllByType('a').length, 0);
+    quoteMode = 'error';
+    releaseQuote();
+    await settle(() => !!button(f.tree, 'Повторить расчёт'));
+    assert.equal(price(f.tree).length, 0);
+    assert.equal(f.tree.root.findAllByType('a').length, 0);
+    quoteMode = 'success';
+    Renderer.act(() => button(f.tree, 'Повторить расчёт').props.onClick());
+    await settle(() => price(f.tree).length > 0);
+  } finally {
+    f.close();
+  }
+});
+test('session change clears manual draft; missing end differs from null and permission denies controls', async () => {
+  current = { ...fixture(), planId: 'pro', currentPlan: plans[1], subscriptionEnd: undefined };
+  const f = mount();
+  try {
+    await settle(() => calls.at(-1)?.employees === 5);
+    assert.ok(contents(f.tree).includes('Срокнеуказан'));
+    fill(f.tree, 'Всего сотрудников', '9');
+    token = 'ownerB';
+    f.rerender();
+    assert.equal(input(f.tree, 'Всего сотрудников').props.value, '5');
+    allow = false;
+    f.rerender();
+    assert.equal(f.tree.root.findAllByType('input').length, 0);
+    assert.equal(f.tree.root.findByType('PageHeader').props.subtitle, 'Нет доступа к настройкам компании.');
+  } finally {
+    f.close();
   }
 });

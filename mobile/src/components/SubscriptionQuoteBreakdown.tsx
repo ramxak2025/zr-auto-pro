@@ -9,10 +9,12 @@ export default function SubscriptionQuoteBreakdown({
   preview,
   hideMoney = false,
   compact = false,
+  informational = false,
 }: {
   preview: SubscriptionQuotePreview;
   hideMoney?: boolean;
   compact?: boolean;
+  informational?: boolean;
 }) {
   const palette = useColors();
   const [expanded, setExpanded] = React.useState(false);
@@ -24,15 +26,17 @@ export default function SubscriptionQuoteBreakdown({
     <View style={{ gap: spacing[2], paddingVertical: compact ? spacing[1] : spacing[3] }}>
       {!hideMoney && (
         <>
-          <Text style={{ fontSize: 28, fontWeight: '700', color: palette.text.primary }}>
+          <Text style={{ fontSize: 28, fontWeight: '700', color: palette.text.primary, fontVariant: ['tabular-nums'] }}>
             {display.approximate ? '≈ ' : ''}
             {money(display.amount)}/мес
           </Text>
           {annual ? (
             <>
-              <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>в месяц при оплате за год</Text>
+              <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>
+                {informational ? 'в среднем в месяц за 12 месяцев' : 'в месяц при оплате за год'}
+              </Text>
               <Text style={{ fontSize: fontSize.base, fontWeight: '600', color: palette.text.primary }}>
-                К оплате сразу за 12 месяцев: {money(q.total)}
+                {informational ? 'Расчёт за 12 месяцев' : 'К оплате сразу за 12 месяцев'}: {money(q.total)}
               </Text>
             </>
           ) : null}
