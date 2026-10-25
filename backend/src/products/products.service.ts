@@ -198,6 +198,8 @@ export class ProductsService {
     const search = query.search || '';
 
     let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
+    if (query.lowStock === true || query.lowStock === 'true')
+      where += ' AND p.min_stock > 0 AND p.stock <= p.min_stock';
     const params: any[] = [tenantID];
     let idx = 2;
 

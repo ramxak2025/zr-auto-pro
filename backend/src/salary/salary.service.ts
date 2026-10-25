@@ -227,6 +227,67 @@ export class SalaryService {
     return assertRowPointForWrite(this.pool, table, id, tenantID, pointId, notFoundMessage);
   }
 
+  /** Today's saved net earnings, before any payout/advance. One grouped read. */
+  async getTodayEarnings(tenantID: string, pointId: string | null) {
+    const timezone = await getTenantTimezone(this.pool, tenantID);
+    const date = zonedDateKey(new Date(), timezone);
+    const params: unknown[] = [tenantID, date, date, timezone];
+    const period = (col: string) => periodPredicate(col, date, date, '$4::text');
+    const checkPoint = pointFilterSql('ch', pointId, params);
+    const premiumPoint = pointFilterSql('pr', pointId, params);
+    const penaltyPoint = pointFilterSql('pen', pointId, params);
+    const assigned = assignedToPointSql('u', '$1', pointId, params);
+    const membership = pointId
+      ? ` AND (EXISTS (SELECT 1 FROM earnings e WHERE e.employee_id = u.id)
+          OR EXISTS (SELECT 1 FROM users ua WHERE ua.id = u.id AND ua.tenant_id = $1
+            ${assigned.replaceAll('u.id', 'ua.id')}))`
+      : '';
+    const { rows } = await this.pool.query(
+      `WITH earnings AS (
+        SELECT COALESCE(sl.master_id, ch.master_id) AS employee_id, SUM(COALESCE(sl.salary_amount, 0)) AS amount
+          FROM checks ch JOIN check_service_lines sl ON sl.check_id = ch.id
+         WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+           AND ${period('ch.date')}${checkPoint}
+         GROUP BY COALESCE(sl.master_id, ch.master_id)
+        UNION ALL
+        SELECT ch.master_id, SUM(COALESCE(ch.product_salary_total, 0))
+          FROM checks ch WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+           AND ${period('ch.date')}${checkPoint} GROUP BY ch.master_id
+        UNION ALL
+        SELECT ma.employee_id, SUM(ma.amount) FROM motivation_accruals ma
+          JOIN checks ch ON ch.id = ma.check_id AND ch.tenant_id = ma.tenant_id
+         WHERE ma.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
+           AND ${period('ma.accrued_at')}${checkPoint} GROUP BY ma.employee_id
+        UNION ALL
+        SELECT pr.user_id, SUM(pr.amount) FROM salary_premiums pr
+         WHERE pr.tenant_id = $1 AND pr.type = 'cash'
+           AND ${effectiveMonthMembershipSql('pr.period_month_year', 'pr.created_at', date, date, '$4::text')}${premiumPoint}
+         GROUP BY pr.user_id
+        UNION ALL
+        SELECT pen.user_id, -SUM(pen.amount) FROM salary_penalties pen
+         WHERE pen.tenant_id = $1 AND ${period('pen.date')}${penaltyPoint} GROUP BY pen.user_id
+      ), employees AS (
+        SELECT u.id, u.full_name AS name, u.avatar, COALESCE(SUM(e.amount), 0) AS earned_amount
+          FROM users u LEFT JOIN earnings e ON e.employee_id = u.id
+         WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')${membership}
+         GROUP BY u.id, u.full_name, u.avatar
+      ) SELECT *, SUM(earned_amount) OVER () AS total FROM employees ORDER BY earned_amount DESC, name, id`,
+      params,
+    );
+    return {
+      date,
+      timezone,
+      pointId,
+      employees: rows.map((r) => ({
+        id: r.id as string,
+        name: r.name as string,
+        avatar: (r.avatar as string) ?? null,
+        earnedAmount: round2(Number(r.earned_amount)),
+      })),
+      total: round2(Number(rows[0]?.total ?? 0)),
+    };
+  }
+
   async getAll(tenantID: string, query: any, pointId: string | null = null, opts: { carryOver?: boolean } = {}) {
     // Правка №3 (2026-09-30): `carryOverAmount` — «долг за прошлые месяцы» — по
     // умолчанию считается (экран «Зарплата»); отчёт «По зарплатам» берёт из getAll

@@ -1882,12 +1882,33 @@ export class TenantsService {
     // gate on `sub.features.includes(key)` instead of the fragile name match.
     // `planName` stays for backward-compat with shipped clients.
     let planName: string | null = null;
+    let currentPlan = null;
     let features: string[] = [];
     if (r.plan_id) {
-      const { rows: planRows } = await this.pool.query('SELECT name, features FROM plans WHERE id=$1', [r.plan_id]);
+      const { rows: planRows } = await this.pool.query(
+        `SELECT id, name, monthly_price, code, included_employees, extra_employee_monthly_price,
+                included_points, extra_point_monthly_price, description, features, max_users,
+                is_active, sort_order, created_at
+         FROM plans WHERE id=$1`,
+        [r.plan_id],
+      );
       if (planRows.length > 0) {
         planName = planRows[0].name;
         features = Array.isArray(planRows[0].features) ? planRows[0].features : [];
+        const p = planRows[0];
+        currentPlan = {
+          id: p.id,
+          name: p.name,
+          monthlyPrice: parseFloat(p.monthly_price) || 0,
+          code: p.code ?? null,
+          pricing: pricingFromPlanRow(p),
+          description: p.description,
+          features,
+          maxUsers: p.max_users,
+          isActive: p.is_active,
+          sortOrder: p.sort_order,
+          createdAt: p.created_at,
+        };
       }
     }
 
@@ -1899,6 +1920,7 @@ export class TenantsService {
       tenantName: r.name,
       planId: r.plan_id ?? null,
       planName,
+      currentPlan,
       features,
       // `status` (102) lets every client render a professional block message +
       // hard gate. `planPrice` is an explicit alias of the effective price for

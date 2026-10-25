@@ -1,3 +1,4 @@
+import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
   AttendanceNfcTag,
   CreatedAttendanceNfcTag,
@@ -1275,6 +1276,7 @@ export function createSalaryApi(api: HttpClient) {
   return {
     getAll: (params?: DateRangeParams) => api.get<MasterSalary[]>('/salary', { params }),
     getMy: () => api.get<SalarySummary>('/salary/my'),
+    getTodayEarnings: () => api.get<TodayEarnings>('/salary/today-earnings'),
     getPayments: (params?: { userId?: string; monthYear?: string }) =>
       api.get<SalaryPayment[]>('/salary/payments', { params }),
     createPayment: (data: {
@@ -2407,8 +2409,8 @@ export function createBookingsApi(api: HttpClient) {
       api.post<PublicBookingPageSettings>('/bookings/public-settings/publish', data),
     unpublish: (data: BookingOperationRequest) =>
       api.post<PublicBookingPageSettings>('/bookings/public-settings/unpublish', data),
-    requests: (status?: PublicBookingRequestStatus) =>
-      api.get<StaffPublicBookingRequest[]>('/bookings/requests', { params: { status } }),
+    requests: (status?: PublicBookingRequestStatus, page?: number) =>
+      api.get<StaffPublicBookingRequest[]>('/bookings/requests', { params: { status, page } }),
     approve: (id: string, data: ApprovePublicBookingRequest) =>
       api.post<StaffPublicBookingRequest>(`/bookings/requests/${id}/approve`, data),
     reject: (id: string, data: BookingOperationRequest) =>
@@ -3154,4 +3156,8 @@ export function createManagerCabinetApi(api: HttpClient) {
     auditLog: (params?: { limit?: number; offset?: number }) =>
       api.get<AuditLogEntry[]>('/manager/audit-log', { params }),
   };
+}
+
+export function createDashboardApi(api: HttpClient) {
+  return { attention: () => api.get<DashboardAttention>('/dashboard/attention') };
 }

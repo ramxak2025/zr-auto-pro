@@ -803,16 +803,19 @@ export class PublicBookingsService {
       createdAt: row.created_at.toISOString(),
     };
   }
-  async requests(actor: JwtPayload, query: { status?: string } = {}) {
+  async requests(actor: JwtPayload, query: { status?: string; page?: string | number } = {}) {
     const fresh = await bookingActor(this.pool, actor),
       point = actorPointId(actor);
     if (query.status && !['pending', 'confirmed', 'rejected', 'cancelled'].includes(query.status))
       throw new BadRequestException({ message: 'Неизвестный статус' });
+    const page = Number(query.page ?? 1);
+    if (!Number.isSafeInteger(page) || page < 1 || page > 1000000)
+      throw new BadRequestException({ message: 'Некорректная страница заявок' });
     const { rows } = await this.pool.query<RequestRow>(
       `${requestSelect} WHERE r.tenant_id=$1 AND r.point_id IS NOT DISTINCT FROM $2::uuid
       AND ($3::boolean OR r.resource_id=$4) AND ($5::text IS NULL OR CASE WHEN b.status='cancelled' THEN 'cancelled' ELSE r.status END=$5)
-      ORDER BY r.created_at DESC,r.id LIMIT 200`,
-      [actor.tenantID, point, bookingOwner(fresh), actor.userID, query.status ?? null],
+      ORDER BY r.created_at DESC,r.id LIMIT 200 OFFSET $6`,
+      [actor.tenantID, point, bookingOwner(fresh), actor.userID, query.status ?? null, (page - 1) * 200],
     );
     return rows.map((r) => this.staffRequest(r));
   }

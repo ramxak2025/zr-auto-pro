@@ -271,6 +271,7 @@ export interface CarsQuery extends PaginationParams {
  * название и штрихкод — поиск по адресу не требует отдельного параметра.
  */
 export interface ProductsQuery extends PaginationParams {
+  lowStock?: boolean;
   /**
    * id склада; `'all'` — все склады филиала сессии; без параметра — ОСНОВНОЙ склад
    * филиала сессии (прежнее поведение, старые клиенты не меняются).

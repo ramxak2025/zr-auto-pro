@@ -307,6 +307,8 @@ export interface PosSettingsConflict {
 }
 
 export interface SubscriptionInfo {
+  /** Assigned plan by planId, including archived plans. Missing on older servers. */
+  currentPlan?: Plan | null;
   usage?: SubscriptionUsage;
   tenantName: string;
   /**
@@ -6244,3 +6246,19 @@ export type AttendanceNfcRequestResult =
   | { status: 'unknown' };
 
 export type * from './starterCatalogs';
+
+/** Read-only homepage aggregates; values retain kopecks, including negative earnings. */
+export interface TodayEarnings {
+  date: string;
+  timezone: string;
+  pointId: string | null;
+  employees: { id: string; name: string; avatar: string | null; earnedAmount: number }[];
+  total: number;
+}
+export type AttentionBucketId = 'bookings' | 'deferred' | 'purchase-orders' | 'low-stock' | 'installments';
+export interface DashboardAttention {
+  date: string;
+  timezone: string;
+  pointId: string | null;
+  buckets: { id: AttentionBucketId; count: number | null; error?: true }[];
+}

@@ -54,6 +54,12 @@ export class SalaryController {
     return this.salaryService.getAll(user.tenantID, query, point(user));
   }
 
+  @RequirePermission('salary_view_all')
+  @Get('today-earnings')
+  getTodayEarnings(@CurrentUser() user: JwtPayload) {
+    return this.salaryService.getTodayEarnings(user.tenantID, point(user));
+  }
+
   // `getMy` filters by the JWT subject inside the service — every authenticated
   // user is allowed to see their OWN earnings. No permission gate.
   @Get('my')
