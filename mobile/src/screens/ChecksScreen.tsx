@@ -1,3 +1,4 @@
+import { useRoute, type RouteProp } from '@react-navigation/native';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
@@ -871,7 +872,18 @@ export default function ChecksScreen() {
 
   // Filters
   const [showFilters, setShowFilters] = useState(false);
-  const [appliedFilters, setAppliedFilters] = useState<JournalFilters>(emptyJournalFilters);
+  const route = useRoute<RouteProp<{ Filters: { deferredOnly?: boolean; deferredMasterId?: string } }, 'Filters'>>();
+  const [appliedFilters, setAppliedFilters] = useState<JournalFilters>(() => ({
+    ...emptyJournalFilters(),
+    isDeferred: route.params?.deferredOnly ?? false,
+    masterId: route.params?.deferredMasterId ?? '',
+  }));
+  useEffect(() => {
+    if (route.params?.deferredOnly) {
+      setAppliedFilters({ ...emptyJournalFilters(), isDeferred: true, masterId: route.params.deferredMasterId ?? '' });
+      navigation.setParams({ deferredOnly: undefined, deferredMasterId: undefined });
+    }
+  }, [route.params?.deferredOnly, route.params?.deferredMasterId, navigation]);
   const {
     dateFrom,
     dateTo,

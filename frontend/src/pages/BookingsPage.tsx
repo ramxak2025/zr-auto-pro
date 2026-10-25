@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom';
 import '../components/booking/booking-settings.css';
 import BookingBrandingEditor from '../components/booking/BookingBrandingEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -29,11 +30,15 @@ const DEFAULT_BOOKING_HOURS = Object.fromEntries(
 );
 
 export default function BookingsPage() {
+  const [searchParams] = useSearchParams();
+  const pendingOnly = searchParams.get('status') === 'pending';
   const queryClient = useQueryClient();
   const { user, token, hasPermission } = useAuth();
   const canManage = hasPermission('company_manage');
   const canReview = hasPermission('bookings_access');
-  const [activeTab, setActiveTab] = useState<'settings' | 'requests'>(canManage ? 'settings' : 'requests');
+  const [activeTab, setActiveTab] = useState<'settings' | 'requests'>(
+    searchParams.get('tab') === 'requests' ? 'requests' : canManage ? 'settings' : 'requests',
+  );
   const ownerScope = `${user?.id ?? ''}:${user?.currentPointId ?? ''}`;
   const sessionClient = useMemo(() => (token ? createSessionBoundClient(token) : null), [token]);
   const scopedBookingsApi = useMemo(() => (sessionClient ? createBookingsApi(sessionClient) : null), [sessionClient]);
@@ -94,13 +99,16 @@ export default function BookingsPage() {
     },
     enabled: canManage && !!scopedBookingsApi,
   });
+  const [requestsPage, setRequestsPage] = useState(1);
+  useEffect(() => setRequestsPage(1), [ownerScope, pendingOnly]);
   const requestsQuery = useQuery<StaffPublicBookingRequest[]>({
-    queryKey: ['bookings', 'public-requests', ownerScope],
+    queryKey: ['bookings', 'public-requests', ownerScope, pendingOnly, requestsPage],
     queryFn: async () => {
       if (!scopedBookingsApi) throw new Error('Нет активной сессии');
-      return (await scopedBookingsApi.requests()).data;
+      return (await scopedBookingsApi.requests(pendingOnly ? 'pending' : undefined, requestsPage)).data;
     },
     enabled: canReview && activeTab === 'requests' && !!scopedBookingsApi,
+    placeholderData: undefined,
   });
   const settings = pageQuery.data;
   const publicUrl = settings?.publicUrl;
@@ -613,13 +621,14 @@ export default function BookingsPage() {
                   Повторить
                 </button>
               </div>
-            ) : (requestsQuery.data ?? []).filter((request) => request.status === 'pending' || request.needsClientLink)
-                .length === 0 ? (
+            ) : (requestsQuery.data ?? []).filter(
+                (request) => request.status === 'pending' || (!pendingOnly && request.needsClientLink),
+              ).length === 0 ? (
               <p className="text-sm text-slate-500">Новых заявок нет.</p>
             ) : (
               <div className="space-y-4">
                 {requestsQuery.data
-                  ?.filter((request) => request.status === 'pending' || request.needsClientLink)
+                  ?.filter((request) => request.status === 'pending' || (!pendingOnly && request.needsClientLink))
                   .map((request) => (
                     <article key={request.id} className="rounded-xl border border-slate-200 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -682,6 +691,23 @@ export default function BookingsPage() {
                   ))}
               </div>
             )}
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <button
+                className="min-h-[44px] text-sm underline disabled:opacity-40"
+                disabled={requestsPage === 1 || requestsQuery.isFetching}
+                onClick={() => setRequestsPage((p) => p - 1)}
+              >
+                Назад
+              </button>
+              <span className="text-sm text-slate-500">Страница {requestsPage}</span>
+              <button
+                className="min-h-[44px] text-sm underline disabled:opacity-40"
+                disabled={requestsQuery.isFetching || (requestsQuery.data?.length ?? 0) < 200}
+                onClick={() => setRequestsPage((p) => p + 1)}
+              >
+                Далее
+              </button>
+            </div>
             <button
               className="mt-4 text-sm font-semibold text-blue-700 underline"
               onClick={() => void requestsQuery.refetch()}

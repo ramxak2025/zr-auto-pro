@@ -24,6 +24,7 @@ import {
   createCheckTemplatesApi,
   createSuppliersApi,
   createSalaryApi,
+  createDashboardApi,
   createReportsApi,
   createShiftsApi,
   createScheduleApi,
@@ -248,3 +249,5 @@ export const uploadsApi = {
 };
 
 export const starterCatalogsApi = createStarterCatalogsApi(api);
+
+export const dashboardApi = createDashboardApi(api);

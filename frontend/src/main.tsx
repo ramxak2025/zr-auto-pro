@@ -1,3 +1,4 @@
+import { attachDashboardRefresh } from '../../shared/utils/dashboardQueries';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -125,6 +126,7 @@ const queryClient = new QueryClient({
     },
   },
 });
+attachDashboardRefresh(queryClient);
 
 // Restore previously persisted query results from IndexedDB. Runs before the
 // first paint so screens with cached data render instantly on cold start.

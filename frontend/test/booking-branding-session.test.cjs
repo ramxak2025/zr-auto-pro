@@ -20,6 +20,8 @@ for (const extension of ['.ts', '.tsx'])
 require.extensions['.css'] = () => {};
 const React = require('react');
 const Renderer = require('react-test-renderer');
+const { MemoryRouter } = require('react-router-dom');
+const pageWithRouter = () => React.createElement(MemoryRouter, null, React.createElement(Page));
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 let auth = {
   user: { id: 'owner-A', currentPointId: 'point-A', tenant: { name: 'Сервис A' } },
@@ -75,7 +77,7 @@ const Editor = require('../src/components/booking/BookingBrandingEditor').defaul
 function render() {
   let tree;
   Renderer.act(() => {
-    tree = Renderer.create(React.createElement(Page));
+    tree = Renderer.create(pageWithRouter());
   });
   return tree;
 }
@@ -101,10 +103,10 @@ test('late image upload cannot cross owner, branch or A→B→A session boundari
         : change === 'account'
           ? { ...auth, user: { ...auth.user, id: 'owner-B' }, token: 'token-B' }
           : { ...auth, token: 'token-B' };
-    Renderer.act(() => tree.update(React.createElement(Page)));
+    Renderer.act(() => tree.update(pageWithRouter()));
     // Return to A before its original upload finishes: the old generation is still stale.
     auth = original;
-    Renderer.act(() => tree.update(React.createElement(Page)));
+    Renderer.act(() => tree.update(pageWithRouter()));
     await Renderer.act(async () => {
       finish({ data: { url: '/api/uploads/old-owner.webp' } });
       await response;

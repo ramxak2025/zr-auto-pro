@@ -221,6 +221,7 @@ export default function ChecksPage() {
   const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
   const search = params.get('q') ?? '';
   const masterId = params.get('masterId') ?? '';
+  const deferredOnly = params.get('isDeferred') === 'true';
   const dateFrom = params.get('from') ?? '';
   const dateTo = params.get('to') ?? '';
   const rawView = params.get('view');
@@ -254,9 +255,10 @@ export default function ChecksPage() {
     isFetching,
     refetch,
   } = useQuery<PaginatedResponse<Check>>({
-    queryKey: ['checks', page, search, masterId, dateFrom, dateTo],
+    queryKey: ['checks', page, search, masterId, dateFrom, dateTo, deferredOnly],
     queryFn: async () => {
       const queryParams: Record<string, any> = { page, limit: LIMIT };
+      if (deferredOnly) queryParams.isDeferred = true;
       if (search) queryParams.search = search;
       if (masterId) queryParams.masterId = masterId;
       if (dateFrom) queryParams.dateFrom = dateFrom;
@@ -695,6 +697,14 @@ export default function ChecksPage() {
 
   return (
     <div className="space-y-5">
+      {deferredOnly && (
+        <div className="flex items-center gap-3 text-sm text-ink-2">
+          Отложенные чеки{' '}
+          <button className="underline" onClick={() => patchParams({ isDeferred: null })}>
+            Все чеки
+          </button>
+        </div>
+      )}
       <PageHeader title="Журнал" icon={BookOpen} subtitle={subtitle} />
 
       <Tabs

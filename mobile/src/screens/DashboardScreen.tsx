@@ -1,3 +1,4 @@
+import { AttentionCard, TodayEarningsCard } from './dashboard/TodayWidgets';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
@@ -3694,6 +3695,8 @@ const DASHBOARD_WIDGETS: DashboardWidgetDef[] = [
   { id: 'recent-reviews', label: 'Последние отзывы', Component: RecentReviewsCard },
   { id: 'personal-record', label: 'Личный рекорд', Component: PersonalRecordCard },
   { id: 'month-forecast', label: 'Прогноз конца месяца', Component: MonthForecastCard },
+  { id: 'attention', label: 'Требует внимания', Component: AttentionCard },
+  { id: 'today-earnings', label: 'Заработок сегодня', Component: TodayEarningsCard },
 ];
 
 function AdminDashboard({ name }: { name: string }) {
@@ -4666,6 +4669,8 @@ export default function DashboardScreen() {
     // requests it isn't allowed to make. (And never `invalidateQueries()`
     // with no filter — that refetched EVERY key in the app.)
     const ownerKeys: (string | (string | number)[])[][] = [
+      ['dashboard-attention'],
+      ['salary-today-earnings'],
       ['dashboard-chart'],
       // ['dashboard-v2'] also refreshes NetProfitAccrualCard (piggybacks on it).
       ['dashboard-v2'],
@@ -4685,6 +4690,8 @@ export default function DashboardScreen() {
       ['call-funnel'],
     ];
     const masterKeys: (string | (string | number)[])[][] = [
+      ['dashboard-attention'],
+      ['salary-today-earnings'],
       ['shifts'],
       // ['salary'] also refreshes MasterSalaryMonthCard (same summary query).
       ['salary'],
@@ -4792,6 +4799,8 @@ export default function DashboardScreen() {
             </View>
             {attendanceMode === 'manual' && <ShiftControl />}
             <MasterDashboard />
+            <TodayEarningsCard />
+            <AttentionCard />
           </>
         ) : isOwner || user?.role === UserRole.ADMIN ? (
           <AdminDashboard name={displayName} />

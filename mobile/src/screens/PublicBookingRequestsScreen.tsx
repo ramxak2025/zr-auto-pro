@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import { useRoute, type RouteProp } from '@react-navigation/native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
@@ -17,6 +18,8 @@ import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 export default function PublicBookingRequestsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const palette = useColors();
+  const route = useRoute<RouteProp<{ Filters: { pendingOnly?: boolean } }, 'Filters'>>();
+  const pendingOnly = route.params?.pendingOnly === true;
   const queryClient = useQueryClient();
   const { user, token, hasPermission } = useAuth();
   const canReview = hasPermission('bookings_access');
@@ -28,13 +31,16 @@ export default function PublicBookingRequestsScreen({ embedded = false }: { embe
   useEffect(() => {
     decisionKeys.current.clear();
   }, [ownerScope]);
+  const [requestsPage, setRequestsPage] = useState(1);
+  useEffect(() => setRequestsPage(1), [ownerScope, pendingOnly]);
   const requestsQuery = useQuery<StaffPublicBookingRequest[]>({
-    queryKey: ['bookings', 'public-requests', ownerScope, 'pending'],
+    queryKey: ['bookings', 'public-requests', ownerScope, 'pending', pendingOnly, requestsPage],
     queryFn: async () => {
       if (!scopedBookingsApi) throw new Error('Нет активной сессии');
-      return (await scopedBookingsApi.requests()).data;
+      return (await scopedBookingsApi.requests(pendingOnly ? 'pending' : undefined, requestsPage)).data;
     },
     enabled: canReview && !!scopedBookingsApi,
+    placeholderData: undefined,
   });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['bookings', 'public-requests'] });
   const decide = useMutation({
@@ -91,14 +97,15 @@ export default function PublicBookingRequestsScreen({ embedded = false }: { embe
             Неподтверждённые заявки не занимают время сотрудника. Подтвердите запись, когда проверите возможность
             принять клиента.
           </Text>
-          {(requestsQuery.data ?? []).filter((request) => request.status === 'pending' || request.needsClientLink)
-            .length === 0 ? (
+          {(requestsQuery.data ?? []).filter(
+            (request) => request.status === 'pending' || (!pendingOnly && request.needsClientLink),
+          ).length === 0 ? (
             <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
               <Text style={[styles.title, { color: palette.text.primary }]}>Новых заявок нет</Text>
             </View>
           ) : (
             requestsQuery.data
-              ?.filter((request) => request.status === 'pending' || request.needsClientLink)
+              ?.filter((request) => request.status === 'pending' || (!pendingOnly && request.needsClientLink))
               .map((request) => (
                 <View
                   key={request.id}
@@ -148,6 +155,19 @@ export default function PublicBookingRequestsScreen({ embedded = false }: { embe
                 </View>
               ))
           )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Action
+              label="Назад"
+              disabled={requestsPage === 1 || requestsQuery.isFetching}
+              onPress={() => setRequestsPage((p) => p - 1)}
+            />
+            <Text style={{ color: palette.text.secondary }}>Страница {requestsPage}</Text>
+            <Action
+              label="Далее"
+              disabled={requestsQuery.isFetching || (requestsQuery.data?.length ?? 0) < 200}
+              onPress={() => setRequestsPage((p) => p + 1)}
+            />
+          </View>
           <TouchableOpacity onPress={() => void requestsQuery.refetch()} style={styles.refresh}>
             <Text style={styles.refreshText}>Обновить список</Text>
           </TouchableOpacity>
