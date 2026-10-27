@@ -17,6 +17,7 @@ const { WarehousesService } = load('warehouses/warehouses.service');
 const { ReturnsService } = load('returns/returns.service');
 Logger.overrideLogger(false);
 const live = process.env.AUTEXA_CHECK_PROFIT_TEST_DB;
+const ciFixture = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true';
 
 test(
   'saved motivation profit: journal/detail/board/car/client history, ACL, returns and restore',
@@ -24,12 +25,20 @@ test(
   async () => {
     const url = new URL(live);
     assert.equal(url.hostname, '127.0.0.1');
-    assert.equal(url.port, '55452');
-    assert.equal(url.pathname, '/autexa_oct27_display');
-    assert.equal(url.username, 'oct27_display_admin');
+    if (ciFixture) {
+      assert.equal(url.port, '55438');
+      assert.equal(url.pathname, '/autexa_oct8_test');
+      assert.equal(url.username, 'oct8_fixture');
+      assert.ok(process.env.OCT27_TEST_APP_PASSWORD, 'CI fixture app password is required');
+    } else {
+      assert.equal(url.port, '55452');
+      assert.equal(url.pathname, '/autexa_oct27_display');
+      assert.equal(url.username, 'oct27_display_admin');
+    }
     const admin = new Pool({ connectionString: live });
     const appUrl = new URL(live);
     appUrl.username = 'autexa_app';
+    if (ciFixture) appUrl.password = process.env.OCT27_TEST_APP_PASSWORD;
     const pool = new TenantAwarePool(admin, new Pool({ connectionString: appUrl.toString() }));
     const clients = new ClientsService(pool);
     const checks = new ChecksService(pool, new WarrantyService(pool), clients);

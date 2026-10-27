@@ -15,7 +15,8 @@ const { vehicleDayCosts } = require('../dist/common/vehicle-day-costs');
 const { TenantAwarePool } = require('../dist/common/tenant-pool');
 const { runWithTenant } = require('../dist/common/tenant-context');
 const repairFixture = process.env.OCT28_FINANCE_REPAIR_TEST_DB;
-const live = repairFixture ?? process.env.OCT27_FINANCE_TEST_DB;
+const ciFixture = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true';
+const live = ciFixture ? process.env.OCT27_FINANCE_TEST_DB : (repairFixture ?? process.env.OCT27_FINANCE_TEST_DB);
 Logger.overrideLogger(false);
 const json = (x) => JSON.parse(JSON.stringify(x));
 const status = (code) => (e) => e.getStatus?.() === code;
@@ -23,15 +24,23 @@ const status = (code) => (e) => e.getStatus?.() === code;
 async function fixture(fn) {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, repairFixture ? '55453' : '55451');
-  assert.equal(url.pathname, repairFixture ? '/autexa_oct28_finance_repair' : '/autexa_oct27_finance');
-  assert.equal(url.username, repairFixture ? 'oct28_finance_repair_admin' : 'oct27_finance_admin');
+  if (ciFixture) {
+    assert.equal(url.port, '55438');
+    assert.equal(url.pathname, '/autexa_oct8_test');
+    assert.equal(url.username, 'oct8_fixture');
+    assert.ok(process.env.OCT27_TEST_APP_PASSWORD, 'CI fixture app password is required');
+  } else {
+    assert.equal(url.port, repairFixture ? '55453' : '55451');
+    assert.equal(url.pathname, repairFixture ? '/autexa_oct28_finance_repair' : '/autexa_oct27_finance');
+    assert.equal(url.username, repairFixture ? 'oct28_finance_repair_admin' : 'oct27_finance_admin');
+  }
   const admin = new Pool({ connectionString: live });
   const schema = `finance_${randomUUID().replaceAll('-', '')}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
   const pool = new Pool({ connectionString: live, options: `-c search_path=${schema},pg_catalog` });
   const appUrl = new URL(live);
   appUrl.username = 'autexa_app';
+  if (ciFixture) appUrl.password = process.env.OCT27_TEST_APP_PASSWORD;
   const app = new Pool({ connectionString: appUrl.toString(), options: `-c search_path=${schema},pg_catalog` });
   const scoped = new TenantAwarePool(pool, app);
   const q = (sql, params = []) => pool.query(sql, params);
