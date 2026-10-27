@@ -533,11 +533,11 @@ test('формулы премий и мотивации взяты из ОБЩЕ
     'сгруппированный по филиалам запрос премий собран не из общих выражений — он разъедется с дашбордом',
   );
   assert.ok(
-    /const netProfitMonth = profitMonth - expMonth - salaryExtras\.month;/.test(reportsSrc),
+    /const netProfitMonth = profitMonth - expMonth - salaryExtras\.month - vehicleMonth;/.test(reportsSrc),
     'состав термов netProfitMonth на главной изменился — карточку филиала надо двигать следом',
   );
   assert.ok(
-    /\(parseFloat\(r\.profit_month\) \|\| 0\) - \(expenseByPoint\.get\(id\) \?\? 0\) - \(extrasByPoint\.get\(id\) \?\? 0\)/.test(
+    /\(parseFloat\(r\.profit_month\) \|\| 0\)\s*-\s*\(expenseByPoint\.get\(id\) \?\? 0\)\s*-\s*\(extrasByPoint\.get\(id\) \?\? 0\)\s*-\s*\(vehicleByPoint\.get\(id\) \?\? 0\)/.test(
       pointsSrc,
     ),
     'на карточке филиала состав термов «Прибыли за месяц» разошёлся с главной',

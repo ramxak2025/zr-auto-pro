@@ -1,3 +1,4 @@
+import { checkMotivationAmounts } from './check-display-profit';
 import { validateJournalFilters } from './journal-filters';
 import {
   Injectable,
@@ -1061,7 +1062,7 @@ export class ChecksService {
     return userHasPermission(actor, 'profit_view');
   }
 
-  private mapCheck(row: any, canSeeProfit = true) {
+  private mapCheck(row: any, canSeeProfit = false, motivationAmount = 0) {
     return {
       id: row.id,
       number: row.number,
@@ -1089,6 +1090,17 @@ export class ChecksService {
       productSalaryTotal: canSeeProfit ? parseFloat(row.product_salary_total) || 0 : 0,
       totalCost: canSeeProfit ? parseFloat(row.total_cost) || 0 : 0,
       profit: canSeeProfit ? parseFloat(row.profit) || 0 : 0,
+      motivationAmount: canSeeProfit ? motivationAmount : 0,
+      profitAfterMotivation: canSeeProfit ? round2((parseFloat(row.profit) || 0) - motivationAmount) : 0,
+      warrantyLossAfterMotivation:
+        canSeeProfit && row.payment_method === 'warranty'
+          ? round2(
+              (parseFloat(row.product_cost_total) || 0) +
+                (parseFloat(row.service_salary_total) || 0) +
+                (parseFloat(row.product_salary_total) || 0) +
+                motivationAmount,
+            )
+          : 0,
       // ITEM 2 — «по гарантии» = УБЫТОК, не выручка. Флаг + производная сумма
       // убытка, отдаётся и в списке (журнал), и в детали (единый маппер).
       // warrantyLoss = закупка использованных запчастей (Σ cost_price×qty =
@@ -1105,7 +1117,8 @@ export class ChecksService {
           ? round2(
               (parseFloat(row.product_cost_total) || 0) +
                 (parseFloat(row.service_salary_total) || 0) +
-                (parseFloat(row.product_salary_total) || 0),
+                (parseFloat(row.product_salary_total) || 0) +
+                motivationAmount,
             )
           : 0,
       // Returns metadata: 040 added is_returned + returned_at + return_destination + return_scope.
@@ -1488,8 +1501,15 @@ export class ChecksService {
 
     const fields = parseFields(query.fields);
     const canSeeProfit = this.canSeeProfit(actor);
+    const motivation = canSeeProfit
+      ? await checkMotivationAmounts(
+          this.pool,
+          tenantID,
+          rows.map((row) => row.id),
+        )
+      : new Map<string, number>();
     const checks = rows.map((row) => {
-      const ch = this.mapCheck(row, canSeeProfit);
+      const ch = this.mapCheck(row, canSeeProfit, motivation.get(row.id) ?? 0);
       if (row.master_id) {
         (ch as any).master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
       }
@@ -1621,7 +1641,11 @@ export class ChecksService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
 
     const row = rows[0];
-    const ch: any = this.mapCheck(row, this.canSeeProfit(actor));
+    const canSeeProfit = this.canSeeProfit(actor);
+    const motivation = canSeeProfit
+      ? await checkMotivationAmounts(this.pool, tenantID, [id])
+      : new Map<string, number>();
+    const ch: any = this.mapCheck(row, canSeeProfit, motivation.get(id) ?? 0);
     if (row.master_id) ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
     if (row.client_id) ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
     // 171 — VIN машины едет в проекции всегда (null, если не указан), и при
@@ -2247,8 +2271,15 @@ export class ChecksService {
     );
 
     const canSeeProfit = this.canSeeProfit(actor);
+    const motivation = canSeeProfit
+      ? await checkMotivationAmounts(
+          this.pool,
+          tenantID,
+          rows.map((row) => row.id),
+        )
+      : new Map<string, number>();
     for (const row of rows) {
-      const ch: any = this.mapCheck(row, canSeeProfit);
+      const ch: any = this.mapCheck(row, canSeeProfit, motivation.get(row.id) ?? 0);
       if (row.master_id) {
         ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
       }

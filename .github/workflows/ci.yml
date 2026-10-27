@@ -73,6 +73,9 @@ jobs:
           OCT16_INVENTORY_LIVE_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           OCT12_CLIENT_HISTORY_APP_PASSWORD: oct8_app_fixture_only
           AUTEXA_AUTH_TEST_DATABASE_URL: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT27_FINANCE_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          AUTEXA_CHECK_PROFIT_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT27_TEST_APP_PASSWORD: oct8_app_fixture_only
           RUN_BACKGROUND_JOBS: "false"
           SENTRY_DSN: ""
         run: >-
@@ -99,6 +102,8 @@ jobs:
           test/subscription-composition-live.test.cjs
           test/inventory-integrity-live.test.cjs
           test/auth-refresh-recovery.test.cjs
+          test/vehicle-day-finance-live.test.cjs
+          test/check-derived-profit-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)

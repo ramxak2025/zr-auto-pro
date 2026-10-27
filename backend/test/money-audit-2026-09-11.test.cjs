@@ -234,7 +234,7 @@ test('финотчёт вычитает премии и мотивацию и п
   const financial = bodyBetween(reports, 'async getFinancial(', 'private async salaryExtrasForPeriod(');
 
   assert.ok(
-    /const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss - extras\.total;/.test(financial),
+    /const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss - extras\.total - perVehicleDayExpense;/.test(financial),
     'getFinancial: премии и мотивация снова не уменьшают прибыль — владелец видит прибыль выше фактической на сумму выданных мастерам денег',
   );
   assert.ok(
@@ -265,23 +265,23 @@ test('дашборд вычитает премии/мотивацию во ВС�
   const dash = bodyBetween(reports, 'private async computeDashboardV2(', 'async clientsNewVsReturning(');
 
   assert.ok(
-    /const netProfitToday = profitToday - expToday - salaryExtras\.today;/.test(dash),
+    /const netProfitToday = profitToday - expToday - salaryExtras\.today - vehicleToday;/.test(dash),
     'computeDashboardV2: «прибыль сегодня» не учитывает премии/мотивацию дня',
   );
   assert.ok(
-    /const netProfitMonth = profitMonth - expMonth - salaryExtras\.month;/.test(dash),
+    /const netProfitMonth = profitMonth - expMonth - salaryExtras\.month - vehicleMonth;/.test(dash),
     'computeDashboardV2: «прибыль за месяц» не учитывает премии/мотивацию месяца',
   );
   assert.ok(
-    /const prevNet = prevProfit - expPrevMonth - salaryExtras\.prevWindow;/.test(dash),
+    /const prevNet = prevProfit - expPrevMonth - salaryExtras\.prevWindow - vehiclePrev;/.test(dash),
     'computeDashboardV2: окно сравнения маржи не вычитает премии — marginPctChange покажет фантомное падение',
   );
   assert.ok(
-    /mtdRecurringExcess -\s*\n\s*mtdSalaryExtras;/.test(dash),
+    /mtdRecurringExcess -\s*\n\s*mtdSalaryExtras -\s*\n\s*vehicleMonth;/.test(dash),
     'computeDashboardV2: accrual-прибыль (mtd) не вычитает премии — инвариант «без планового конфига mtd.netProfit === netProfitMonth» сломан',
   );
   assert.ok(
-    /projRecurringExcess -\s*\n\s*projSalaryExtras;/.test(dash),
+    /projRecurringExcess -\s*\n\s*projSalaryExtras -\s*\n\s*projVehicleExpense;/.test(dash),
     'computeDashboardV2: прогноз на месяц не вычитает премии',
   );
   assert.ok(

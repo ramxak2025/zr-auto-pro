@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
+import { vehicleDayCosts } from '../../../common/vehicle-day-costs';
 import { PG_POOL } from '../../../database.module';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../../common/check-money-sql';
 import { premiumCashAmountExpr } from '../../../common/salary-extras-sql';
@@ -89,8 +90,15 @@ export class PointsBuilder implements ReportBuilder {
       ),
     ]);
 
+    const vehicleRows = await vehicleDayCosts(this.pool, { ...ctx, pointId: null });
+    for (const row of vehicleRows) {
+      if (row.pointId && (ctx.ids.length === 0 || ctx.ids.includes(row.pointId))) {
+        eRows.push({ point_id: row.pointId, total: row.amount });
+      }
+    }
     const expenseByPoint = new Map<string, number>();
-    for (const r of eRows) expenseByPoint.set(String(r.point_id), num(r.total));
+    for (const r of eRows)
+      expenseByPoint.set(String(r.point_id), (expenseByPoint.get(String(r.point_id)) ?? 0) + num(r.total));
     const extrasByPoint = new Map<string, number>();
     for (const r of [...prRows, ...mRows]) {
       const id = String(r.point_id);

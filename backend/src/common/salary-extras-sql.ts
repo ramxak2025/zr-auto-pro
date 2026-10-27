@@ -143,18 +143,19 @@ export function premiumsByPointMonthSql(): string {
  *   $1 — tenant_id;
  *   $2 — начало месяца как UTC-инстант (то же значение, что monthStart
  *        дашборда: у мотивации назначенного периода нет, только accrued_at).
+ *   $3 — asOf (optional boundAsOf=true): исключает будущие начисления на дашборде.
  *
  * ФИЛИАЛ БЕРЁТСЯ У ЧЕКА — то же правило, что в motivationPointFilterSql выше,
  * только в форме JOIN: группировать по значению, которого у самой строки нет,
  * иначе нечем. JOIN не размножает строки — motivation_accruals.check_id
  * NOT NULL и ссылается ровно на один чек (миграция 095).
  */
-export function motivationByPointMonthSql(): string {
+export function motivationByPointMonthSql(boundAsOf = false): string {
   return `SELECT mch.point_id, COALESCE(SUM(ma.amount), 0) AS total
             FROM motivation_accruals ma
             JOIN checks mch ON mch.id = ma.check_id AND mch.tenant_id = ma.tenant_id
            WHERE ma.tenant_id = $1
-             AND ma.accrued_at >= $2
+             AND ma.accrued_at >= $2${boundAsOf ? ' AND ma.accrued_at <= $3::timestamptz' : ''}
              AND mch.point_id IS NOT NULL
            GROUP BY mch.point_id`;
 }
