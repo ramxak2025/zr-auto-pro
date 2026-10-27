@@ -1,3 +1,5 @@
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { displayedProfit, displayedWarrantyLoss } from '../../../shared/utils/checkProfit';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
@@ -328,7 +330,7 @@ const CheckRow = React.memo(function CheckRow({
   // карточку красной плашкой «УБЫТОК» рядом с жёлтым бейджем оплаты «Гарантия»,
   // а в подвале (для тех, кто видит прибыль) показываем сумму убытка.
   const isWarranty = check.isWarranty === true;
-  const warrantyLoss = check.warrantyLoss ?? 0;
+  const warrantyLoss = displayedWarrantyLoss(check);
   // Пробег авто и скидка на товары — доп. чипы в строке инфо. Показываем
   // только когда значение осмысленно (> 0); 0 / отсутствие — прячем.
   const mileage = typeof check.mileage === 'number' && check.mileage > 0 ? check.mileage : null;
@@ -612,11 +614,18 @@ const CheckRow = React.memo(function CheckRow({
               (isWarranty && warrantyLoss > 0 ? (
                 // Гарантийный чек: вместо прибыли показываем убыток (запчасти +
                 // выплата мастеру) красным со знаком минус.
-                <Text style={[styles.footerProfit, styles.profitNegative]}>−{formatMoney(warrantyLoss)}</Text>
+                <Text style={[styles.footerProfit, styles.profitNegative]}>
+                  −{formatFinancialMoney(warrantyLoss, 2)}
+                </Text>
               ) : (
-                <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-                  {check.profit >= 0 ? '+' : ''}
-                  {formatMoney(check.profit)}
+                <Text
+                  style={[
+                    styles.footerProfit,
+                    displayedProfit(check) >= 0 ? styles.profitPositive : styles.profitNegative,
+                  ]}
+                >
+                  {displayedProfit(check) >= 0 ? '+' : ''}
+                  {formatFinancialMoney(displayedProfit(check), 2)}
                 </Text>
               ))}
           </View>

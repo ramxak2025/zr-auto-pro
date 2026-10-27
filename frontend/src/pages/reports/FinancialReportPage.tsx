@@ -22,7 +22,7 @@ import {
 
 import { reportsApi } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatMoney } from '../../../../shared/utils/formatters';
+import { formatMoney as formatPreciseMoney } from '../../../../shared/utils/formatters';
 import { useTenantCalendar } from '../../hooks/useTenantTimezone';
 import type { FinancialReport } from '../../types';
 import DatePeriodPicker from '../../components/DatePeriodPicker';
@@ -39,6 +39,8 @@ import { Money } from '../../ui/Money';
 import { Toolbar } from '../../ui/Toolbar';
 import { SkeletonCard } from '../../ui/Skeleton';
 import { toneChip } from '../../ui/tokens';
+
+const formatMoney = (value: number) => formatPreciseMoney(value, 2);
 
 const percentFormat = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 });
 
@@ -70,7 +72,7 @@ function ExpenseRow({
           {hint && <p className="text-xs text-ink-3">{hint}</p>}
         </div>
       </div>
-      <Money value={value} className="text-sm font-semibold text-ink" />
+      <Money precision={2} value={value} className="text-sm font-semibold text-ink" />
     </li>
   );
 }
@@ -253,7 +255,7 @@ export default function FinancialReportPage() {
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <StatCard
                 label="Чистая прибыль"
-                value={<Money value={report.netProfit} colorize />}
+                value={<Money precision={2} value={report.netProfit} colorize />}
                 hint={marginPct !== null ? `Маржа ${percentFormat.format(marginPct)}%` : 'Выручки за период нет'}
                 icon={TrendingUp}
                 tone={report.netProfit >= 0 ? 'ok' : 'bad'}
@@ -300,7 +302,7 @@ export default function FinancialReportPage() {
                     <ExpenseRow
                       icon={Sparkles}
                       label="Мотивация"
-                      hint="Бонусы мастеров за акционные товары"
+                      hint="Сохранённые начисления сотрудникам"
                       value={report.motivation ?? 0}
                     />
                   )}
@@ -312,7 +314,15 @@ export default function FinancialReportPage() {
                       value={report.warrantyLoss ?? 0}
                     />
                   )}
-                  {other > 0 && (
+                  {(report.perVehicleDayExpense ?? 0) !== 0 && (
+                    <ExpenseRow
+                      icon={Receipt}
+                      label="За автомобиль в день"
+                      hint="По уникальным визитам · уже вычтен из прибыли"
+                      value={report.perVehicleDayExpense ?? 0}
+                    />
+                  )}
+                  {other !== 0 && (
                     <ExpenseRow
                       icon={Wallet}
                       label="Прочие расходы"
@@ -376,16 +386,16 @@ export default function FinancialReportPage() {
                       header: 'Выручка',
                       numeric: true,
                       sortable: true,
-                      render: (r) => <Money value={r.revenue} />,
-                      footer: (rows) => <Money value={rows.reduce((s, r) => s + r.revenue, 0)} />,
+                      render: (r) => <Money precision={2} value={r.revenue} />,
+                      footer: (rows) => <Money precision={2} value={rows.reduce((s, r) => s + r.revenue, 0)} />,
                     },
                     {
                       key: 'profit',
                       header: 'Прибыль',
                       numeric: true,
                       sortable: true,
-                      render: (r) => <Money value={r.profit} colorize className="font-medium" />,
-                      footer: (rows) => <Money value={rows.reduce((s, r) => s + r.profit, 0)} colorize />,
+                      render: (r) => <Money precision={2} value={r.profit} colorize className="font-medium" />,
+                      footer: (rows) => <Money precision={2} value={rows.reduce((s, r) => s + r.profit, 0)} colorize />,
                     },
                   ]}
                 />

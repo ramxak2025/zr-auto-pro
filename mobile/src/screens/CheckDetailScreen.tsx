@@ -1,3 +1,5 @@
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { displayedProfit } from '../../../shared/utils/checkProfit';
 import { captureCheckSaveSession } from './checkCreate/saveSession';
 import { readPendingCheckPhotos, updatePendingCheckPhotos } from '../utils/pendingCheckPhotos';
 import { captureDataSession } from '../contexts/dataSession';
@@ -1861,18 +1863,18 @@ export default function CheckDetailScreen() {
                 <Ionicons
                   name="trending-up"
                   size={16}
-                  color={check.profit >= 0 ? colors.green[600] : colors.red[500]}
+                  color={displayedProfit(check) >= 0 ? colors.green[600] : colors.red[500]}
                 />
                 <Text style={[styles.profitLabel, { color: palette.text.secondary }]}>Прибыль</Text>
               </View>
               <Text
                 style={[
                   styles.profitValue,
-                  check.profit >= 0 ? { color: colors.green[600] } : { color: colors.red[500] },
+                  displayedProfit(check) >= 0 ? { color: colors.green[600] } : { color: colors.red[500] },
                 ]}
               >
-                {check.profit >= 0 ? '+' : ''}
-                {formatMoney(check.profit)}
+                {displayedProfit(check) >= 0 ? '+' : ''}
+                {formatFinancialMoney(displayedProfit(check), 2)}
               </Text>
             </View>
           )}

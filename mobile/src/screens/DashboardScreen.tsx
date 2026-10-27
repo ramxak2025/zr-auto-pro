@@ -1,3 +1,5 @@
+import { formatMoney as formatPreciseMoney } from '../../../shared/utils/formatters';
+import { accrualBreakdown } from '../../../shared/utils/accrualBreakdown';
 import { AttentionCard, TodayEarningsCard } from './dashboard/TodayWidgets';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -115,7 +117,8 @@ const AnimatedSvgCircle = Animated.createAnimatedComponent(Circle);
 // chart — no visible overlap, no clipping.
 const X_AXIS_LABEL_W = 28;
 
-function formatMoney(value: number): string {
+function formatMoney(value: number, precision: 0 | 2 = 0): string {
+  if (precision === 2) return formatPreciseMoney(value, 2);
   const rounded = Math.round(value);
   return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 }
@@ -362,10 +365,10 @@ function OwnerHero({ name }: { name: string }) {
             <Skeleton width={220} height={36} radius={10} style={{ backgroundColor: 'rgba(255,255,255,0.10)' }} />
           ) : (
             <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
-              {formatMoney(profitToday)}
+              {formatMoney(profitToday, 2)}
             </Text>
           )}
-          {!isLoading && <Text style={styles.heroValueSub}>за сегодня · без постоянных расходов</Text>}
+          {!isLoading && <Text style={styles.heroValueSub}>за сегодня · по факту</Text>}
           {!isLoading && (
             <Text style={styles.heroSecondary}>
               Оборот: <Text style={styles.heroSecondaryBold}>{formatMoney(revenueToday)}</Text>
@@ -3287,7 +3290,8 @@ function NetProfitAccrualCard() {
   const palette = useColors();
   const navigation = useNavigation<any>();
   const [expanded, setExpanded] = useState(false);
-  const { data, isLoading } = useQuery({
+  const [period, setPeriod] = useState<'today' | 'mtd'>('mtd');
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['dashboard-v2', 'today'],
     queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
     staleTime: 60_000,
@@ -3309,12 +3313,21 @@ function NetProfitAccrualCard() {
         </AnimatedCard>
       );
     }
-    return null;
+    return isError ? (
+      <TouchableOpacity
+        accessibilityRole="button"
+        onPress={() => refetch()}
+        style={[styles.ownerCard, { backgroundColor: palette.bg.card }]}
+      >
+        <Text style={{ color: palette.text.primary }}>Не удалось загрузить прибыль по начислению. Повторить</Text>
+      </TouchableOpacity>
+    ) : null;
   }
   if (!accrual) return null;
 
-  const { mtd, projection, config } = accrual;
-  const netMtd = mtd.netProfit;
+  const { projection, config } = accrual;
+  const selected = period === 'today' && accrual.today ? accrual.today : accrual.mtd;
+  const netMtd = selected.netProfit;
   const netProj = projection.netProfit;
   const positive = netMtd >= 0;
   const accent = positive ? colors.green[600] : colors.red[600];
@@ -3331,20 +3344,10 @@ function NetProfitAccrualCard() {
     config.plannedFixedMonthly === 0 &&
     config.staffFixedMonthly === 0 &&
     config.pctTurnoverTotal === 0 &&
-    config.pctProfitTotal === 0;
+    config.pctProfitTotal === 0 &&
+    !config.hasPerVehicleDayCosts;
 
-  // Разбор вычитаемого. amount всегда ≥ 0; kind решает знак/цвет.
-  const breakdown: { label: string; amount: number; kind: 'base' | 'minus' }[] = [
-    { label: 'Прибыль по чекам', amount: mtd.checkProfit, kind: 'base' },
-    { label: 'Постоянные расходы', amount: mtd.plannedFixedAmortized, kind: 'minus' },
-    { label: 'Оклады сотрудников', amount: mtd.staffFixedAmortized, kind: 'minus' },
-    { label: '% с оборота', amount: mtd.staffPctTurnover, kind: 'minus' },
-    { label: '% с прибыли', amount: mtd.staffPctProfit, kind: 'minus' },
-    { label: 'Разовые расходы', amount: mtd.oneOffExpenses, kind: 'minus' },
-  ];
-  if (mtd.recurringExcess > 0) {
-    breakdown.push({ label: 'Постоянка сверх Плана', amount: mtd.recurringExcess, kind: 'minus' });
-  }
+  const breakdown = accrualBreakdown(selected);
 
   return (
     <AnimatedCard
@@ -3361,16 +3364,44 @@ function NetProfitAccrualCard() {
         </View>
       </View>
 
+      {accrual.today && (
+        <View
+          accessibilityRole="radiogroup"
+          style={{ flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] }}
+        >
+          {(['today', 'mtd'] as const).map((value) => (
+            <TouchableOpacity
+              key={value}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: period === value }}
+              onPress={() => setPeriod(value)}
+              style={{
+                minHeight: 44,
+                justifyContent: 'center',
+                paddingHorizontal: spacing[3],
+                borderRadius: 8,
+                backgroundColor: period === value ? palette.accent.primarySoft : palette.bg.muted,
+              }}
+            >
+              <Text style={{ color: period === value ? palette.accent.primaryText : palette.text.secondary }}>
+                {value === 'today' ? 'Сегодня' : 'С начала месяца'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
       <Text style={[styles.napValue, { color: accent }]} numberOfLines={1} adjustsFontSizeToFit>
-        {formatMoney(netMtd)}
+        {formatMoney(netMtd, 2)}
       </Text>
-      <Text style={[styles.napCaption, { color: palette.text.tertiary }]}>с начала месяца</Text>
+      <Text style={[styles.napCaption, { color: palette.text.tertiary }]}>
+        {period === 'today' && accrual.today ? 'за сегодня · по начислению' : 'с начала месяца · по начислению'}
+      </Text>
 
       <View style={[styles.napProjRow, { backgroundColor: palette.bg.muted }]}>
         <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
         <Text style={[styles.napProjLabel, { color: palette.text.secondary }]}>Прогноз на месяц</Text>
         <Text style={[styles.napProjValue, { color: netProj >= 0 ? palette.text.primary : colors.red[600] }]}>
-          {formatMoney(netProj)}
+          {formatMoney(netProj, 2)}
         </Text>
       </View>
 
@@ -3392,73 +3423,72 @@ function NetProfitAccrualCard() {
           </Text>
           <Ionicons name="chevron-forward" size={16} color={colors.primary[600]} />
         </TouchableOpacity>
-      ) : (
-        <>
-          {config.recurringUncovered > 0 && (
-            <TouchableOpacity
-              style={[
-                styles.napWarn,
-                { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
-              ]}
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning', initial: false } });
-              }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="alert-circle-outline" size={16} color={colors.amber[600]} />
-              <Text style={[styles.napWarnText, { color: colors.amber[700] }]}>
-                Отмечено постоянным, но не в Плане: {formatMoney(config.recurringUncovered)} — задайте в Постоянных
-                расходах
-              </Text>
-            </TouchableOpacity>
-          )}
-
+      ) : null}
+      <>
+        {config.recurringUncovered > 0 && (
           <TouchableOpacity
-            style={styles.napToggle}
+            style={[
+              styles.napWarn,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+            ]}
             onPress={() => {
               haptic('tap');
-              setExpanded((e) => !e);
+              navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning', initial: false } });
             }}
-            activeOpacity={0.7}
+            activeOpacity={0.85}
           >
-            <Text style={[styles.napToggleText, { color: colors.primary[600] }]}>
-              {expanded ? 'Скрыть разбор' : 'Что вычитается'}
+            <Ionicons name="alert-circle-outline" size={16} color={colors.amber[600]} />
+            <Text style={[styles.napWarnText, { color: colors.amber[700] }]}>
+              Отмечено постоянным, но не в Плане: {formatMoney(config.recurringUncovered)} — задайте в Постоянных
+              расходах
             </Text>
-            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color={colors.primary[600]} />
           </TouchableOpacity>
+        )}
 
-          {expanded && (
-            <View style={[styles.napBreakdown, { borderTopColor: palette.border.subtle }]}>
-              {breakdown.map((row) => (
-                <View key={row.label} style={styles.napRow}>
-                  <Text style={[styles.napRowLabel, { color: palette.text.secondary }]}>{row.label}</Text>
-                  <Text
-                    style={[
-                      styles.napRowValue,
-                      {
-                        color:
-                          row.kind === 'base'
-                            ? palette.text.primary
-                            : row.amount > 0
-                              ? colors.red[600]
-                              : palette.text.tertiary,
-                      },
-                    ]}
-                  >
-                    {row.kind === 'minus' && row.amount > 0 ? '− ' : ''}
-                    {formatMoney(row.amount)}
-                  </Text>
-                </View>
-              ))}
-              <View style={[styles.napRow, styles.napRowTotal, { borderTopColor: palette.border.subtle }]}>
-                <Text style={[styles.napRowTotalLabel, { color: palette.text.primary }]}>Чистая прибыль</Text>
-                <Text style={[styles.napRowTotalValue, { color: accent }]}>{formatMoney(netMtd)}</Text>
+        <TouchableOpacity
+          style={styles.napToggle}
+          onPress={() => {
+            haptic('tap');
+            setExpanded((e) => !e);
+          }}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.napToggleText, { color: colors.primary[600] }]}>
+            {expanded ? 'Скрыть разбор' : 'Что вычитается'}
+          </Text>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color={colors.primary[600]} />
+        </TouchableOpacity>
+
+        {expanded && (
+          <View style={[styles.napBreakdown, { borderTopColor: palette.border.subtle }]}>
+            {breakdown.map((row) => (
+              <View key={row.label} style={styles.napRow}>
+                <Text style={[styles.napRowLabel, { color: palette.text.secondary }]}>{row.label}</Text>
+                <Text
+                  style={[
+                    styles.napRowValue,
+                    {
+                      color:
+                        row.contribution >= 0
+                          ? palette.text.primary
+                          : row.contribution < 0
+                            ? colors.red[600]
+                            : palette.text.tertiary,
+                    },
+                  ]}
+                >
+                  {row.contribution > 0 ? '+' : row.contribution < 0 ? '−' : ''}
+                  {formatMoney(Math.abs(row.contribution), 2)}
+                </Text>
               </View>
+            ))}
+            <View style={[styles.napRow, styles.napRowTotal, { borderTopColor: palette.border.subtle }]}>
+              <Text style={[styles.napRowTotalLabel, { color: palette.text.primary }]}>Чистая прибыль</Text>
+              <Text style={[styles.napRowTotalValue, { color: accent }]}>{formatMoney(netMtd, 2)}</Text>
             </View>
-          )}
-        </>
-      )}
+          </View>
+        )}
+      </>
     </AnimatedCard>
   );
 }

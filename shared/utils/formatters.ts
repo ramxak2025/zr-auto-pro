@@ -1,7 +1,10 @@
 /**
  * Format a number as Russian currency: "1 234 ₽"
  */
-export function formatMoney(value: number): string {
+export function formatMoney(value: number, precision: 0 | 2 = 0): string {
+  if (precision === 2) {
+    return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)} ₽`;
+  }
   const rounded = Math.round(value);
   const formatted = rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   return `${formatted} \u20BD`;

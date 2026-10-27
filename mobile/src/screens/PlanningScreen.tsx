@@ -1,4 +1,15 @@
-import { captureDataSession } from '../contexts/dataSession';
+import { randomUUID } from 'expo-crypto';
+import {
+  costRevision,
+  costRate,
+  costStatus,
+  plannedCostState,
+  isVehicleCost,
+  vehicleCostHint,
+  costConflictMessage,
+  isCostConflict,
+  costRequestIntent,
+} from '../../../shared/utils/planningCosts';
 /**
  * PlanningScreen — «Постоянные расходы и мотивация» (v3.0.1 ФИЧА 1).
  *
@@ -22,7 +33,7 @@ import { captureDataSession } from '../contexts/dataSession';
  *
  * Только presentation + config: контракт (`planningApi`, типы) уже существует.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useRef, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Switch, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -163,64 +174,83 @@ export default function PlanningScreen() {
     [queryClient],
   );
 
+  const intentId = useRef(costRequestIntent(randomUUID));
+  const fixedBusy = useRef(false);
+  const [fixedMessage, setFixedMessage] = useState('');
+  const fixedFailure = async (error: unknown) => {
+    fixedBusy.current = false;
+    haptic('error');
+    if (isCostConflict(error)) {
+      const latest = await refetchFixed();
+      if (editingFixed) setEditingFixed(latest.data?.find((c) => c.id === editingFixed.id) ?? editingFixed);
+      setFixedMessage(costConflictMessage);
+      Alert.alert('Расход изменился', costConflictMessage);
+    } else {
+      setFixedMessage('Не удалось сохранить. Введённые данные сохранены — повторите попытку.');
+      Alert.alert('Ошибка', 'Не удалось сохранить. Повторите попытку.');
+    }
+  };
   const saveFixedMutation = useMutation({
     mutationFn: (v: {
       id?: string;
-      name: string;
-      category: FixedCostCategory;
-      monthlyAmount: number;
-      active: boolean;
+      body: Parameters<typeof planningApi.fixedCosts.create>[0] | Parameters<typeof planningApi.fixedCosts.update>[1];
     }) =>
       v.id
-        ? planningApi.fixedCosts.update(v.id, {
-            name: v.name,
-            category: v.category,
-            monthlyAmount: v.monthlyAmount,
-            active: v.active,
-          })
-        : planningApi.fixedCosts.create({
-            name: v.name,
-            category: v.category,
-            monthlyAmount: v.monthlyAmount,
-            active: v.active,
-          }),
+        ? planningApi.fixedCosts.update(v.id, v.body)
+        : planningApi.fixedCosts.create(v.body as Parameters<typeof planningApi.fixedCosts.create>[0]),
+    onSuccess: () => {
+      haptic('success');
+      invalidateFixed();
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      setFixedModalOpen(false);
+    },
+    onError: fixedFailure,
+    onSettled: () => {
+      fixedBusy.current = false;
+    },
+  });
+  const deleteFixedMutation = useMutation({
+    mutationFn: (cost: FixedCost) =>
+      planningApi.fixedCosts.remove(
+        cost.id,
+        isVehicleCost(cost)
+          ? {
+              revision: costRevision(cost),
+              requestId: intentId.current({ operation: 'archive', id: cost.id, revision: cost.revision }),
+            }
+          : undefined,
+      ),
     onSuccess: () => {
       haptic('success');
       invalidateFixed();
       setFixedModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
     },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось сохранить постоянный расход');
+    onError: fixedFailure,
+    onSettled: () => {
+      fixedBusy.current = false;
     },
   });
-
-  const deleteFixedMutation = useMutation({
-    mutationFn: (id: string) => planningApi.fixedCosts.remove(id),
-    onSuccess: () => {
-      haptic('success');
-      invalidateFixed();
-    },
-    onError: () => Alert.alert('Ошибка', 'Не удалось удалить'),
-  });
-
   const toggleFixedMutation = useMutation({
-    mutationFn: ({ id, active }: { id: string; active: boolean }) => planningApi.fixedCosts.update(id, { active }),
-    onMutate: async ({ id, active }) => {
-      const continuation = captureDataSession();
-      await queryClient.cancelQueries({ queryKey: ['planning', 'fixed-costs'] });
-      if (!continuation.isCurrent()) throw Object.assign(new Error('Сессия изменилась.'), { code: 'ERR_CANCELED' });
-      const prev = queryClient.getQueryData<FixedCost[]>(['planning', 'fixed-costs']);
-      queryClient.setQueryData<FixedCost[]>(['planning', 'fixed-costs'], (old) =>
-        old ? old.map((c) => (c.id === id ? { ...c, active } : c)) : old,
-      );
-      return { prev };
+    mutationFn: ({ cost, active }: { cost: FixedCost; active: boolean }) =>
+      planningApi.fixedCosts.update(
+        cost.id,
+        isVehicleCost(cost)
+          ? {
+              active,
+              revision: cost.revision,
+              requestId: intentId.current({ id: cost.id, active, revision: cost.revision }),
+            }
+          : { active },
+      ),
+    onSuccess: () => {
+      invalidateFixed();
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
     },
-    onError: (_e, _v, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['planning', 'fixed-costs'], ctx.prev);
-      Alert.alert('Ошибка', 'Не удалось изменить статус');
+    onError: fixedFailure,
+    onSettled: () => {
+      fixedBusy.current = false;
     },
-    onSettled: () => invalidateFixed(),
   });
 
   const saveCompMutation = useMutation({
@@ -249,15 +279,18 @@ export default function PlanningScreen() {
   // ── Fixed-cost modal state ───────────────────────────────────────────────
   const [fixedModalOpen, setFixedModalOpen] = useState(false);
   const [editingFixed, setEditingFixed] = useState<FixedCost | null>(null);
+  const [fMode, setFMode] = useState<'monthly' | 'per_vehicle_day'>('monthly');
   const [fName, setFName] = useState('');
   const [fCategory, setFCategory] = useState<FixedCostCategory>('rent');
   const [fAmount, setFAmount] = useState('');
   const [fActive, setFActive] = useState(true);
-  const [deleteFixedId, setDeleteFixedId] = useState<string | null>(null);
 
   const openFixedCreate = useCallback(() => {
     haptic('tap');
     setEditingFixed(null);
+    intentId.current = costRequestIntent(randomUUID);
+    setFixedMessage('');
+    setFMode('monthly');
     setFName('');
     setFCategory('rent');
     setFAmount('');
@@ -268,26 +301,46 @@ export default function PlanningScreen() {
   const openFixedEdit = useCallback((c: FixedCost) => {
     haptic('tap');
     setEditingFixed(c);
+    intentId.current = costRequestIntent(randomUUID);
+    setFixedMessage('');
+    setFMode(c.mode ?? 'monthly');
     setFName(c.name);
     setFCategory(c.category);
-    setFAmount(String(c.monthlyAmount || ''));
-    setFActive(c.active);
+    setFAmount(String(isVehicleCost(c) ? (plannedCostState(c).perVehicleDayAmount ?? 0) : c.monthlyAmount || ''));
+    setFActive(plannedCostState(c).active);
     setFixedModalOpen(true);
   }, []);
 
   const submitFixed = useCallback(() => {
+    if (fixedBusy.current) return;
     const name = fName.trim();
-    const monthlyAmount = parseMoney(fAmount);
-    if (!name) {
-      Alert.alert('Укажите название', 'Например: «Аренда бокса» или «Реклама Авито».');
-      return;
-    }
-    if (monthlyAmount <= 0) {
-      Alert.alert('Укажите сумму', 'Сумма в месяц должна быть больше нуля.');
-      return;
-    }
-    saveFixedMutation.mutate({ id: editingFixed?.id, name, category: fCategory, monthlyAmount, active: fActive });
-  }, [fName, fAmount, fCategory, fActive, editingFixed, saveFixedMutation]);
+    const raw = fAmount.trim().replace(',', '.');
+    const amount = Number(raw);
+    if (!name) return Alert.alert('Укажите название', 'Например: «Аренда бокса».');
+    if (
+      !/^\d+(?:\.\d{1,2})?$/.test(raw) ||
+      !Number.isFinite(amount) ||
+      amount < 0 ||
+      amount > 100000000 ||
+      (fMode === 'monthly' && amount === 0)
+    )
+      return Alert.alert('Укажите сумму', 'Допустимо не более двух знаков после запятой.');
+    fixedBusy.current = true;
+    setFixedMessage('');
+    const base = { name, category: fCategory, active: fActive };
+    if (fMode === 'per_vehicle_day') {
+      const body = {
+        ...base,
+        mode: fMode,
+        perVehicleDayAmount: amount,
+        ...(editingFixed ? { revision: editingFixed.revision } : {}),
+      };
+      saveFixedMutation.mutate({
+        id: editingFixed?.id,
+        body: { ...body, requestId: intentId.current({ id: editingFixed?.id, ...body }) },
+      });
+    } else saveFixedMutation.mutate({ id: editingFixed?.id, body: { ...base, monthlyAmount: amount } });
+  }, [fName, fAmount, fCategory, fActive, fMode, editingFixed, saveFixedMutation]);
 
   // ── Compensation modal state ─────────────────────────────────────────────
   const [compModalOpen, setCompModalOpen] = useState(false);
@@ -449,7 +502,8 @@ export default function PlanningScreen() {
               </View>
             </View>
             <Text style={[styles.summaryHint, { color: palette.text.tertiary }]}>
-              В прибыли постоянные расходы учитываются по дням (амортизация), а не разовым списанием.
+              Ежемесячные суммы распределяются по дням месяца. Расходы за автомобиль считаются отдельно, по фактическим
+              визитам.
             </Text>
           </View>
 
@@ -504,18 +558,35 @@ export default function PlanningScreen() {
                             </View>
                           )}
                         </View>
+                        {isVehicleCost(c) && (
+                          <Text style={{ color: palette.text.tertiary, fontSize: 11, marginTop: 3 }}>
+                            Сегодня: {costStatus(c)}
+                          </Text>
+                        )}
+                        {c.pending && (
+                          <Text style={{ color: palette.accent.primaryText, fontSize: 11, marginTop: 3 }}>
+                            С {c.pending.effectiveFrom}: {costStatus(c.pending)} ·{' '}
+                            {formatMoney(c.pending.perVehicleDayAmount, 2)} / авто в день
+                          </Text>
+                        )}
                       </View>
                       <View style={styles.fixedAmountCol}>
                         <Text style={[styles.fixedAmount, { color: palette.text.primary }]} numberOfLines={1}>
-                          {formatMoney(c.monthlyAmount)}
+                          {formatMoney(costRate(c), 2)}
                         </Text>
-                        <Text style={[styles.fixedPerMonth, { color: palette.text.tertiary }]}>/ мес</Text>
+                        <Text style={[styles.fixedPerMonth, { color: palette.text.tertiary }]}>
+                          {isVehicleCost(c) ? '/ авто в день' : '/ мес'}
+                        </Text>
                       </View>
                       <Switch
-                        value={c.active}
+                        value={plannedCostState(c).active && !plannedCostState(c).archived}
+                        accessibilityLabel={`Учитывать расход ${c.name}${isVehicleCost(c) ? ' с завтра' : ''}`}
+                        disabled={toggleFixedMutation.isPending || deleteFixedMutation.isPending}
                         onValueChange={(v) => {
+                          if (fixedBusy.current) return;
+                          fixedBusy.current = true;
                           haptic('select');
-                          toggleFixedMutation.mutate({ id: c.id, active: v });
+                          toggleFixedMutation.mutate({ cost: c, active: v });
                         }}
                         trackColor={{ false: palette.bg.muted, true: colors.green[500] }}
                         thumbColor={colors.white}
@@ -648,11 +719,61 @@ export default function PlanningScreen() {
       {/* ── Модалка постоянного расхода ──────────────────────────────────── */}
       <Modal
         visible={fixedModalOpen}
-        onClose={() => setFixedModalOpen(false)}
+        onClose={() => {
+          if (!fixedBusy.current) setFixedModalOpen(false);
+        }}
         title={editingFixed ? 'Постоянный расход' : 'Новый постоянный расход'}
       >
+        {fixedMessage ? (
+          <Text accessibilityRole="alert" style={{ color: colors.red[600], marginBottom: spacing[3] }}>
+            {fixedMessage}
+          </Text>
+        ) : null}
+        {editingFixed ? (
+          <Text style={{ color: palette.text.secondary, marginBottom: spacing[3] }}>
+            Расчёт: {fMode === 'per_vehicle_day' ? '₽ за автомобиль в день' : '₽ в месяц'}. Единица не меняется.
+          </Text>
+        ) : (
+          <View accessibilityRole="radiogroup" style={[styles.chipRow, { marginBottom: spacing[3] }]}>
+            {(['monthly', 'per_vehicle_day'] as const).map((mode) => (
+              <TouchableOpacity
+                key={mode}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: mode === fMode }}
+                onPress={() => setFMode(mode)}
+                style={[
+                  styles.catChip,
+                  {
+                    minHeight: 44,
+                    backgroundColor: mode === fMode ? palette.accent.primarySoft : palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                  },
+                ]}
+              >
+                <Text style={{ color: palette.text.primary }}>{mode === 'monthly' ? 'В месяц' : 'За авто в день'}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+        {fMode === 'per_vehicle_day' && (
+          <View style={{ gap: spacing[2], marginBottom: spacing[3] }}>
+            <Text style={{ color: palette.text.secondary }}>{vehicleCostHint}</Text>
+            <Text style={{ color: palette.text.tertiary }}>
+              {editingFixed
+                ? 'Изменения, пауза и архив — с завтрашнего дня автосервиса.'
+                : 'Учитывается с сегодняшнего дня. Списание в кассе не создаётся.'}
+            </Text>
+            {editingFixed && (
+              <Text style={{ color: palette.text.tertiary }}>
+                Сейчас: {formatMoney(costRate(editingFixed), 2)} / авто в день · {costStatus(editingFixed)}
+                {editingFixed.pending ? `; изменения с ${editingFixed.pending.effectiveFrom}` : ''}
+              </Text>
+            )}
+          </View>
+        )}
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Название</Text>
         <TextInput
+          accessibilityLabel="Название расхода"
           value={fName}
           onChangeText={setFName}
           placeholder="Например: Аренда бокса"
@@ -693,27 +814,39 @@ export default function PlanningScreen() {
           })}
         </View>
 
-        <Text style={[styles.formLabel, { color: palette.text.secondary, marginTop: spacing[4] }]}>Сумма в месяц</Text>
+        <Text style={[styles.formLabel, { color: palette.text.secondary, marginTop: spacing[4] }]}>
+          {fMode === 'per_vehicle_day' ? 'За автомобиль в день' : 'Сумма в месяц'}
+        </Text>
         <View style={[styles.amountWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           <TextInput
             value={fAmount}
-            onChangeText={(t) => setFAmount(t.replace(/\D/g, ''))}
+            onChangeText={setFAmount}
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
-            keyboardType="number-pad"
+            keyboardType="decimal-pad"
+            accessibilityLabel={fMode === 'per_vehicle_day' ? 'Сумма за автомобиль в день' : 'Сумма в месяц'}
             style={[styles.amountInput, { color: palette.text.primary }]}
           />
-          <Text style={[styles.amountUnit, { color: palette.text.tertiary }]}>₽ / мес</Text>
+          <Text style={[styles.amountUnit, { color: palette.text.tertiary }]}>
+            {fMode === 'per_vehicle_day' ? '₽ / авто в день' : '₽ / мес'}
+          </Text>
         </View>
 
         <View style={[styles.switchRow, { borderTopColor: palette.border.subtle }]}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.switchLabel, { color: palette.text.primary }]}>Учитывать в прибыли</Text>
             <Text style={[styles.switchHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-              {fActive ? 'Активен — амортизируется по дням' : 'На паузе — не влияет на прибыль'}
+              {fMode === 'per_vehicle_day'
+                ? editingFixed
+                  ? 'Планируемый статус с завтра'
+                  : 'Учитывается с сегодняшнего дня'
+                : fActive
+                  ? 'Активен — амортизируется по дням'
+                  : 'На паузе — не влияет на прибыль'}
             </Text>
           </View>
           <Switch
+            accessibilityLabel="Учитывать расход в прибыли"
             value={fActive}
             onValueChange={setFActive}
             trackColor={{ false: palette.bg.card, true: colors.green[500] }}
@@ -738,7 +871,27 @@ export default function PlanningScreen() {
         {editingFixed && (
           <TouchableOpacity
             style={styles.deleteBtn}
-            onPress={() => setDeleteFixedId(editingFixed.id)}
+            onPress={() => {
+              if (fixedBusy.current) return;
+              Alert.alert(
+                isVehicleCost(editingFixed) ? 'Архивировать расход?' : 'Удалить расход?',
+                isVehicleCost(editingFixed)
+                  ? 'Архив с завтрашнего дня автосервиса. Сегодня расход ещё учитывается; история сохранится.'
+                  : 'Постоянный расход перестанет учитываться в прибыли. Это действие необратимо.',
+                [
+                  { text: 'Отмена', style: 'cancel' },
+                  {
+                    text: isVehicleCost(editingFixed) ? 'В архив' : 'Удалить',
+                    style: 'destructive',
+                    onPress: () => {
+                      if (fixedBusy.current) return;
+                      fixedBusy.current = true;
+                      deleteFixedMutation.mutate(editingFixed);
+                    },
+                  },
+                ],
+              );
+            }}
             activeOpacity={0.7}
           >
             <Ionicons name="trash-outline" size={16} color={colors.red[600]} />
@@ -843,21 +996,6 @@ export default function PlanningScreen() {
           </TouchableOpacity>
         )}
       </Modal>
-
-      {/* ── Confirm delete: fixed cost ───────────────────────────────────── */}
-      <ConfirmDialog
-        visible={deleteFixedId !== null}
-        onClose={() => setDeleteFixedId(null)}
-        onConfirm={() => {
-          if (deleteFixedId) deleteFixedMutation.mutate(deleteFixedId);
-          setDeleteFixedId(null);
-          setFixedModalOpen(false);
-        }}
-        title="Удалить расход?"
-        message="Постоянный расход перестанет учитываться в прибыли. Это действие необратимо."
-        confirmText="Удалить"
-        variant="danger"
-      />
 
       {/* ── Confirm delete: compensation ─────────────────────────────────── */}
       <ConfirmDialog

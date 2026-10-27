@@ -1,3 +1,5 @@
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { displayedProfit } from '../../../shared/utils/checkProfit';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -2022,10 +2024,12 @@ const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, o
           {check.master ? (
             <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
           ) : null}
-          {canViewProfit && check.profit !== undefined ? (
-            <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-              {check.profit >= 0 ? '+' : ''}
-              {formatMoney(check.profit)}
+          {canViewProfit && (check.profitAfterMotivation !== undefined || check.profit !== undefined) ? (
+            <Text
+              style={[styles.footerProfit, displayedProfit(check) >= 0 ? styles.profitPositive : styles.profitNegative]}
+            >
+              {displayedProfit(check) >= 0 ? '+' : ''}
+              {formatFinancialMoney(displayedProfit(check), 2)}
             </Text>
           ) : null}
         </View>

@@ -1,3 +1,4 @@
+import { displayedProfit, displayedWarrantyLoss } from '../../../shared/utils/checkProfit';
 import { memo, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -172,11 +173,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
           </div>
           <div className="flex flex-shrink-0 items-center gap-3">
             {canViewProfit && !check.isWarranty && (
-              <Money value={check.profit} signed colorize className="text-xs font-medium" />
+              <Money precision={2} value={displayedProfit(check)} signed colorize className="text-xs font-medium" />
             )}
             {check.isWarranty ? (
               canViewProfit ? (
-                <Money value={-(check.warrantyLoss ?? 0)} colorize className="text-sm font-semibold" />
+                <Money precision={2} value={-displayedWarrantyLoss(check)} colorize className="text-sm font-semibold" />
               ) : (
                 <span className="text-sm font-semibold text-warn-text">По гарантии</span>
               )
@@ -484,19 +485,15 @@ export default function ChecksPage() {
         sortable: true,
         width: 120,
         headerClassName: SORT_HEADER_FIX,
-        sortValue: (c) => (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit),
+        sortValue: (c) => displayedProfit(c),
         render: (c) =>
           c.isWarranty ? (
-            <Money value={-(c.warrantyLoss ?? 0)} colorize className="font-semibold" />
+            <Money precision={2} value={-displayedWarrantyLoss(c)} colorize className="font-semibold" />
           ) : (
-            <Money value={c.profit} signed colorize className="font-semibold" />
+            <Money precision={2} value={displayedProfit(c)} signed colorize className="font-semibold" />
           ),
         footer: (rows) => (
-          <Money
-            value={rows.reduce((s, c) => s + (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit || 0), 0)}
-            signed
-            colorize
-          />
+          <Money precision={2} value={rows.reduce((s, c) => s + displayedProfit(c), 0)} signed colorize />
         ),
       });
     }

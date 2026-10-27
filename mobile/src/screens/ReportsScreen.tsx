@@ -1,3 +1,5 @@
+import { financialExpenses } from '../../../shared/utils/financialExpenses';
+import { formatMoney as formatPreciseMoney } from '../../../shared/utils/formatters';
 /**
  * ReportsScreen — финансовый отчёт-центр.
  *
@@ -73,9 +75,7 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 // ─────────────────────────────────────────────────────────────────────────────
 
 function formatMoney(v: number): string {
-  const abs = Math.abs(Math.round(v));
-  const formatted = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return `${v < 0 ? '-' : ''}${formatted} ₽`;
+  return formatPreciseMoney(v, 2);
 }
 
 /** Компактная форма для крупных цифр: 1.2M / 234k. */
@@ -816,6 +816,11 @@ export default function ReportsScreen() {
   // бэком из netProfit; здесь показываем его отдельной строкой в воронке и P&L,
   // чтобы «Чистая прибыль» сходилась и было видно, откуда просадка.
   const warrantyLoss = report?.warrantyLoss ?? 0;
+  const actualExpenses = report ? financialExpenses(report) : [];
+  const totalActualExpenses = actualExpenses.reduce((total, row) => total + row.amount, 0);
+  const additionalExpenses = actualExpenses.filter(
+    (row) => !['Себестоимость товаров', 'Зарплаты по чекам', 'Прочие расходы', 'Убыток по гарантии'].includes(row.name),
+  );
 
   const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
   const prevMarginPct = prevReport && prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
@@ -852,7 +857,7 @@ export default function ReportsScreen() {
   // Алерты по финансовой части
   const alerts = buildAlerts({
     revenue,
-    expenses: productCost + salaries + otherExpenses,
+    expenses: totalActualExpenses,
     marginPct,
     prevMarginPct: compareEnabled ? prevMarginPct : null,
   });
@@ -1119,7 +1124,20 @@ export default function ReportsScreen() {
                   tone="result"
                   palette={palette}
                 />
-                {otherExpenses > 0 && (
+                {additionalExpenses.map((row) => (
+                  <React.Fragment key={row.name}>
+                    <FunnelArrow palette={palette} />
+                    <FunnelRow
+                      label={row.name}
+                      amount={-row.amount}
+                      pct={pctOf(row.amount, revenue)}
+                      icon="wallet-outline"
+                      tone="negative"
+                      palette={palette}
+                    />
+                  </React.Fragment>
+                ))}
+                {otherExpenses !== 0 && (
                   <>
                     <FunnelArrow palette={palette} />
                     <FunnelRow
@@ -1175,15 +1193,10 @@ export default function ReportsScreen() {
                 {pnlOpen && (
                   <View style={{ marginTop: spacing[3] }}>
                     <PnLRow label="Доходы" amount={revenue} palette={palette} tone="positive" />
-                    <PnLRow
-                      label="Расходы"
-                      amount={-(productCost + salaries + otherExpenses)}
-                      palette={palette}
-                      tone="negative"
-                    />
-                    {warrantyLoss > 0 && (
-                      <PnLRow label="Убыток по гарантии" amount={-warrantyLoss} palette={palette} tone="negative" />
-                    )}
+                    <PnLRow label="Расходы" amount={-totalActualExpenses} palette={palette} tone="negative" />
+                    {actualExpenses.map((row) => (
+                      <PnLRow key={row.name} label={row.name} amount={-row.amount} palette={palette} tone="negative" />
+                    ))}
                     <View style={[styles.pnlDivider, { backgroundColor: palette.border.subtle }]} />
                     <PnLRow label="Чистая прибыль" amount={netProfit} palette={palette} tone="bold" />
                     <TouchableOpacity style={styles.pnlPdfBtn} onPress={exportPdf} activeOpacity={0.85}>
@@ -1249,24 +1262,20 @@ export default function ReportsScreen() {
                 )}
               </AnimatedCard>
 
-              {/* 5. РАСХОДЫ ПО КАТЕГОРИЯМ */}
-              {expensesByCategory.length > 0 && (
+              {/* 5. СТРУКТУРА РАСХОДОВ */}
+              {actualExpenses.length > 0 && (
                 <AnimatedCard
                   index={4}
                   style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                 >
                   <Text style={[styles.cardTitle, { color: palette.text.tertiary, paddingBottom: spacing[1] }]}>
-                    РАСХОДЫ ПО КАТЕГОРИЯМ
+                    СТРУКТУРА РАСХОДОВ
                   </Text>
-                  {/* Расходы по месяцу «за который» (attribution: 'period'), как отчёт «По расходам»: выплата
-                      «за сентябрь», выданная в октябре, здесь сентябрьская. Лента «Расходы» и касса — по дате
-                      оплаты. Прибыль выше исключает зарплатную категорию и неодобренные расходы, поэтому суммы
-                      могут законно расходиться с финотчётом. */}
                   <Text style={[styles.expSectionNote, { color: palette.text.tertiary }]}>
-                    По месяцу, за который расход. Лента «Расходы» и касса — по дате оплаты.
+                    Все расходы финансового отчёта. Уже вычтены из чистой прибыли.
                   </Text>
-                  {expensesByCategory.slice(0, 5).map((row, idx) => {
-                    const total = expensesByCategory.reduce((s, r) => s + r.amount, 0);
+                  {actualExpenses.map((row, idx) => {
+                    const total = actualExpenses.reduce((s, r) => s + r.amount, 0);
                     const pct = total > 0 ? (row.amount / total) * 100 : 0;
                     return (
                       <View key={row.name} style={styles.expRow}>
@@ -2245,6 +2254,9 @@ function buildReportHtml({
     ['− Себестоимость товаров', -report.productCost, pctOf(report.productCost, report.revenue)],
     ['= Валовая прибыль', report.grossProfit, pctOf(report.grossProfit, report.revenue)],
     ['− Зарплаты', -report.salaries, pctOf(report.salaries, report.revenue)],
+    ...financialExpenses(report)
+      .filter((row) => !['Себестоимость товаров', 'Зарплаты по чекам'].includes(row.name))
+      .map((row): [string, number, string] => [row.name, -row.amount, pctOf(row.amount, report.revenue)]),
   ];
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${pdfBaseCss()}</style></head><body>
   ${pdfBrandBar(companyName, periodLabel, 'Финансовый отчёт')}
@@ -2333,6 +2345,17 @@ function buildTableHtml({
     ['Себестоимость', formatMoney(report.productCost), prevReport ? formatMoney(prevReport.productCost) : null],
     ['Валовая прибыль', formatMoney(report.grossProfit), prevReport ? formatMoney(prevReport.grossProfit) : null],
     ['Зарплаты', formatMoney(report.salaries), prevReport ? formatMoney(prevReport.salaries) : null],
+    ...(['premiums', 'motivation', 'perVehicleDayExpense', 'warrantyLoss', 'otherExpenses'] as const).map(
+      (key, index): [string, string, string | null] => {
+        const current = report as FinancialReport & { otherExpenses?: number };
+        const prior = prevReport as (FinancialReport & { otherExpenses?: number }) | undefined;
+        return [
+          ['Премии деньгами', 'Мотивация', 'За автомобиль в день', 'Убыток по гарантии', 'Прочие расходы'][index],
+          formatMoney(current[key] ?? 0),
+          prior ? formatMoney(prior[key] ?? 0) : null,
+        ];
+      },
+    ),
     ['Чистая прибыль', formatMoney(report.netProfit), prevReport ? formatMoney(prevReport.netProfit) : null],
     ['Чеков', String(report.checkCount), prevReport ? String(prevReport.checkCount) : null],
   ];
