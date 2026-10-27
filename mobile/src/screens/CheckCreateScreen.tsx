@@ -2932,6 +2932,7 @@ export default function CheckCreateScreen() {
   // подтвердится, заблокировать запись чека уже ничто не может. СБП-чек
   // никогда не откладывается (отложенный = ещё не оплачен).
   const openSbpPayment = () => {
+    if (paymentMethod !== 'card' || isDeferred) return;
     if (submittingRef.current || createMutation.isPending) return;
     // 1) Есть что проводить.
     if (serviceLines.length === 0 && productLines.length === 0) {
@@ -4657,43 +4658,46 @@ export default function CheckCreateScreen() {
                 )}
 
                 {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
-                проводить и чек не откладывается. Открывает модалку: создаёт
+                проводить, выбрана карта и чек не откладывается. Открывает модалку: создаёт
                 онлайн-платёж, показывает ссылку СБП, опрашивает статус; при
                 успехе проводит чек по карточному (электронному) тендеру.
                 нал/карта/смешанная/отложенный — без изменений. */}
-                {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
-                  <TouchableOpacity
-                    style={[
-                      styles.sbpButton,
-                      { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
-                    ]}
-                    onPress={openSbpPayment}
-                    activeOpacity={0.85}
-                    accessibilityRole="button"
-                    accessibilityLabel="Оплата по СБП или QR-коду"
-                  >
-                    <View
+                {paymentMethod === 'card' &&
+                  !isDeferred &&
+                  total > 0 &&
+                  (serviceLines.length > 0 || productLines.length > 0) && (
+                    <TouchableOpacity
                       style={[
-                        styles.sbpButtonIcon,
-                        { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
+                        styles.sbpButton,
+                        { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
                       ]}
+                      onPress={openSbpPayment}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Оплата по СБП или QR-коду"
                     >
-                      <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
-                        numberOfLines={1}
+                      <View
+                        style={[
+                          styles.sbpButtonIcon,
+                          { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
+                        ]}
                       >
-                        Оплата по СБП / QR
-                      </Text>
-                      <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-                        Система быстрых платежей — оплата по QR
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
-                  </TouchableOpacity>
-                )}
+                        <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
+                          numberOfLines={1}
+                        >
+                          Оплата по СБП / QR
+                        </Text>
+                        <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                          Система быстрых платежей — оплата по QR
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
+                    </TouchableOpacity>
+                  )}
 
                 {/* Deferred toggle — скрыт при правке ПРОВЕДЁННОГО чека (#61):
                       закрытый чек не возвращают в черновик (бэк editClosedCheck

@@ -3720,7 +3720,14 @@ function AdminDashboard({ name }: { name: string }) {
     reset: resetOrder,
   } = usePreference<WidgetOrder>(prefKey(DASHBOARD_WIDGETS_ORDER_PREF, user?.id), []);
 
-  const orderedWidgets = useMemo(() => applyWidgetOrder(DASHBOARD_WIDGETS, order), [order]);
+  const orderedWidgets = useMemo(
+    () =>
+      applyWidgetOrder(
+        DASHBOARD_WIDGETS.filter((widget) => widget.id !== 'attention' || user?.role === 'director'),
+        order,
+      ),
+    [order, user?.role],
+  );
 
   const handleToggle = useCallback(
     (id: string, next: boolean) => {
@@ -4800,7 +4807,6 @@ export default function DashboardScreen() {
             {attendanceMode === 'manual' && <ShiftControl />}
             <MasterDashboard />
             <TodayEarningsCard />
-            <AttentionCard />
           </>
         ) : isOwner || user?.role === UserRole.ADMIN ? (
           <AdminDashboard name={displayName} />

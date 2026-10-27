@@ -57,11 +57,13 @@ export function AttentionCard() {
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['dashboard-attention', ...scope],
     queryFn: async () => (await dashboardApi.attention()).data,
+    enabled: user?.role === 'director',
     staleTime: 30_000,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
     placeholderData: undefined,
   });
+  if (user?.role !== 'director') return null;
   if (isLoading) return <SkeletonCard lines={4} />;
   if (isError && !data)
     return <ErrorRow message="Не удалось загрузить задачи" onRetry={() => refetch()} loading={isFetching} />;

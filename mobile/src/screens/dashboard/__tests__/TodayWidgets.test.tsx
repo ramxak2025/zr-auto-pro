@@ -6,8 +6,9 @@ import { emptyJournalFilters, journalQueryParams } from '../../journal/filters';
 import React from 'react';
 const mockNavigate = jest.fn();
 const mockQuery = jest.fn();
+const mockFocusEffect = jest.fn();
 const mockAuth = {
-  user: { id: 'account-A', currentPointId: 'point-A', permissions: {} },
+  user: { id: 'account-A', currentPointId: 'point-A', permissions: {}, role: 'director' },
   hasPermission: jest.fn(() => true),
 };
 jest.mock('react', () => ({
@@ -26,7 +27,7 @@ jest.mock('react-native', () => ({
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: mockNavigate }),
-  useFocusEffect: jest.fn(),
+  useFocusEffect: (callback: () => void) => mockFocusEffect(callback),
 }));
 jest.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => mockQuery(options) }));
 jest.mock('../../../api/services', () => ({
@@ -52,7 +53,21 @@ function nodes(node: React.ReactNode): React.ReactElement<Record<string, unknown
 }
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAuth.user.role = 'director';
   mockAuth.hasPermission.mockReturnValue(true);
+});
+test('attention stops rendering and fetching when the account changes from director to another role', () => {
+  const refetch = jest.fn();
+  mockQuery.mockReturnValue({ data: { buckets: [{ id: 'bookings', count: 1 }] }, refetch });
+  expect(AttentionCard()).not.toBeNull();
+  expect(mockQuery.mock.calls.at(-1)?.[0].enabled).toBe(true);
+  for (const role of ['admin', 'master', 'superadmin', 'custom']) {
+    mockAuth.user.role = role;
+    expect(AttentionCard()).toBeNull();
+    expect(mockQuery.mock.calls.at(-1)?.[0].enabled).toBe(false);
+    mockFocusEffect.mock.calls.at(-1)?.[0]();
+    expect(refetch).not.toHaveBeenCalled();
+  }
 });
 test('salary_view_all gates request and render without financial_reports', () => {
   mockQuery.mockReturnValue({
