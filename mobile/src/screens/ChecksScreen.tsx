@@ -27,7 +27,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
-import CompactScreenHeader, { CompactSearchInput } from '../components/CompactScreenHeader';
+import JournalHeader, { JournalSearchInput, useJournalHeaderScroll } from './journal/JournalHeader';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
@@ -857,6 +857,7 @@ export default function ChecksScreen() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
+  const journalHeader = useJournalHeaderScroll();
   // Page-based infinite scroll. The first page is the most recent checks
   // (the API sorts desc by date, so today's rows land first); subsequent
   // pages are appended below as the user scrolls. We stay on a small page
@@ -1360,17 +1361,19 @@ export default function ChecksScreen() {
   const isWarehouseLoading = warehouseLoading;
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <CompactScreenHeader
-        title="Журнал"
-        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-        status={
-          <FreshnessBadge
-            query={
-              activeTab === 'checks'
-                ? { isFetching, isLoading, dataUpdatedAt }
-                : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
-            }
-          />
+      <JournalHeader
+        compact={journalHeader.compact}
+        context={
+          <>
+            <PointIndicator variant="chip" style={styles.pointChipRow} />
+            <FreshnessBadge
+              query={
+                activeTab === 'checks'
+                  ? { isFetching, isLoading, dataUpdatedAt }
+                  : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
+              }
+            />
+          </>
         }
         actions={
           <View style={styles.entryBtnRow}>
@@ -1469,6 +1472,7 @@ export default function ChecksScreen() {
               // Хаптика только при реальном переключении (selection changed);
               // повторный тап по активному сегменту молчит.
               if (activeTab !== 'checks') haptic('select');
+              journalHeader.expand();
               setActiveTab('checks');
             }}
             activeOpacity={0.7}
@@ -1502,6 +1506,7 @@ export default function ChecksScreen() {
             ]}
             onPress={() => {
               if (activeTab !== 'warehouse') haptic('select');
+              journalHeader.expand();
               setActiveTab('warehouse');
             }}
             activeOpacity={0.7}
@@ -1533,7 +1538,8 @@ export default function ChecksScreen() {
           названию / поставщику / комментарию загруженной ленты. */}
       <View style={styles.searchRow}>
         <View style={styles.searchInputWrap}>
-          <CompactSearchInput
+          <JournalSearchInput
+            onFocusChange={journalHeader.onSearchFocus}
             value={search}
             onChange={(v) => {
               setSearch(v);
@@ -1547,8 +1553,7 @@ export default function ChecksScreen() {
         <TouchableOpacity
           style={[
             styles.filterBtn,
-            buildShadow(palette),
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
             activeFilterCount > 0 && styles.filterBtnActive,
             activeFilterCount > 0 && {
               backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
@@ -1896,6 +1901,9 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              onScroll={journalHeader.onScroll}
+              scrollEventThrottle={32}
+              keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — тот же фикс, что вылечил
               // экран Клиентов. FlashList РЕЦИКЛИТ ячейки; на Fabric/Android
               // рециклированная ячейка может на кадр показать пустую / устаревшую
@@ -1984,6 +1992,9 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              onScroll={journalHeader.onScroll}
+              scrollEventThrottle={32}
+              keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — см. пояснение у списка
               // чеков выше. removeClippedSubviews=false убирает пустые кадры
               // от отсоединения офскрин-строк на Android. windowSize 21 +
