@@ -14,8 +14,15 @@ import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { invalidateAuthUser } from '../common/auth-cache';
 import { ttlCache } from '../common/ttl-cache';
-import { getTenantTimezone, startOfDayInZone, startOfMonthInZone, zonedMonthKey } from '../common/timezone';
+import {
+  getTenantTimezone,
+  startOfDayInZone,
+  startOfMonthInZone,
+  zonedMonthKey,
+  zonedDateKey,
+} from '../common/timezone';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
+import { vehicleDayCosts } from '../common/vehicle-day-costs';
 import { motivationByPointMonthSql, premiumsByPointMonthSql } from '../common/salary-extras-sql';
 import { actorPointId, PointScopeQueryable } from '../common/point-scope';
 
@@ -790,10 +797,11 @@ export class PointsService {
    * деньги, см. common/salary-extras-sql.ts). Теперь термы те же и в том же
    * составе, поэтому числа сходятся до рубля.
    *
-   * ЧЕГО В ОБЕИХ ЦИФРАХ НЕТ ОДИНАКОВО: плановая постоянка (fixed_costs,
-   * employee_compensation) — она общетенантная, филиала не имеет и не входит
+   * ЧЕГО В ОБЕИХ ЦИФРАХ НЕТ ОДИНАКОВО: месячная плановая постоянка (fixed_costs.mode=monthly,
+   * employee_compensation) — она не входит
    * ни в netProfitMonth, ни сюда. Расхождением это не является: accrual-прибыль
-   * дашборда (netProfitAccrual) — ДРУГАЯ метрика с другим именем.
+   * дашборда (netProfitAccrual) — ДРУГАЯ метрика с другим именем. Расход за
+   * автомобиль в день, напротив, входит в обе метрики одинаково.
    *
    * ПРИБЫЛЬ ВИДИТ ТОЛЬКО ДЕРЖАТЕЛЬ profit_view — как и в чеке/дашборде.
    * Зануляем на КОПИИ: кеш общий на тенанта, мутация закэшированного объекта
@@ -885,7 +893,7 @@ export class PointsService {
     // выданные мастерам сверх чековой зарплаты.
     const [{ rows: premRows }, { rows: motRows }] = await Promise.all([
       this.pool.query(premiumsByPointMonthSql(), [tenantID, monthKey, tz]),
-      this.pool.query(motivationByPointMonthSql(), [tenantID, monthStart]),
+      this.pool.query(motivationByPointMonthSql(true), [tenantID, monthStart, now.toISOString()]),
     ]);
     const extrasByPoint = new Map<string, number>();
     for (const r of [...premRows, ...motRows]) {
@@ -893,6 +901,17 @@ export class PointsService {
       extrasByPoint.set(id, (extrasByPoint.get(id) ?? 0) + (parseFloat(r.total) || 0));
     }
 
+    const vehicleByPoint = new Map<string, number>();
+    for (const row of await vehicleDayCosts(this.pool, {
+      tenantId: tenantID,
+      dateFrom: `${monthKey}-01`,
+      dateTo: zonedDateKey(now, tz),
+      tz,
+      pointId: null,
+      asOf: now.toISOString(),
+    })) {
+      if (row.pointId) vehicleByPoint.set(row.pointId, (vehicleByPoint.get(row.pointId) ?? 0) + row.amount);
+    }
     const revenue = checkRevenueExpr('ch');
     const profit = checkProfitExpr('ch');
     // АРХИВНЫЕ ФИЛИАЛЫ ТОЖЕ В ВЫБОРКЕ (фильтра `p.is_active = true` здесь
@@ -925,11 +944,11 @@ export class PointsService {
          FROM tenant_points p
          LEFT JOIN checks ch
                 ON ch.point_id = p.id AND ch.tenant_id = p.tenant_id
-               AND ${checkMoneyBaseWhere('ch')}
+               AND ${checkMoneyBaseWhere('ch')} AND ch.date <= $4::timestamptz
         WHERE p.tenant_id = $1
         GROUP BY p.id, p.name, p.is_main, p.is_active, p.sort_order
         ORDER BY p.is_active DESC, p.is_main DESC, p.sort_order ASC, lower(p.name) ASC`,
-      [tenantID, dayStart, monthStart],
+      [tenantID, dayStart, monthStart, now.toISOString()],
     );
 
     const points = rows.map((r) => {
@@ -944,7 +963,10 @@ export class PointsService {
       // закрывает в убыток, и увидеть это владелец обязан именно на карточке
       // филиала.
       const profitMonth =
-        (parseFloat(r.profit_month) || 0) - (expenseByPoint.get(id) ?? 0) - (extrasByPoint.get(id) ?? 0);
+        (parseFloat(r.profit_month) || 0) -
+        (expenseByPoint.get(id) ?? 0) -
+        (extrasByPoint.get(id) ?? 0) -
+        (vehicleByPoint.get(id) ?? 0);
       return {
         pointId: id,
         name: r.name as string,

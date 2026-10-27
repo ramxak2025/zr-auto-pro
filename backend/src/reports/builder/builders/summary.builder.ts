@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Pool } from 'pg';
+import { vehicleDayCosts } from '../../../common/vehicle-day-costs';
 import { PG_POOL } from '../../../database.module';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../../common/check-money-sql';
 import { pointFilterSql } from '../../../common/point-scope';
@@ -159,7 +160,7 @@ export class SummaryBuilder implements ReportBuilder {
 
     const notes = [
       'Выручка и прибыль — по проведённым чекам; гарантийные чеки денег не приносят, возвраты уже вычтены из выручки в периоде продажи.',
-      'Расходы — одобренные, без категории «Зарплата»; расход «за месяц» входит, только если период покрывает этот месяц целиком.',
+      'Расходы — одобренные, без категории «Зарплата», плюс начисления за автомобиль в день; расход «за месяц» входит, только если период покрывает этот месяц целиком.',
       'Зарплата начислено = процент с работ и товаров по чекам + премии деньгами + мотивация. Выплачено — по месяцу, за который выдана выплата.',
       'Долги (нам должны / мы должны) — на сегодня и по всей компании: клиенты и поставщики общие для сети.',
       '% к прошлому периоду — сравнение с предыдущим периодом той же длины.',
@@ -220,6 +221,9 @@ export class SummaryBuilder implements ReportBuilder {
         exParams,
       ),
     ]);
+
+    const vehicleRows = await vehicleDayCosts(this.pool, ctx);
+    for (const row of vehicleRows) exRows.push({ day: row.day, total: row.amount });
 
     const byWeek = ctx.days > 31;
     const bucketOf = (day: string) => (byWeek ? mondayOf(day) : day);

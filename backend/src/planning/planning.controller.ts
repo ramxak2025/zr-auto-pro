@@ -36,8 +36,8 @@ export class PlanningController {
   }
 
   @Delete('fixed-costs/:id')
-  removeFixedCost(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.planningService.removeFixedCost(id, user.tenantID, actorPointId(user));
+  removeFixedCost(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: Record<string, unknown>) {
+    return this.planningService.removeFixedCost(id, user.tenantID, actorPointId(user), dto);
   }
 
   // ── Employee compensation (оклад / % с оборота / % с прибыли) ───────────────

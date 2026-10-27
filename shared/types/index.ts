@@ -2457,6 +2457,12 @@ export interface Check {
    * can label the check and show this as the loss.
    */
   warrantyLoss?: number;
+  /** Saved motivation ledger sum for this check; informational, not baked into profit. */
+  motivationAmount?: number;
+  /** Ordinary check profit less saved motivation. Does not change the historical profit column. */
+  profitAfterMotivation?: number;
+  /** Warranty loss including saved motivation (0 for ordinary checks). */
+  warrantyLossAfterMotivation?: number;
   /** Warranties spawned by this check (only populated by /checks/:id). */
   warrantyClaims?: WarrantyClaim[];
   /** Set when the check has been returned (full or partial). FE renders a strikethrough + badge in the journal. */
@@ -3575,6 +3581,8 @@ export interface FinancialReport {
    * акции. Как и premiums, УЖЕ вычтена из netProfit. Optional: старый бэкенд = 0.
    */
   motivation?: number;
+  /** Derived vehicle-day expense, already deducted from netProfit; no cash/expense ledger entry. */
+  perVehicleDayExpense?: number;
   grossProfit: number;
   netProfit: number;
   checkCount: number;
@@ -4664,9 +4672,15 @@ export interface NetProfitAccrual {
      * бэкенд = 0.
      */
     salaryExtras?: number;
+    /** Informational subset of salaryExtras; do not subtract twice. */
+    motivation?: number;
+    /** Actual MTD/today charge; projection is calendar run-rate estimate only. */
+    perVehicleDayExpense?: number;
     /** Итоговая чистая прибыль по начислению на сегодня. */
     netProfit: number;
   };
+  /** Today's signed MTD-component delta; percentage reversals can be negative. */
+  today?: NetProfitAccrual['mtd'];
   /** Прогноз на ВЕСЬ месяц (run-rate + полная плановая постоянка). */
   projection: {
     revenue: number;
@@ -4681,6 +4695,10 @@ export interface NetProfitAccrual {
     recurringExcess: number;
     /** Run-rate премий и «мотивации» (ongoing, а не сунк). Optional: старый бэкенд = 0. */
     salaryExtras?: number;
+    /** Informational subset of salaryExtras; do not subtract twice. */
+    motivation?: number;
+    /** Actual MTD/today charge; projection is calendar run-rate estimate only. */
+    perVehicleDayExpense?: number;
     netProfit: number;
   };
   /** Снимок конфига (для прозрачности UI). */
@@ -4698,6 +4716,10 @@ export interface NetProfitAccrual {
      * конфига нет.
      */
     recurringUncovered: number;
+    /** Existing monthly/compensation coverage condition, excludes vehicle mode. */
+    hasPlannedConfig?: boolean;
+    /** Vehicle mode configured (including zero rate/no visits), separate from monthly coverage. */
+    hasPerVehicleDayCosts?: boolean;
   };
 }
 
@@ -4779,6 +4801,17 @@ export interface ClientsNewVsReturning {
 // ───────────────────────────────────────────────────────────────────────
 
 export type FixedCostCategory = 'rent' | 'utilities' | 'marketing' | 'other';
+export type FixedCostMode = 'monthly' | 'per_vehicle_day';
+export interface FixedCostEffectiveState {
+  effectiveFrom: string;
+  perVehicleDayAmount: number;
+  active: boolean;
+  archived: boolean;
+}
+export interface FixedCostMutationIdentity {
+  requestId: string;
+  revision: number;
+}
 
 /** One planned recurring MONTHLY fixed cost (amortised over calendar days). */
 export interface FixedCost {
@@ -4793,6 +4826,14 @@ export interface FixedCost {
   active: boolean;
   /** Филиал плана (167): план постоянки — на каждый автосервис свой. null — филиалов нет. */
   pointId?: string | null;
+  /** Missing on old server means monthly; conversion is prohibited. */
+  mode?: FixedCostMode;
+  perVehicleDayAmount?: number;
+  revision?: number;
+  effectiveFrom?: string;
+  archived?: boolean;
+  /** Latest accepted change effective from tomorrow in the company timezone. */
+  pending?: FixedCostEffectiveState;
   createdAt: string;
   updatedAt: string;
 }

@@ -135,14 +135,14 @@ test('планирование: fixed_costs по филиалу, оклады �
     'listFixedCosts(user.tenantID, actorPointId(user))',
     'createFixedCost(user.tenantID, dto, actorPointId(user))',
     'updateFixedCost(id, user.tenantID, dto, actorPointId(user))',
-    'removeFixedCost(id, user.tenantID, actorPointId(user))',
+    'removeFixedCost(id, user.tenantID, actorPointId(user), dto)',
     'listCompensation(user.tenantID, actorPointId(user))',
   ]) {
     assert.ok(planningController.includes(call), `planning.controller: ${call} — филиал не передан`);
   }
   // Accrual-прибыль филиала вычитает ЕГО план и оклады ЕГО команды.
   const r = stripComments(reports);
-  assert.ok(/FROM fixed_costs WHERE tenant_id = \$1 AND active = true\$\{fcPointFilter\}/.test(r), 'reports: план постоянки по сети, а не по филиалу');
+  assert.ok(/FROM fixed_costs WHERE tenant_id = \$1 AND active = true\$\{fcPointFilter\} AND mode = 'monthly'/.test(r), 'reports: план постоянки по сети, а не по филиалу');
   assert.ok(/FROM employee_compensation ec\s+JOIN users u ON u\.id = ec\.user_id[\s\S]{0,200}\$\{compTeamFilter\}/.test(r), 'reports: оклады по сети, а не по команде филиала');
 });
 

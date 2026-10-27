@@ -5,6 +5,7 @@
  * (salaryExtrasForPeriod) — с той же семантикой отнесения к периоду.
  */
 import { Pool } from 'pg';
+import { sumVehicleDayCosts, vehicleDayCosts } from '../../common/vehicle-day-costs';
 import { checkMoneyBaseWhere, checkRevenueExpr } from '../../common/check-money-sql';
 import { effectiveMonthMembershipSql } from '../../common/period-membership';
 import { pointFilterSql } from '../../common/point-scope';
@@ -59,7 +60,8 @@ export async function checkAggregate(
 
 /**
  * Расходы периода БЕЗ категории «Зарплата», только одобренные, с отнесением
- * по period_month — как reports.getFinancial (otherExpenses).
+ * по period_month — как reports.getFinancial (otherExpenses), плюс отдельный
+ * derived-расход за автомобиль в день, уже входящий в итоговую прибыль.
  */
 export async function otherExpensesTotal(
   pool: Pool,
@@ -75,7 +77,8 @@ export async function otherExpensesTotal(
         AND ${expenseApproved('e')} AND COALESCE(ec.name, '') <> 'Зарплата'${point}`,
     params,
   );
-  return num(rows[0]?.total);
+  const vehicleExpense = sumVehicleDayCosts(await vehicleDayCosts(pool, ctx));
+  return num(rows[0]?.total) + vehicleExpense;
 }
 
 /**

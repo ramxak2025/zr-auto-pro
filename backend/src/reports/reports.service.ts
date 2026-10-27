@@ -18,6 +18,7 @@ import {
   zonedMonthKey,
 } from '../common/timezone';
 import { previousComparableWindow } from '../common/period-compare';
+import { sumVehicleDayCosts, vehicleDayCosts } from '../common/vehicle-day-costs';
 import { CallsService } from '../calls/calls.service';
 
 /** Актор запроса «Движения денег» — источник охвата (свои / все) и атрибуции. */
@@ -229,7 +230,10 @@ export class ReportsService {
     // Гарантия вычитается ОТДЕЛЬНЫМ термом (warrantyLoss). productCost/salaries
     // выше уже НЕ содержат гарантийных чеков (FILTER), поэтому двойного вычета
     // запчастей/зарплаты нет.
-    const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss - extras.total;
+    const perVehicleDayExpense = sumVehicleDayCosts(
+      await vehicleDayCosts(this.pool, { tenantId: tenantID, dateFrom, dateTo, tz, pointId }),
+    );
+    const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss - extras.total - perVehicleDayExpense;
 
     return {
       dateFrom,
@@ -238,6 +242,7 @@ export class ReportsService {
       productCost,
       salaries,
       otherExpenses,
+      perVehicleDayExpense,
       // ITEM 2 — убыток по гарантийным чекам за период (запчасти + выплата
       // мастеру). Уже вычтен из netProfit; отдаётся отдельно, чтобы UI мог
       // показать «Гарантия (убыток)» строкой. 0 если гарантийных чеков не было.
@@ -333,8 +338,9 @@ export class ReportsService {
       prevYm: string;
       prevWindowStart: string;
       prevWindowEnd: string;
+      asOf: string;
     },
-  ): Promise<{ today: number; month: number; prevWindow: number }> {
+  ): Promise<{ today: number; month: number; prevWindow: number; motivationToday: number; motivationMonth: number }> {
     const premEff = premiumMonthExpr('sp', '$5::text');
     const premParams: any[] = [tenantID, w.todayStart, w.curYm, w.prevYm, tz, w.prevWindowEnd, w.prevWindowStart];
     const premPointFilter = pointFilterSql('sp', pointId, premParams);
@@ -349,7 +355,7 @@ export class ReportsService {
       premParams,
     );
 
-    const motParams: any[] = [tenantID, w.todayStart, w.monthStart, w.prevWindowStart, w.prevWindowEnd];
+    const motParams: any[] = [tenantID, w.todayStart, w.monthStart, w.prevWindowStart, w.prevWindowEnd, w.asOf];
     const motPointFilter = motivationPointFilterSql('ma', '$1', pointId, motParams);
     const { rows: motRows } = await this.pool.query(
       `SELECT
@@ -357,12 +363,14 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN ma.accrued_at >= $3 THEN ma.amount END), 0) AS mot_month,
          COALESCE(SUM(CASE WHEN ma.accrued_at >= $4 AND ma.accrued_at <= $5 THEN ma.amount END), 0) AS mot_prev
        FROM motivation_accruals ma
-      WHERE ma.tenant_id = $1${motPointFilter}`,
+      WHERE ma.tenant_id = $1 AND ma.accrued_at <= $6::timestamptz${motPointFilter}`,
       motParams,
     );
 
     const num = (v: unknown) => parseFloat(String(v)) || 0;
     return {
+      motivationToday: num(motRows[0]?.mot_today),
+      motivationMonth: num(motRows[0]?.mot_month),
       today: num(premRows[0]?.prem_today) + num(motRows[0]?.mot_today),
       month: num(premRows[0]?.prem_month) + num(motRows[0]?.mot_month),
       prevWindow: num(premRows[0]?.prem_prev) + num(motRows[0]?.mot_prev),
@@ -1253,7 +1261,7 @@ export class ReportsService {
     // могут разъехаться, потому что формула физически одна.
     const revenueExpr = checkRevenueExpr();
     const profitExpr = checkProfitExpr();
-    const baseParams: any[] = [tenantID, todayStart, monthStart];
+    const baseParams: any[] = [tenantID, todayStart, monthStart, now.toISOString()];
     const basePointFilter = pointFilterSql(null, pointId, baseParams);
     const { rows: baseRows } = await this.pool.query(
       `SELECT
@@ -1268,7 +1276,7 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN product_cost_total + service_salary_total + COALESCE(product_salary_total, 0) END), 0) AS warranty_loss_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) END), 0) AS installment_debt_today
        FROM checks
-       WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}${basePointFilter}`,
+       WHERE tenant_id=$1 AND date <= $4::timestamptz AND ${checkMoneyBaseWhere()}${basePointFilter}`,
       baseParams,
     );
     const base = baseRows[0];
@@ -1347,7 +1355,10 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN ${effMonth} = $3 THEN e.amount END), 0) AS exp_month,
          COALESCE(SUM(CASE WHEN ${effMonth} = $4 AND e.date >= $7 AND e.date <= $6 THEN e.amount END), 0) AS exp_prev_month,
          COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 THEN e.amount END), 0) AS exp_yesterday,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS oneoff_yesterday,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS recurring_yesterday
        FROM expenses e
        LEFT JOIN expense_categories ec ON ec.id = e.category_id
        WHERE e.tenant_id=$1
@@ -1384,10 +1395,32 @@ export class ReportsService {
       prevYm,
       prevWindowStart,
       prevWindowEnd,
+      asOf: now.toISOString(),
     });
+    const todayKey = zonedDateKey(now, tz);
+    const vehicleRows = await vehicleDayCosts(this.pool, {
+      tenantId: tenantID,
+      dateFrom: `${curYm}-01`,
+      dateTo: todayKey,
+      tz,
+      pointId,
+      asOf: now.toISOString(),
+    });
+    const vehicleMonth = sumVehicleDayCosts(vehicleRows);
+    const vehicleToday = sumVehicleDayCosts(vehicleRows.filter((row) => row.day === todayKey));
+    const vehiclePrev = sumVehicleDayCosts(
+      await vehicleDayCosts(this.pool, {
+        tenantId: tenantID,
+        dateFrom: zonedDateKey(new Date(prevWindowStart), tz),
+        dateTo: zonedDateKey(new Date(prevWindowEnd), tz),
+        tz,
+        pointId,
+        asOf: prevWindowEnd,
+      }),
+    );
 
-    const netProfitToday = profitToday - expToday - salaryExtras.today;
-    const netProfitMonth = profitMonth - expMonth - salaryExtras.month;
+    const netProfitToday = profitToday - expToday - salaryExtras.today - vehicleToday;
+    const netProfitMonth = profitMonth - expMonth - salaryExtras.month - vehicleMonth;
 
     // Previous-period net profit for marginPctChange — прошлый месяц НА ТУ ЖЕ
     // ДАТУ (1–9 августа против 1–9 сентября), а не целиком.
@@ -1415,7 +1448,7 @@ export class ReportsService {
     // Обе стороны сравнения маржи вычитают премии/мотивацию своего окна —
     // иначе месяц с премиями выглядел бы хуже прошлого без них по причине,
     // которой в цифрах не видно.
-    const prevNet = prevProfit - expPrevMonth - salaryExtras.prevWindow;
+    const prevNet = prevProfit - expPrevMonth - salaryExtras.prevWindow - vehiclePrev;
     const marginPct = revenueMonth > 0 ? (netProfitMonth / revenueMonth) * 100 : 0;
     const prevMarginPct = prevRevenue > 0 ? (prevNet / prevRevenue) * 100 : 0;
     const marginPctChange = marginPct - prevMarginPct;
@@ -1429,27 +1462,27 @@ export class ReportsService {
     // Точка кладётся ОДИН раз, оба фрагмента адресуют ОДИН плейсхолдер: второй
     // push дал бы Postgres лишний параметр, а разные значения в одном запросе
     // означали бы разные филиалы у прибыли и у расхода.
-    const sparkParams: any[] = [tenantID];
+    const sparkParams: any[] = [tenantID, tz, now.toISOString()];
     const sparkPointFilter = pointFilterSql(null, pointId, sparkParams);
     const sparkExpPointFilter = pointId ? ` AND e.point_id = $${sparkParams.length}` : '';
     const { rows: sparkRows } = await this.pool.query(
-      `SELECT day, COALESCE(profit, 0) AS profit, COALESCE(exp, 0) AS expense
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, COALESCE(profit, 0) AS profit, COALESCE(exp, 0) AS expense
          FROM (
-           SELECT generate_series(now()::date - interval '29 days', now()::date, '1 day')::date AS day
+           SELECT generate_series(($3::timestamptz AT TIME ZONE $2::text)::date - interval '29 days', ($3::timestamptz AT TIME ZONE $2::text)::date, '1 day')::date AS day
          ) d
          LEFT JOIN (
-           SELECT date::date AS day,
+           SELECT (date AT TIME ZONE $2::text)::date AS day,
                   SUM(${profitExpr}) AS profit
              FROM checks
             WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}
-              AND date >= now() - interval '30 days'${sparkPointFilter}
+              AND date >= $3::timestamptz - interval '30 days' AND date <= $3::timestamptz${sparkPointFilter}
             GROUP BY day
          ) ch USING (day)
          LEFT JOIN (
-           SELECT e.date::date AS day, SUM(e.amount) AS exp
+           SELECT (e.date AT TIME ZONE $2::text)::date AS day, SUM(e.amount) AS exp
              FROM expenses e
              LEFT JOIN expense_categories ec ON ec.id = e.category_id
-            WHERE e.tenant_id=$1 AND e.date >= now() - interval '30 days'
+            WHERE e.tenant_id=$1 AND e.date >= $3::timestamptz - interval '30 days' AND e.date <= $3::timestamptz
               AND COALESCE(e.approval_status, 'approved') = 'approved'
               AND COALESCE(ec.name, '') <> 'Зарплата'${sparkExpPointFilter}
             GROUP BY day
@@ -1457,7 +1490,20 @@ export class ReportsService {
          ORDER BY day`,
       sparkParams,
     );
-    const marginSpark = sparkRows.map((r) => (parseFloat(r.profit) || 0) - (parseFloat(r.expense) || 0));
+    const sparkVehicle = new Map<string, number>();
+    for (const row of await vehicleDayCosts(this.pool, {
+      tenantId: tenantID,
+      dateFrom: zonedDateKey(new Date(now.getTime() - 29 * 86400000), tz),
+      dateTo: todayKey,
+      tz,
+      pointId,
+      asOf: now.toISOString(),
+    }))
+      sparkVehicle.set(row.day, (sparkVehicle.get(row.day) ?? 0) + row.amount);
+    const marginSpark = sparkRows.map((r) => {
+      const day = String(r.day);
+      return (parseFloat(r.profit) || 0) - (parseFloat(r.expense) || 0) - (sparkVehicle.get(day) ?? 0);
+    });
 
     // Погашения рассрочки за сегодня — по дате платежа (installment_payments,
     // 093). Информационно: деньги за прошлые продажи, в revenueToday не входят.
@@ -1625,7 +1671,7 @@ export class ReportsService {
     const [{ rows: fcRows }, { rows: compRows }] = await Promise.all([
       this.pool.query(
         `SELECT COALESCE(SUM(monthly_amount), 0) AS planned_fixed
-           FROM fixed_costs WHERE tenant_id = $1 AND active = true${fcPointFilter}`,
+           FROM fixed_costs WHERE tenant_id = $1 AND active = true${fcPointFilter} AND mode = 'monthly'`,
         fcParams,
       ),
       this.pool.query(
@@ -1637,6 +1683,20 @@ export class ReportsService {
         compParams,
       ),
     ]);
+    const vehicleConfigParams = [...fcParams, tz];
+    const vehicleConfigTz = `$${vehicleConfigParams.length}::text`;
+    const { rows: vehicleConfigRows } = await this.pool.query(
+      `SELECT EXISTS (
+        SELECT 1 FROM fixed_costs WHERE tenant_id = $1${fcPointFilter} AND mode = 'per_vehicle_day'
+          AND EXISTS (SELECT 1 FROM fixed_cost_vehicle_history h WHERE h.tenant_id = $1 AND h.fixed_cost_id = fixed_costs.id
+            AND h.revision = (SELECT h2.revision FROM fixed_cost_vehicle_history h2
+              WHERE h2.tenant_id = $1 AND h2.fixed_cost_id = fixed_costs.id
+                AND h2.effective_from <= (now() AT TIME ZONE ${vehicleConfigTz})::date
+              ORDER BY h2.effective_from DESC,h2.revision DESC LIMIT 1) AND NOT h.archived)
+      ) AS configured`,
+      vehicleConfigParams,
+    );
+    const hasPerVehicleDayCosts = vehicleConfigRows[0]?.configured === true;
     const plannedFixedMonthly = parseFloat(fcRows[0]?.planned_fixed) || 0;
     let staffFixedMonthly = 0;
     let pctTurnoverTotal = 0;
@@ -1688,7 +1748,8 @@ export class ReportsService {
       mtdStaffPctProfit -
       mtdOneOff -
       mtdRecurringExcess -
-      mtdSalaryExtras;
+      mtdSalaryExtras -
+      vehicleMonth;
 
     // Full-month projection (run-rate revenue/profit + FULL planned costs). Разовые
     // расходы — СУНК: считаем ОДИН раз (projOneOff === mtdOneOff, БЕЗ run-rate,
@@ -1707,6 +1768,7 @@ export class ReportsService {
     // их до конца месяца, поэтому прогноз берёт их по run-rate (как непокрытую
     // постоянку), а не один раз (как разовые расходы).
     const projSalaryExtras = mtdSalaryExtras * runRateFactor;
+    const projVehicleExpense = vehicleMonth * runRateFactor;
     const projNetProfit =
       projCheckProfit -
       plannedFixedMonthly -
@@ -1715,50 +1777,102 @@ export class ReportsService {
       projStaffPctProfit -
       projOneOff -
       projRecurringExcess -
-      projSalaryExtras;
+      projSalaryExtras -
+      projVehicleExpense;
 
-    const r0 = (n: number) => Math.round(n);
+    const yesterdayFactor = (dayOfMonth - 1) / daysInMonth;
+    const yesterdayProfit = dayOfMonth === 1 ? 0 : profitMonth - profitToday;
+    const yesterdayRevenue = dayOfMonth === 1 ? 0 : revenueMonth - revenueToday;
+    const yesterdayStaffPctProfit = (Math.max(yesterdayProfit, 0) * pctProfitTotal) / 100;
+    const yesterdayStaffPctTurnover = (yesterdayRevenue * pctTurnoverTotal) / 100;
+    const yesterdayRecurring = dayOfMonth === 1 ? 0 : Number(expenseRows[0]?.recurring_yesterday ?? 0);
+    const yesterdayCoverage =
+      (plannedFixedMonthly + staffFixedMonthly) * yesterdayFactor + yesterdayStaffPctProfit + yesterdayStaffPctTurnover;
+    const yesterdayExcess = hasPlannedConfig
+      ? Math.max(yesterdayRecurring * yesterdayFactor - yesterdayCoverage, 0)
+      : 0;
+    const yesterdayOneOff =
+      dayOfMonth === 1 ? 0 : Number(expenseRows[0]?.[hasPlannedConfig ? 'oneoff_yesterday' : 'exp_yesterday'] ?? 0);
+    const todayPlannedFixed = plannedFixedMonthly / daysInMonth;
+    const todayStaffFixed = staffFixedMonthly / daysInMonth;
+    const todayPctTurnover = mtdStaffPctTurnover - yesterdayStaffPctTurnover;
+    const todayPctProfit = mtdStaffPctProfit - yesterdayStaffPctProfit;
+    const todayOneOff = mtdOneOff - yesterdayOneOff;
+    const todayExcess = mtdRecurringExcess - yesterdayExcess;
+    const todayExtras = dayOfMonth === 1 ? mtdSalaryExtras : salaryExtras.today;
+    const todayMotivation = dayOfMonth === 1 ? salaryExtras.motivationMonth : salaryExtras.motivationToday;
+    const todayNet =
+      profitToday -
+      todayPlannedFixed -
+      todayStaffFixed -
+      todayPctTurnover -
+      todayPctProfit -
+      todayOneOff -
+      todayExcess -
+      todayExtras -
+      vehicleToday;
+
+    const money = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const netProfitAccrual = {
       daysInMonth,
       daysElapsed: dayOfMonth,
+      today: {
+        checkProfit: money(profitToday),
+        plannedFixedAmortized: money(todayPlannedFixed),
+        staffFixedAmortized: money(todayStaffFixed),
+        staffPctTurnover: money(todayPctTurnover),
+        staffPctProfit: money(todayPctProfit),
+        oneOffExpenses: money(todayOneOff),
+        recurringExcess: money(todayExcess),
+        salaryExtras: money(todayExtras),
+        motivation: money(todayMotivation),
+        perVehicleDayExpense: money(vehicleToday),
+        netProfit: money(todayNet),
+      },
       mtd: {
-        checkProfit: r0(checkProfitMTD),
-        plannedFixedAmortized: r0(mtdPlannedFixed),
-        staffFixedAmortized: r0(mtdStaffFixed),
-        staffPctTurnover: r0(mtdStaffPctTurnover),
-        staffPctProfit: r0(mtdStaffPctProfit),
-        oneOffExpenses: r0(mtdOneOff),
+        checkProfit: money(checkProfitMTD),
+        plannedFixedAmortized: money(mtdPlannedFixed),
+        staffFixedAmortized: money(mtdStaffFixed),
+        staffPctTurnover: money(mtdStaffPctTurnover),
+        staffPctProfit: money(mtdStaffPctProfit),
+        oneOffExpenses: money(mtdOneOff),
         // Непокрытый планом избыток фактической постоянки (FIX 2). 0 при отсутствии
         // конфига (recurring трактуется как разовое в oneOffExpenses).
-        recurringExcess: r0(mtdRecurringExcess),
+        recurringExcess: money(mtdRecurringExcess),
         // Премии деньгами + мотивация месяца — реальные выплаты мастерам,
         // которых нет ни в чековой прибыли, ни в расходах.
-        salaryExtras: r0(mtdSalaryExtras),
-        netProfit: r0(mtdNetProfit),
+        salaryExtras: money(mtdSalaryExtras),
+        motivation: money(salaryExtras.motivationMonth),
+        perVehicleDayExpense: money(vehicleMonth),
+        netProfit: money(mtdNetProfit),
       },
       projection: {
-        revenue: r0(projRevenue),
-        checkProfit: r0(projCheckProfit),
-        plannedFixed: r0(plannedFixedMonthly),
-        staffFixed: r0(staffFixedMonthly),
-        staffPctTurnover: r0(projStaffPctTurnover),
-        staffPctProfit: r0(projStaffPctProfit),
+        revenue: money(projRevenue),
+        checkProfit: money(projCheckProfit),
+        plannedFixed: money(plannedFixedMonthly),
+        staffFixed: money(staffFixedMonthly),
+        staffPctTurnover: money(projStaffPctTurnover),
+        staffPctProfit: money(projStaffPctProfit),
         // Разовые — сунк, один раз (совпадает с mtd.oneOffExpenses, FIX 1).
-        oneOffExpenses: r0(projOneOff),
-        recurringExcess: r0(projRecurringExcess),
+        oneOffExpenses: money(projOneOff),
+        recurringExcess: money(projRecurringExcess),
         // Премии/мотивация — ongoing, поэтому run-rate (в отличие от разовых).
-        salaryExtras: r0(projSalaryExtras),
-        netProfit: r0(projNetProfit),
+        salaryExtras: money(projSalaryExtras),
+        motivation: money(salaryExtras.motivationMonth * runRateFactor),
+        perVehicleDayExpense: money(projVehicleExpense),
+        netProfit: money(projNetProfit),
       },
       config: {
-        plannedFixedMonthly: r0(plannedFixedMonthly),
-        staffFixedMonthly: r0(staffFixedMonthly),
+        plannedFixedMonthly: money(plannedFixedMonthly),
+        staffFixedMonthly: money(staffFixedMonthly),
         pctTurnoverTotal,
         pctProfitTotal,
         // FIX 2d — сколько фактической постоянки (MTD) помечено «постоянной», но НЕ
         // покрыто планом: сигнал UI «отмечено постоянным, но не заведено в План: X ₽»,
         // чтобы владелец добавил строку в fixed_costs, а не терял расход молча.
-        recurringUncovered: r0(mtdRecurringExcess),
+        recurringUncovered: money(mtdRecurringExcess),
+        hasPlannedConfig,
+        hasPerVehicleDayCosts,
       },
     };
 
