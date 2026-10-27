@@ -14,7 +14,8 @@ const { PointsBuilder } = require('../dist/reports/builder/builders/points.build
 const { vehicleDayCosts } = require('../dist/common/vehicle-day-costs');
 const { TenantAwarePool } = require('../dist/common/tenant-pool');
 const { runWithTenant } = require('../dist/common/tenant-context');
-const live = process.env.OCT27_FINANCE_TEST_DB;
+const repairFixture = process.env.OCT28_FINANCE_REPAIR_TEST_DB;
+const live = repairFixture ?? process.env.OCT27_FINANCE_TEST_DB;
 Logger.overrideLogger(false);
 const json = (x) => JSON.parse(JSON.stringify(x));
 const status = (code) => (e) => e.getStatus?.() === code;
@@ -22,9 +23,9 @@ const status = (code) => (e) => e.getStatus?.() === code;
 async function fixture(fn) {
   const url = new URL(live);
   assert.equal(url.hostname, '127.0.0.1');
-  assert.equal(url.port, '55451');
-  assert.equal(url.pathname, '/autexa_oct27_finance');
-  assert.equal(url.username, 'oct27_finance_admin');
+  assert.equal(url.port, repairFixture ? '55453' : '55451');
+  assert.equal(url.pathname, repairFixture ? '/autexa_oct28_finance_repair' : '/autexa_oct27_finance');
+  assert.equal(url.username, repairFixture ? 'oct28_finance_repair_admin' : 'oct27_finance_admin');
   const admin = new Pool({ connectionString: live });
   const schema = `finance_${randomUUID().replaceAll('-', '')}`;
   await admin.query(`CREATE SCHEMA ${schema}`);
@@ -663,3 +664,222 @@ test('PG: multiple-day vehicle totals retain exact cents and independent current
     assert.equal(financial.perVehicleDayExpense, 1501.65, 'sum in kopecks, independent of current parent active flag');
   });
 });
+
+// P1 repair: use the actual service, restricted app-role SQL and the same saved
+// rows at two frozen clocks. No separate in-memory model of expense membership.
+async function expenseFixture(
+  f,
+  { amount, date, period = null, recurring = false, point = f.point, tenant = f.tenant },
+) {
+  const category = randomUUID();
+  await f.q('INSERT INTO expense_categories(id,tenant_id,name,is_recurring) VALUES($1,$2,$3,$4)', [
+    category,
+    tenant,
+    'Membership regression',
+    recurring,
+  ]);
+  await f.q('INSERT INTO expenses(tenant_id,point_id,category_id,amount,date,period_month) VALUES($1,$2,$3,$4,$5,$6)', [
+    tenant,
+    point,
+    category,
+    amount,
+    date,
+    period,
+  ]);
+}
+async function dashboardSnapshot(f) {
+  const dashboard = await f.run(() => f.reports.computeDashboardV2(f.tenant, 'month', f.point));
+  const summary = await f.run(() => new PointsService(f.pool).computeSummary(f.tenant));
+  const point = summary.points.find((row) => row.pointId === f.point);
+  assert.equal(
+    round(point.profitMonth),
+    round(dashboard.netProfitMonth),
+    'point-card actual month must equal dashboard actual month at the same clock',
+  );
+  return dashboard;
+}
+async function pairedSnapshots(f, first = '2026-10-27T12:00:00Z', second = '2026-10-28T12:00:00Z') {
+  await f.clock(first);
+  const before = await dashboardSnapshot(f);
+  await f.clock(second);
+  const after = await dashboardSnapshot(f);
+  return { before, after };
+}
+function assertExpenseDelta(before, after) {
+  for (const key of ['oneOffExpenses', 'recurringExcess', 'netProfit']) {
+    assert.equal(
+      after.netProfitAccrual.today[key],
+      round(after.netProfitAccrual.mtd[key] - before.netProfitAccrual.mtd[key]),
+      `paired-clock expense MTD delta: ${key}`,
+    );
+  }
+}
+
+test('PG P1 paired-clock: allocated one-off dated next month is not charged again every day', opts, async (t) => {
+  await fixture(async (f) => {
+    await expenseFixture(f, { amount: 1000, date: '2026-11-05T12:00:00Z', period: '2026-10' });
+    await expenseFixture(f, { amount: 888, date: '2026-11-05T12:00:00Z', period: '2026-10', point: f.branch });
+    await expenseFixture(f, { amount: 999, date: '2026-11-05T12:00:00Z', period: '2026-10', tenant: f.foreignTenant });
+    const { before, after } = await pairedSnapshots(f);
+    t.diagnostic(
+      JSON.stringify({
+        before: before.netProfitAccrual.mtd.netProfit,
+        after: after.netProfitAccrual.mtd.netProfit,
+        today: after.netProfitAccrual.today.netProfit,
+      }),
+    );
+    assert.equal(before.netProfitAccrual.mtd.netProfit, -1000);
+    assert.equal(after.netProfitAccrual.mtd.netProfit, -1000);
+    assert.equal(after.netProfitAccrual.today.netProfit, 0);
+    assertExpenseDelta(before, after);
+    assert.equal(after.netProfitMonth, -1000);
+    assert.equal(after.netProfitToday, 0, 'legacy actual today remains a fact-day field');
+  });
+});
+
+test(
+  'PG P1 paired-clock: allocated recurring paid next month uses the same monthly coverage in both snapshots',
+  opts,
+  async (t) => {
+    await fixture(async (f) => {
+      await expenseFixture(f, { amount: 31000, date: '2026-11-05T12:00:00Z', period: '2026-10', recurring: true });
+      await f.run(() => f.service.createFixedCost(f.tenant, { name: 'Monthly rent', monthlyAmount: 3100 }, f.point));
+      const { before, after } = await pairedSnapshots(f);
+      t.diagnostic(
+        JSON.stringify({
+          before: before.netProfitAccrual.mtd.netProfit,
+          after: after.netProfitAccrual.mtd.netProfit,
+          today: after.netProfitAccrual.today.netProfit,
+        }),
+      );
+      assert.equal(before.netProfitAccrual.mtd.netProfit, -27000);
+      assert.equal(after.netProfitAccrual.mtd.netProfit, -28000);
+      assert.equal(after.netProfitAccrual.today.plannedFixedAmortized, 100);
+      assert.equal(after.netProfitAccrual.today.recurringExcess, 900);
+      assert.equal(after.netProfitAccrual.today.netProfit, -1000);
+      assertExpenseDelta(before, after);
+    });
+  },
+);
+
+test('PG P1 paired-clock: future unallocated October31 expense is absent before its company day', opts, async () => {
+  await fixture(async (f) => {
+    await expenseFixture(f, { amount: 1000, date: '2026-10-31T12:00:00Z' });
+    const { before, after } = await pairedSnapshots(f);
+    assert.equal(before.netProfitAccrual.mtd.netProfit, 0);
+    assert.equal(after.netProfitAccrual.mtd.netProfit, 0);
+    assert.equal(after.netProfitMonth, 0);
+    assert.equal(after.netProfitToday, 0);
+    assertExpenseDelta(before, after);
+    await f.clock('2026-10-31T12:00:00Z');
+    const due = await dashboardSnapshot(f);
+    assert.equal(due.netProfitAccrual.today.netProfit, -1000);
+    assert.equal(due.netProfitAccrual.mtd.netProfit, -1000);
+  });
+});
+
+test(
+  'PG P1 paired-clock: ordinary expense enters once on today with an exclusive tenant-midnight cutoff',
+  opts,
+  async () => {
+    await fixture(async (f) => {
+      // Moscow October28 ends at21:00Z; both timestamps are later than frozen now.
+      await expenseFixture(f, { amount: 1000, date: '2026-10-28T20:59:59Z' });
+      await expenseFixture(f, { amount: 250, date: '2026-10-28T21:00:00Z' });
+      const { before, after } = await pairedSnapshots(f);
+      assert.equal(before.netProfitAccrual.mtd.netProfit, 0);
+      assert.equal(after.netProfitAccrual.mtd.netProfit, -1000);
+      assert.equal(after.netProfitAccrual.today.netProfit, -1000);
+      assert.equal(after.netProfitMonth, -1000);
+      assert.equal(after.netProfitToday, -1000);
+      assertExpenseDelta(before, after);
+      await f.clock('2026-10-29T12:00:00Z');
+      const next = await dashboardSnapshot(f);
+      assert.equal(next.netProfitAccrual.mtd.netProfit, -1250);
+      assert.equal(next.netProfitAccrual.today.netProfit, -250);
+    });
+  },
+);
+
+test('PG P1 paired-clock: prior-month prepayment allocated to October keeps month priority', opts, async () => {
+  await fixture(async (f) => {
+    await expenseFixture(f, { amount: 1000, date: '2026-09-20T12:00:00Z', period: '2026-10' });
+    const { before, after } = await pairedSnapshots(f);
+    assert.equal(before.netProfitAccrual.mtd.netProfit, -1000);
+    assert.equal(after.netProfitAccrual.mtd.netProfit, -1000);
+    assert.equal(after.netProfitAccrual.today.netProfit, 0);
+    assertExpenseDelta(before, after);
+  });
+});
+
+test(
+  'PG P1 paired-clock: first day accrual today equals full MTD but actual today remains fact-day',
+  opts,
+  async () => {
+    await fixture(async (f) => {
+      await expenseFixture(f, { amount: 1000, date: '2026-11-05T12:00:00Z', period: '2026-10' });
+      await expenseFixture(f, { amount: 2000, date: '2026-09-20T12:00:00Z', period: '2026-10' });
+      await expenseFixture(f, { amount: 300, date: '2026-10-01T12:00:00Z' });
+      await expenseFixture(f, { amount: 400, date: '2026-10-02T12:00:00Z' });
+      const { before, after } = await pairedSnapshots(f, '2026-10-01T12:00:00Z', '2026-10-02T12:00:00Z');
+      assert.equal(before.netProfitAccrual.mtd.netProfit, -3300);
+      assert.deepEqual(before.netProfitAccrual.today, before.netProfitAccrual.mtd);
+      assert.equal(before.netProfitToday, -300);
+      assert.equal(after.netProfitAccrual.today.netProfit, -400);
+      assertExpenseDelta(before, after);
+    });
+  },
+);
+
+for (const monthlyPlan of [false, true]) {
+  test(
+    `PG P1 paired-clock: vehicle costs stay separate from recurring coverage, monthly plan=${monthlyPlan}`,
+    opts,
+    async () => {
+      await fixture(async (f) => {
+        await f.clock('2026-10-26T12:00:00Z');
+        await f.create(500.55);
+        await expenseFixture(f, { amount: 31000, date: '2026-11-05T12:00:00Z', period: '2026-10', recurring: true });
+        if (monthlyPlan)
+          await f.run(() =>
+            f.service.createFixedCost(f.tenant, { name: 'Monthly rent', monthlyAmount: 3100 }, f.point),
+          );
+        const car = randomUUID();
+        await f.check({ car, date: '2026-10-27T10:00:00Z' });
+        await f.check({ car, date: '2026-10-28T10:00:00Z' });
+        const { before, after } = await pairedSnapshots(f);
+        assert.equal(before.netProfitAccrual.mtd.perVehicleDayExpense, 500.55);
+        assert.equal(after.netProfitAccrual.mtd.perVehicleDayExpense, 1001.1);
+        assert.equal(after.netProfitAccrual.today.perVehicleDayExpense, 500.55);
+        assert.equal(after.netProfitAccrual.today.recurringExcess, monthlyPlan ? 900 : 0);
+        assert.equal(after.netProfitAccrual.mtd.oneOffExpenses, monthlyPlan ? 0 : 31000);
+        assert.equal(after.netProfitAccrual.today.oneOffExpenses, 0);
+        assert.equal(after.netProfitAccrual.today.netProfit, monthlyPlan ? -1500.55 : -500.55);
+        assertExpenseDelta(before, after);
+      });
+    },
+  );
+}
+
+test(
+  'PG P1 paired-clock: previous-month comparison uses allocation priority and its own local cutoff',
+  opts,
+  async () => {
+    await fixture(async (f) => {
+      await expenseFixture(f, { amount: 1000, date: '2026-10-05T12:00:00Z', period: '2026-09' });
+      await expenseFixture(f, { amount: 500, date: '2026-08-20T12:00:00Z', period: '2026-09' });
+      await expenseFixture(f, { amount: 200, date: '2026-09-28T20:59:59Z' });
+      await expenseFixture(f, { amount: 900, date: '2026-09-28T21:00:00Z' }); // Sep29 Moscow
+      await f.check({ revenue: 10000, date: '2026-09-01T12:00:00Z' });
+      await f.check({ revenue: 10000, date: '2026-10-01T12:00:00Z' });
+      const { before, after } = await pairedSnapshots(f);
+      assert.equal(before.marginPctChange, 15);
+      assert.equal(after.marginPctChange, 17);
+      const financial = await f.run(() =>
+        f.reports.getFinancial(f.tenant, { dateFrom: '2026-09-01', dateTo: '2026-09-30' }, f.point),
+      );
+      assert.equal(financial.otherExpenses, 2600, 'full financial report retains whole-month membership');
+      assert.equal(financial.netProfit, 7400);
+    });
+  },
+);

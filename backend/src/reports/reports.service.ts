@@ -15,8 +15,10 @@ import {
   startOfMonthInZone,
   startOfMonthInZoneOffset,
   zonedDateKey,
+  zonedMidnight,
   zonedMonthKey,
 } from '../common/timezone';
+import { expenseMonthAsOfSql } from '../common/dashboard-expense-sql';
 import { previousComparableWindow } from '../common/period-compare';
 import { sumVehicleDayCosts, vehicleDayCosts } from '../common/vehicle-day-costs';
 import { CallsService } from '../calls/calls.service';
@@ -1222,6 +1224,7 @@ export class ReportsService {
     const prevMonthStartDate = startOfMonthInZoneOffset(tz, -1, now);
     const monthStartDate = startOfMonthInZone(tz, now);
     const todayStart = startOfDayInZone(tz, now).toISOString();
+    const todayEnd = zonedMidnight(tz, locY, locM, locD + 1).toISOString();
     const monthStart = monthStartDate.toISOString();
 
     // Окно сравнения с прошлым месяцем — «НА ТУ ЖЕ ДАТУ» (единый хелпер с
@@ -1300,18 +1303,11 @@ export class ReportsService {
     // silently vanish from the accrual when a category is flagged recurring but
     // never budgeted in fixed_costs (see reconciliation below).
     //
-    // Round 14 (149) — «за какой месяц»: месячные агрегаты относят расход по
-    // effective-месяцу COALESCE(e.period_month, месяц e.date в поясе тенанта), а не по
-    // дате факта. Равенство месяца здесь = «диапазон покрывает месяц целиком»
-    // из getFinancial (агрегат всегда ровно один календарный месяц), поэтому
-    // задвоения под-диапазонов, исправленного в getFinancial, тут нет by
-    // construction. Выплата 5 августа «за июль» больше НЕ режет августовский
-    // netProfitMonth (она уехала в июль — getFinancial за июль её видит);
-    // exp_today дополнительно требует «сегодняшний» расход быть ЗА текущий
-    // месяц — выплата задним числом не искажает «прибыль сегодня». Побочная
-    // доводка: равенство месяца (вместо date >= monthStart без верхней
-    // границы) перестало затягивать расходы, датированные БУДУЩИМИ месяцами,
-    // в текущий месяц — согласовано с period-семантикой.
+    // Assigned period_month retains priority over the payment date. For rows
+    // without an assigned month, MTD now stops at the end of the company day:
+    // an ordinary future expense must not reduce today's monthly profit.
+    // getFinancial's explicitly selected whole-period membership is unchanged.
+    // Actual exp_today additionally requires the payment date to be today.
     const curYm = zonedMonthKey(now, tz);
     const prevYm = zonedMonthKey(prevMonthStartDate, tz);
     // Пояс уходит параметром $5 — в SQL его нельзя склеивать строкой.
@@ -1325,40 +1321,34 @@ export class ReportsService {
     // конфиг сотрудника, и в срез филиала входят оклады его КОМАНДЫ
     // (user_points, дефолт 156). Раньше план вычитался целиком по сети, и
     // accrual-прибыль филиала занижалась на аренду соседнего автосервиса.
-    // exp_prev_month РЕЖЕТСЯ ОКНОМ СРАВНЕНИЯ ЦЕЛИКОМ — обеими границами
-    // ($7 = начало окна, $6 = конец), ровно как прибыль прошлого месяца
-    // (prevRows ниже берёт чеки `date >= prevWindowStart AND date <= prevWindowEnd`).
-    //
-    // ПОЧЕМУ ПОЯВИЛАСЬ НИЖНЯЯ ГРАНИЦА. Раньше стояла только верхняя, а состав
-    // задавался отнесением по месяцу (effMonth). Расход, отнесённый к прошлому
-    // месяцу, но ДАТИРОВАННЫЙ раньше окна — предоплаченная в июле аренда за
-    // август — проходил оба условия и падал в срез «август по 9-е» ЦЕЛЫМ
-    // месяцем. Прибыль в этом окне при этом всего за девять дней, и
-    // prevMarginPct получался бессмысленным: маржа прошлого месяца уезжала в
-    // минус, а marginPctChange показывал владельцу фантомный рост.
-    //
-    // ПОЧЕМУ effMonth ПРИ ЭТОМ ОСТАЁТСЯ. Отнесение — это ответ на вопрос «за
-    // какой месяц расход», и он симметричен текущей стороне сравнения
-    // (exp_month тоже собирается по effMonth). Аренда за август, оплаченная
-    // 5 сентября, в срез «август по 9-е» не попадает и по нижней границе, и
-    // по верхней: на 9 августа её ещё не существовало. Итог — обе ноги
-    // сравнения обрезаны ОДНИМ окном по дате факта, а состав расходов
-    // остаётся месячно-отнесённым, как на текущей стороне.
-    const effMonth = `COALESCE(e.period_month, to_char(e.date AT TIME ZONE $5::text, 'YYYY-MM'))`;
-    // Фиксированные $1..$7 остаются на местах, точка кладётся ВОСЬМОЙ — иначе
-    // разъехались бы все ${effMonth}-выражения выше, собранные вокруг $5.
+    // The same allocation-first policy must define BOTH MTD snapshots.
+    // Assigned-month expenses belong to that month even when paid before/after
+    // it. Unallocated expenses stop at the local calendar cutoff (exclusive).
+    // Otherwise today's delta charges a future-dated allocated expense again.
+    // Legacy actual-today remains fact-day based, with the same daily upper bound.
     const expenseParams: any[] = [tenantID, todayStart, curYm, prevYm, tz, prevWindowEnd, prevWindowStart];
+    expenseParams.push(todayEnd, monthStart); // $8/$9, before the optional point.
+    const currentExpenseMembership = expenseMonthAsOfSql('e', '$3', '$5::text', '$9::timestamptz', '$8::timestamptz');
+    const yesterdayExpenseMembership = expenseMonthAsOfSql('e', '$3', '$5::text', '$9::timestamptz', '$2::timestamptz');
+    // previousComparableWindow ends one second before the next local midnight.
+    const prevExpenseMembership = expenseMonthAsOfSql(
+      'e',
+      '$4',
+      '$5::text',
+      '$7::timestamptz',
+      "$6::timestamptz + interval '1 second'",
+    );
     const expensePointFilter = pointFilterSql('e', pointId, expenseParams);
     const { rows: expenseRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN e.date >= $2 AND ${effMonth} = $3 THEN e.amount END), 0) AS exp_today,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 THEN e.amount END), 0) AS exp_month,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $4 AND e.date >= $7 AND e.date <= $6 THEN e.amount END), 0) AS exp_prev_month,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 THEN e.amount END), 0) AS exp_yesterday,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS oneoff_yesterday,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND e.date < $2 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS recurring_yesterday
+         COALESCE(SUM(CASE WHEN e.date >= $2 AND e.date < $8::timestamptz AND ${currentExpenseMembership} THEN e.amount END), 0) AS exp_today,
+         COALESCE(SUM(CASE WHEN ${currentExpenseMembership} THEN e.amount END), 0) AS exp_month,
+         COALESCE(SUM(CASE WHEN ${prevExpenseMembership} THEN e.amount END), 0) AS exp_prev_month,
+         COALESCE(SUM(CASE WHEN ${currentExpenseMembership} AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
+         COALESCE(SUM(CASE WHEN ${currentExpenseMembership} AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring,
+         COALESCE(SUM(CASE WHEN ${yesterdayExpenseMembership} THEN e.amount END), 0) AS exp_yesterday,
+         COALESCE(SUM(CASE WHEN ${yesterdayExpenseMembership} AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS oneoff_yesterday,
+         COALESCE(SUM(CASE WHEN ${yesterdayExpenseMembership} AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS recurring_yesterday
        FROM expenses e
        LEFT JOIN expense_categories ec ON ec.id = e.category_id
        WHERE e.tenant_id=$1
@@ -1441,13 +1431,9 @@ export class ReportsService {
     );
     const prevRevenue = parseFloat(prevRows[0]?.revenue) || 0;
     const prevProfit = parseFloat(prevRows[0]?.profit) || 0;
-    // Обе стороны — за ОДНО И ТО ЖЕ окно: prevProfit по чекам 1–9 августа,
-    // expPrevMonth по расходам, отнесённым к августу И датированным теми же
-    // 1–9 августа (см. $7/$6 выше). Одна и та же обрезка с двух сторон — иначе
-    // процент маржи прошлого месяца сравнивать не с чем.
-    // Обе стороны сравнения маржи вычитают премии/мотивацию своего окна —
-    // иначе месяц с премиями выглядел бы хуже прошлого без них по причине,
-    // которой в цифрах не видно.
+    // Prior expenses use the same allocation-first membership as current MTD;
+    // unallocated rows are bounded by the prior comparable calendar window.
+    // Premiums/motivation keep their existing independent attribution rules.
     const prevNet = prevProfit - expPrevMonth - salaryExtras.prevWindow - vehiclePrev;
     const marginPct = revenueMonth > 0 ? (netProfitMonth / revenueMonth) * 100 : 0;
     const prevMarginPct = prevRevenue > 0 ? (prevNet / prevRevenue) * 100 : 0;

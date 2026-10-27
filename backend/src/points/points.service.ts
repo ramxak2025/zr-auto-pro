@@ -16,12 +16,15 @@ import { invalidateAuthUser } from '../common/auth-cache';
 import { ttlCache } from '../common/ttl-cache';
 import {
   getTenantTimezone,
+  getZonedParts,
+  zonedMidnight,
   startOfDayInZone,
   startOfMonthInZone,
   zonedMonthKey,
   zonedDateKey,
 } from '../common/timezone';
 import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
+import { expenseMonthAsOfSql } from '../common/dashboard-expense-sql';
 import { vehicleDayCosts } from '../common/vehicle-day-costs';
 import { motivationByPointMonthSql, premiumsByPointMonthSql } from '../common/salary-extras-sql';
 import { actorPointId, PointScopeQueryable } from '../common/point-scope';
@@ -861,6 +864,8 @@ export class PointsService {
     //   • отнесение к месяцу — по effective-месяцу COALESCE(period_month,
     //     месяц даты факта в поясе тенанта), а не по голой дате: выплата
     //     5 сентября «за август» режет август, а не сентябрь;
+    //   • без назначенного месяца — только до конца сегодняшнего дня тенанта,
+    //     общий предикат с dashboard-v2 не включает будущие расходы;
     //   • только approved (NULL у легаси = approved);
     //   • без категории «Зарплата» — зарплатное начисление уже сидит внутри
     //     per-check profit, и вычесть выплату ещё раз значило бы списать труд
@@ -868,6 +873,9 @@ export class PointsService {
     // Отдельным запросом, а не подзапросом в LEFT JOIN ниже: расход к чеку
     // отношения не имеет, и join по точке размножил бы строки чеков.
     const monthKey = zonedMonthKey(now, tz);
+    const localNow = getZonedParts(now, tz);
+    const dayEnd = zonedMidnight(tz, localNow.year, localNow.month - 1, localNow.day + 1).toISOString();
+    const expenseMembership = expenseMonthAsOfSql('e', '$3', '$2::text', '$4::timestamptz', '$5::timestamptz');
     const { rows: expRows } = await this.pool.query(
       `SELECT e.point_id,
               COALESCE(SUM(e.amount), 0) AS total
@@ -875,11 +883,11 @@ export class PointsService {
          LEFT JOIN expense_categories ec ON ec.id = e.category_id
         WHERE e.tenant_id = $1
           AND e.point_id IS NOT NULL
-          AND COALESCE(e.period_month, to_char(e.date AT TIME ZONE $2::text, 'YYYY-MM')) = $3
+          AND ${expenseMembership}
           AND COALESCE(e.approval_status, 'approved') = 'approved'
           AND COALESCE(ec.name, '') <> 'Зарплата'
         GROUP BY e.point_id`,
-      [tenantID, tz, monthKey],
+      [tenantID, tz, monthKey, monthStart, dayEnd],
     );
     const expenseByPoint = new Map<string, number>();
     for (const r of expRows) expenseByPoint.set(r.point_id as string, parseFloat(r.total) || 0);
