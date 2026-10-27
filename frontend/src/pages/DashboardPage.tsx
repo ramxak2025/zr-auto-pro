@@ -64,7 +64,7 @@ function QuickLinks() {
 // ---------------------------------------------------------------------------
 
 function AdminDashboard() {
-  const { hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
   // Финансовый дашборд (net profit, графики, рассрочка) — по ключу
   // financial_reports (backend /reports/dashboard-v2 гейтится им же; волна
   // Битрикс24). Без права — только ростер сотрудников.
@@ -78,7 +78,7 @@ function AdminDashboard() {
     return (
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
         <div className="space-y-5 xl:col-span-2">
-          <AttentionCard />
+          {user?.role === 'director' && <AttentionCard />}
           <TodayEarningsCard />
           <StaffTodayCard />
           <DeferredChecksCard />
@@ -100,7 +100,7 @@ function AdminDashboard() {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
         <div className="space-y-5 xl:col-span-2">
           <RevenueChart />
-          <AttentionCard />
+          {user?.role === 'director' && <AttentionCard />}
           <TodayEarningsCard />
           <StaffTodayCard />
           <DeferredChecksCard />
@@ -149,7 +149,6 @@ export default function DashboardPage() {
         <>
           <MasterDashboard />
           <TodayEarningsCard />
-          <AttentionCard />
           <DeferredChecksCard />
         </>
       ) : (

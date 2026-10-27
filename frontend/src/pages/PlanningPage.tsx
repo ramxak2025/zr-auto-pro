@@ -1,4 +1,15 @@
-import { useState } from 'react';
+import {
+  costRevision,
+  costRate,
+  costStatus,
+  plannedCostState,
+  isVehicleCost,
+  vehicleCostHint,
+  costConflictMessage,
+  isCostConflict,
+  costRequestIntent,
+} from '../../../shared/utils/planningCosts';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Navigate } from 'react-router-dom';
 import {
@@ -80,10 +91,11 @@ interface FixedForm {
   name: string;
   category: FixedCostCategory;
   monthlyAmount: string;
+  mode: 'monthly' | 'per_vehicle_day';
   active: boolean;
 }
 
-const emptyFixedForm: FixedForm = { name: '', category: 'rent', monthlyAmount: '', active: true };
+const emptyFixedForm: FixedForm = { name: '', category: 'rent', monthlyAmount: '', active: true, mode: 'monthly' };
 
 function FixedCostsSection() {
   const queryClient = useQueryClient();
@@ -91,6 +103,21 @@ function FixedCostsSection() {
   const [editing, setEditing] = useState<FixedCost | null>(null);
   const [form, setForm] = useState<FixedForm>(emptyFixedForm);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [formError, setFormError] = useState('');
+  const intentId = useRef(costRequestIntent(() => crypto.randomUUID()));
+  const busy = useRef(false);
+  const costError = async (error: unknown) => {
+    busy.current = false;
+    if (isCostConflict(error)) {
+      const latest = await refetch();
+      if (editing) setEditing(latest.data?.find((c) => c.id === editing.id) ?? editing);
+      setFormError(costConflictMessage);
+      toast.error(costConflictMessage);
+    } else {
+      setFormError('Не удалось сохранить. Повторите попытку — введённые данные сохранены.');
+      toast.error('Не удалось сохранить');
+    }
+  };
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['planning', 'fixed-costs'],
@@ -104,73 +131,127 @@ function FixedCostsSection() {
   };
 
   const createMut = useMutation({
-    mutationFn: (body: { name: string; category: FixedCostCategory; monthlyAmount: number }) =>
-      planningApi.fixedCosts.create(body),
+    mutationFn: (body: Parameters<typeof planningApi.fixedCosts.create>[0]) => planningApi.fixedCosts.create(body),
     onSuccess: () => {
+      busy.current = false;
       invalidate();
-      toast.success('Постоянный расход добавлен');
+      toast.success('Расход добавлен');
       closeModal();
     },
-    onError: () => toast.error('Не удалось сохранить'),
+    onError: costError,
   });
-
   const updateMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof planningApi.fixedCosts.update>[1] }) =>
       planningApi.fixedCosts.update(id, body),
     onSuccess: () => {
+      busy.current = false;
       invalidate();
       toast.success('Сохранено');
       closeModal();
     },
-    onError: () => toast.error('Не удалось сохранить'),
+    onError: costError,
   });
-
   const toggleMut = useMutation({
-    mutationFn: ({ id, active }: { id: string; active: boolean }) => planningApi.fixedCosts.update(id, { active }),
+    mutationFn: ({ cost, active }: { cost: FixedCost; active: boolean }) => {
+      const intent = { id: cost.id, active, revision: cost.revision };
+      return planningApi.fixedCosts.update(
+        cost.id,
+        isVehicleCost(cost) ? { active, revision: cost.revision, requestId: intentId.current(intent) } : { active },
+      );
+    },
     onSuccess: invalidate,
-    onError: () => toast.error('Не удалось изменить'),
+    onError: costError,
+    onSettled: () => {
+      busy.current = false;
+    },
   });
-
   const deleteMut = useMutation({
-    mutationFn: (id: string) => planningApi.fixedCosts.remove(id),
+    mutationFn: (cost: FixedCost) =>
+      planningApi.fixedCosts.remove(
+        cost.id,
+        isVehicleCost(cost)
+          ? {
+              revision: costRevision(cost),
+              requestId: intentId.current({ operation: 'archive', id: cost.id, revision: cost.revision }),
+            }
+          : undefined,
+      ),
     onSuccess: () => {
       invalidate();
-      toast.success('Удалено');
+      setDeleteId(null);
+      toast.success('Расход удалён или запланирован к архивированию');
     },
-    onError: () => toast.error('Не удалось удалить'),
+    onError: costError,
+    onSettled: () => {
+      busy.current = false;
+    },
   });
 
   const openCreate = () => {
     setEditing(null);
+    intentId.current = costRequestIntent(() => crypto.randomUUID());
+    setFormError('');
     setForm(emptyFixedForm);
     setModalOpen(true);
   };
   const openEdit = (c: FixedCost) => {
     setEditing(c);
-    setForm({ name: c.name, category: c.category, monthlyAmount: String(c.monthlyAmount), active: c.active });
+    intentId.current = costRequestIntent(() => crypto.randomUUID());
+    setFormError('');
+    const planned = plannedCostState(c);
+    setForm({
+      name: c.name,
+      category: c.category,
+      mode: c.mode ?? 'monthly',
+      monthlyAmount: String(isVehicleCost(c) ? (planned.perVehicleDayAmount ?? 0) : c.monthlyAmount),
+      active: planned.active,
+    });
     setModalOpen(true);
   };
   const closeModal = () => {
+    if (busy.current) return;
     setModalOpen(false);
     setEditing(null);
   };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = parseFloat(form.monthlyAmount.replace(',', '.'));
+    if (busy.current) return;
+    const raw = form.monthlyAmount.trim().replace(',', '.');
+    const amount = Number(raw);
     if (!form.name.trim()) return toast.error('Укажите название');
-    if (!Number.isFinite(amount) || amount <= 0) return toast.error('Укажите сумму в месяц');
+    if (
+      !/^\d+(?:\.\d{1,2})?$/.test(raw) ||
+      !Number.isFinite(amount) ||
+      amount > 100000000 ||
+      amount < 0 ||
+      (form.mode === 'monthly' && amount === 0)
+    )
+      return toast.error('Укажите корректную сумму, не более двух знаков после запятой');
+    busy.current = true;
+    setFormError('');
+    const metadata = { name: form.name.trim(), category: form.category, active: form.active };
     if (editing) {
+      const body =
+        form.mode === 'per_vehicle_day'
+          ? { ...metadata, perVehicleDayAmount: amount, revision: editing.revision }
+          : { ...metadata, monthlyAmount: amount };
       updateMut.mutate({
         id: editing.id,
-        body: { name: form.name.trim(), category: form.category, monthlyAmount: amount, active: form.active },
+        body:
+          form.mode === 'per_vehicle_day'
+            ? { ...body, requestId: intentId.current({ id: editing.id, ...body }) }
+            : body,
       });
+    } else if (form.mode === 'per_vehicle_day') {
+      const body = { ...metadata, mode: 'per_vehicle_day' as const, perVehicleDayAmount: amount };
+      createMut.mutate({ ...body, requestId: intentId.current(body) });
     } else {
-      createMut.mutate({ name: form.name.trim(), category: form.category, monthlyAmount: amount });
+      createMut.mutate({ ...metadata, monthlyAmount: amount });
     }
   };
 
-  const totalMonthly = costs.filter((c) => c.active).reduce((s, c) => s + c.monthlyAmount, 0);
+  const totalMonthly = costs.filter((c) => c.active && !isVehicleCost(c)).reduce((s, c) => s + c.monthlyAmount, 0);
   const saving = createMut.isPending || updateMut.isPending;
 
   const columns: DataTableColumn<FixedCost>[] = [
@@ -182,12 +263,19 @@ function FixedCostsSection() {
       render: (c) => (
         <span className="block min-w-0">
           <span className="block truncate font-medium text-ink">{c.name}</span>
+          {isVehicleCost(c) && <span className="block text-xs text-ink-3">Сегодня: {costStatus(c)}</span>}
+          {c.pending && (
+            <span className="block whitespace-normal text-xs text-info-text">
+              С {c.pending.effectiveFrom}: {costStatus(c.pending)} ·{' '}
+              <Money value={c.pending.perVehicleDayAmount} precision={2} /> / авто в день
+            </span>
+          )}
           <span className="block text-xs text-ink-3 md:hidden">
             {(CATEGORY_META[c.category] ?? CATEGORY_META.other).label}
           </span>
         </span>
       ),
-      footer: 'Итого в месяц',
+      footer: 'Итого ежемесячные',
     },
     {
       key: 'category',
@@ -206,25 +294,38 @@ function FixedCostsSection() {
     },
     {
       key: 'monthlyAmount',
-      header: 'В месяц',
+      header: 'Сумма и единица',
       numeric: true,
       sortable: true,
-      render: (c) => <Money value={c.monthlyAmount} className="font-medium text-ink" />,
+      sortValue: costRate,
+      render: (c) => (
+        <span>
+          <Money value={costRate(c)} precision={2} className="font-medium text-ink" />
+          <span className="block text-xs font-normal text-ink-3">{isVehicleCost(c) ? '/ авто в день' : '/ месяц'}</span>
+        </span>
+      ),
       footer: <Money value={totalMonthly} />,
     },
     {
       key: 'active',
-      header: 'В прибыли',
+      header: 'Статус / план',
       align: 'center',
       interactive: true,
       width: 96,
       render: (c) => (
-        <span className="inline-flex justify-center">
+        <span className="inline-flex flex-col items-center gap-1">
           <Switch
-            checked={c.active}
-            onChange={(active) => toggleMut.mutate({ id: c.id, active })}
-            label={`${c.active ? 'Выключить' : 'Включить'} расход ${c.name}`}
+            checked={plannedCostState(c).active && !plannedCostState(c).archived}
+            disabled={toggleMut.isPending || deleteMut.isPending}
+            onChange={(active) => {
+              if (!busy.current) {
+                busy.current = true;
+                toggleMut.mutate({ cost: c, active });
+              }
+            }}
+            label={`${plannedCostState(c).active ? 'Выключить' : 'Включить'} расход ${c.name}${isVehicleCost(c) ? ' с завтра' : ''}`}
           />
+          {isVehicleCost(c) && <span className="text-xs text-ink-3">С завтра</span>}
         </span>
       ),
       footer: <span className="block text-center text-xs font-normal text-ink-3">только активные</span>,
@@ -256,7 +357,7 @@ function FixedCostsSection() {
         icon={Wallet}
         iconTone="neutral"
         title="Постоянные расходы"
-        subtitle="Ежемесячные суммы: аренда, коммуналка, реклама"
+        subtitle="Ежемесячные суммы и расходы за автомобиль в день"
         divider={false}
         actions={
           <Button size="sm" variant="secondary" icon={Plus} onClick={openCreate}>
@@ -282,7 +383,7 @@ function FixedCostsSection() {
           action: { label: 'Добавить расход', onClick: openCreate },
         }}
         rowClassName={(c) => (c.active ? undefined : inactiveRow)}
-        caption="Постоянные расходы в месяц"
+        caption="Постоянные расходы и их единицы расчёта"
         bare
         className="overflow-x-auto"
       />
@@ -294,7 +395,7 @@ function FixedCostsSection() {
         size="md"
         footer={
           <>
-            <Button variant="secondary" onClick={closeModal}>
+            <Button variant="secondary" disabled={saving} onClick={closeModal}>
               Отмена
             </Button>
             <Button type="submit" form="fixed-cost-form" icon={editing ? undefined : Plus} loading={saving}>
@@ -304,6 +405,45 @@ function FixedCostsSection() {
         }
       >
         <form id="fixed-cost-form" onSubmit={submit} className="space-y-4">
+          {formError && (
+            <p role="alert" className="text-sm text-bad-text">
+              {formError}
+            </p>
+          )}
+          {editing ? (
+            <p className="text-sm text-ink-2">
+              Расчёт: {form.mode === 'per_vehicle_day' ? '₽ за автомобиль в день' : '₽ в месяц'}. Единица не меняется.
+            </p>
+          ) : (
+            <Field label="Расчёт расхода">
+              <SegmentedControl
+                aria-label="Расчёт расхода"
+                fullWidth
+                options={[
+                  { value: 'monthly', label: 'В месяц' },
+                  { value: 'per_vehicle_day', label: 'За авто в день' },
+                ]}
+                value={form.mode}
+                onChange={(mode) => setForm({ ...form, mode })}
+              />
+            </Field>
+          )}
+          {form.mode === 'per_vehicle_day' && (
+            <div className="space-y-1 text-xs text-ink-3">
+              <p>{vehicleCostHint}</p>
+              <p>
+                {editing
+                  ? 'Изменения, пауза и архив — с завтрашнего дня автосервиса.'
+                  : 'Начнёт учитываться сегодня. Списание денег в кассе не создаётся.'}
+              </p>
+              {editing && (
+                <p>
+                  Сейчас: <Money value={costRate(editing)} precision={2} /> / авто в день · {costStatus(editing)}
+                  {editing.pending && `; запланировано с ${editing.pending.effectiveFrom}`}
+                </p>
+              )}
+            </div>
+          )}
           <Field label="Название" htmlFor="fixed-name" required>
             <Input
               id="fixed-name"
@@ -323,7 +463,11 @@ function FixedCostsSection() {
               onChange={(category) => setForm({ ...form, category })}
             />
           </Field>
-          <Field label="Сумма в месяц" htmlFor="fixed-amount" required>
+          <Field
+            label={form.mode === 'per_vehicle_day' ? 'За автомобиль в день' : 'Сумма в месяц'}
+            htmlFor="fixed-amount"
+            required
+          >
             <Input
               id="fixed-amount"
               inputMode="decimal"
@@ -338,7 +482,11 @@ function FixedCostsSection() {
             <div className="flex items-center justify-between gap-3 rounded-lg bg-surface-2 px-3.5 py-3">
               <div>
                 <p className="text-sm font-medium text-ink">Учитывать в прибыли</p>
-                <p className="text-xs text-ink-3">Выключенные расходы не вычитаются</p>
+                <p className="text-xs text-ink-3">
+                  {form.mode === 'per_vehicle_day'
+                    ? 'Планируемый статус с завтрашнего дня'
+                    : 'Выключенные расходы не вычитаются'}
+                </p>
               </div>
               <Switch
                 checked={form.active}
@@ -353,9 +501,19 @@ function FixedCostsSection() {
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => deleteId && deleteMut.mutate(deleteId)}
+        onConfirm={() => {
+          const cost = costs.find((c) => c.id === deleteId);
+          if (cost && !busy.current) {
+            busy.current = true;
+            deleteMut.mutate(cost);
+          }
+        }}
         title="Удалить постоянный расход"
-        message="Расход перестанет учитываться в чистой прибыли по начислению. Продолжить?"
+        message={
+          costs.find((c) => c.id === deleteId)?.mode === 'per_vehicle_day'
+            ? 'Архив запланируется с завтрашнего дня автосервиса. Сегодня расход ещё учитывается; история сохранится.'
+            : 'Расход перестанет учитываться в чистой прибыли по начислению. Продолжить?'
+        }
         confirmText="Удалить"
         variant="danger"
         loading={deleteMut.isPending}
@@ -800,8 +958,8 @@ export default function PlanningPage() {
       <div className="flex items-start gap-3 rounded-xl border border-info/20 bg-info-soft px-4 py-3 text-sm text-info-text">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
         <p className="leading-relaxed">
-          Эти суммы вычитаются из прибыли <span className="font-semibold">равномерно по дням месяца</span>, а не в день
-          оплаты. Так «Чистая прибыль по начислению» на главной не прыгает и показывает реальную картину.
+          Ежемесячные расходы и оклады распределяются по дням месяца. Расход за автомобиль учитывается один раз за день
+          визита. Эти начисления не создают списаний денег в кассе.
         </p>
       </div>
 

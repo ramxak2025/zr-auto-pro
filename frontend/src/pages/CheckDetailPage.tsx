@@ -1,3 +1,4 @@
+import { displayedProfit, displayedWarrantyLoss } from '../../../shared/utils/checkProfit';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -811,9 +812,20 @@ export default function CheckDetailPage() {
                       {check.isWarranty ? 'Убыток по гарантии' : 'Чистая прибыль'}
                     </span>
                     {check.isWarranty ? (
-                      <Money value={-(check.warrantyLoss ?? 0)} colorize className="text-base font-semibold" />
+                      <Money
+                        precision={2}
+                        value={-displayedWarrantyLoss(check)}
+                        colorize
+                        className="text-base font-semibold"
+                      />
                     ) : (
-                      <Money value={check.profit} signed colorize className="text-base font-semibold" />
+                      <Money
+                        precision={2}
+                        value={displayedProfit(check)}
+                        signed
+                        colorize
+                        className="text-base font-semibold"
+                      />
                     )}
                   </div>
                 </div>

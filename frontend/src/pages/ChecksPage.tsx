@@ -1,3 +1,4 @@
+import { displayedProfit, displayedWarrantyLoss } from '../../../shared/utils/checkProfit';
 import { memo, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -16,6 +17,8 @@ import {
   Recycle,
   Undo2,
   CalendarRange,
+  SlidersHorizontal,
+  X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -24,15 +27,13 @@ import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { zoned } from '../utils/tenantTime';
 import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import PageHeader from '../components/PageHeader';
+import JournalHeader from './journal/JournalHeader';
+import JournalFilters from './journal/JournalFilters';
 import Pagination from '../components/Pagination';
-import DatePeriodPicker from '../components/DatePeriodPicker';
-import SearchInput from '../components/SearchInput';
+import JournalSearch from './journal/JournalSearch';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
-import { Toolbar } from '../ui/Toolbar';
 import { Tabs, TabPanel } from '../ui/Tabs';
-import { Select } from '../ui/Select';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -172,11 +173,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
           </div>
           <div className="flex flex-shrink-0 items-center gap-3">
             {canViewProfit && !check.isWarranty && (
-              <Money value={check.profit} signed colorize className="text-xs font-medium" />
+              <Money precision={2} value={displayedProfit(check)} signed colorize className="text-xs font-medium" />
             )}
             {check.isWarranty ? (
               canViewProfit ? (
-                <Money value={-(check.warrantyLoss ?? 0)} colorize className="text-sm font-semibold" />
+                <Money precision={2} value={-displayedWarrantyLoss(check)} colorize className="text-sm font-semibold" />
               ) : (
                 <span className="text-sm font-semibold text-warn-text">По гарантии</span>
               )
@@ -237,6 +238,7 @@ export default function ChecksPage() {
     setParams(next, { replace: true });
   };
 
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Check | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<TrashedCheck | null>(null);
 
@@ -267,6 +269,7 @@ export default function ChecksPage() {
       return res.data;
     },
     enabled: view === 'checks',
+    placeholderData: (previous) => previous,
   });
 
   const deleteMutation = useMutation({
@@ -482,19 +485,15 @@ export default function ChecksPage() {
         sortable: true,
         width: 120,
         headerClassName: SORT_HEADER_FIX,
-        sortValue: (c) => (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit),
+        sortValue: (c) => displayedProfit(c),
         render: (c) =>
           c.isWarranty ? (
-            <Money value={-(c.warrantyLoss ?? 0)} colorize className="font-semibold" />
+            <Money precision={2} value={-displayedWarrantyLoss(c)} colorize className="font-semibold" />
           ) : (
-            <Money value={c.profit} signed colorize className="font-semibold" />
+            <Money precision={2} value={displayedProfit(c)} signed colorize className="font-semibold" />
           ),
         footer: (rows) => (
-          <Money
-            value={rows.reduce((s, c) => s + (c.isWarranty ? -(c.warrantyLoss ?? 0) : c.profit || 0), 0)}
-            signed
-            colorize
-          />
+          <Money precision={2} value={rows.reduce((s, c) => s + displayedProfit(c), 0)} signed colorize />
         ),
       });
     }
@@ -682,7 +681,7 @@ export default function ChecksPage() {
 
   const tabItems = [
     { key: 'checks' as const, label: 'Чеки', icon: BookOpen },
-    { key: 'docs' as const, label: 'Документы склада', icon: Package },
+    { key: 'docs' as const, label: 'Документы', icon: Package },
     ...(canSeeTrash ? [{ key: 'trash' as const, label: 'Корзина', icon: Trash2 }] : []),
   ];
 
@@ -705,47 +704,83 @@ export default function ChecksPage() {
           </button>
         </div>
       )}
-      <PageHeader title="Журнал" icon={BookOpen} subtitle={subtitle} />
-
-      <Tabs
-        aria-label="Разделы журнала"
-        idPrefix="journal"
-        items={tabItems}
-        value={view}
-        onChange={(v) => patchParams({ view: v === 'checks' ? null : v })}
-      />
-
-      {view !== 'trash' && (
-        <Toolbar>
-          {view === 'checks' && (
-            <SearchInput
-              value={search}
-              onChange={(v) => patchParams({ q: v })}
-              placeholder="Клиент, авто, номер чека…"
-              aria-label="Поиск по журналу"
-              className="w-full sm:w-72"
-            />
-          )}
-          <Select
-            aria-label="Мастер"
-            placeholder="Все мастера"
-            options={masterOptions}
-            value={masterId}
-            onChange={(e) => patchParams({ masterId: e.target.value })}
-            className="w-full sm:w-52"
+      <JournalHeader subtitle={subtitle}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <Tabs
+            aria-label="Разделы журнала"
+            idPrefix="journal"
+            items={tabItems}
+            value={view}
+            variant="pills"
+            className="max-w-full self-start [&_button]:min-h-10 [&_button]:px-2.5 sm:[&_button]:px-3"
+            onChange={(v) => patchParams({ view: v === 'checks' ? null : v })}
           />
-          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => patchParams({ from, to })} />
-          {(search || masterId || hasPeriod) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => patchParams({ q: null, masterId: null, from: null, to: null })}
-            >
+          {view !== 'trash' && (
+            <div className="flex min-w-0 items-center gap-2 lg:w-[25rem]">
+              {view === 'checks' && (
+                <div className="min-w-0 flex-1">
+                  <JournalSearch value={search} onChange={(v) => patchParams({ q: v })} />
+                </div>
+              )}
+              <Button
+                variant={masterId || hasPeriod ? 'soft' : 'secondary'}
+                icon={SlidersHorizontal}
+                className="h-11 shrink-0"
+                onClick={() => setFiltersOpen(true)}
+              >
+                Фильтры
+                {Number(!!masterId) + Number(hasPeriod) > 0 ? ` · ${Number(!!masterId) + Number(hasPeriod)}` : ''}
+              </Button>
+            </div>
+          )}
+        </div>
+        {view !== 'trash' && (masterId || hasPeriod) && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {[
+              ...(masterId
+                ? [
+                    {
+                      label: masterOptions.find((option) => option.value === masterId)?.label ?? 'Мастер выбран',
+                      clear: () => patchParams({ masterId: null }),
+                    },
+                  ]
+                : []),
+              ...(hasPeriod
+                ? [
+                    {
+                      label: `${dateFrom || 'Любая дата'} — ${dateTo || 'Любая дата'}`,
+                      clear: () => patchParams({ from: null, to: null }),
+                    },
+                  ]
+                : []),
+            ].map((chip) => (
+              <button
+                key={chip.label}
+                type="button"
+                aria-label={`Убрать фильтр: ${chip.label}`}
+                onClick={chip.clear}
+                className={cn(
+                  'inline-flex min-h-8 max-w-full items-center gap-2 rounded-lg bg-accent-soft px-2.5 text-xs font-medium text-accent-text',
+                  focusRing,
+                )}
+              >
+                <span className="truncate">{chip.label}</span>
+                <X className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              </button>
+            ))}
+            <Button variant="ghost" size="sm" onClick={() => patchParams({ masterId: null, from: null, to: null })}>
               Сбросить
             </Button>
-          )}
-        </Toolbar>
-      )}
+          </div>
+        )}
+      </JournalHeader>
+      <JournalFilters
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        applied={{ from: dateFrom, to: dateTo, masterId }}
+        options={masterOptions}
+        onApply={(values) => patchParams(values)}
+      />
 
       <TabPanel idPrefix="journal" tabKey="checks" active={view === 'checks'} className="space-y-4">
         {/* Мобильные карточки (< md): владелец открывает журнал с телефона. */}

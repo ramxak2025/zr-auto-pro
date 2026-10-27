@@ -1,3 +1,5 @@
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { displayedProfit, displayedWarrantyLoss } from '../../../shared/utils/checkProfit';
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
@@ -27,7 +29,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
-import CompactScreenHeader, { CompactSearchInput } from '../components/CompactScreenHeader';
+import { JournalHeaderActions, JournalHeaderSegments } from './journal/JournalHeaderControls';
+import JournalHeader, { JournalSearchInput, useJournalHeaderScroll } from './journal/JournalHeader';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
@@ -328,7 +331,7 @@ const CheckRow = React.memo(function CheckRow({
   // карточку красной плашкой «УБЫТОК» рядом с жёлтым бейджем оплаты «Гарантия»,
   // а в подвале (для тех, кто видит прибыль) показываем сумму убытка.
   const isWarranty = check.isWarranty === true;
-  const warrantyLoss = check.warrantyLoss ?? 0;
+  const warrantyLoss = displayedWarrantyLoss(check);
   // Пробег авто и скидка на товары — доп. чипы в строке инфо. Показываем
   // только когда значение осмысленно (> 0); 0 / отсутствие — прячем.
   const mileage = typeof check.mileage === 'number' && check.mileage > 0 ? check.mileage : null;
@@ -612,11 +615,18 @@ const CheckRow = React.memo(function CheckRow({
               (isWarranty && warrantyLoss > 0 ? (
                 // Гарантийный чек: вместо прибыли показываем убыток (запчасти +
                 // выплата мастеру) красным со знаком минус.
-                <Text style={[styles.footerProfit, styles.profitNegative]}>−{formatMoney(warrantyLoss)}</Text>
+                <Text style={[styles.footerProfit, styles.profitNegative]}>
+                  −{formatFinancialMoney(warrantyLoss, 2)}
+                </Text>
               ) : (
-                <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-                  {check.profit >= 0 ? '+' : ''}
-                  {formatMoney(check.profit)}
+                <Text
+                  style={[
+                    styles.footerProfit,
+                    displayedProfit(check) >= 0 ? styles.profitPositive : styles.profitNegative,
+                  ]}
+                >
+                  {displayedProfit(check) >= 0 ? '+' : ''}
+                  {formatFinancialMoney(displayedProfit(check), 2)}
                 </Text>
               ))}
           </View>
@@ -857,6 +867,7 @@ export default function ChecksScreen() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
+  const journalHeader = useJournalHeaderScroll();
   // Page-based infinite scroll. The first page is the most recent checks
   // (the API sorts desc by date, so today's rows land first); subsequent
   // pages are appended below as the user scrolls. We stay on a small page
@@ -1360,53 +1371,33 @@ export default function ChecksScreen() {
   const isWarehouseLoading = warehouseLoading;
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <CompactScreenHeader
-        title="Журнал"
-        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-        status={
-          <FreshnessBadge
-            query={
-              activeTab === 'checks'
-                ? { isFetching, isLoading, dataUpdatedAt }
-                : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
-            }
-          />
+      <JournalHeader
+        compact={journalHeader.compact}
+        context={
+          <>
+            <PointIndicator variant="chip" style={styles.pointChipRow} />
+            <FreshnessBadge
+              query={
+                activeTab === 'checks'
+                  ? { isFetching, isLoading, dataUpdatedAt }
+                  : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
+              }
+            />
+          </>
         }
         actions={
-          <View style={styles.entryBtnRow}>
-            <TouchableOpacity
-              style={styles.boardEntryBtn}
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate('WorkBoard');
-              }}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="Открыть доску заказ-нарядов"
-            >
-              <Ionicons name="albums-outline" size={21} color={colors.primary[600]} />
-              <Text style={styles.boardEntryText}>Доска</Text>
-            </TouchableOpacity>
-            {/* «Корзина» (106) — рядом с Доской, тот же pill-паттерн (owner
-              brief: «корзина должна быть в разделе журнал рядом с доской»).
-              Гейт checks_delete — бэкенд гейтит trash/restore тем же ключом,
-              без права кнопку не показываем. Тоже пуш внутри ChecksStack —
-              таб-бар остаётся, back возвращает в Журнал. */}
-            {canSeeTrash && (
-              <TouchableOpacity
-                style={styles.boardEntryBtn}
-                onPress={() => {
-                  haptic('tap');
-                  navigation.navigate('CheckTrash');
-                }}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel="Открыть корзину удалённых заказ-нарядов"
-              >
-                <Ionicons name="trash-outline" size={21} color={colors.primary[600]} />
-              </TouchableOpacity>
-            )}
-          </View>
+          <JournalHeaderActions
+            palette={palette}
+            canSeeTrash={canSeeTrash}
+            onBoard={() => {
+              haptic('tap');
+              navigation.navigate('WorkBoard');
+            }}
+            onTrash={() => {
+              haptic('tap');
+              navigation.navigate('CheckTrash');
+            }}
+          />
         }
       />
 
@@ -1443,89 +1434,15 @@ export default function ChecksScreen() {
           контексте (iOS-иерархия «scope → tools»). Внешний вид —
           UISegmentedControl: серая подложка, активный сегмент — карточка
           с мягкой тенью. */}
-      <View style={styles.segmentedWrap}>
-        <View
-          style={[
-            styles.segmentedControl,
-            { backgroundColor: palette.bg.muted },
-            Platform.OS === 'android' && {
-              borderWidth: 1,
-              borderColor: palette.border.strong,
-              backgroundColor: palette.bg.canvas,
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={[
-              styles.segmentBtn,
-              Platform.OS === 'android' && styles.segmentBtnAndroid,
-              activeTab === 'checks' && [
-                styles.segmentBtnActive,
-                Platform.OS === 'ios' && buildShadow(palette),
-                { backgroundColor: Platform.OS === 'ios' ? palette.bg.card : palette.accent.primarySoft },
-              ],
-            ]}
-            onPress={() => {
-              // Хаптика только при реальном переключении (selection changed);
-              // повторный тап по активному сегменту молчит.
-              if (activeTab !== 'checks') haptic('select');
-              setActiveTab('checks');
-            }}
-            activeOpacity={0.7}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === 'checks' }}
-          >
-            <Ionicons
-              name="receipt-outline"
-              size={15}
-              color={activeTab === 'checks' ? colors.primary[700] : palette.text.secondary}
-            />
-            <Text
-              style={[
-                styles.segmentBtnText,
-                { color: palette.text.secondary },
-                activeTab === 'checks' && styles.segmentBtnTextActive,
-              ]}
-            >
-              Чеки
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.segmentBtn,
-              Platform.OS === 'android' && styles.segmentBtnAndroid,
-              activeTab === 'warehouse' && [
-                styles.segmentBtnActive,
-                Platform.OS === 'ios' && buildShadow(palette),
-                { backgroundColor: Platform.OS === 'ios' ? palette.bg.card : palette.accent.primarySoft },
-              ],
-            ]}
-            onPress={() => {
-              if (activeTab !== 'warehouse') haptic('select');
-              setActiveTab('warehouse');
-            }}
-            activeOpacity={0.7}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === 'warehouse' }}
-            accessibilityLabel="Складские документы"
-          >
-            <Ionicons
-              name="cube-outline"
-              size={15}
-              color={activeTab === 'warehouse' ? colors.primary[700] : palette.text.secondary}
-            />
-            <Text
-              style={[
-                styles.segmentBtnText,
-                { color: palette.text.secondary },
-                activeTab === 'warehouse' && styles.segmentBtnTextActive,
-              ]}
-            >
-              Документы
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <JournalHeaderSegments
+        palette={palette}
+        active={activeTab}
+        onChange={(scope) => {
+          if (activeTab !== scope) haptic('select');
+          journalHeader.expand();
+          setActiveTab(scope);
+        }}
+      />
 
       {/* Search + Filter. Placeholder честный и тоже tab-aware: на чеках
           перечисляет РЕАЛЬНЫЕ поля серверного поиска (включая свежий поиск
@@ -1533,7 +1450,8 @@ export default function ChecksScreen() {
           названию / поставщику / комментарию загруженной ленты. */}
       <View style={styles.searchRow}>
         <View style={styles.searchInputWrap}>
-          <CompactSearchInput
+          <JournalSearchInput
+            onFocusChange={journalHeader.onSearchFocus}
             value={search}
             onChange={(v) => {
               setSearch(v);
@@ -1547,8 +1465,7 @@ export default function ChecksScreen() {
         <TouchableOpacity
           style={[
             styles.filterBtn,
-            buildShadow(palette),
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
             activeFilterCount > 0 && styles.filterBtnActive,
             activeFilterCount > 0 && {
               backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
@@ -1896,6 +1813,9 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              onScroll={journalHeader.onScroll}
+              scrollEventThrottle={32}
+              keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — тот же фикс, что вылечил
               // экран Клиентов. FlashList РЕЦИКЛИТ ячейки; на Fabric/Android
               // рециклированная ячейка может на кадр показать пустую / устаревшую
@@ -1984,6 +1904,9 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              onScroll={journalHeader.onScroll}
+              scrollEventThrottle={32}
+              keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — см. пояснение у списка
               // чеков выше. removeClippedSubviews=false убирает пустые кадры
               // от отсоединения офскрин-строк на Android. windowSize 21 +
@@ -2195,20 +2118,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
 
   pointChipRow: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
-  entryBtnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  boardEntryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1.5],
-    paddingHorizontal: spacing[1],
-    minWidth: Platform.OS === 'android' ? 48 : 44,
-    minHeight: Platform.OS === 'android' ? 48 : 44,
-  },
-  boardEntryText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   // ── Офлайн-очередь чеков (Round 9) ──────────────────────────────
   // Пилюля «Ожидают отправки: N» — тот же pill-язык, что «Доска» выше,
   // но амберный (внимание без паники); видна только при N > 0.
@@ -2395,44 +2304,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   kindChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
-
-  // ── Segmented Control ───────────────────────────────────────────
-  segmentedWrap: {
-    paddingHorizontal: spacing[4],
-    paddingBottom: spacing[2],
-  },
-  segmentedControl: {
-    flexDirection: 'row',
-    backgroundColor: colors.gray[100],
-    borderRadius: borderRadius.xl,
-    // 2pt — как у нативного UISegmentedControl (было 3).
-    padding: 2,
-  },
-  segmentBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[1],
-    paddingVertical: spacing[2],
-    minHeight: Platform.OS === 'android' ? 48 : 44,
-    borderRadius: borderRadius.lg,
-  },
-  segmentBtnAndroid: { borderRadius: borderRadius.lg },
-  segmentBtnActive: {
-    backgroundColor: colors.white,
-  },
-  segmentBtnText: {
-    fontSize: fontSize.sm,
-    flexShrink: 1,
-    textAlign: 'center',
-    fontWeight: fontWeight.medium,
-    color: colors.gray[500],
-  },
-  segmentBtnTextActive: {
-    color: colors.primary[700],
-    fontWeight: fontWeight.semibold,
-  },
 
   // ── Filters panel ───────────────────────────────────────────────
   // Сгруппированный лоток настроек: приглушённая подложка (bg.muted inline) +

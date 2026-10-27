@@ -216,7 +216,13 @@ export default function SubscriptionScreen() {
                       accessibilityRole="radio"
                       accessibilityLabel={`Тариф ${plan.name}: ${planIncludedLabel(plan)}`}
                       accessibilityState={{ checked: calc.planId === plan.id }}
-                      style={[styles.planChoice, { borderTopColor: palette.border.subtle }]}
+                      style={[
+                        styles.planChoice,
+                        {
+                          borderColor: calc.planId === plan.id ? palette.accent.primary : palette.border.subtle,
+                          backgroundColor: calc.planId === plan.id ? palette.bg.muted : palette.bg.card,
+                        },
+                      ]}
                     >
                       <View style={styles.flex}>
                         <Text style={[styles.label, { color: palette.text.primary }]}>{plan.name}</Text>
@@ -224,11 +230,17 @@ export default function SubscriptionScreen() {
                           {planIncludedLabel(plan)}
                         </Text>
                       </View>
-                      <Ionicons
-                        name={calc.planId === plan.id ? 'radio-button-on' : 'radio-button-off'}
-                        size={23}
-                        color={calc.planId === plan.id ? palette.accent.primary : palette.text.secondary}
-                      />
+                      <View
+                        style={[
+                          styles.planIndicator,
+                          {
+                            borderColor: calc.planId === plan.id ? palette.accent.primary : palette.text.secondary,
+                            backgroundColor: calc.planId === plan.id ? palette.accent.primary : 'transparent',
+                          },
+                        ]}
+                      >
+                        {calc.planId === plan.id && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+                      </View>
                     </TouchableOpacity>
                   ))}
                   {calc.pricing ? (
@@ -402,8 +414,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'baseline',
     gap: spacing[2],
-    paddingVertical: spacing[3],
-    borderTopWidth: StyleSheet.hairlineWidth,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderRadius: borderRadius.md,
+  },
+  planIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   rowLabel: { fontSize: fontSize.sm, flexShrink: 1 },
   rowValue: {
