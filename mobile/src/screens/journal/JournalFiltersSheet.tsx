@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +21,9 @@ import { useColors } from '../../contexts/ThemeContext';
 import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { CompactSearchInput as SearchInput } from '../../components/CompactScreenHeader';
 import type { User } from '../../../../shared/types';
+import { useJournalReducedMotion } from './JournalHeader';
 import {
+  journalFilterCount,
   emptyJournalFilters,
   journalDateLabel,
   journalDay,
@@ -45,6 +48,8 @@ interface Props {
 export default function JournalFiltersSheet(props: Props) {
   const p = useColors();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const reducedMotion = useJournalReducedMotion();
   const [draft, setDraft] = useState(props.applied);
   const [employeePicker, setEmployeePicker] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState('');
@@ -100,7 +105,7 @@ export default function JournalFiltersSheet(props: Props) {
   return (
     <Modal
       visible={props.visible}
-      animationType="slide"
+      animationType={reducedMotion ? 'fade' : 'slide'}
       transparent
       statusBarTranslucent
       navigationBarTranslucent
@@ -111,9 +116,13 @@ export default function JournalFiltersSheet(props: Props) {
         <KeyboardAvoidingView behavior="padding" style={s.keyboardHost} pointerEvents="box-none">
           <View style={[s.overlay, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
             <View
-              style={[s.container, { backgroundColor: p.bg.canvas, paddingBottom: insets.bottom }]}
+              style={[
+                s.container,
+                { maxHeight: windowHeight - insets.top - 16, backgroundColor: p.bg.card, paddingBottom: insets.bottom },
+              ]}
               accessibilityViewIsModal
             >
+              <View style={[s.handle, { backgroundColor: p.border.subtle }]} />
               <View style={[s.header, { borderBottomColor: p.border.subtle }]}>
                 <TouchableOpacity
                   onPress={close}
@@ -128,7 +137,7 @@ export default function JournalFiltersSheet(props: Props) {
                   )}
                 </TouchableOpacity>
                 <Text variant="title3" color={p.text.primary} style={s.headerTitle}>
-                  {employeePicker ? 'По сотруднику' : 'Фильтры чеков'}
+                  {employeePicker ? 'По сотруднику' : 'Фильтры'}
                 </Text>
                 <View style={s.headerAction} />
               </View>
@@ -184,6 +193,69 @@ export default function JournalFiltersSheet(props: Props) {
                   </>
                 ) : (
                   <>
+                    <Text variant="footnote" color={p.text.secondary} style={s.sectionTitle}>
+                      Период
+                    </Text>
+                    <View style={s.presets}>
+                      {(['today', 'week', 'month'] as const).map((key, index) => (
+                        <TouchableOpacity
+                          key={key}
+                          style={[
+                            s.preset,
+                            {
+                              backgroundColor:
+                                draft.dateFrom === journalPeriod(key, props.timeZone).dateFrom &&
+                                draft.dateTo === journalPeriod(key, props.timeZone).dateTo
+                                  ? p.accent.primarySoft
+                                  : p.bg.muted,
+                            },
+                          ]}
+                          onPress={() => patch(journalPeriod(key, props.timeZone))}
+                          accessibilityState={{
+                            selected:
+                              draft.dateFrom === journalPeriod(key, props.timeZone).dateFrom &&
+                              draft.dateTo === journalPeriod(key, props.timeZone).dateTo,
+                          }}
+                          accessibilityRole="button"
+                        >
+                          <Text variant="footnote" color={p.accent.primary}>
+                            {['Сегодня', '7 дней', 'Этот месяц'][index]}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View style={[s.dateFields, fontScale > 1.3 && s.dateFieldsLarge]}>
+                      {(['dateFrom', 'dateTo'] as const).map((key, index) => (
+                        <View key={key} style={[s.dateField, { backgroundColor: p.bg.muted }]}>
+                          <TouchableOpacity
+                            style={[s.dateAction, s.flex]}
+                            onPress={() => setDatePicker(key)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${index === 0 ? 'Дата от' : 'Дата до'}: ${draft[key] ? journalDateLabel(draft[key]) : 'Любая дата'}`}
+                          >
+                            <Text variant="caption" color={p.text.secondary}>
+                              {index === 0 ? 'От' : 'До'}
+                            </Text>
+                            <Text color={draft[key] ? p.accent.primary : p.text.secondary}>
+                              {draft[key] ? journalDateLabel(draft[key]) : 'Любая дата'}
+                            </Text>
+                          </TouchableOpacity>
+                          {draft[key] && (
+                            <TouchableOpacity
+                              style={s.clear}
+                              onPress={() => patch({ [key]: '' })}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Очистить дату ${index === 0 ? 'от' : 'до'}`}
+                            >
+                              <Ionicons name="close-circle" size={20} color={p.text.secondary} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                    <Text variant="footnote" color={p.text.secondary} style={s.hint}>
+                      Оба дня включены. Часовой пояс автосервиса.
+                    </Text>
                     <TouchableOpacity
                       style={rowStyle}
                       onPress={() => {
@@ -203,51 +275,6 @@ export default function JournalFiltersSheet(props: Props) {
                       </View>
                       <Ionicons name="chevron-forward" size={18} color={p.text.secondary} />
                     </TouchableOpacity>
-                    <Text variant="footnote" color={p.text.secondary} style={s.sectionTitle}>
-                      Период
-                    </Text>
-                    <View style={s.presets}>
-                      {(['today', 'week', 'month'] as const).map((key, index) => (
-                        <TouchableOpacity
-                          key={key}
-                          style={[s.preset, { backgroundColor: p.bg.muted }]}
-                          onPress={() => patch(journalPeriod(key, props.timeZone))}
-                          accessibilityRole="button"
-                        >
-                          <Text variant="footnote" color={p.accent.primary}>
-                            {['Сегодня', '7 дней', 'Этот месяц'][index]}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                    {(['dateFrom', 'dateTo'] as const).map((key, index) => (
-                      <View key={key} style={rowStyle}>
-                        <TouchableOpacity
-                          style={[s.dateAction, s.flex]}
-                          onPress={() => setDatePicker(key)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${index === 0 ? 'Дата от' : 'Дата до'}: ${draft[key] ? journalDateLabel(draft[key]) : 'Любая дата'}`}
-                        >
-                          <Text color={p.text.primary}>{index === 0 ? 'От' : 'До'}</Text>
-                          <Text color={draft[key] ? p.accent.primary : p.text.secondary}>
-                            {draft[key] ? journalDateLabel(draft[key]) : 'Любая дата'}
-                          </Text>
-                        </TouchableOpacity>
-                        {draft[key] && (
-                          <TouchableOpacity
-                            style={s.clear}
-                            onPress={() => patch({ [key]: '' })}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Очистить дату ${index === 0 ? 'от' : 'до'}`}
-                          >
-                            <Ionicons name="close-circle" size={20} color={p.text.secondary} />
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    ))}
-                    <Text variant="footnote" color={p.text.secondary} style={s.hint}>
-                      Оба дня включены. Часовой пояс автосервиса.
-                    </Text>
                     <TouchableOpacity
                       style={[rowStyle, s.advancedRow]}
                       onPress={() => setAdvanced(!advanced)}
@@ -317,7 +344,7 @@ export default function JournalFiltersSheet(props: Props) {
                 )}
               </KeyboardAwareScrollView>
               {!employeePicker && (
-                <View style={[s.footer, { borderTopColor: p.border.subtle, backgroundColor: p.bg.canvas }]}>
+                <View style={[s.footer, { borderTopColor: p.border.subtle, backgroundColor: p.bg.card }]}>
                   {error && (
                     <Text color={colors.red[600]} accessibilityRole="alert" style={s.message}>
                       {error}
@@ -348,7 +375,7 @@ export default function JournalFiltersSheet(props: Props) {
                       accessibilityRole="button"
                     >
                       <Text variant="callout" color={p.text.inverse}>
-                        Применить
+                        {journalFilterCount(draft) ? `Применить · ${journalFilterCount(draft)}` : 'Применить'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -379,12 +406,12 @@ export default function JournalFiltersSheet(props: Props) {
 const touchHeight = Platform.OS === 'android' ? 48 : 44;
 const s = StyleSheet.create({
   keyboardHost: { flex: 1 },
+  handle: { width: 36, height: 5, borderRadius: 3, alignSelf: 'center', marginTop: 8, marginBottom: 2 },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.28)' },
   overlay: { flex: 1, justifyContent: 'flex-end', alignItems: 'center' },
   container: {
     width: '100%',
     maxWidth: 600,
-    maxHeight: 620,
     flexShrink: 1,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -409,16 +436,25 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     paddingVertical: 8,
   },
-  sectionTitle: { marginTop: 16, marginBottom: 8 },
+  sectionTitle: { marginTop: 12, marginBottom: 8 },
+  dateFields: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  dateFieldsLarge: { flexDirection: 'column' },
+  dateField: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingLeft: 12 },
   advancedRow: { marginTop: 8 },
   presets: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  preset: { minHeight: touchHeight, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 8 },
+  preset: {
+    flex: 1,
+    minHeight: touchHeight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
   dateAction: {
     minHeight: touchHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
+    paddingVertical: 6,
+    gap: 2,
   },
   clear: { width: touchHeight, height: touchHeight, alignItems: 'center', justifyContent: 'center' },
   hint: { marginTop: 8 },

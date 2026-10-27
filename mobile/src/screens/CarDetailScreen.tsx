@@ -1,3 +1,5 @@
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { displayedProfit } from '../../../shared/utils/checkProfit';
 /**
  * CarDetailScreen — dedicated drill-down for ONE car of a client.
  *
@@ -410,10 +412,12 @@ const CarCheckRow = React.memo(function CarCheckRow({ check, palette, canViewPro
               {check.mileage.toLocaleString('ru-RU')} км
             </Text>
           ) : null}
-          {canViewProfit && check.profit !== undefined ? (
-            <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-              {check.profit >= 0 ? '+' : ''}
-              {formatMoney(check.profit)}
+          {canViewProfit && (check.profitAfterMotivation !== undefined || check.profit !== undefined) ? (
+            <Text
+              style={[styles.footerProfit, displayedProfit(check) >= 0 ? styles.profitPositive : styles.profitNegative]}
+            >
+              {displayedProfit(check) >= 0 ? '+' : ''}
+              {formatFinancialMoney(displayedProfit(check), 2)}
             </Text>
           ) : null}
         </View>

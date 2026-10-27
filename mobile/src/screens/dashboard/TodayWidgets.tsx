@@ -85,11 +85,13 @@ export function AttentionCard() {
   const query = useQuery({
     queryKey: ['dashboard-attention', ...scope],
     queryFn: async () => (await dashboardApi.attention()).data,
+    enabled: user?.role === 'director',
     staleTime: 30_000,
     refetchOnMount: 'always',
     placeholderData: undefined,
   });
-  useRefresh(query.refetch);
+  useRefresh(query.refetch, user?.role === 'director');
+  if (user?.role !== 'director') return null;
   const open = (id: AttentionBucketId) =>
     openAttention(navigation, id, hasPermission('checks_view_all') ? undefined : user?.id);
   if (!query.isLoading && !query.isError && !query.data?.buckets.length) return null;

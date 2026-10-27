@@ -33,6 +33,7 @@ jest.mock('react-native', () => ({
   TextInput: 'TextInput',
   Switch: 'Switch',
   Platform: { OS: 'ios' },
+  useWindowDimensions: () => ({ height: 844, width: 390, fontScale: 1 }),
   StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 },
 }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 48, bottom: 34 }) }));
@@ -53,6 +54,7 @@ jest.mock('../../../contexts/ThemeContext', () => ({
   }),
 }));
 jest.mock('../../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
+jest.mock('../JournalHeader', () => ({ useJournalReducedMotion: () => false }));
 jest.mock('../../../components/CompactScreenHeader', () => ({ CompactSearchInput: 'SearchInput' }));
 import React from 'react';
 import JournalFiltersSheet from '../JournalFiltersSheet';

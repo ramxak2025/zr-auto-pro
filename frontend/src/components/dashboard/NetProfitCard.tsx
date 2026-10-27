@@ -1,3 +1,5 @@
+import { accrualBreakdown } from '../../../../shared/utils/accrualBreakdown';
+import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,14 +14,11 @@ import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
 import { ErrorRow } from './shared';
 
-function BreakdownRow({ label, value, sign }: { label: string; value: number; sign: 'plus' | 'minus' }) {
+function BreakdownRow({ label, contribution }: { label: string; contribution: number }) {
   return (
-    <div className="flex items-center justify-between py-1.5 text-sm">
+    <div className="flex items-start justify-between gap-3 py-1.5 text-sm">
       <span className="text-ink-2">{label}</span>
-      <span className={cn('font-medium tabular-nums', sign === 'plus' ? 'text-ink' : 'text-bad-text')}>
-        {sign === 'minus' ? '−' : ''}
-        {formatMoney(value)}
-      </span>
+      <Money value={contribution} precision={2} signed colorize className="font-medium" />
     </div>
   );
 }
@@ -32,6 +31,7 @@ function BreakdownRow({ label, value, sign }: { label: string; value: number; si
  */
 export default function NetProfitCard() {
   const [expanded, setExpanded] = useState(false);
+  const [period, setPeriod] = useState<'today' | 'mtd'>('mtd');
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['dashboard-v2'],
     queryFn: async () => (await reportsApi.dashboardV2()).data,
@@ -46,24 +46,16 @@ export default function NetProfitCard() {
   const acc = data?.netProfitAccrual;
   if (!acc) return null; // legacy backend — no accrual payload
 
-  const { mtd, projection, config, daysElapsed, daysInMonth } = acc;
+  const { projection, config, daysElapsed, daysInMonth } = acc;
+  const selected = period === 'today' && acc.today ? acc.today : acc.mtd;
   const configEmpty =
     config.plannedFixedMonthly === 0 &&
     config.staffFixedMonthly === 0 &&
     config.pctTurnoverTotal === 0 &&
-    config.pctProfitTotal === 0;
-  const positive = mtd.netProfit >= 0;
-
-  const rows: { label: string; value: number; sign: 'plus' | 'minus' }[] = [
-    { label: 'Прибыль по чекам', value: mtd.checkProfit, sign: 'plus' },
-    { label: 'Постоянные расходы', value: mtd.plannedFixedAmortized, sign: 'minus' },
-    { label: 'Оклады', value: mtd.staffFixedAmortized, sign: 'minus' },
-    { label: '% с оборота', value: mtd.staffPctTurnover, sign: 'minus' },
-    { label: '% с прибыли', value: mtd.staffPctProfit, sign: 'minus' },
-    { label: 'Разовые расходы', value: mtd.oneOffExpenses, sign: 'minus' },
-  ];
-  if (mtd.recurringExcess > 0) rows.push({ label: 'Постоянка вне Плана', value: mtd.recurringExcess, sign: 'minus' });
-  const visibleRows = rows.filter((r, i) => i === 0 || r.value !== 0);
+    config.pctProfitTotal === 0 &&
+    !config.hasPerVehicleDayCosts;
+  const positive = selected.netProfit >= 0;
+  const visibleRows = accrualBreakdown(selected);
 
   return (
     <Card padding="none">
@@ -72,7 +64,7 @@ export default function NetProfitCard() {
         icon={Coins}
         iconTone={positive ? 'ok' : 'bad'}
         title="Чистая прибыль"
-        subtitle="по начислению · с начала месяца"
+        subtitle="по начислению"
         actions={
           <Badge tone="neutral" className="tabular-nums">
             {daysElapsed} / {daysInMonth} дн.
@@ -81,19 +73,36 @@ export default function NetProfitCard() {
       />
 
       <div className="px-4 pt-4">
-        <div className="flex items-end justify-between gap-4">
+        {acc.today && (
+          <SegmentedControl
+            aria-label="Период прибыли по начислению"
+            size="sm"
+            className="mb-4"
+            options={[
+              { value: 'today', label: 'Сегодня' },
+              { value: 'mtd', label: 'С начала месяца' },
+            ]}
+            value={period}
+            onChange={setPeriod}
+          />
+        )}
+        {!acc.today && <p className="mb-3 text-xs text-ink-3">С начала месяца</p>}
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
             <Money
-              value={mtd.netProfit}
+              value={selected.netProfit}
+              precision={2}
               colorize
               className={cn('block text-[28px] font-semibold leading-none tracking-tight', positive && 'text-ink')}
             />
-            <p className="mt-1.5 text-xs text-ink-3">Заработано к сегодняшнему дню</p>
+            <p className="mt-1.5 text-xs text-ink-3">
+              {period === 'today' && acc.today ? 'За сегодня, по начислению' : 'С начала месяца, по начислению'}
+            </p>
           </div>
           <div className="flex-shrink-0 text-right">
             <p className="text-2xs font-medium uppercase tracking-wide text-ink-3">Прогноз на месяц</p>
             <p className="mt-0.5 text-base font-semibold tabular-nums text-ink-2">
-              {formatMoney(projection.netProfit)}
+              {formatMoney(projection.netProfit, 2)}
             </p>
           </div>
         </div>
@@ -153,12 +162,12 @@ export default function NetProfitCard() {
         <div className="rounded-b-xl border-t border-line bg-surface-2 px-4 py-3">
           <div className="divide-y divide-line">
             {visibleRows.map((r) => (
-              <BreakdownRow key={r.label} label={r.label} value={r.value} sign={r.sign} />
+              <BreakdownRow key={r.label} {...r} />
             ))}
           </div>
           <div className="mt-2 flex items-center justify-between border-t border-line-strong pt-2.5">
             <span className="text-sm font-semibold text-ink">Чистая прибыль</span>
-            <Money value={mtd.netProfit} colorize className="text-base font-semibold" />
+            <Money value={selected.netProfit} precision={2} colorize className="text-base font-semibold" />
           </div>
         </div>
       )}
