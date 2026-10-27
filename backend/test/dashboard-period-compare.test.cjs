@@ -223,14 +223,15 @@ test('reports.service больше не сравнивает с полным п�
     !/prevParams: any\[\] = \[tenantID, prevMonthStart, monthStart\]/.test(reportsService),
     'reports.service: окно marginPctChange снова «весь прошлый месяц»',
   );
-  // Расходы прошлого месяца обязаны резаться ТЕМ ЖЕ ОКНОМ, что и прибыль, —
-  // обеими границами. Только верхняя граница пропускала в срез «1–9 августа»
-  // предоплаченную в июле аренду за август ЦЕЛЫМ месяцем, и маржа прошлого
-  // месяца сравнивалась с девятью днями выручки.
+  // Assigned period has priority in both snapshots. Unallocated rows are
+  // bounded by the previous comparison window, ending at its next local midnight.
   assert.ok(
     /AS exp_prev_month/.test(reportsService) &&
-      /\$\{effMonth\} = \$4 AND e\.date >= \$7 AND e\.date <= \$6/.test(reportsService),
-    'reports.service: расходы прошлого месяца обрезаны не тем же окном, что прибыль',
+      /\$\{prevExpenseMembership\}/.test(reportsService) &&
+      /const prevExpenseMembership = expenseMonthAsOfSql/.test(reportsService) &&
+      reportsService.includes("'$7::timestamptz'") &&
+      reportsService.includes("$6::timestamptz + interval '1 second'"),
+    'reports.service: previous expense membership must use allocation priority and its calendar cutoff',
   );
   assert.ok(
     /const expenseParams: any\[\] = \[tenantID, todayStart, curYm, prevYm, tz, prevWindowEnd, prevWindowStart\];/.test(

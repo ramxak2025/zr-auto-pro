@@ -76,6 +76,7 @@ export class CarsController {
       user.tenantID,
       Math.min(Math.max(numericLimit || 50, 1), 200),
       actorPointId(user),
+      user,
     );
   }
 

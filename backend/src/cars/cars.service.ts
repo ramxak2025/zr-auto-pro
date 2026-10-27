@@ -1,5 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { Pool } from 'pg';
+import { checkMotivationAmounts } from '../checks/check-display-profit';
+import { userHasPermission } from '../common/guards/permissions.guard';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { normalizePlate } from '../imports/normalize-plate';
@@ -659,7 +661,13 @@ export class CarsService {
    * Зеркальные исключения: checks.getAll при ?clientId/?carId и
    * ClientsService.getChecksByCar.
    */
-  async getChecks(id: string, tenantID: string, limit: number, actorPoint?: string | null) {
+  async getChecks(
+    id: string,
+    tenantID: string,
+    limit: number,
+    actorPoint?: string | null,
+    actor?: { role: string; permissions?: Record<string, boolean> },
+  ) {
     // Verify car belongs to tenant — without this the foreign-id path
     // returns an empty array instead of a 404, which masks bugs.
     // 161 — скоупится ДОСТУП К МАШИНЕ (чужой гараж не открывается), но НЕ сами
@@ -675,6 +683,7 @@ export class CarsService {
 
     const { rows } = await this.pool.query(
       `SELECT ch.id, ch.number, ch.date, ch.total_revenue, ch.payment_method, ch.is_returned,
+              ch.profit, ch.product_cost_total, ch.service_salary_total, ch.product_salary_total,
               ch.is_deferred, ch.mileage, m.full_name as master_name, ca.plate_number, ca.make_model,
               cl.full_name as client_name, cl.phone as client_phone
        FROM checks ch
@@ -686,9 +695,43 @@ export class CarsService {
        LIMIT $3`,
       [tenantID, id, limit],
     );
+    const canSeeProfit = userHasPermission(actor, 'profit_view');
+    const motivation = canSeeProfit
+      ? await checkMotivationAmounts(
+          this.pool,
+          tenantID,
+          rows.map((row) => row.id),
+        )
+      : new Map<string, number>();
     return rows.map((r: any) => ({
       id: r.id,
       number: r.number,
+      profit: canSeeProfit ? Number(r.profit) || 0 : 0,
+      motivationAmount: canSeeProfit ? (motivation.get(r.id) ?? 0) : 0,
+      profitAfterMotivation: canSeeProfit
+        ? Math.round(((Number(r.profit) || 0) - (motivation.get(r.id) ?? 0)) * 100) / 100
+        : 0,
+      isWarranty: r.payment_method === 'warranty',
+      warrantyLoss:
+        canSeeProfit && r.payment_method === 'warranty'
+          ? Math.round(
+              ((Number(r.product_cost_total) || 0) +
+                (Number(r.service_salary_total) || 0) +
+                (Number(r.product_salary_total) || 0) +
+                (motivation.get(r.id) ?? 0)) *
+                100,
+            ) / 100
+          : 0,
+      warrantyLossAfterMotivation:
+        canSeeProfit && r.payment_method === 'warranty'
+          ? Math.round(
+              ((Number(r.product_cost_total) || 0) +
+                (Number(r.service_salary_total) || 0) +
+                (Number(r.product_salary_total) || 0) +
+                (motivation.get(r.id) ?? 0)) *
+                100,
+            ) / 100
+          : 0,
       date: r.date,
       totalRevenue: parseFloat(r.total_revenue) || 0,
       paymentMethod: r.payment_method,

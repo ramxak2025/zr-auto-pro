@@ -300,7 +300,7 @@ test('карточка филиала показывает прибыль ПОС
   const summary = bodyBetween(points, 'private async computeSummary(', '// ── Суперадмин');
 
   assert.ok(
-    /\(parseFloat\(r\.profit_month\) \|\| 0\) - \(expenseByPoint\.get\(id\) \?\? 0\) - \(extrasByPoint\.get\(id\) \?\? 0\)/.test(
+    /\(parseFloat\(r\.profit_month\) \|\| 0\)\s*-\s*\(expenseByPoint\.get\(id\) \?\? 0\)\s*-\s*\(extrasByPoint\.get\(id\) \?\? 0\)\s*-\s*\(vehicleByPoint\.get\(id\) \?\? 0\)/.test(
       summary,
     ),
     'points.computeSummary: из «Прибыли за месяц» филиала выпал терм (расходы или премии+мотивация) — карточка и главная снова две разные метрики с одним именем',
@@ -309,7 +309,8 @@ test('карточка филиала показывает прибыль ПОС
   // Определение расхода обязано СОВПАДАТЬ с reports.computeDashboardV2, иначе
   // цифры разойдутся снова, просто на меньшую величину.
   assert.ok(
-    /COALESCE\(e\.period_month, to_char\(e\.date AT TIME ZONE \$2::text, 'YYYY-MM'\)\) = \$3/.test(summary),
+    summary.includes("expenseMonthAsOfSql('e', '$3', '$2::text', '$4::timestamptz', '$5::timestamptz')") &&
+      /\[tenantID, tz, monthKey, monthStart, dayEnd\]/.test(summary),
     'points.computeSummary: отнесение расхода к месяцу не совпадает с dashboard-v2 (period_month, затем месяц даты факта в поясе тенанта)',
   );
   assert.ok(

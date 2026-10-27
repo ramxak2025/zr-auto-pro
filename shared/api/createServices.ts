@@ -1619,17 +1619,32 @@ export function createReportsApi(api: HttpClient) {
 //  Every endpoint is owner-class + financial_reports gated server-side.
 // ───────────────────────────────────────────────────────────────────────
 
+export type FixedCostCreateInput = { name: string; category?: FixedCostCategory; active?: boolean } & (
+  | { mode?: 'monthly'; monthlyAmount: number }
+  | { mode: 'per_vehicle_day'; perVehicleDayAmount: number; requestId: string }
+);
+export type FixedCostUpdateInput = {
+  name?: string;
+  category?: FixedCostCategory;
+  active?: boolean;
+  mode?: 'monthly' | 'per_vehicle_day';
+  monthlyAmount?: number;
+  perVehicleDayAmount?: number;
+  requestId?: string;
+  revision?: number;
+};
+
 export function createPlanningApi(api: HttpClient) {
   return {
     fixedCosts: {
       list: () => api.get<FixedCost[]>('/planning/fixed-costs'),
-      create: (data: { name: string; category?: FixedCostCategory; monthlyAmount: number; active?: boolean }) =>
-        api.post<FixedCost>('/planning/fixed-costs', data),
-      update: (
-        id: string,
-        data: { name?: string; category?: FixedCostCategory; monthlyAmount?: number; active?: boolean },
-      ) => api.patch<FixedCost>(`/planning/fixed-costs/${id}`, data),
-      remove: (id: string) => api.delete(`/planning/fixed-costs/${id}`),
+      create: (data: FixedCostCreateInput) => api.post<FixedCost>('/planning/fixed-costs', data),
+      update: (id: string, data: FixedCostUpdateInput) => api.patch<FixedCost>(`/planning/fixed-costs/${id}`, data),
+      remove: (id: string, data?: { requestId: string; revision: number }) =>
+        api.delete<{ message: string; fixedCost?: FixedCost }>(
+          `/planning/fixed-costs/${id}`,
+          data ? { data } : undefined,
+        ),
     },
     compensation: {
       list: () => api.get<EmployeeCompensation[]>('/planning/compensation'),
