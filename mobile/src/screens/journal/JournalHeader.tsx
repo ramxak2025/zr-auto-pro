@@ -9,6 +9,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -77,6 +78,9 @@ export default function JournalHeader({
 }) {
   const p = useColors();
   const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const largeText = fontScale > 1.3;
+  const titleMinHeight = Math.ceil((textVariantStyles.title2.lineHeight ?? 28) * fontScale) + 12;
   const reduced = useJournalReducedMotion();
   const progress = useRef(new Animated.Value(1)).current;
   const [contextHeight, setContextHeight] = useState(0);
@@ -92,11 +96,16 @@ export default function JournalHeader({
   }, [compact, progress, reduced]);
   return (
     <View style={[s.header, { paddingTop: insets.top, backgroundColor: p.bg.canvas }]}>
-      <View style={s.toolbar}>
-        <Text variant="title2" color={p.text.primary} accessibilityRole="header" style={s.title}>
+      <View style={[s.toolbar, { minHeight: Math.max(touch + 4, titleMinHeight) }, largeText && s.toolbarLarge]}>
+        <Text
+          variant="title2"
+          color={p.text.primary}
+          accessibilityRole="header"
+          style={[s.title, largeText && s.titleLarge]}
+        >
           Журнал
         </Text>
-        <View style={s.actions}>{actions}</View>
+        <View style={[s.actions, largeText && s.actionsLarge]}>{actions}</View>
       </View>
       <Animated.View
         style={{
@@ -236,8 +245,11 @@ const touch = Platform.OS === 'android' ? 48 : 44;
 const s = StyleSheet.create({
   header: { paddingHorizontal: 16 },
   toolbar: { minHeight: touch + 4, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  title: { flex: 1, paddingVertical: 6 },
+  toolbarLarge: { flexDirection: 'column', alignItems: 'stretch', gap: 0 },
+  title: { flex: 1, minWidth: 0, paddingVertical: 6 },
+  titleLarge: { flex: 0 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  actionsLarge: { alignSelf: 'flex-end', maxWidth: '100%' },
   context: {
     flexDirection: 'row',
     alignItems: 'center',
