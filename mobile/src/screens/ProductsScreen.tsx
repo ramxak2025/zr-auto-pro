@@ -18,8 +18,8 @@ import {
 
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import CompactScreenHeader, { CompactSearchInput, compactTouchSize } from '../components/CompactScreenHeader';
-import PointIndicator from '../components/PointIndicator';
+import { compactTouchSize } from '../components/CompactScreenHeader';
+import WarehouseHeader from './warehouse/WarehouseHeader';
 import { usePointAccess } from '../hooks/usePoints';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -48,7 +48,6 @@ import ProductMovementHistoryModal from '../components/ProductMovementHistoryMod
 import BulkPriceAdjustSheet from '../components/BulkPriceAdjustSheet';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
-import FreshnessBadge from '../components/FreshnessBadge';
 import StorageCellChip, { CELL_CODE_FONT } from '../components/StorageCellChip';
 import StorageCellPickerModal from '../components/StorageCellPickerModal';
 import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
@@ -2324,127 +2323,43 @@ function ProductsScreenContents() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {/* \u0417\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A \u0440\u0435\u0436\u0438\u043C\u0430 \u043C\u0430\u0441\u0441\u043E\u0432\u043E\u0433\u043E \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u044F (REQ A). \u0417\u0430\u043C\u0435\u043D\u044F\u0435\u0442 \u043E\u0431\u044B\u0447\u043D\u0443\u044E \u0448\u0430\u043F\u043A\u0443,
-          \u043F\u043E\u043A\u0430 \u0438\u0434\u0451\u0442 \u0432\u044B\u0431\u043E\u0440: \u0441\u043B\u0435\u0432\u0430 \u00AB\u041E\u0442\u043C\u0435\u043D\u0430\u00BB (\u0432\u044B\u0445\u043E\u0434), \u0432 \u0446\u0435\u043D\u0442\u0440\u0435 \u0441\u0447\u0451\u0442\u0447\u0438\u043A \u00AB\u0412\u044B\u0431\u0440\u0430\u043D\u043E N\u00BB,
-          \u0441\u043F\u0440\u0430\u0432\u0430 \u00AB\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0432\u0441\u0451\u00BB / \u00AB\u0421\u043D\u044F\u0442\u044C \u0432\u0441\u0451\u00BB. */}
-      {selectMode ? (
-        <SafeAreaView edges={['top']} style={{ backgroundColor: palette.bg.canvas }}>
-          <View style={[styles.selectHeader, { borderBottomColor: palette.border.subtle }]}>
-            <TouchableOpacity onPress={exitSelectMode} hitSlop={8} style={styles.selectHeaderSide}>
-              <Text style={[styles.selectHeaderCancel, { color: palette.accent.primary }]}>
-                \u041E\u0442\u043C\u0435\u043D\u0430
-              </Text>
-            </TouchableOpacity>
-            <Text style={[styles.selectHeaderTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              {selectedCount > 0
-                ? `\u0412\u044B\u0431\u0440\u0430\u043D\u043E ${selectedCount}`
-                : '\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u043E\u0432\u0430\u0440\u044B'}
-            </Text>
-            <TouchableOpacity
-              onPress={toggleSelectAll}
-              hitSlop={8}
-              style={[styles.selectHeaderSide, { alignItems: 'flex-end' }]}
-              disabled={visibleSelectableCount === 0}
-            >
-              <Text
-                style={[
-                  styles.selectHeaderCancel,
-                  { color: visibleSelectableCount === 0 ? palette.text.tertiary : palette.accent.primary },
-                ]}
-              >
-                {allVisibleSelected
-                  ? '\u0421\u043D\u044F\u0442\u044C \u0432\u0441\u0451'
-                  : '\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0432\u0441\u0451'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.selectedContextRow}>
-            <PointIndicator variant="chip" style={styles.pointChipRow} />
-            <FreshnessBadge
-              queries={[
-                { isFetching, isLoading, dataUpdatedAt },
-                { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
-              ]}
-            />
-          </View>
-        </SafeAreaView>
-      ) : (
-        <CompactScreenHeader
-          title={activeWarehouse?.name || 'Склад'}
-          subtitle={
-            data === undefined
-              ? undefined
-              : listTruncated
-                ? `${allProducts.length} из ${data?.total} товаров`
-                : `${warehouseStats.count} товаров`
-          }
-          onTitlePress={warehouses && warehouses.length > 1 ? () => setShowWarehouseSwitcher(true) : undefined}
-          titleLabel={`Сменить склад. Текущий: ${activeWarehouse?.name || 'Склад'}`}
-          context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-          status={
-            <FreshnessBadge
-              queries={[
-                { isFetching, isLoading, dataUpdatedAt },
-                { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
-              ]}
-            />
-          }
-          actions={
-            <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-              {/* Сканировать — barcode → найти и открыть товар. Read-only action,
-                shown to everyone who can see the warehouse. The scanner itself
-                degrades gracefully if the camera native module isn't linked. */}
-              <TouchableOpacity
-                style={[
-                  styles.opsBtn,
-                  {
-                    backgroundColor: palette.bg.muted,
-                  },
-                ]}
-                onPress={() => {
-                  haptic('tap');
-                  setShowScanner(true);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Сканировать штрих-код"
-              >
-                <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
-              </TouchableOpacity>
-              {canManageWarehouse && (
-                <TouchableOpacity
-                  style={[
-                    styles.opsBtn,
-                    {
-                      backgroundColor: palette.bg.muted,
-                    },
-                  ]}
-                  onPress={() => setShowOpsModal(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Складские операции"
-                >
-                  <Ionicons name="swap-horizontal-outline" size={18} color={palette.accent.primary} />
-                </TouchableOpacity>
-              )}
-              {/* «+» создаёт товар в текущем складе. На складе брака этого
-                делать нельзя: товары туда попадают только переводом со
-                склада или возвратом от клиента (бэк бы 400'нул). Скрываем
-                кнопку, чтобы UI не путал владельца. На used (Б/У) товары
-                заводятся через «Покупка б/у» у системного поставщика,
-                поэтому на used-складе тоже прячем создание. */}
-              {canManageWarehouse && activeWarehouse?.kind === 'main' && (
-                <TouchableOpacity
-                  style={styles.addBtn}
-                  onPress={openCreate}
-                  accessibilityRole="button"
-                  accessibilityLabel="Добавить товар"
-                >
-                  <Ionicons name="add" size={18} color={colors.white} />
-                </TouchableOpacity>
-              )}
-            </View>
-          }
-        />
-      )}
+      <WarehouseHeader
+        warehouseName={activeWarehouse?.name || 'Склад'}
+        countLabel={
+          data === undefined
+            ? undefined
+            : listTruncated
+              ? `${allProducts.length} из ${data?.total} товаров`
+              : `${warehouseStats.count} товаров`
+        }
+        queries={[
+          { isFetching, isLoading, dataUpdatedAt },
+          { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
+        ]}
+        search={search}
+        onSearchChange={(value) => {
+          setSearch(value);
+          if (value && activePath.length > 0) navigation.popToTop();
+        }}
+        onWarehousePress={warehouses && warehouses.length > 1 ? () => setShowWarehouseSwitcher(true) : undefined}
+        onScan={() => {
+          haptic('tap');
+          setShowScanner(true);
+        }}
+        onOperations={canManageWarehouse ? () => setShowOpsModal(true) : undefined}
+        onAdd={canManageWarehouse && activeWarehouse?.kind === 'main' ? openCreate : undefined}
+        selection={
+          selectMode
+            ? {
+                count: selectedCount,
+                allSelected: allVisibleSelected,
+                canSelectAll: visibleSelectableCount > 0,
+                onCancel: exitSelectMode,
+                onToggleAll: toggleSelectAll,
+              }
+            : undefined
+        }
+      />
       {/* Stats cards (\u0441\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C / \u0432 \u0440\u043E\u0437\u043D. \u0446\u0435\u043D\u0430\u0445) intentionally
           REMOVED from the warehouse top \u2014 these belong in the Reports
           screen, not in the warehouse header. Owner spec: "\u0441\u043A\u043B\u0430\u0434 \u0438\u043C\u0435\u0435\u0442
@@ -2475,19 +2390,6 @@ function ProductsScreenContents() {
           ))}
         </View>
       )}
-
-      <View style={styles.searchWrap}>
-        <CompactSearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            // \u0412\u0432\u0435\u0434\u0451\u043D \u043F\u043E\u0438\u0441\u043A \u2192 \u0441\u0445\u043B\u043E\u043F\u044B\u0432\u0430\u0435\u043C \u0441\u0442\u0435\u043A \u0434\u043E \u043A\u043E\u0440\u043D\u044F, \u0447\u0442\u043E\u0431\u044B \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u044B
-            // \u0438\u0441\u043A\u0430\u043B\u0438\u0441\u044C \u043F\u043E \u0432\u0441\u0435\u043C\u0443 \u0441\u043A\u043B\u0430\u0434\u0443, \u0430 \u043D\u0435 \u0432\u043D\u0443\u0442\u0440\u0438 \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0438.
-            if (v && activePath.length > 0) navigation.popToTop();
-          }}
-          placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
-        />
-      </View>
 
       {canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId && (
         <TouchableOpacity

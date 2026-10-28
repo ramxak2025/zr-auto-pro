@@ -56,8 +56,12 @@ function style(value: unknown): Record<string, unknown> {
       : {};
 }
 const render = (value: number) =>
-  JournalHeader({ progress: { value } as SharedValue<number>, context: 'Север', onContentTop: jest.fn() });
-it('captures measured context before the pooled native layout event is released', () => {
+  JournalHeader({
+    progress: { value } as SharedValue<number>,
+    context: 'Обновлено только что',
+    onContentTop: jest.fn(),
+  });
+it('captures the measured title/status row before the pooled native layout event is released', () => {
   mockDeferredUpdates.length = 0;
   const tree = render(0);
   const event: { nativeEvent: { layout: { height: number } } | null } = { nativeEvent: { layout: { height: 38 } } };
@@ -69,15 +73,24 @@ it('captures measured context before the pooled native layout event is released'
 it.each([1, 1.4, 2, 3])('keeps one scalable title and a fixed list viewport at fontScale %s', (fontScale) => {
   mockFontScale = fontScale;
   const heights: unknown[] = [];
+  const measurementKeys: Array<string | null> = [];
   for (const progress of [0, 0.5, 1]) {
     const tree = render(progress);
     const titles = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
     expect(titles).toHaveLength(1);
-    expect(style(titles[0].props.style).fontSize).toBe(34 - 17 * progress);
-    expect(titles[0].props.allowFontScaling).toBe(true);
+    expect(style(titles[0].props.style).fontSize).toBeCloseTo((34 - 17 * progress) * fontScale);
+    expect(style(titles[0].props.style).lineHeight).toBeCloseTo((40 - 18 * progress) * fontScale);
+    // Scale is applied once, explicitly, to invalidate stale native text metrics.
+    expect(titles[0].props.allowFontScaling).toBe(false);
     expect(titles[0].props.maxFontSizeMultiplier).toBeUndefined();
+    const measurement = nodes(tree).find((node) => node.props.testID === 'journal-title-measure')!;
+    expect(style(measurement.props.style).fontSize).toBe(34 * fontScale);
+    expect(style(measurement.props.style).lineHeight).toBe(40 * fontScale);
+    expect(measurement.props.allowFontScaling).toBe(false);
+    measurementKeys.push(measurement.key);
     const reservation = nodes(tree).find((node) => node.props.testID === 'journal-header-reservation')!;
     heights.push(style(reservation.props.style).height);
   }
   expect(new Set(heights).size).toBe(1);
+  expect(new Set(measurementKeys).size).toBe(1);
 });
