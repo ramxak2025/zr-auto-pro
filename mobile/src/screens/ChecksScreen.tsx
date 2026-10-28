@@ -12,8 +12,10 @@ import {
   Alert,
   Platform,
   ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated from 'react-native-reanimated';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -29,15 +31,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
-import { JournalHeaderActions, JournalHeaderSegments } from './journal/JournalHeaderControls';
-import JournalHeader, { JournalSearchInput, useJournalHeaderScroll } from './journal/JournalHeader';
+import { JournalHeaderActions, JournalCommandBar } from './journal/JournalHeaderControls';
+import JournalHeader, { useJournalHeaderScroll } from './journal/JournalHeader';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
-import DateTimePickerModal from '../components/DateTimePickerModal';
-import FreshnessBadge from '../components/FreshnessBadge';
-import PointIndicator from '../components/PointIndicator';
+import JournalContext from './journal/JournalContext';
+import { JournalPressable } from './journal/JournalMotion';
+import { Text as JournalText } from '../platform/Typography';
 import JournalFiltersSheet from './journal/JournalFiltersSheet';
+import JournalWarehouseFilters from './journal/JournalWarehouseFilters';
 import {
   emptyJournalFilters,
   journalDateLabel,
@@ -73,6 +76,8 @@ import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared
 import { formatDateShort, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
+
+const JournalList = Animated.createAnimatedComponent(FlatList) as typeof FlatList;
 
 function formatMoney(v: number) {
   return (
@@ -743,13 +748,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({
   );
 });
 
-// ── ActiveFilterChip ───────────────────────────────────────────────────
-// Чип активного фильтра над списком — виден, только когда панель фильтров
-// СВЁРНУТА. Раньше о включённом фильтре напоминала лишь точка-счётчик на
-// воронке, и «куда делись чеки?» превращалось в загадку. Тап по чипу
-// (крестик) снимает ровно свой фильтр. Palette-aware: light — пастель
-// primary[50], dark — приглушённое стекло того же акцента (softTint) —
-// та же пара, что у активной кнопки-воронки рядом.
+// Active filter actions retain a full touch target around their quiet visual capsule.
 function ActiveFilterChip({
   label,
   onClear,
@@ -759,32 +758,23 @@ function ActiveFilterChip({
   onClear: () => void;
   palette: SemanticPalette;
 }) {
-  const dark = palette.mode === 'dark';
   return (
-    <TouchableOpacity
+    <JournalPressable
       onPress={() => {
         haptic('tap');
         onClear();
       }}
-      activeOpacity={0.7}
-      style={[
-        styles.activeFilterChip,
-        {
-          backgroundColor: dark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-          borderColor: dark ? 'rgba(37,99,235,0.35)' : colors.primary[200],
-        },
-      ]}
+      style={styles.activeFilterChip}
       accessibilityRole="button"
       accessibilityLabel={`Снять фильтр: ${label}`}
     >
-      <Text
-        style={[styles.activeFilterChipText, { color: dark ? colors.primary[300] : colors.primary[700] }]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
-      <Ionicons name="close-circle" size={14} color={dark ? colors.primary[300] : colors.primary[600]} />
-    </TouchableOpacity>
+      <View style={[styles.activeFilterCapsule, { backgroundColor: palette.bg.elevated }]}>
+        <JournalText variant="footnote" color={palette.accent.primaryText}>
+          {label}
+        </JournalText>
+        <Ionicons name="close" size={14} color={palette.text.secondary} />
+      </View>
+    </JournalPressable>
   );
 }
 
@@ -925,8 +915,6 @@ export default function ChecksScreen() {
   // tab's `dateFrom`/`dateTo` so the two tabs' filters never bleed together.
   const [warehouseDateFrom, setWarehouseDateFrom] = useState<Date | null>(null);
   const [warehouseDateTo, setWarehouseDateTo] = useState<Date | null>(null);
-  const [showWhDateFromPicker, setShowWhDateFromPicker] = useState(false);
-  const [showWhDateToPicker, setShowWhDateToPicker] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<JournalDoc | null>(null);
 
   // Funnel-badge count is tab-aware — each tab owns its own filter set, so
@@ -1372,221 +1360,158 @@ export default function ChecksScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <JournalHeader
-        compact={journalHeader.compact}
+        progress={journalHeader.progress}
+        onContentTop={journalHeader.onContentTop}
         context={
-          <>
-            <PointIndicator variant="chip" style={styles.pointChipRow} />
-            <FreshnessBadge
-              query={
-                activeTab === 'checks'
-                  ? { isFetching, isLoading, dataUpdatedAt }
-                  : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
-              }
-            />
-          </>
-        }
-        actions={
-          <JournalHeaderActions
-            palette={palette}
-            canSeeTrash={canSeeTrash}
-            onBoard={() => {
-              haptic('tap');
-              navigation.navigate('WorkBoard');
-            }}
-            onTrash={() => {
-              haptic('tap');
-              navigation.navigate('CheckTrash');
-            }}
+          <JournalContext
+            query={
+              activeTab === 'checks'
+                ? { isFetching, isLoading, dataUpdatedAt }
+                : { isFetching: warehouseFetching, isLoading: warehouseLoading, dataUpdatedAt: warehouseUpdatedAt }
+            }
           />
         }
-      />
-
-      {/* «Ожидают отправки» — офлайн-очередь чеков (Round 9). Узкая пилюля в
+      >
+        <JournalCommandBar
+          palette={palette}
+          progress={journalHeader.progress}
+          active={activeTab}
+          onScopeChange={(scope) => {
+            if (activeTab !== scope) haptic('select');
+            journalHeader.expand();
+            setActiveTab(scope);
+          }}
+          search={search}
+          onSearchChange={(value) => {
+            setSearch(value);
+            setPage(1);
+          }}
+          onSearchFocus={journalHeader.onSearchFocus}
+          filterCount={activeFilterCount}
+          onFilters={() => {
+            haptic('tap');
+            Keyboard.dismiss();
+            setShowFilters(true);
+          }}
+          actions={
+            <JournalHeaderActions
+              palette={palette}
+              canSeeTrash={canSeeTrash}
+              onBoard={() => {
+                haptic('tap');
+                navigation.navigate('WorkBoard');
+              }}
+              onTrash={() => {
+                haptic('tap');
+                navigation.navigate('CheckTrash');
+              }}
+            />
+          }
+        />
+        {/* «Ожидают отправки» — офлайн-очередь чеков (Round 9). Узкая пилюля в
           визуальном языке «Доски» выше; видна ТОЛЬКО когда очередь непуста.
           Красная точка-алерт — есть отклонённые сервером записи. */}
-      {queuedChecks.length > 0 && (
-        <View style={styles.pendingQueueRow}>
-          <TouchableOpacity
-            style={[
-              styles.pendingQueuePill,
-              {
-                backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
-                borderColor: palette.mode === 'dark' ? 'rgba(217, 119, 6, 0.35)' : colors.amber[100],
-              },
-            ]}
-            onPress={() => {
-              haptic('tap');
-              setShowPendingSheet(true);
-            }}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel={`Чеки, ожидающие отправки: ${queuedChecks.length}. Открыть список`}
-          >
-            <Ionicons name="cloud-upload-outline" size={14} color={colors.amber[600]} />
-            <Text style={styles.pendingQueueText}>Ожидают отправки: {queuedChecks.length}</Text>
-            {queuedFailedCount > 0 && <Ionicons name="alert-circle" size={14} color={colors.red[600]} />}
-          </TouchableOpacity>
-        </View>
-      )}
+        {queuedChecks.length > 0 && (
+          <View style={styles.pendingQueueRow}>
+            <TouchableOpacity
+              style={[
+                styles.pendingQueuePill,
+                {
+                  backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                  borderColor: palette.mode === 'dark' ? 'rgba(217, 119, 6, 0.35)' : colors.amber[100],
+                },
+              ]}
+              onPress={() => {
+                haptic('tap');
+                setShowPendingSheet(true);
+              }}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`Чеки, ожидающие отправки: ${queuedChecks.length}. Открыть список`}
+            >
+              <Ionicons name="cloud-upload-outline" size={14} color={colors.amber[600]} />
+              <Text style={styles.pendingQueueText}>Ожидают отправки: {queuedChecks.length}</Text>
+              {queuedFailedCount > 0 && <Ionicons name="alert-circle" size={14} color={colors.red[600]} />}
+            </TouchableOpacity>
+          </View>
+        )}
 
-      {/* Segmented control: Чеки | Складские документы. Стоит НАД поиском:
-          сначала выбираешь, НА ЧТО смотришь, потом ищешь и фильтруешь в этом
-          контексте (iOS-иерархия «scope → tools»). Внешний вид —
-          UISegmentedControl: серая подложка, активный сегмент — карточка
-          с мягкой тенью. */}
-      <JournalHeaderSegments
-        palette={palette}
-        active={activeTab}
-        onChange={(scope) => {
-          if (activeTab !== scope) haptic('select');
-          journalHeader.expand();
-          setActiveTab(scope);
-        }}
-      />
-
-      {/* Search + Filter. Placeholder честный и тоже tab-aware: на чеках
-          перечисляет РЕАЛЬНЫЕ поля серверного поиска (включая свежий поиск
-          по № чека), на складских документах — клиентский фильтр по
-          названию / поставщику / комментарию загруженной ленты. */}
-      <View style={styles.searchRow}>
-        <View style={styles.searchInputWrap}>
-          <JournalSearchInput
-            onFocusChange={journalHeader.onSearchFocus}
-            value={search}
-            onChange={(v) => {
-              setSearch(v);
-              setPage(1);
-            }}
-            placeholder={
-              activeTab === 'checks' ? 'Клиент, телефон, госномер, № чека' : 'Название, поставщик, комментарий'
-            }
-          />
-        </View>
-        <TouchableOpacity
-          style={[
-            styles.filterBtn,
-            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-            activeFilterCount > 0 && styles.filterBtnActive,
-            activeFilterCount > 0 && {
-              backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-            },
-          ]}
-          onPress={() => {
-            haptic('tap');
-            setShowFilters(!showFilters);
-          }}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={`Фильтры${activeFilterCount ? `, применено: ${activeFilterCount}` : ''}`}
-        >
-          <Ionicons
-            name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
-            size={18}
-            color={
-              activeFilterCount > 0
-                ? palette.mode === 'dark'
-                  ? colors.primary[300]
-                  : colors.primary[600]
-                : palette.text.secondary
-            }
-          />
-          {activeFilterCount > 0 && (
-            <View style={[styles.filterCountDot, { borderColor: palette.bg.canvas }]}>
-              <Text style={styles.filterCountDotText}>{activeFilterCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* Активные фильтры при СВЁРНУТОЙ панели — строка чипов с крестиками.
+        {/* Активные фильтры при СВЁРНУТОЙ панели — строка чипов с крестиками.
           Каждый чип снимает свой фильтр; «Сбросить всё» — разом. Когда
           панель открыта, чипы не дублируем: состояние видно в ней самой. */}
-      {activeTab === 'checks' && !showFilters && checksFilterCount > 0 && (
-        <View style={styles.activeFiltersRow}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.activeFiltersRowInner}>
-              {dateFrom && (
-                <ActiveFilterChip
-                  label={`С ${formatFilterDate(dateFrom)}`}
-                  onClear={() => setDateFrom(null)}
-                  palette={palette}
-                />
-              )}
-              {dateTo && (
-                <ActiveFilterChip
-                  label={`По ${formatFilterDate(dateTo)}`}
-                  onClear={() => setDateTo(null)}
-                  palette={palette}
-                />
-              )}
-              {filterMasterId !== '' && (
-                <ActiveFilterChip
-                  label={activeUsers.find((u) => u.id === filterMasterId)?.fullName ?? 'Сотрудник'}
-                  onClear={() => setFilterMasterId('')}
-                  palette={palette}
-                />
-              )}
-              {amountFrom && (
-                <ActiveFilterChip
-                  label={`От ${amountFrom} ₽`}
-                  onClear={() => updateApplied({ amountFrom: '' })}
-                  palette={palette}
-                />
-              )}
-              {amountTo && (
-                <ActiveFilterChip
-                  label={`До ${amountTo} ₽`}
-                  onClear={() => updateApplied({ amountTo: '' })}
-                  palette={palette}
-                />
-              )}
-              {hasDiscount && (
-                <ActiveFilterChip
-                  label="Со скидкой"
-                  onClear={() => updateApplied({ hasDiscount: false })}
-                  palette={palette}
-                />
-              )}
-              {returnsOnly && (
-                <ActiveFilterChip label="Возврат клиента" onClear={() => setReturnsOnly(false)} palette={palette} />
-              )}
-              {deferredOnly && (
-                <ActiveFilterChip label="Отложенные" onClear={() => setDeferredOnly(false)} palette={palette} />
-              )}
-              <TouchableOpacity
-                onPress={() => {
-                  haptic('tap');
-                  resetChecksFilters();
-                }}
-                activeOpacity={0.7}
-                style={[
-                  styles.activeFilterChip,
-                  {
-                    backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50],
-                    borderColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.35)' : colors.red[100],
-                  },
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel="Сбросить все фильтры"
-              >
-                <Ionicons
-                  name="close-circle-outline"
-                  size={14}
-                  color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
-                />
-                <Text
-                  style={[
-                    styles.activeFilterChipText,
-                    { color: palette.mode === 'dark' ? colors.red[300] : colors.red[600] },
-                  ]}
+        {activeTab === 'checks' && !showFilters && checksFilterCount > 0 && (
+          <View style={styles.activeFiltersRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.activeFiltersRowInner}>
+                {dateFrom && (
+                  <ActiveFilterChip
+                    label={`С ${formatFilterDate(dateFrom)}`}
+                    onClear={() => setDateFrom(null)}
+                    palette={palette}
+                  />
+                )}
+                {dateTo && (
+                  <ActiveFilterChip
+                    label={`По ${formatFilterDate(dateTo)}`}
+                    onClear={() => setDateTo(null)}
+                    palette={palette}
+                  />
+                )}
+                {filterMasterId !== '' && (
+                  <ActiveFilterChip
+                    label={activeUsers.find((u) => u.id === filterMasterId)?.fullName ?? 'Сотрудник'}
+                    onClear={() => setFilterMasterId('')}
+                    palette={palette}
+                  />
+                )}
+                {amountFrom && (
+                  <ActiveFilterChip
+                    label={`От ${amountFrom} ₽`}
+                    onClear={() => updateApplied({ amountFrom: '' })}
+                    palette={palette}
+                  />
+                )}
+                {amountTo && (
+                  <ActiveFilterChip
+                    label={`До ${amountTo} ₽`}
+                    onClear={() => updateApplied({ amountTo: '' })}
+                    palette={palette}
+                  />
+                )}
+                {hasDiscount && (
+                  <ActiveFilterChip
+                    label="Со скидкой"
+                    onClear={() => updateApplied({ hasDiscount: false })}
+                    palette={palette}
+                  />
+                )}
+                {returnsOnly && (
+                  <ActiveFilterChip label="Возврат клиента" onClear={() => setReturnsOnly(false)} palette={palette} />
+                )}
+                {deferredOnly && (
+                  <ActiveFilterChip label="Отложенные" onClear={() => setDeferredOnly(false)} palette={palette} />
+                )}
+                <JournalPressable
+                  onPress={() => {
+                    haptic('tap');
+                    resetChecksFilters();
+                  }}
+                  style={styles.activeFilterChip}
+                  accessibilityRole="button"
+                  accessibilityLabel="Сбросить все фильтры"
                 >
-                  Сбросить всё
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-        </View>
-      )}
+                  <View style={[styles.activeFilterCapsule, { backgroundColor: palette.bg.elevated }]}>
+                    <Ionicons name="refresh-outline" size={14} color={palette.accent.primaryText} />
+                    <JournalText variant="footnote" color={palette.accent.primaryText}>
+                      Сбросить всё
+                    </JournalText>
+                  </View>
+                </JournalPressable>
+              </View>
+            </ScrollView>
+          </View>
+        )}
+      </JournalHeader>
 
       <JournalFiltersSheet
         visible={showFilters && activeTab === 'checks'}
@@ -1607,147 +1532,17 @@ export default function ChecksScreen() {
         }}
       />
 
-      {/* Filters panel (warehouse-documents tab) — mirrors the checks
-          funnel panel exactly: collapsed by default, revealed by the SAME
-          filter button. Holds the warehouse-doc-specific filters — document
-          type (kind) + period (date range). Supplier / warehouse filters are
-          intentionally absent: the journal feed exposes no warehouse
-          dimension, and supplier debt/balance lives in the Suppliers screen
-          (see journal-documents-ux). */}
-      {showFilters && activeTab === 'warehouse' && (
-        <View style={[styles.filtersPanel, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          {/* Period — same date-range control as the checks panel */}
-          <Text style={[styles.filterSectionLabel, { color: palette.text.tertiary }]}>Период</Text>
-          <View style={styles.filterRow}>
-            <TouchableOpacity
-              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              onPress={() => setShowWhDateFromPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
-              <Text
-                style={[
-                  styles.filterDateText,
-                  { color: palette.text.tertiary },
-                  warehouseDateFrom && { color: palette.text.primary },
-                ]}
-              >
-                {warehouseDateFrom ? formatFilterDate(warehouseDateFrom) : 'С даты'}
-              </Text>
-              {warehouseDateFrom && (
-                <TouchableOpacity
-                  onPress={() => setWarehouseDateFrom(null)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-            <Ionicons name="arrow-forward" size={12} color={palette.text.tertiary} />
-            <TouchableOpacity
-              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              onPress={() => setShowWhDateToPicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
-              <Text
-                style={[
-                  styles.filterDateText,
-                  { color: palette.text.tertiary },
-                  warehouseDateTo && { color: palette.text.primary },
-                ]}
-              >
-                {warehouseDateTo ? formatFilterDate(warehouseDateTo) : 'По дату'}
-              </Text>
-              {warehouseDateTo && (
-                <TouchableOpacity
-                  onPress={() => setWarehouseDateTo(null)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Document type — the kind chips, moved here from the old
-              always-visible glass strip so the tab opens clean (same
-              collapse-behind-funnel UX as the checks tab). Horizontal
-              scroll keeps all chips reachable; per-kind accent + icon
-              preserved from the previous strip. */}
-          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
-            Тип документа
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.kindChipsRowInner}>
-              {KIND_CHIPS.map((chip) => {
-                const active = warehouseKind === chip.key;
-                const visual = chip.key ? journalKindVisual[chip.key] : null;
-                return (
-                  <TouchableOpacity
-                    key={chip.key ?? 'all'}
-                    onPress={() => setWarehouseKind(chip.key)}
-                    activeOpacity={0.7}
-                    style={[
-                      styles.kindChip,
-                      {
-                        // На приглушённой подложке лотка неактивный чип —
-                        // карточная поверхность (bg.muted сливался бы с ней).
-                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.card,
-                        borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
-                      },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={chip.label}
-                  >
-                    {visual && (
-                      <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
-                    )}
-                    <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
-                      {chip.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </ScrollView>
-
-          {warehouseFilterCount > 0 && (
-            <TouchableOpacity
-              style={styles.clearFiltersBtn}
-              onPress={() => {
-                setWarehouseKind(null);
-                setWarehouseDateFrom(null);
-                setWarehouseDateTo(null);
-              }}
-            >
-              <Ionicons name="close-circle-outline" size={14} color={colors.red[500]} />
-              <Text style={styles.clearFiltersBtnText}>Сбросить фильтры</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
-      {/* Warehouse-tab date pickers — separate visibility + state from the
-          checks pickers above so the two tabs' date ranges stay independent. */}
-      <DateTimePickerModal
-        visible={showWhDateFromPicker}
-        value={warehouseDateFrom || new Date()}
-        mode="date"
-        onConfirm={(d) => {
-          setShowWhDateFromPicker(false);
-          setWarehouseDateFrom(d);
-        }}
-        onCancel={() => setShowWhDateFromPicker(false)}
-      />
-      <DateTimePickerModal
-        visible={showWhDateToPicker}
-        value={warehouseDateTo || new Date()}
-        mode="date"
-        onConfirm={(d) => {
-          setShowWhDateToPicker(false);
-          setWarehouseDateTo(d);
-        }}
-        onCancel={() => setShowWhDateToPicker(false)}
+      <JournalWarehouseFilters
+        visible={showFilters && activeTab === 'warehouse'}
+        onClose={() => setShowFilters(false)}
+        dateFrom={warehouseDateFrom}
+        dateTo={warehouseDateTo}
+        kind={warehouseKind}
+        kinds={KIND_CHIPS}
+        onDateFrom={setWarehouseDateFrom}
+        onDateTo={setWarehouseDateTo}
+        onKind={setWarehouseKind}
+        formatDate={formatFilterDate}
       />
 
       {/* Content */}
@@ -1769,7 +1564,7 @@ export default function ChecksScreen() {
             // ScrollView-обёртка нужна ради pull-to-refresh: жест должен
             // работать и из error-state, а не только когда список жив.
             <ScrollView
-              contentContainerStyle={styles.errorStateWrap}
+              contentContainerStyle={[styles.errorStateWrap, { paddingTop: journalHeader.contentTop }]}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
@@ -1782,39 +1577,49 @@ export default function ChecksScreen() {
               />
             </ScrollView>
           ) : checksData === undefined ? (
-            <ListSkeleton count={8} />
+            <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+              <ListSkeleton count={8} />
+            </View>
           ) : checks.length === 0 && !isLoading ? (
             // Filter-aware empty: «ничего не найдено с фильтрами» — не то же
             // самое, что «чеков вообще нет». Сброс условий сохраняет поиск.
             checksFilterCount > 0 || search ? (
-              <EmptyState
-                icon="search"
-                title="Ничего не найдено"
-                description="С текущими фильтрами и поиском чеков нет"
-                action={{
-                  label: checksFilterCount > 0 ? 'Сбросить фильтры' : 'Очистить поиск',
-                  onPress: checksFilterCount > 0 ? resetChecksFilters : () => setSearch(''),
-                }}
-              />
+              <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+                <EmptyState
+                  icon="search"
+                  title="Ничего не найдено"
+                  description="С текущими фильтрами и поиском чеков нет"
+                  action={{
+                    label: checksFilterCount > 0 ? 'Сбросить фильтры' : 'Очистить поиск',
+                    onPress: checksFilterCount > 0 ? resetChecksFilters : () => setSearch(''),
+                  }}
+                />
+              </View>
             ) : (
-              <EmptyState
-                icon="receipt"
-                title="Чеков пока нет"
-                description="Создайте первый заказ-наряд на вкладке «Касса»"
-              />
+              <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+                <EmptyState
+                  icon="receipt"
+                  title="Чеков пока нет"
+                  description="Создайте первый заказ-наряд на вкладке «Касса»"
+                />
+              </View>
             )
           ) : (
-            <FlatList
+            <JournalList
               ref={checksListRef}
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
-              contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
+              contentContainerStyle={[
+                styles.list,
+                { paddingTop: journalHeader.contentTop },
+                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+              ]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
               onScroll={journalHeader.onScroll}
-              scrollEventThrottle={32}
+              scrollEventThrottle={16}
               keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — тот же фикс, что вылечил
               // экран Клиентов. FlashList РЕЦИКЛИТ ячейки; на Fabric/Android
@@ -1868,44 +1673,54 @@ export default function ChecksScreen() {
              from «no documents of THIS kind», so an empty chip reads as a
              real (correct) result, not a broken filter. */}
           {isWarehouseLoading && allWarehouseDocs.length === 0 ? (
-            <ListSkeleton count={8} />
+            <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+              <ListSkeleton count={8} />
+            </View>
           ) : warehouseDocs.length === 0 ? (
             // Filter-aware empty — тот же паттерн, что на вкладке чеков:
             // «ничего не найдено под фильтрами» отличается от «документов нет
             // вообще», и из первого состояния есть выход одним тапом.
             (warehouseKind || warehouseDateFrom || warehouseDateTo || search) && allWarehouseDocs.length > 0 ? (
-              <EmptyState
-                icon="search"
-                title="Ничего не найдено"
-                description="С текущими фильтрами и поиском документов нет"
-                action={{
-                  label: 'Сбросить фильтры',
-                  onPress: () => {
-                    setWarehouseKind(null);
-                    setWarehouseDateFrom(null);
-                    setWarehouseDateTo(null);
-                    setSearch('');
-                  },
-                }}
-              />
+              <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+                <EmptyState
+                  icon="search"
+                  title="Ничего не найдено"
+                  description="С текущими фильтрами и поиском документов нет"
+                  action={{
+                    label: 'Сбросить фильтры',
+                    onPress: () => {
+                      setWarehouseKind(null);
+                      setWarehouseDateFrom(null);
+                      setWarehouseDateTo(null);
+                      setSearch('');
+                    },
+                  }}
+                />
+              </View>
             ) : (
-              <EmptyState
-                icon="cube"
-                title="Документов не найдено"
-                description="Складские движения и поставки появятся здесь"
-              />
+              <View style={{ flex: 1, paddingTop: journalHeader.contentTop }}>
+                <EmptyState
+                  icon="cube"
+                  title="Документов не найдено"
+                  description="Складские движения и поставки появятся здесь"
+                />
+              </View>
             )
           ) : (
-            <FlatList
+            <JournalList
               data={warehouseDocs}
               keyExtractor={(item) => `${item.kind}-${item.id}`}
               renderItem={renderWarehouseDoc}
-              contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
+              contentContainerStyle={[
+                styles.list,
+                { paddingTop: journalHeader.contentTop },
+                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+              ]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
               onScroll={journalHeader.onScroll}
-              scrollEventThrottle={32}
+              scrollEventThrottle={16}
               keyboardShouldPersistTaps="handled"
               // Обычный RN FlatList (НЕ FlashList) — см. пояснение у списка
               // чеков выше. removeClippedSubviews=false убирает пустые кадры
@@ -2117,7 +1932,6 @@ export default function ChecksScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
 
-  pointChipRow: { maxWidth: '100%', paddingHorizontal: 0, borderWidth: 0, backgroundColor: 'transparent' },
   // ── Офлайн-очередь чеков (Round 9) ──────────────────────────────
   // Пилюля «Ожидают отправки: N» — тот же pill-язык, что «Доска» выше,
   // но амберный (внимание без паники); видна только при N > 0.
@@ -2369,19 +2183,22 @@ const styles = StyleSheet.create({
   // ── Active-filter chips (collapsed panel) ───────────────────────
   // Строка чипов активных фильтров над списком чеков — видна только при
   // свёрнутой панели. Цвета chip'а задаются inline (palette-aware).
-  activeFiltersRow: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
-  activeFiltersRowInner: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  activeFiltersRow: { paddingTop: 4 },
+  activeFiltersRowInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   activeFilterChip: {
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    justifyContent: 'center',
+    paddingVertical: 4,
+  },
+  activeFilterCapsule: {
+    minHeight: 32,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1.5],
-    paddingHorizontal: spacing[3],
-    minHeight: Platform.OS === 'android' ? 48 : 44,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    maxWidth: 240,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 18,
   },
-  activeFilterChipText: { fontSize: 13, fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
   // iOS: bottom space reserved via the list's contentInset prop so

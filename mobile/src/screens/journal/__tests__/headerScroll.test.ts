@@ -1,25 +1,23 @@
-import { initialJournalScrollState, nextJournalScrollState } from '../headerScroll';
-it('condenses only after deliberate travel and expands on reverse travel without jitter', () => {
-  let state = initialJournalScrollState();
-  for (const y of [10, 24, 50, 79]) {
-    state = nextJournalScrollState(state, y, false);
-    expect(state.compact).toBe(false);
+import { JOURNAL_SCROLL_DISTANCE, journalHeaderGeometry, journalHeaderProgress } from '../headerScroll';
+
+it('follows the actual scroll continuously in both directions and clamps overscroll', () => {
+  expect(JOURNAL_SCROLL_DISTANCE).toBeGreaterThanOrEqual(80);
+  expect(JOURNAL_SCROLL_DISTANCE).toBeLessThanOrEqual(96);
+  for (const fraction of [0, 0.1, 0.25, 0.5, 0.75, 1, 0.75, 0.25, 0]) {
+    expect(journalHeaderProgress(JOURNAL_SCROLL_DISTANCE * fraction)).toBeCloseTo(fraction);
   }
-  state = nextJournalScrollState(state, 120, false);
-  expect(state.compact).toBe(true);
-  for (const y of [118, 116, 119, 115]) {
-    state = nextJournalScrollState(state, y, false);
-    expect(state.compact).toBe(true);
-  }
-  state = nextJournalScrollState(state, 75, false);
-  expect(state.compact).toBe(false);
+  expect(journalHeaderProgress(-30)).toBe(0);
+  expect(journalHeaderProgress(1000)).toBe(1);
 });
-it('search focus pins context open and overscroll bounce cannot hide it', () => {
-  let state = nextJournalScrollState(initialJournalScrollState(), 200, false);
-  expect(state.compact).toBe(true);
-  state = nextJournalScrollState(state, 400, true);
-  expect(state.compact).toBe(false);
-  state = nextJournalScrollState(state, -30, false);
-  expect(state.y).toBe(0);
-  expect(state.compact).toBe(false);
+it('fits measured context without artificial whitespace and grows with Dynamic Type', () => {
+  expect(journalHeaderGeometry(1, 18).compactHeight).toBe(44);
+  for (const scale of [1, 1.4, 2, 3]) {
+    const contextHeight = 36 * scale;
+    const geometry = journalHeaderGeometry(scale, contextHeight);
+    const contextGap = geometry.expandedHeight - geometry.contextTop - contextHeight;
+    expect(contextGap).toBeGreaterThanOrEqual(16);
+    expect(contextGap).toBeLessThanOrEqual(20);
+    expect(geometry.expandedHeight).toBeGreaterThan(geometry.compactHeight);
+    expect(geometry.compactHeight).toBeGreaterThanOrEqual(22 * scale + 16);
+  }
 });

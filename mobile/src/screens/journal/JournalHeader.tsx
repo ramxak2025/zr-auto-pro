@@ -1,161 +1,166 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Animated,
-  Easing,
-  Keyboard,
-  Platform,
-  Pressable,
-  StyleSheet,
-  TextInput,
-  View,
-  useWindowDimensions,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-} from 'react-native';
+import { Keyboard, Platform, Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import Animated, {
+  interpolate,
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  useSharedValue,
+  type SharedValue,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../../platform/Typography';
-import { initialJournalScrollState, nextJournalScrollState } from './headerScroll';
+import { journalHeaderGeometry, journalHeaderProgress } from './headerScroll';
+import { JournalPressable, useJournalReducedMotion } from './JournalMotion';
 
-export function useJournalReducedMotion() {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    let mounted = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
-      if (mounted) setReduced(value);
-    });
-    const listener = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduced);
-    return () => {
-      mounted = false;
-      listener.remove();
-    };
-  }, []);
-  return reduced;
-}
+export { useJournalReducedMotion } from './JournalMotion';
 
-/** Direction hysteresis changes state only after intentional travel, never once per scroll frame. */
+/** The scroll worklet never rerenders the list. Its top spacer is constant while scrolling. */
 export function useJournalHeaderScroll() {
-  const [compact, setCompact] = useState(false);
-  const state = useRef({ ...initialJournalScrollState(), focused: false });
-  const update = useCallback((next: boolean) => {
-    if (state.current.compact !== next) {
-      state.current.compact = next;
-      setCompact(next);
-    }
-  }, []);
-  const onSearchFocus = useCallback(
-    (focused: boolean) => {
-      state.current.focused = focused;
-      if (focused) update(false);
-    },
-    [update],
+  const { fontScale } = useWindowDimensions();
+  const initialGeometry = journalHeaderGeometry(fontScale, Math.ceil(18 * fontScale), touch);
+  const progress = useSharedValue(0);
+  const focused = useSharedValue(false);
+  const [contentTop, setContentTop] = useState(
+    initialGeometry.expandedHeight - initialGeometry.compactHeight + Math.max(touch + 12, 22 * fontScale + 24) + 4,
   );
-  const onScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const next = nextJournalScrollState(state.current, event.nativeEvent.contentOffset.y, state.current.focused);
-      state.current = { ...next, compact: state.current.compact, focused: state.current.focused };
-      update(next.compact);
+  const onScroll = useAnimatedScrollHandler((event) => {
+    if (!focused.value) progress.value = journalHeaderProgress(event.contentOffset.y);
+  });
+  const onSearchFocus = useCallback(
+    (value: boolean) => {
+      focused.value = value;
     },
-    [update],
+    [focused],
   );
   const expand = useCallback(() => {
-    state.current.anchor = state.current.y;
-    update(false);
-  }, [update]);
-  return { compact, onScroll, onSearchFocus, expand };
+    progress.value = 0;
+  }, [progress]);
+  const onContentTop = useCallback((height: number) => {
+    setContentTop((current) => (current === height ? current : height));
+  }, []);
+  return { progress, onScroll, onSearchFocus, expand, contentTop, onContentTop };
 }
 
+/**
+ * Only the compact title reserves layout space. The floating controls overlap the
+ * list viewport, so iOS material samples actual moving rows beneath them.
+ */
 export default function JournalHeader({
-  compact,
+  progress,
   context,
-  actions,
+  children,
+  onContentTop,
 }: {
-  compact: boolean;
+  progress: SharedValue<number>;
   context: React.ReactNode;
-  actions: React.ReactNode;
+  children?: React.ReactNode;
+  onContentTop: (height: number) => void;
 }) {
   const p = useColors();
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
-  const largeText = fontScale > 1.3;
-  const titleMinHeight = Math.ceil((textVariantStyles.title2.lineHeight ?? 28) * fontScale) + 12;
   const reduced = useJournalReducedMotion();
-  const progress = useRef(new Animated.Value(1)).current;
-  const [contextHeight, setContextHeight] = useState(0);
+  const [contextHeight, setContextHeight] = useState(Math.ceil(18 * fontScale));
+  const [controlsHeight, setControlsHeight] = useState(Math.max(touch + 12, 22 * fontScale + 24) + 4);
+  const [compact, setCompact] = useState(false);
+  const { compactHeight, expandedHeight, contextTop, titleTop } = journalHeaderGeometry(
+    fontScale,
+    contextHeight,
+    touch,
+  );
+  useAnimatedReaction(
+    () => progress.value >= 0.75,
+    (value, previous) => {
+      if (value !== previous) runOnJS(setCompact)(value);
+    },
+    [progress],
+  );
   useEffect(() => {
-    const animation = Animated.timing(progress, {
-      toValue: compact ? 0 : 1,
-      duration: reduced ? 0 : 180,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [compact, progress, reduced]);
+    onContentTop(expandedHeight - compactHeight + controlsHeight);
+  }, [compactHeight, controlsHeight, expandedHeight, onContentTop]);
+  const stage = useAnimatedStyle(() => ({
+    height: interpolate(progress.value, [0, 1], [expandedHeight, compactHeight]),
+  }));
+  const title = useAnimatedStyle(() => ({
+    fontSize: interpolate(progress.value, [0, 1], [34, 17]),
+    lineHeight: interpolate(progress.value, [0, 1], [40, 22]),
+    top: interpolate(progress.value, [0, 1], [titleTop, 11]),
+  }));
+  const contextMotion = useAnimatedStyle(() => ({
+    opacity: interpolate(progress.value, [0, 0.65, 1], [1, 0, 0]),
+    transform: [{ translateY: reduced ? 0 : -20 * progress.value }],
+  }));
+  const controls = useAnimatedStyle(() => ({
+    transform: [{ translateY: -progress.value * (expandedHeight - compactHeight) }],
+  }));
   return (
-    <View style={[s.header, { paddingTop: insets.top, backgroundColor: p.bg.canvas }]}>
-      <View style={[s.toolbar, { minHeight: Math.max(touch + 4, titleMinHeight) }, largeText && s.toolbarLarge]}>
-        <Text
-          variant="title2"
-          color={p.text.primary}
-          accessibilityRole="header"
-          style={[s.title, largeText && s.titleLarge]}
-        >
-          Журнал
-        </Text>
-        <View style={[s.actions, largeText && s.actionsLarge]}>{actions}</View>
-      </View>
-      <Animated.View
-        style={{
-          height: contextHeight
-            ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, contextHeight] })
-            : undefined,
-          overflow: 'hidden',
-        }}
-        pointerEvents={compact ? 'none' : 'auto'}
-        accessibilityElementsHidden={compact}
-        importantForAccessibility={compact ? 'no-hide-descendants' : 'auto'}
+    <>
+      <View testID="journal-header-reservation" style={{ height: insets.top + compactHeight }} />
+      <View
+        testID="journal-header"
+        style={[s.header, { height: insets.top + expandedHeight + controlsHeight }]}
+        pointerEvents="box-none"
       >
+        <View style={[s.safe, { height: insets.top, backgroundColor: p.bg.canvas }]} />
         <Animated.View
-          onLayout={(event) => {
-            // Native layout events are pooled; capture before React runs a deferred state updater.
-            const measuredHeight = event.nativeEvent.layout.height;
-            setContextHeight((previous) => (previous === measuredHeight ? previous : measuredHeight));
-          }}
-          style={[
-            s.context,
-            {
-              opacity: progress,
-              transform: [
-                { translateY: reduced ? 0 : progress.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) },
-              ],
-            },
-          ]}
+          testID="journal-title-stage"
+          style={[s.stage, { top: insets.top, backgroundColor: p.bg.canvas }, stage]}
         >
-          {context}
+          <Animated.Text
+            accessibilityRole="header"
+            allowFontScaling
+            style={[textVariantStyles.display, s.title, { color: p.text.primary }, title]}
+          >
+            Журнал
+          </Animated.Text>
+          <Animated.View
+            pointerEvents="none"
+            accessibilityElementsHidden={compact}
+            importantForAccessibility={compact ? 'no-hide-descendants' : 'auto'}
+            onLayout={(event) => {
+              const measuredHeight = event.nativeEvent.layout.height;
+              setContextHeight((previous) => (previous === measuredHeight ? previous : measuredHeight));
+            }}
+            style={[s.context, { top: contextTop }, contextMotion]}
+          >
+            {context}
+          </Animated.View>
         </Animated.View>
-      </Animated.View>
-    </View>
+        <Animated.View
+          testID="journal-floating-controls"
+          pointerEvents="box-none"
+          onLayout={(event) => setControlsHeight(event.nativeEvent.layout.height)}
+          style={[s.controls, { top: insets.top + expandedHeight }, controls]}
+        >
+          {children}
+        </Animated.View>
+      </View>
+    </>
   );
 }
 
-/** Stable field: filtering and header condensation never remount the native input. */
+/** One native field survives both the authored reveal and all scope/filter changes. */
 export function JournalSearchInput({
   value,
   onChange,
   onFocusChange,
   placeholder,
+  active = true,
+  onCancel,
 }: {
   value: string;
   onChange: (value: string) => void;
   onFocusChange: (focused: boolean) => void;
   placeholder: string;
+  active?: boolean;
+  onCancel?: () => void;
 }) {
   const p = useColors();
   const [local, setLocal] = useState(value);
-  const [focused, setFocused] = useState(false);
   const field = useRef<TextInput>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearTimer = () => {
@@ -164,6 +169,10 @@ export function JournalSearchInput({
       timer.current = null;
     }
   };
+  useEffect(() => {
+    if (active) field.current?.focus();
+    else field.current?.blur();
+  }, [active]);
   useEffect(() => {
     clearTimer();
     setLocal((previous) => (previous === value ? previous : value));
@@ -175,11 +184,16 @@ export function JournalSearchInput({
     [],
   );
   return (
-    <View style={s.searchRow}>
+    <View
+      style={s.searchRow}
+      accessibilityElementsHidden={!active}
+      importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
+    >
       <View style={[s.search, { backgroundColor: p.bg.muted }]}>
-        <Ionicons name="search" size={18} color={p.text.secondary} />
+        <Ionicons name="search" size={19} color={p.text.secondary} />
         <TextInput
           ref={field}
+          testID="journal-search-input"
           value={local}
           onChangeText={(next) => {
             setLocal(next);
@@ -191,18 +205,18 @@ export function JournalSearchInput({
           accessibilityLabel={placeholder}
           placeholder={placeholder}
           placeholderTextColor={p.text.secondary}
+          selectionColor={p.accent.primary}
+          editable={active}
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
-          onSubmitEditing={Keyboard.dismiss}
-          onFocus={() => {
-            setFocused(true);
-            onFocusChange(true);
+          onSubmitEditing={() => {
+            clearTimer();
+            onChange(local);
+            Keyboard.dismiss();
           }}
-          onBlur={() => {
-            setFocused(false);
-            onFocusChange(false);
-          }}
+          onFocus={() => onFocusChange(true)}
+          onBlur={() => onFocusChange(false)}
         />
         {!!local && (
           <Pressable
@@ -216,55 +230,45 @@ export function JournalSearchInput({
               field.current?.focus();
             }}
           >
-            <Ionicons name="close-circle" size={20} color={p.text.secondary} />
+            <Ionicons name="close-circle" size={19} color={p.text.secondary} />
           </Pressable>
         )}
       </View>
-      {focused && (
-        <Pressable
-          style={s.cancel}
-          accessibilityRole="button"
-          accessibilityLabel="Отменить поиск"
-          onPress={() => {
-            clearTimer();
-            setLocal('');
-            onChange('');
-            field.current?.blur();
-            Keyboard.dismiss();
-          }}
-        >
-          <Text variant="footnote" color={p.accent.primary}>
-            Отмена
-          </Text>
-        </Pressable>
-      )}
+      <JournalPressable
+        style={s.cancel}
+        accessibilityRole="button"
+        accessibilityLabel="Отменить поиск"
+        onPress={() => {
+          clearTimer();
+          setLocal('');
+          onChange('');
+          field.current?.blur();
+          Keyboard.dismiss();
+          onFocusChange(false);
+          onCancel?.();
+        }}
+      >
+        <Text variant="footnote" color={p.accent.primaryText}>
+          Отмена
+        </Text>
+      </JournalPressable>
     </View>
   );
 }
 const touch = Platform.OS === 'android' ? 48 : 44;
 const s = StyleSheet.create({
-  header: { paddingHorizontal: 16 },
-  toolbar: { minHeight: touch + 4, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  toolbarLarge: { flexDirection: 'column', alignItems: 'stretch', gap: 0 },
-  title: { flex: 1, minWidth: 0, paddingVertical: 6 },
-  titleLarge: { flex: 0 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  actionsLarge: { alignSelf: 'flex-end', maxWidth: '100%' },
-  context: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    columnGap: 8,
-    rowGap: 4,
-    paddingBottom: 8,
-  },
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  header: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, overflow: 'visible' },
+  safe: { position: 'absolute', left: 0, right: 0, top: 0 },
+  stage: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+  title: { position: 'absolute', left: 20, right: 20 },
+  context: { position: 'absolute', left: 20, right: 20, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  controls: { position: 'absolute', left: 0, right: 0, paddingHorizontal: 16, paddingBottom: 4 },
+  searchRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
   search: {
     flex: 1,
     minWidth: 0,
     minHeight: touch,
-    borderRadius: 10,
+    borderRadius: 20,
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: 12,
@@ -272,5 +276,5 @@ const s = StyleSheet.create({
   },
   field: { flex: 1, minWidth: 0, minHeight: touch, paddingVertical: 8, paddingRight: 4 },
   icon: { minWidth: touch, minHeight: touch, alignItems: 'center', justifyContent: 'center' },
-  cancel: { minHeight: touch, justifyContent: 'center', paddingHorizontal: 4 },
+  cancel: { minHeight: touch, justifyContent: 'center', paddingRight: 6 },
 });
