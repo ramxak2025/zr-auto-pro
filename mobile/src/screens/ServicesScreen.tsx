@@ -605,8 +605,8 @@ export default function ServicesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader scroll={section} title="Услуги" subtitle={total > 0 ? `Услуг: ${total}` : undefined}>
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <HeaderIsland layout="column" style={{ flexWrap: 'nowrap' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', gap: 6 }}>
             <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
             <HeaderSearch
               timing={{ debounceMs: 300 }}
