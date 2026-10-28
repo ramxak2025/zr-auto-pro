@@ -3,6 +3,7 @@ const mockDeferredUpdates: Array<(previous: number) => number> = [];
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useEffect: jest.fn(),
+  useLayoutEffect: jest.fn(),
   useRef: (current: unknown) => ({ current }),
   useState: (initial: unknown) => [initial, (update: (previous: number) => number) => mockDeferredUpdates.push(update)],
 }));
@@ -38,7 +39,7 @@ jest.mock('../../../platform/Typography', () => ({
   textVariantStyles: { display: { fontSize: 34, lineHeight: 40 } },
 }));
 import React from 'react';
-import type { SharedValue } from 'react-native-reanimated';
+import type { JournalScrollController } from '../JournalHeader';
 import JournalHeader from '../JournalHeader';
 type Element = React.ReactElement<
   Record<string, unknown> & { children?: React.ReactNode; onLayout?: (event: unknown) => void }
@@ -55,11 +56,14 @@ function style(value: unknown): Record<string, unknown> {
       ? (value as Record<string, unknown>)
       : {};
 }
-const render = (value: number) =>
+const render = (offset: number) =>
   JournalHeader({
-    progress: { value } as SharedValue<number>,
+    scroll: {
+      scrollY: { value: offset },
+      titleHeight: { value: 64 },
+      onContentTop: jest.fn(),
+    } as unknown as JournalScrollController,
     context: 'Обновлено только что',
-    onContentTop: jest.fn(),
   });
 it('captures the measured title/status row before the pooled native layout event is released', () => {
   mockDeferredUpdates.length = 0;
@@ -68,29 +72,27 @@ it('captures the measured title/status row before the pooled native layout event
   nodes(tree).find((node) => node.props.onLayout)!.props.onLayout!(event);
   event.nativeEvent = null;
   expect(mockDeferredUpdates).toHaveLength(1);
-  expect(mockDeferredUpdates[0](0)).toBe(38);
+  expect(mockDeferredUpdates[0](0)).toBe(24);
 });
-it.each([1, 1.4, 2, 3])('keeps one scalable title and a fixed list viewport at fontScale %s', (fontScale) => {
-  mockFontScale = fontScale;
-  const heights: unknown[] = [];
-  const measurementKeys: Array<string | null> = [];
-  for (const progress of [0, 0.5, 1]) {
-    const tree = render(progress);
-    const titles = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
-    expect(titles).toHaveLength(1);
-    expect(style(titles[0].props.style).fontSize).toBeCloseTo((34 - 17 * progress) * fontScale);
-    expect(style(titles[0].props.style).lineHeight).toBeCloseTo((40 - 18 * progress) * fontScale);
-    // Scale is applied once, explicitly, to invalidate stale native text metrics.
-    expect(titles[0].props.allowFontScaling).toBe(false);
-    expect(titles[0].props.maxFontSizeMultiplier).toBeUndefined();
-    const measurement = nodes(tree).find((node) => node.props.testID === 'journal-title-measure')!;
-    expect(style(measurement.props.style).fontSize).toBe(34 * fontScale);
-    expect(style(measurement.props.style).lineHeight).toBe(40 * fontScale);
-    expect(measurement.props.allowFontScaling).toBe(false);
-    measurementKeys.push(measurement.key);
-    const reservation = nodes(tree).find((node) => node.props.testID === 'journal-header-reservation')!;
-    heights.push(style(reservation.props.style).height);
-  }
-  expect(new Set(heights).size).toBe(1);
-  expect(new Set(measurementKeys).size).toBe(1);
-});
+it.each([1, 1.353, 2, 3])(
+  'moves the full-size title with content and pins only controls at fontScale %s',
+  (fontScale) => {
+    mockFontScale = fontScale;
+    for (const offset of [0, 20, 64, 200, 0]) {
+      const tree = render(offset);
+      const title = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
+      expect(title).toHaveLength(1);
+      expect(style(title[0].props.style).fontSize).toBe(34 * fontScale);
+      expect(title[0].props.allowFontScaling).toBe(false);
+      const reservation = nodes(tree).find((node) => node.props.testID === 'journal-header-reservation')!;
+      expect(style(reservation.props.style).height).toBe(62);
+      const stage = style(nodes(tree).find((node) => node.props.testID === 'journal-title-stage')!.props.style);
+      const controls = style(
+        nodes(tree).find((node) => node.props.testID === 'journal-floating-controls')!.props.style,
+      );
+      const movement = (controls.transform as Array<{ translateY: number }>)[0].translateY;
+      expect(movement).toBe(-Math.min(offset, Number(stage.height)));
+      expect(Number(controls.top) + movement).toBe(62 + Math.max(0, Number(stage.height) - offset));
+    }
+  },
+);

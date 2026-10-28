@@ -1,14 +1,16 @@
 .journal-header {
   --journal-material: 0;
+  --journal-title-height: 80px;
+  --journal-sticky-inset: 0px;
   --journal-dock-elevation: 1;
   position: sticky;
-  top: -80px;
+  top: calc(-1 * var(--journal-title-height) - var(--journal-sticky-inset));
   z-index: 20;
   padding-bottom: 12px;
   overflow-anchor: none;
 }
 .journal-heading {
-  height: 80px;
+  padding-bottom: 17px;
   overflow: hidden;
 }
 .journal-title {
@@ -30,7 +32,7 @@
 }
 .journal-command-material {
   position: absolute;
-  top: 80px;
+  top: var(--journal-title-height);
   bottom: 0;
   left: -24px;
   right: -24px;

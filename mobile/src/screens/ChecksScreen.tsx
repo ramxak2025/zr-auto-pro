@@ -1356,12 +1356,16 @@ export default function ChecksScreen() {
     [warehouseDateHeaderByIndex, tenantTz, palette],
   );
 
+  const hasJournalList =
+    activeTab === 'checks' ? checksData !== undefined && checks.length > 0 : warehouseDocs.length > 0;
+  useEffect(() => {
+    if (!hasJournalList) journalHeader.reset();
+  }, [hasJournalList, journalHeader.reset]);
   const isWarehouseLoading = warehouseLoading;
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <JournalHeader
-        progress={journalHeader.progress}
-        onContentTop={journalHeader.onContentTop}
+        scroll={journalHeader}
         context={
           <JournalContext
             query={
@@ -1377,16 +1381,18 @@ export default function ChecksScreen() {
           progress={journalHeader.progress}
           active={activeTab}
           onScopeChange={(scope) => {
-            if (activeTab !== scope) haptic('select');
-            journalHeader.expand();
-            setActiveTab(scope);
+            if (activeTab !== scope) {
+              haptic('select');
+              journalHeader.reset();
+              setActiveTab(scope);
+            }
           }}
           search={search}
           onSearchChange={(value) => {
             setSearch(value);
             setPage(1);
           }}
-          onSearchFocus={journalHeader.onSearchFocus}
+          onSearchFocus={() => undefined}
           filterCount={activeFilterCount}
           onFilters={() => {
             haptic('tap');

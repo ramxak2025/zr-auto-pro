@@ -27,6 +27,8 @@ export default function JournalModal({
   visible,
   onRequestClose,
   onDismiss,
+  onExited,
+  closeLabel,
   children,
   menu = false,
   anchor,
@@ -34,6 +36,9 @@ export default function JournalModal({
   visible: boolean;
   onRequestClose: () => void;
   onDismiss?: () => void;
+  /** After the exit and native modal dismissal; may present a successor modal. */
+  onExited?: () => void;
+  closeLabel?: string;
   children: React.ReactNode;
   menu?: boolean;
   anchor?: JournalMenuAnchor;
@@ -51,17 +56,37 @@ export default function JournalModal({
   const open = useRef(visible);
   const generation = useRef(0);
   const dismissRef = useRef(onDismiss || onRequestClose);
+  const exitedRef = useRef(onExited);
+  const nativeExitPending = useRef(false);
   open.current = visible;
   dismissRef.current = onDismiss || onRequestClose;
+  exitedRef.current = onExited;
   const dismiss = () => {
     if (open.current) dismissRef.current();
   };
   const finishExit = useCallback((run: number, finished: boolean | undefined) => {
-    if (canFinishJournalExit(finished, run, generation.current, open.current)) setMounted(false);
+    if (canFinishJournalExit(finished, run, generation.current, open.current)) {
+      nativeExitPending.current = true;
+      setMounted(false);
+    }
+  }, []);
+  const notifyExited = useCallback(() => {
+    if (!open.current && nativeExitPending.current) {
+      nativeExitPending.current = false;
+      exitedRef.current?.();
+    }
   }, []);
   useEffect(() => {
-    if (visible) setMounted(true);
+    if (visible) {
+      nativeExitPending.current = false;
+      setMounted(true);
+    }
   }, [visible]);
+  useEffect(() => {
+    // iOS uses its actual native dismissal event. Android tears down its dialog
+    // with the visible=false commit; it has no corresponding onDismiss event.
+    if (Platform.OS !== 'ios' && !mounted && !visible) notifyExited();
+  }, [mounted, visible, notifyExited]);
   useEffect(() => {
     if (!mounted) return;
     const run = ++generation.current;
@@ -119,17 +144,20 @@ export default function JournalModal({
     .onFinalize((_event, success) => {
       if (!success) drag.value = withSpring(0, { duration: reduced ? 0 : 230, dampingRatio: 1 });
     });
-  if (!mounted) return null;
+  // Keep the iOS Modal controller mounted for an opted-in successor handoff.
+  // Unmounting it here would remove its native-dismiss subscription too early.
+  if (!mounted && !onExited) return null;
   const menuTop = Math.min(anchor ? anchor.y + anchor.height + 8 : insets.top + 56, height - insets.bottom - 180);
   const menuRight = anchor ? Math.max(16, Math.min(width - 256, width - anchor.x - anchor.width)) : 16;
   return (
     <Modal
-      visible
+      visible={mounted}
       transparent
       animationType="none"
       statusBarTranslucent
       navigationBarTranslucent
       onRequestClose={onRequestClose}
+      onDismiss={notifyExited}
     >
       <GestureHandlerRootView style={s.host}>
         <KeyboardProvider>
@@ -144,7 +172,7 @@ export default function JournalModal({
               ]}
               onPress={dismiss}
               accessibilityRole="button"
-              accessibilityLabel={menu ? 'Закрыть меню журнала' : 'Закрыть фильтры'}
+              accessibilityLabel={closeLabel || (menu ? 'Закрыть меню журнала' : 'Закрыть фильтры')}
             />
           </Animated.View>
           <KeyboardAvoidingView behavior="padding" style={s.host} pointerEvents="box-none">

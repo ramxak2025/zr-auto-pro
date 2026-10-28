@@ -20,6 +20,7 @@ import CachedImage from '../components/CachedImage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { compactTouchSize } from '../components/CompactScreenHeader';
 import WarehouseHeader from './warehouse/WarehouseHeader';
+import { WarehouseList, useWarehouseScroll } from './warehouse/WarehouseScroll';
 import { usePointAccess } from '../hooks/usePoints';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -449,6 +450,7 @@ function ProductsScreenContents() {
   const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const [search, setSearch] = useState('');
+  const warehouseScroll = useWarehouseScroll();
   // Весь каталог склада одной страницей — см. PRODUCT_LIST_LIMIT.
   const limit = PRODUCT_LIST_LIMIT;
   // Slim list payload (audit #5) — `?fields=` projection. The field set now
@@ -2173,10 +2175,95 @@ function ProductsScreenContents() {
     return getImageUrl(photo);
   };
 
+  const showProductList = !(
+    ((data === undefined || allProducts.length === 0) && isError) ||
+    data === undefined ||
+    (cellFilterId && currentProducts.length === 0) ||
+    (!search && sortedFolders.length === 0 && currentProducts.length === 0)
+  );
+  React.useEffect(() => {
+    if (!showProductList) warehouseScroll.reset();
+  }, [showProductList, warehouseScroll.reset]);
+  const ListPrefix = (
+    <>
+      {/* Breadcrumb */}
+      {activePath.length > 0 && !search && (
+        <View style={styles.breadcrumb}>
+          <TouchableOpacity onPress={() => goToLevel(0)} style={styles.breadcrumbItem}>
+            <Ionicons name="home-outline" size={14} color={palette.accent.primary} />
+            <Text style={[styles.breadcrumbText, { color: palette.accent.primary }]}>{'\u0412\u0441\u0435'}</Text>
+          </TouchableOpacity>
+          {activePath.map((seg, i) => (
+            <React.Fragment key={i}>
+              <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+              <TouchableOpacity onPress={() => goToLevel(i + 1)} style={styles.breadcrumbItem}>
+                <Text
+                  style={[
+                    styles.breadcrumbText,
+                    { color: palette.accent.primary },
+                    i === activePath.length - 1 && [styles.breadcrumbTextActive, { color: palette.text.primary }],
+                  ]}
+                >
+                  {seg}
+                </Text>
+              </TouchableOpacity>
+            </React.Fragment>
+          ))}
+        </View>
+      )}
+
+      {activeWarehouse?.kind === 'defect' && activePath.length === 0 && !search && (
+        <View
+          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="information-circle-outline" size={16} color={colors.orange[600]} />
+          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
+            Товары попадают в брак только через перемещение со склада или возврат от клиента
+          </Text>
+        </View>
+      )}
+
+      {/* Активный фильтр «ячейка X» (2026-09-30): пришли со страницы «Ячейки хранения».
+          Плашка показывает, что список сужен, и снимает фильтр одним касанием. */}
+      {cellFilterId ? (
+        <View style={styles.cellFilterRow}>
+          <TouchableOpacity
+            onPress={clearCellFilter}
+            style={[styles.cellFilterChip, { backgroundColor: palette.accent.primarySoft }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Ячейка ${cellFilterCode ?? ''}. Сбросить фильтр`}
+            hitSlop={8}
+          >
+            <Ionicons name="file-tray-stacked-outline" size={14} color={palette.accent.primary} />
+            <Text style={[styles.cellFilterChipText, { color: palette.accent.primary }]} numberOfLines={1}>
+              {`Ячейка ${cellFilterCode ?? ''}`.trim()}
+            </Text>
+            <Ionicons name="close-circle" size={16} color={palette.accent.primary} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* Список обрезан лимитом — говорим об этом прямо и подсказываем выход.
+          Поиск на этом экране серверный, он видит весь каталог. */}
+      {listTruncated && (
+        <View
+          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="warning-outline" size={16} color={colors.orange[600]} />
+          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
+            {cellFilterId
+              ? `Показаны ${allProducts.length} из ${data?.total} товаров, поэтому в ячейке могут быть не все. Введите код ячейки в поиск.`
+              : `Показаны ${allProducts.length} из ${data?.total} товаров. Остальные найдутся поиском.`}
+          </Text>
+        </View>
+      )}
+    </>
+  );
+
   // Header for the products FlashList — папки + breadcrumb. Мемоизирован,
   // чтобы FlashList не пересоздавал ListHeaderComponent на каждый рендер
   // ProductsScreen и folder rows физически переиспользовались.
-  const ListHeader = useMemo(() => {
+  const FolderListHeader = useMemo(() => {
     if (search || sortedFolders.length === 0) return null;
     return (
       <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
@@ -2224,6 +2311,13 @@ function ProductsScreenContents() {
     palette.accent.primary,
     palette.accent.primarySoft,
   ]);
+
+  const ListHeader = (
+    <View>
+      {ListPrefix}
+      {FolderListHeader}
+    </View>
+  );
 
   // Stable references for the warehouse FlashList — keys and render
   // function. The renderItem indirection lets the memoised ProductRow
@@ -2324,6 +2418,7 @@ function ProductsScreenContents() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <WarehouseHeader
+        scroll={warehouseScroll}
         warehouseName={activeWarehouse?.name || 'Склад'}
         countLabel={
           data === undefined
@@ -2348,6 +2443,17 @@ function ProductsScreenContents() {
         }}
         onOperations={canManageWarehouse ? () => setShowOpsModal(true) : undefined}
         onAdd={canManageWarehouse && activeWarehouse?.kind === 'main' ? openCreate : undefined}
+        onCreateFolder={
+          canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId
+            ? () =>
+                setNewFolder({
+                  parentPath: activePath.join('/'),
+                  warehouseId: activeWarehouseId,
+                  warehouseName: activeWarehouse?.name ?? 'Склад',
+                  session: captureDataSession(),
+                })
+            : undefined
+        }
         selection={
           selectMode
             ? {
@@ -2364,59 +2470,6 @@ function ProductsScreenContents() {
           REMOVED from the warehouse top \u2014 these belong in the Reports
           screen, not in the warehouse header. Owner spec: "\u0441\u043A\u043B\u0430\u0434 \u0438\u043C\u0435\u0435\u0442
           \u0430\u043A\u043A\u0443\u0440\u0430\u0442\u043D\u0443\u044E \u0448\u0430\u043F\u043A\u0443 \u0431\u0435\u0437 \u0444\u0438\u043D\u0430\u043D\u0441\u043E\u0432\u044B\u0445 \u0441\u0443\u043C\u043C". */}
-
-      {/* Breadcrumb */}
-      {activePath.length > 0 && !search && (
-        <View style={styles.breadcrumb}>
-          <TouchableOpacity onPress={() => goToLevel(0)} style={styles.breadcrumbItem}>
-            <Ionicons name="home-outline" size={14} color={palette.accent.primary} />
-            <Text style={[styles.breadcrumbText, { color: palette.accent.primary }]}>{'\u0412\u0441\u0435'}</Text>
-          </TouchableOpacity>
-          {activePath.map((seg, i) => (
-            <React.Fragment key={i}>
-              <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
-              <TouchableOpacity onPress={() => goToLevel(i + 1)} style={styles.breadcrumbItem}>
-                <Text
-                  style={[
-                    styles.breadcrumbText,
-                    { color: palette.accent.primary },
-                    i === activePath.length - 1 && [styles.breadcrumbTextActive, { color: palette.text.primary }],
-                  ]}
-                >
-                  {seg}
-                </Text>
-              </TouchableOpacity>
-            </React.Fragment>
-          ))}
-        </View>
-      )}
-
-      {canManageWarehouse && activeWarehouseId && !search && !selectMode && !cellFilterId && (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Новая папка"
-          style={{
-            minHeight: 44,
-            paddingHorizontal: spacing[4],
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: spacing[2],
-          }}
-          onPress={() =>
-            setNewFolder({
-              parentPath: activePath.join('/'),
-              warehouseId: activeWarehouseId,
-              warehouseName: activeWarehouse?.name ?? 'Склад',
-              session: captureDataSession(),
-            })
-          }
-        >
-          <Ionicons name="folder-open-outline" size={18} color={palette.accent.primaryText} />
-          <Text style={{ color: palette.accent.primaryText, fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>
-            Новая папка
-          </Text>
-        </TouchableOpacity>
-      )}
 
       {newFolder && (
         <NewCatalogFolderModal
@@ -2454,51 +2507,7 @@ function ProductsScreenContents() {
           \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043D\u043E\u0441 / \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u2014 UI \u044D\u0442\u043E \u043E\u0431\u044A\u044F\u0441\u043D\u044F\u0435\u0442, \u0447\u0442\u043E\u0431\u044B
           \u0432\u043B\u0430\u0434\u0435\u043B\u0435\u0446 \u043D\u0435 \u0438\u0441\u043A\u0430\u043B \u043A\u043D\u043E\u043F\u043A\u0443 \u00AB+\u00BB. \u0412\u0438\u0434\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043A\u043E\u0440\u043D\u0435 \u0441\u043A\u043B\u0430\u0434\u0430,
           \u043D\u0435 \u0434\u0443\u0431\u043B\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u043D\u0430 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0430\u0445, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u0437\u0430\u0433\u0440\u043E\u043C\u043E\u0436\u0434\u0430\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A. */}
-      {activeWarehouse?.kind === 'defect' && activePath.length === 0 && !search && (
-        <View
-          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        >
-          <Ionicons name="information-circle-outline" size={16} color={colors.orange[600]} />
-          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
-            Товары попадают в брак только через перемещение со склада или возврат от клиента
-          </Text>
-        </View>
-      )}
-
-      {/* Активный фильтр «ячейка X» (2026-09-30): пришли со страницы «Ячейки хранения».
-          Плашка показывает, что список сужен, и снимает фильтр одним касанием. */}
-      {cellFilterId ? (
-        <View style={styles.cellFilterRow}>
-          <TouchableOpacity
-            onPress={clearCellFilter}
-            style={[styles.cellFilterChip, { backgroundColor: palette.accent.primarySoft }]}
-            accessibilityRole="button"
-            accessibilityLabel={`Ячейка ${cellFilterCode ?? ''}. Сбросить фильтр`}
-            hitSlop={8}
-          >
-            <Ionicons name="file-tray-stacked-outline" size={14} color={palette.accent.primary} />
-            <Text style={[styles.cellFilterChipText, { color: palette.accent.primary }]} numberOfLines={1}>
-              {`Ячейка ${cellFilterCode ?? ''}`.trim()}
-            </Text>
-            <Ionicons name="close-circle" size={16} color={palette.accent.primary} />
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {/* Список обрезан лимитом — говорим об этом прямо и подсказываем выход.
-          Поиск на этом экране серверный, он видит весь каталог. */}
-      {listTruncated && (
-        <View
-          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        >
-          <Ionicons name="warning-outline" size={16} color={colors.orange[600]} />
-          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
-            {cellFilterId
-              ? `Показаны ${allProducts.length} из ${data?.total} товаров, поэтому в ячейке могут быть не все. Введите код ячейки в поиск.`
-              : `Показаны ${allProducts.length} из ${data?.total} товаров. Остальные найдутся поиском.`}
-          </Text>
-        </View>
-      )}
+      {!showProductList && <View style={{ paddingTop: warehouseScroll.contentTop }}>{ListPrefix}</View>}
 
       {/* Render gate \u2014 EVERY branch terminates in content, EmptyState or
           QueryErrorState. Never an eternal skeleton:
@@ -2563,7 +2572,9 @@ function ProductsScreenContents() {
           }
         />
       ) : (
-        <FlashList
+        <WarehouseList
+          onScroll={warehouseScroll.onScroll}
+          scrollEventThrottle={16}
           data={currentProducts}
           keyExtractor={productKey}
           // FlashList v2 auto-measures rows; no estimatedItemSize prop.
@@ -2575,6 +2586,7 @@ function ProductsScreenContents() {
           renderItem={renderProductItem}
           contentContainerStyle={[
             styles.list,
+            { paddingTop: warehouseScroll.contentTop },
             // iOS uses contentInset; Android needs explicit
             // paddingBottom or the last row sits under the M3 bar.
             Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,

@@ -240,6 +240,18 @@ for (const name of [
   jest.doMock(`../../components/${name}`, () => ({ __esModule: true, default: name }));
 }
 jest.doMock('../warehouse/WarehouseHeader', () => ({ __esModule: true, default: 'WarehouseHeader' }));
+jest.doMock('../warehouse/WarehouseScroll', () => ({
+  WarehouseList: 'FlashList',
+  useWarehouseScroll: () => ({
+    scrollY: { value: 0 },
+    titleHeight: { value: 64 },
+    progress: { value: 0 },
+    contentTop: 124,
+    reset: jest.fn(),
+    onScroll: jest.fn(),
+    onContentTop: jest.fn(),
+  }),
+}));
 jest.doMock('../../components/CompactScreenHeader', () => ({
   __esModule: true,
   default: 'CompactScreenHeader',
@@ -293,6 +305,13 @@ const nodes = (node: React.ReactNode): Element[] =>
                         key: 'warehouse-add',
                         accessibilityLabel: 'Добавить товар',
                         onPress: (node as Element).props.onAdd,
+                      })
+                    : null,
+                  (node as Element).props.onCreateFolder
+                    ? React.createElement('TouchableOpacity', {
+                        key: 'warehouse-folder',
+                        accessibilityLabel: 'Создать папку',
+                        onPress: (node as Element).props.onCreateFolder,
                       })
                     : null,
                   React.createElement('SearchInput', {

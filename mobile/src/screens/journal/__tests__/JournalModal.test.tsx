@@ -96,9 +96,9 @@ jest.mock('../JournalMotion', () => ({
 import React from 'react';
 import JournalModal, { canFinishJournalExit } from '../JournalModal';
 const props = { visible: true, onRequestClose: jest.fn(), children: 'Filters' };
-function render(visible: boolean) {
+function render(visible: boolean, overrides: Partial<Parameters<typeof JournalModal>[0]> = {}) {
   mockIndex = 0;
-  const tree = JournalModal({ ...props, visible });
+  const tree = JournalModal({ ...props, ...overrides, visible });
   for (const effect of mockEffects.splice(0)) effect();
   return tree;
 }
@@ -136,4 +136,17 @@ it('requires a successful completion from the current generation while closed', 
   expect(canFinishJournalExit(false, 4, 4, false)).toBe(false);
   expect(canFinishJournalExit(true, 3, 4, false)).toBe(false);
   expect(canFinishJournalExit(true, 4, 4, true)).toBe(false);
+});
+
+it('hands off a successor only after the iOS native dismissal, once', () => {
+  const onExited = jest.fn();
+  render(true, { onExited });
+  render(false, { onExited });
+  mockCompletions.at(-1)!(true);
+  const waiting = render(false, { onExited });
+  expect(waiting?.props.visible).toBe(false);
+  expect(onExited).not.toHaveBeenCalled();
+  (waiting!.props.onDismiss as () => void)();
+  (waiting!.props.onDismiss as () => void)();
+  expect(onExited).toHaveBeenCalledTimes(1);
 });
