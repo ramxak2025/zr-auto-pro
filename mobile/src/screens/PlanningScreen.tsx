@@ -61,7 +61,8 @@ import type {
   User,
 } from '../../../shared/types';
 import { formatMoney, roleLabels } from '../../../shared/utils/formatters';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ── Метаданные категорий постоянных расходов ────────────────────────────────
 
@@ -115,6 +116,7 @@ function initials(name: string): string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function PlanningScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const shadow = useShadow();
@@ -432,13 +434,22 @@ export default function PlanningScreen() {
   if (!isOwner) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Постоянные расходы" onBack={() => navigation.goBack()} />
-        <View style={styles.restricted}>
-          <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
-          <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
-            Планирование постоянных расходов и мотивации доступно сотрудникам с правом «Финансовые отчёты».
-          </Text>
-        </View>
+        <IosScreenHeader scroll={section} title="Постоянные расходы" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.restricted}>
+            <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
+              Планирование постоянных расходов и мотивации доступно сотрудникам с правом «Финансовые отчёты».
+            </Text>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -448,6 +459,8 @@ export default function PlanningScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+        scroll={section}
         title="Постоянные расходы"
         subtitle="Для расчёта чистой прибыли"
         onBack={() => navigation.goBack()}
@@ -456,20 +469,45 @@ export default function PlanningScreen() {
       {/* Автосервис плана (167): постоянка — на каждый филиал своя, и владелец
           обязан видеть, чей план перед ним. Только подпись: филиал выбран
           при входе / в разделе «Филиалы». */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {fixedError && fixedCosts === undefined ? (
-        <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchFixed()} />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchFixed()} />
+        </ScreenSectionScrollView>
       ) : fixedCosts === undefined ? (
-        <LoadingSpinner />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       ) : (
-        <ScrollView
-          contentContainerStyle={{
-            paddingHorizontal: spacing[4],
-            paddingTop: spacing[3],
-            paddingBottom: tabBarHeight + spacing[6],
-            gap: spacing[4],
-          }}
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          style={{ flex: 1 }}
+          reserveSafeAreaBottom
+          contentContainerStyle={[
+            {
+              paddingHorizontal: spacing[4],
+              paddingTop: spacing[3],
+              paddingBottom: tabBarHeight + spacing[6],
+              gap: spacing[4],
+            },
+            { paddingTop: section.contentTop + spacing[3] },
+          ]}
           contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           showsVerticalScrollIndicator={false}
@@ -713,7 +751,7 @@ export default function PlanningScreen() {
               </View>
             )}
           </View>
-        </ScrollView>
+        </ScreenSectionScrollView>
       )}
 
       {/* ── Модалка постоянного расхода ──────────────────────────────────── */}

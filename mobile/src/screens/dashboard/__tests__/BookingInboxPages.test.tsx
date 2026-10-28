@@ -1,3 +1,31 @@
+// Screen chrome is inert here; these suites exercise the existing business handlers.
+const mockSectionScroll = {
+  scrollY: { value: 0 },
+  titleHeight: { value: 64 },
+  progress: { value: 0 },
+  contentTop: 0,
+  reset: jest.fn(),
+  onScroll: jest.fn(),
+  onNativeScroll: jest.fn(),
+  onContentTop: jest.fn(),
+};
+jest.mock('../../../components/ScreenSectionHeader', () => ({
+  __esModule: true,
+  default: 'Header',
+  useScreenSectionScroll: () => mockSectionScroll,
+}));
+jest.mock('../../../components/ScreenSectionScrollable', () => ({
+  ScreenSectionScrollView: 'ScrollView',
+  ScreenSectionFlatList: 'FlatList',
+  ScreenSectionFlashList: 'FlashList',
+}));
+jest.mock('../../../components/ScreenHeaderControls', () => ({
+  HeaderAction: 'HeaderAction',
+  HeaderIsland: 'HeaderIsland',
+  HeaderSearch: 'SearchInput',
+  headerTouchSize: 44,
+}));
+
 import React from 'react';
 const mockRequests = jest.fn(async (_status?: string, _page?: number) => ({ data: [] }));
 const mockState = { page: 1 };

@@ -321,11 +321,19 @@ export default function InstallmentsPage() {
             </Button>
           ) : undefined
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <SegmentedControl
+                aria-label="Статус рассрочки"
+                options={SEGMENTS}
+                value={segment}
+                onChange={setSegment}
+              />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <SegmentedControl aria-label="Статус рассрочки" options={SEGMENTS} value={segment} onChange={setSegment} />
-      </Toolbar>
 
       {/* Summary — по текущему списку */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

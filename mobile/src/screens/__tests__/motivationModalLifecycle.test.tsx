@@ -5,6 +5,7 @@ import React from 'react';
 import { Platform } from 'react-native';
 import type { MotivationPromo, MotivationRule, MotivationAccrualV2 } from '../../../../shared/types';
 
+const mockSectionScroll = { contentTop: 144, onScroll: jest.fn(), reset: jest.fn() };
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
 const mockCallbacks: unknown[] = [];
@@ -129,6 +130,20 @@ jest.mock('../../components/motivation/MotivationBulkComposer', () => ({
 jest.doMock('../../components/TabBarScrollable', () => ({
   TabBarFlashList: 'FlashList',
   TabBarScrollView: 'ScrollView',
+}));
+jest.mock('../../components/ScreenSectionHeader', () => ({
+  __esModule: true,
+  default: 'Header',
+  useScreenSectionScroll: () => mockSectionScroll,
+}));
+jest.mock('../../components/ScreenSectionScrollable', () => ({
+  ScreenSectionFlashList: 'FlashList',
+  ScreenSectionScrollView: 'ScrollView',
+}));
+jest.mock('../../components/ScreenHeaderControls', () => ({
+  HeaderAction: 'HeaderAction',
+  HeaderIsland: 'HeaderIsland',
+  headerTouchSize: 44,
 }));
 const MotivationScreen = jest.requireActual<{ default: () => React.ReactElement }>('../MotivationScreen').default;
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;

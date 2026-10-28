@@ -38,7 +38,8 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentReminderSettings } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type Mode = InstallmentReminderSettings['mode'];
 
@@ -51,6 +52,7 @@ const MODES: { key: Mode; label: string; icon: keyof typeof Ionicons.glyphMap }[
 const QK = ['installments', 'reminder-settings'] as const;
 
 export default function InstallmentReminderSettingsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -118,19 +120,45 @@ export default function InstallmentReminderSettingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Напоминания о платежах" onBack={() => navigation.goBack()} centerTitle />
+      <IosScreenHeader scroll={section} title="Напоминания о платежах" onBack={() => navigation.goBack()} centerTitle />
 
       {isLoading && !data ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={palette.accent.primary} />
-        </View>
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.center}>
+            <ActivityIndicator color={palette.accent.primary} />
+          </View>
+        </ScreenSectionScrollView>
       ) : isError && !data ? (
-        <View style={styles.center}>
-          <Text style={{ color: palette.text.tertiary }}>Не удалось загрузить настройки</Text>
-        </View>
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.center}>
+            <Text style={{ color: palette.text.tertiary }}>Не удалось загрузить настройки</Text>
+          </View>
+        </ScreenSectionScrollView>
       ) : (
-        <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          style={{ flex: 1 }}
+          reserveSafeAreaBottom
+          contentContainerStyle={[
+            [styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }],
+            { paddingTop: section.contentTop + spacing[3] },
+          ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -330,7 +358,7 @@ export default function InstallmentReminderSettingsScreen() {
               )}
             </TouchableOpacity>
           ) : null}
-        </ScrollView>
+        </ScreenSectionScrollView>
       )}
     </View>
   );

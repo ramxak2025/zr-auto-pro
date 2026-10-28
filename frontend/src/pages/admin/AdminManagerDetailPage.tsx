@@ -167,19 +167,22 @@ export default function AdminManagerDetailPage() {
             </Button>
           </>
         }
+        toolbar={
+          <>
+            <Tabs
+              aria-label="Разделы карточки менеджера"
+              idPrefix={TAB_ID_PREFIX}
+              items={tabItems}
+              value={tab}
+              onChange={setTab}
+            />
+          </>
+        }
       />
 
       {manager.note && <p className="text-sm text-ink-2 [overflow-wrap:anywhere]">Заметка: {manager.note}</p>}
 
       <ManagerBalanceTiles summary={manager.summary} viewer="owner" />
-
-      <Tabs
-        aria-label="Разделы карточки менеджера"
-        idPrefix={TAB_ID_PREFIX}
-        items={tabItems}
-        value={tab}
-        onChange={setTab}
-      />
 
       <TabPanel idPrefix={TAB_ID_PREFIX} tabKey="clients" active={tab === 'clients'}>
         <TenantsTable

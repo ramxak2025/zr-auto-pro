@@ -340,22 +340,25 @@ export default function CashFlowPage() {
         title="Движение денег"
         icon={ArrowRightLeft}
         subtitle="Касса по дням: наличные, карта, рассрочка, погашения"
+        toolbar={
+          <>
+            <Toolbar>
+              <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={(from, to) => update({ from, to })} />
+              <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => update({ from, to })} />
+              {canFilterByMaster && mastersData && mastersData.length > 0 && (
+                <Select
+                  aria-label="Мастер"
+                  placeholder="Все мастера"
+                  options={mastersData.map((m) => ({ value: m.id, label: m.fullName }))}
+                  value={masterId}
+                  onChange={(e) => update({ masterId: e.target.value })}
+                  className="w-52"
+                />
+              )}
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={(from, to) => update({ from, to })} />
-        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => update({ from, to })} />
-        {canFilterByMaster && mastersData && mastersData.length > 0 && (
-          <Select
-            aria-label="Мастер"
-            placeholder="Все мастера"
-            options={mastersData.map((m) => ({ value: m.id, label: m.fullName }))}
-            value={masterId}
-            onChange={(e) => update({ masterId: e.target.value })}
-            className="w-52"
-          />
-        )}
-      </Toolbar>
 
       {kpiLoading ? (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">

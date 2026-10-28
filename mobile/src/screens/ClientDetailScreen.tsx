@@ -1,4 +1,6 @@
-import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { formatMoney as formatFinancialMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { displayedProfit } from '../../../shared/utils/checkProfit';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -29,12 +31,12 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import SourcePickerSheet from '../components/SourcePickerSheet';
 import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import CarPlateField from '../components/CarPlateField';
-import type { PlateMode } from '../components/RussianPlateInput';
+import { type PlateMode } from '../components/RussianPlateInput';
 import VinInput, { type VinInputHandle } from '../components/VinInput';
 import VinText from '../components/VinText';
 import { useVinEnabled } from '../hooks/useVinEnabled';
 import { carVin, vinDuplicateMessage, vinLengthError } from '../utils/vinUi';
-import { apiErrorMessage } from '../../../shared/utils/apiError';
+import { apiErrorMessage, otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import ClientCallsSection from '../components/ClientCallsSection';
 import ClientInstallmentSection from '../components/installments/ClientInstallmentSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
@@ -49,20 +51,19 @@ import {
   paymentMethodBadgeColor,
   softTint,
 } from '../theme';
-import type {
-  Client,
-  Car,
-  Check,
-  ClientDebtSummary,
-  ClientBonusSummary,
-  BonusType,
-  WalletSettings,
+import {
+  type Client,
+  type Car,
+  type Check,
+  type ClientDebtSummary,
+  type ClientBonusSummary,
+  type BonusType,
+  type WalletSettings,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
-import { paymentMethodLabels } from '../../../shared/utils/formatters';
-import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
+
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
 import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
@@ -877,6 +878,11 @@ export default function ClientDetailScreen() {
       setHistoryExpanded(true);
     }
   };
+  const retailSection = useScreenSectionScroll();
+  const detailSection = useScreenSectionScroll({
+    onScroll: (event) => maybeExpandHistory(event.nativeEvent.contentOffset.y),
+  });
+  const section = isRetail ? retailSection : detailSection;
 
   // Prefetch the car's checks the instant the user starts tapping a garage
   // card, so CarDetailScreen opens straight from cache. Key + limit mirror
@@ -975,10 +981,13 @@ export default function ClientDetailScreen() {
     const retailTotal = stats.total;
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Розничный покупатель" onBack={() => navigation.goBack()} centerTitle />
-        <ScrollView
+        <IosScreenHeader scroll={section} title="Розничный покупатель" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          onScroll={section.onScroll}
           style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingTop: section.contentTop + spacing[4] }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -1063,14 +1072,29 @@ export default function ClientDetailScreen() {
               </Text>
             </TouchableOpacity>
           ) : null}
-        </ScrollView>
+        </ScreenSectionScrollView>
       </View>
     );
   }
 
-  if (isLoading) return <LoadingSpinner />;
-  if (!client)
-    return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
+  if (isLoading || !client)
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader scroll={section} title="Клиент" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          {isLoading ? (
+            <LoadingSpinner />
+          ) : (
+            <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>
+          )}
+        </ScreenSectionScrollView>
+      </View>
+    );
 
   const initials = getInitials(client.fullName);
   const avatarColor = getAvatarColor(client.fullName);
@@ -1078,17 +1102,18 @@ export default function ClientDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={client.fullName} onBack={() => navigation.goBack()} centerTitle />
+      <IosScreenHeader scroll={section} title={client.fullName} onBack={() => navigation.goBack()} />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        contentInsetAdjustmentBehavior="never"
         ref={scrollRef}
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: section.contentTop + spacing[4] }]}
         scrollEventThrottle={16}
         onLayout={(e) => {
           viewportH.current = e.nativeEvent.layout.height;
         }}
-        onScroll={(e) => maybeExpandHistory(e.nativeEvent.contentOffset.y)}
+        onScroll={section.onScroll}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -1623,7 +1648,7 @@ export default function ClientDetailScreen() {
             <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>Показать всю историю</Text>
           </TouchableOpacity>
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Car Modal — form state lives INSIDE (RNPERF-6): keystrokes
           re-render the modal only, never the check-history tree. */}

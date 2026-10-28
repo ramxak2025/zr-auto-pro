@@ -1,9 +1,10 @@
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RouteProp } from '@react-navigation/native';
-import type { RootStackParamList } from '../navigation/AppNavigator';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { type NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { type RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import { type RootStackParamList } from '../navigation/AppNavigator';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
@@ -29,9 +30,10 @@ import {
   type ProductPickerBridge,
   type ProcurementPickerDrafts,
 } from '../utils/productPickerSession';
-import type { Product, PurchaseReceiptContext } from '../../../shared/types';
-import type { CreateDeliveryRequest } from '../../../shared/api/types';
+import { type Product, type PurchaseReceiptContext } from '../../../shared/types';
+import { type CreateDeliveryRequest } from '../../../shared/api/types';
 import { spacing, colors, borderRadius } from '../theme';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 interface Line {
   productId: string;
@@ -43,6 +45,7 @@ interface Line {
 }
 /** Direct receipt uses the existing durable financial request, never stock-only updates. */
 export default function DirectSupplyCreateScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'DirectSupplyCreate'>>();
   const { supplierId, supplierName } = route.params;
@@ -257,14 +260,32 @@ export default function DirectSupplyCreateScreen() {
   };
   if (!canWrite)
     return (
-      <View style={styles.screen}>
-        <Text>Нет доступа к оформлению поставки.</Text>
+      <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader scroll={section} title="Поставка без заказа" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <Text>Нет доступа к оформлению поставки.</Text>
+        </ScreenSectionScrollView>
       </View>
     );
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Поставка без заказа" subtitle={supplierName} onBack={() => navigation.goBack()} />
-      <KeyboardAwareScroll contentContainerStyle={styles.content}>
+      <IosScreenHeader
+        scroll={section}
+        title="Поставка без заказа"
+        subtitle={supplierName}
+        onBack={() => navigation.goBack()}
+      />
+      <KeyboardAwareScroll
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[styles.content, { paddingTop: section.contentTop + spacing[4] }]}
+      >
         <ProcurementRecoveryPanel recovery={recovery} onRecovered={recovered} />
         <Text style={{ color: palette.text.secondary }}>
           Остатки увеличатся после приёмки. Сумма поставки добавится в долг поставщику.

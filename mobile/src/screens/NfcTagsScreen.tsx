@@ -12,7 +12,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { parseAttendanceNfcUri } from '../../../shared/utils/attendanceNfcUri';
-import type { AttendanceNfcTag, CreatedAttendanceNfcTag } from '../../../shared/types';
+import { type AttendanceNfcTag, type CreatedAttendanceNfcTag } from '../../../shared/types';
 import {
   AttendanceNfcDeviceError,
   checkAttendanceNfcHardware,
@@ -21,14 +21,17 @@ import {
   createAttendanceNfcOperation,
   readAttendanceNfcUri,
   describeAttendanceNfcDeviceError,
+  type NfcTagReplacement,
+  type NfcWritePhase,
 } from '../utils/attendanceNfcDevice';
 import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
 import { runNfcCreateTagOperation } from '../utils/nfcCreateTagOperation';
 import { runNfcTagActivation } from '../utils/nfcTagActivation';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { extractApiErrorMessage } from '../utils/apiError';
-import type { NfcTagReplacement, NfcWritePhase } from '../utils/attendanceNfcDevice';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type EnrollmentPhase = 'ready' | NfcWritePhase | 'activating' | 'success' | 'error';
 const phaseLabels: Record<EnrollmentPhase, string> = {
@@ -43,6 +46,7 @@ const phaseLabels: Record<EnrollmentPhase, string> = {
 };
 
 export default function NfcTagsScreen() {
+  const section = useScreenSectionScroll();
   const palette = useColors();
   const navigation = useNavigation();
   const tabBarHeight = useTabBarHeight();
@@ -346,9 +350,15 @@ export default function NfcTagsScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="NFC-метки" onBack={() => navigation.goBack()} />
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[6] }]}
+      <IosScreenHeader scroll={section} title="NFC-метки" onBack={() => navigation.goBack()} />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.content, { paddingBottom: tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
@@ -581,7 +591,7 @@ export default function NfcTagsScreen() {
             )}
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

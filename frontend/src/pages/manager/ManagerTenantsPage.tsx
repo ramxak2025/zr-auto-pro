@@ -233,31 +233,34 @@ export default function ManagerTenantsPage() {
             Новый автосервис
           </Button>
         }
-      />
-
-      <Toolbar
-        end={
-          isFiltered && !isLoading && !isError ? (
-            <span className="text-sm text-ink-3">
-              Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
-            </span>
-          ) : undefined
+        toolbar={
+          <>
+            <Toolbar
+              end={
+                isFiltered && !isLoading && !isError ? (
+                  <span className="text-sm text-ink-3">
+                    Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
+                  </span>
+                ) : undefined
+              }
+            >
+              <SearchInput
+                value={search}
+                onChange={(v) => patch({ q: v })}
+                placeholder="Название или телефон…"
+                aria-label="Поиск автосервисов"
+                className="w-full sm:w-72"
+              />
+              <SegmentedControl<StatusFilter>
+                aria-label="Состояние подписки"
+                value={statusFilter}
+                onChange={(v) => patch({ status: v })}
+                options={STATUS_FILTERS}
+              />
+            </Toolbar>
+          </>
         }
-      >
-        <SearchInput
-          value={search}
-          onChange={(v) => patch({ q: v })}
-          placeholder="Название или телефон…"
-          aria-label="Поиск автосервисов"
-          className="w-full sm:w-72"
-        />
-        <SegmentedControl<StatusFilter>
-          aria-label="Состояние подписки"
-          value={statusFilter}
-          onChange={(v) => patch({ status: v })}
-          options={STATUS_FILTERS}
-        />
-      </Toolbar>
+      />
 
       <TenantsTable
         rows={filtered}

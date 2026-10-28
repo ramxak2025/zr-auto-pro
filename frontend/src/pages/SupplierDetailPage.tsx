@@ -1096,6 +1096,17 @@ export default function SupplierDetailPage() {
             )
           ) : undefined
         }
+        toolbar={
+          <>
+            <Tabs
+              aria-label="Разделы поставщика"
+              idPrefix="supplier"
+              items={tabs}
+              value={activeTab}
+              onChange={(key) => setParam({ tab: key === 'deliveries' ? null : key })}
+            />
+          </>
+        }
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -1109,14 +1120,6 @@ export default function SupplierDetailPage() {
           hint={supplier.currentDebt > 0 ? 'Погасите через «Новая оплата»' : 'Долга нет'}
         />
       </div>
-
-      <Tabs
-        aria-label="Разделы поставщика"
-        idPrefix="supplier"
-        items={tabs}
-        value={activeTab}
-        onChange={(key) => setParam({ tab: key === 'deliveries' ? null : key })}
-      />
 
       <TabPanel idPrefix="supplier" tabKey="deliveries" active={activeTab === 'deliveries'} className="space-y-4">
         {/* «Новая поставка» скрыта для системного поставщика — приход по нему

@@ -49,14 +49,16 @@ import { iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { notificationsApi, pushApi } from '../api/services';
-import type {
-  NotificationCategory,
-  NotificationPreferences,
-  NotificationSettings,
-  PushDiagnostics,
-  PushTokenInfo,
+import {
+  type NotificationCategory,
+  type NotificationPreferences,
+  type NotificationSettings,
+  type PushDiagnostics,
+  type PushTokenInfo,
 } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const QK_PREFS = ['notification-preferences'] as const;
 const QK_SETTINGS = ['notification-settings'] as const;
@@ -382,6 +384,7 @@ function currentTzOffsetMinutes(): number {
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function NotificationSettingsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<{ goBack: () => void }>();
   const palette = useColors();
   const shadow = useShadow();
@@ -628,8 +631,15 @@ export default function NotificationSettingsScreen() {
   if (prefsLoading || settingsLoading) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Уведомления" onBack={() => navigation.goBack()} />
-        <ActivityIndicator style={{ marginTop: spacing[10] }} color={palette.accent.primary} />
+        <IosScreenHeader scroll={section} title="Уведомления" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <ActivityIndicator style={{ marginTop: spacing[10] }} color={palette.accent.primary} />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -637,36 +647,49 @@ export default function NotificationSettingsScreen() {
   if (loadFailed) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Уведомления" onBack={() => navigation.goBack()} />
-        <View style={styles.loadErrorWrap}>
-          <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
-          <Text style={[styles.loadErrorTitle, { color: palette.text.primary }]}>Не удалось загрузить настройки</Text>
-          <Text style={[styles.loadErrorText, { color: palette.text.secondary }]}>
-            Переключатели скрыты намеренно: если показать их сейчас, любое изменение перезапишет ваши настоящие
-            настройки значениями по умолчанию.
-          </Text>
-          <TouchableOpacity
-            style={[styles.retryBtn, { backgroundColor: palette.accent.primary }]}
-            onPress={() => {
-              haptic('tap');
-              void queryClient.invalidateQueries({ queryKey: QK_PREFS });
-              void queryClient.invalidateQueries({ queryKey: QK_SETTINGS });
-            }}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.retryText}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
+        <IosScreenHeader scroll={section} title="Уведомления" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.loadErrorWrap}>
+            <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.loadErrorTitle, { color: palette.text.primary }]}>Не удалось загрузить настройки</Text>
+            <Text style={[styles.loadErrorText, { color: palette.text.secondary }]}>
+              Переключатели скрыты намеренно: если показать их сейчас, любое изменение перезапишет ваши настоящие
+              настройки значениями по умолчанию.
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryBtn, { backgroundColor: palette.accent.primary }]}
+              onPress={() => {
+                haptic('tap');
+                void queryClient.invalidateQueries({ queryKey: QK_PREFS });
+                void queryClient.invalidateQueries({ queryKey: QK_SETTINGS });
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryText}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Уведомления" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Уведомления" onBack={() => navigation.goBack()} />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[2] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -900,7 +923,7 @@ export default function NotificationSettingsScreen() {
         <Text style={[styles.footer, styles.footerLast, { color: palette.text.tertiary }]}>
           Важные объявления от поддержки приходят всегда — их нельзя отключить.
         </Text>
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       <DateTimePickerModal
         visible={picker !== null}

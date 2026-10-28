@@ -256,16 +256,19 @@ export default function SuppliersPage() {
             </Button>
           ) : undefined
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <SearchInput
+                value={search}
+                onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
+                placeholder="Название или контакт…"
+                className="w-full sm:w-72"
+              />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <SearchInput
-          value={search}
-          onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
-          placeholder="Название или контакт…"
-          className="w-full sm:w-72"
-        />
-      </Toolbar>
 
       <DataTable
         rows={suppliers}

@@ -451,43 +451,46 @@ export default function ServicesPage() {
             </div>
           ) : undefined
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <div className="w-full sm:w-auto">
+                <SearchInput
+                  value={search}
+                  onChange={(value) => {
+                    setParam({ q: value, page: null }, { replace: true });
+                  }}
+                  placeholder="Поиск во всех папках"
+                  className="w-full sm:w-72"
+                />
+              </div>
+              {canManage && (
+                <Button
+                  variant="secondary"
+                  icon={ShieldCheck}
+                  disabled={!visibilityConfigQuery.isSuccess}
+                  onClick={() => setFolderListOpen(true)}
+                >
+                  Видимость по ролям
+                </Button>
+              )}
+              {!isOwner && (
+                <Button
+                  variant="secondary"
+                  icon={showAllServices ? EyeOff : Eye}
+                  onClick={() => {
+                    setShowAllServices((value) => !value);
+                    setParam({ page: null }, { replace: true });
+                  }}
+                  aria-pressed={showAllServices}
+                >
+                  {showAllServices ? 'По роли' : 'Все услуги'}
+                </Button>
+              )}
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <div className="w-full sm:w-auto">
-          <SearchInput
-            value={search}
-            onChange={(value) => {
-              setParam({ q: value, page: null }, { replace: true });
-            }}
-            placeholder="Поиск во всех папках"
-            className="w-full sm:w-72"
-          />
-        </div>
-        {canManage && (
-          <Button
-            variant="secondary"
-            icon={ShieldCheck}
-            disabled={!visibilityConfigQuery.isSuccess}
-            onClick={() => setFolderListOpen(true)}
-          >
-            Видимость по ролям
-          </Button>
-        )}
-        {!isOwner && (
-          <Button
-            variant="secondary"
-            icon={showAllServices ? EyeOff : Eye}
-            onClick={() => {
-              setShowAllServices((value) => !value);
-              setParam({ page: null }, { replace: true });
-            }}
-            aria-pressed={showAllServices}
-          >
-            {showAllServices ? 'По роли' : 'Все услуги'}
-          </Button>
-        )}
-      </Toolbar>
 
       {!search && activePath.length > 0 && (
         <nav aria-label="Путь в каталоге" className="flex flex-wrap items-center gap-2 text-sm text-ink-2">

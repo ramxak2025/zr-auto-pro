@@ -83,7 +83,11 @@ export default function IosScreenHeader({
   if (scroll || sectionVariant === 'static') {
     const controls =
       leading || onBack || trailing ? (
-        <HeaderIsland>
+        <HeaderIsland
+          style={
+            scroll && sectionVariant !== 'static' && onBack && !leading && !trailing ? styles.backOnlyIsland : undefined
+          }
+        >
           {leading ?? (onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : null)}
           {trailing ? <View style={styles.sectionTrailing}>{trailing}</View> : null}
         </HeaderIsland>
@@ -149,6 +153,7 @@ export default function IosScreenHeader({
 }
 
 const styles = StyleSheet.create({
+  backOnlyIsland: { alignSelf: 'flex-start' },
   sectionTrailing: {
     flex: 1,
     flexDirection: 'row',

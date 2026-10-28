@@ -156,22 +156,27 @@ export default function MotivationPage() {
             </Button>
           ) : undefined
         }
+        toolbar={
+          <>
+            {canManage && (
+              <SegmentedControl
+                aria-label="Раздел мотивации"
+                value={tab}
+                onChange={setTab}
+                options={[
+                  { value: 'rules', label: 'Правила' },
+                  { value: 'accruals', label: 'Начисления' },
+                ]}
+              />
+            )}
+          </>
+        }
       />
       <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
         Новые правила начисляют процент от продажи товаров — до или после скидки по настройке правила. Бонус делится
         поровну между подтверждёнными исполнителями. Изменения действуют только для новых продаж.
       </p>
-      {canManage && (
-        <SegmentedControl
-          aria-label="Раздел мотивации"
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: 'rules', label: 'Правила' },
-            { value: 'accruals', label: 'Начисления' },
-          ]}
-        />
-      )}
+
       {composer && canManage && (
         <MotivationBulkComposer
           onClose={() => setComposer(false)}

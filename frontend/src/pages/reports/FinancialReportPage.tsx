@@ -222,12 +222,15 @@ export default function FinancialReportPage() {
         icon={LineChart}
         subtitle="Прибыль, расходы, брак и списания, метки — за месяц или период"
         backTo="/reports"
+        toolbar={
+          <>
+            <Toolbar>
+              <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={setPeriod} />
+              <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={setPeriod} />
-        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
-      </Toolbar>
 
       <QueryState
         isLoading={reportQuery.isLoading}

@@ -1,3 +1,4 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 /**
  * RolesScreen — «Роли» (Bitrix24-style, миграция 114).
  *
@@ -21,7 +22,7 @@
  *   • удаление занятой роли → 400 { code: 'ROLE_HAS_USERS', count } → алерт
  *     «Сначала переназначьте N сотрудников» (текст приходит с сервера).
  */
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -50,9 +51,10 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
-import { CASHIER_ROLE_PRESET } from '../../../shared/types';
-import type { Role } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { CASHIER_ROLE_PRESET, type Role } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 /** «5 сотрудников» / «1 сотрудник» / «3 сотрудника». */
 function employeesLabel(n: number): string {
@@ -137,6 +139,7 @@ function RoleRow({ role, employeeCount, isLast, onPress, onMenu }: RoleRowProps)
 }
 
 export default function RolesScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -293,8 +296,15 @@ export default function RolesScreen() {
   if (!canManage) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Роли" onBack={() => navigation.goBack()} />
-        <EmptyState title="Нет доступа" description="Управлять ролями может владелец или администратор" />
+        <IosScreenHeader scroll={section} title="Роли" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState title="Нет доступа" description="Управлять ролями может владелец или администратор" />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -306,13 +316,14 @@ export default function RolesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Роли"
         subtitle={hasAny ? `Всего: ${roles.length}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
           <TouchableOpacity
             onPress={openCreate}
-            style={styles.addBtn}
+            style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
             accessibilityRole="button"
             accessibilityLabel="Создать роль"
           >
@@ -321,8 +332,14 @@ export default function RolesScreen() {
         }
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -440,7 +457,7 @@ export default function RolesScreen() {
             </Text>
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* ── Копия существующей: выбор роли-источника ───────────────────── */}
       <Modal visible={copySheetOpen} onClose={() => setCopySheetOpen(false)} title="Копия существующей">

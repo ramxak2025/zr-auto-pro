@@ -464,16 +464,19 @@ export default function ClientsPage() {
             </Button>
           </>
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <SearchInput
+                value={search}
+                onChange={(val) => updateParams({ q: val, page: 1 })}
+                placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
+                className="w-full sm:w-80"
+              />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <SearchInput
-          value={search}
-          onChange={(val) => updateParams({ q: val, page: 1 })}
-          placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
-          className="w-full sm:w-80"
-        />
-      </Toolbar>
 
       {/* Розничный покупатель — точка входа в розничные чеки. Настоящая ссылка:
           Tab/Enter, Cmd+клик, средняя кнопка (аудит 2.5 P0). */}

@@ -72,6 +72,8 @@ import type {
   SubscriptionInfo,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 function formatDateTime(iso?: string | null): string {
   if (!iso) return '';
@@ -92,6 +94,7 @@ type HistoryEvent =
   | { kind: 'reschedule'; ts: number; reschedule: InstallmentReschedule };
 
 export default function InstallmentDetailScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const palette = useColors();
@@ -445,7 +448,15 @@ export default function InstallmentDetailScreen() {
   if (!initialPlan) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Рассрочка" onBack={() => navigation.goBack()} centerTitle />
+        <IosScreenHeader scroll={section} title="Рассрочка" onBack={() => navigation.goBack()} centerTitle />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        />
       </View>
     );
   }
@@ -461,14 +472,23 @@ export default function InstallmentDetailScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={plan.checkNumber ? `Заказ-наряд №${plan.checkNumber}` : 'Рассрочка'}
         subtitle={plan.clientName || undefined}
         onBack={() => navigation.goBack()}
         centerTitle
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[6] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[2] },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* 1. Hero summary */}
@@ -1055,7 +1075,7 @@ export default function InstallmentDetailScreen() {
             </AnimatedCard>
           </>
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       <InstallmentPayModal visible={showPay} plan={plan} onClose={() => setShowPay(false)} onPaid={() => {}} />
 

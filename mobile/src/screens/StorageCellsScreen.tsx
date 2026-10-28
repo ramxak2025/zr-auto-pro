@@ -1,3 +1,7 @@
+import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 /**
  * StorageCellsScreen — «Ячейки хранения» (2026-09-30, docs/ios-redesign/STORAGE_CELLS_2026-09-30.md).
  *
@@ -29,7 +33,6 @@ import {
   View,
 } from 'react-native';
 
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -38,7 +41,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
-import SearchInput from '../components/SearchInput';
+
 import { ListSkeleton } from '../components/Skeleton';
 import { CELL_CODE_FONT } from '../components/StorageCellChip';
 import StorageCellPickerModal from '../components/StorageCellPickerModal';
@@ -72,9 +75,9 @@ import {
   storageCellFormFailureText,
 } from '../utils/storageCellsUi';
 import { MAX_BULK_CELLS, normalizeCellCode } from '../../../shared/utils/storageCells';
-import type { UpdateStorageCellRequest } from '../../../shared/api/types';
-import type { StorageCell, Warehouse } from '../../../shared/types';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { type UpdateStorageCellRequest } from '../../../shared/api/types';
+import { type StorageCell, type Warehouse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 /** Пауза между закрытием одной модалки и открытием следующей — та же, что в ProductsScreen. */
 const MODAL_CHAIN_DELAY_MS = 300;
@@ -642,6 +645,7 @@ function CellGridBody({
 // ─── Экран ────────────────────────────────────────────────────────────────────
 
 export default function StorageCellsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -860,16 +864,40 @@ export default function StorageCellsScreen() {
     [canManage, openCellProducts, openMenu, handleLongPress],
   );
 
+  // Reset only when React replaces this screen's native root scroller.
+  const sectionRootKind =
+    canRead &&
+    !((warehousesLoading || warehousesError) && !warehouses) &&
+    activeWarehouse &&
+    cells.length > 0 &&
+    filtered.length > 0
+      ? 'cell-list'
+      : 'state-scroll';
+  const previousSectionRootKind = React.useRef(sectionRootKind);
+  React.useEffect(() => {
+    if (previousSectionRootKind.current !== sectionRootKind) {
+      previousSectionRootKind.current = sectionRootKind;
+      section.reset();
+    }
+  }, [sectionRootKind, section.reset]);
+
   if (!canRead) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-        <IosScreenHeader title="Ячейки хранения" onBack={() => navigation.goBack()} />
-        <EmptyState
-          icon="lock"
-          title="Недостаточно прав"
-          description="Ячейки хранения доступны сотрудникам с доступом к складу."
-        />
-      </SafeAreaView>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader scroll={section} title="Ячейки хранения" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState
+            icon="lock"
+            title="Недостаточно прав"
+            description="Ячейки хранения доступны сотрудникам с доступом к складу."
+          />
+        </ScreenSectionScrollView>
+      </View>
     );
   }
 
@@ -879,48 +907,106 @@ export default function StorageCellsScreen() {
 
   let content: React.ReactNode;
   if (warehousesLoading && !warehouses) {
-    content = <ListSkeleton />;
+    content = (
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <ListSkeleton />
+      </ScreenSectionScrollView>
+    );
   } else if (warehousesError && !warehouses) {
     content = (
-      <EmptyState
-        icon="warning"
-        title="Не удалось загрузить"
-        description="Проверьте соединение и повторите."
-        action={{ label: 'Повторить', onPress: () => refetchWarehouses() }}
-      />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <EmptyState
+          icon="warning"
+          title="Не удалось загрузить"
+          description="Проверьте соединение и повторите."
+          action={{ label: 'Повторить', onPress: () => refetchWarehouses() }}
+        />
+      </ScreenSectionScrollView>
     );
   } else if (!activeWarehouse) {
-    content = <EmptyState icon="warehouse" title="Склад не найден" description="У компании пока нет складов." />;
+    content = (
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <EmptyState icon="warehouse" title="Склад не найден" description="У компании пока нет складов." />
+      </ScreenSectionScrollView>
+    );
   } else if (cellsLoading && cells.length === 0) {
-    content = <ListSkeleton />;
+    content = (
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <ListSkeleton />
+      </ScreenSectionScrollView>
+    );
   } else if (cellsError && cells.length === 0) {
     content = (
-      <EmptyState
-        icon="warning"
-        title="Не удалось загрузить"
-        description="Проверьте соединение и повторите."
-        action={{ label: 'Повторить', onPress: () => refetchCells() }}
-      />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <EmptyState
+          icon="warning"
+          title="Не удалось загрузить"
+          description="Проверьте соединение и повторите."
+          action={{ label: 'Повторить', onPress: () => refetchCells() }}
+        />
+      </ScreenSectionScrollView>
     );
   } else if (cells.length === 0) {
     content = (
-      <EmptyState
-        icon="cube"
-        title="Ячеек пока нет"
-        description={
-          canManage
-            ? 'Нажмите «Добавить», чтобы завести ячейку, или «Создать сетку» — сразу все стеллажи, полки и ячейки.'
-            : 'Ячейки заводит сотрудник с правом управления складом.'
-        }
-      />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <EmptyState
+          icon="cube"
+          title="Ячеек пока нет"
+          description={
+            canManage
+              ? 'Нажмите «Добавить», чтобы завести ячейку, или «Создать сетку» — сразу все стеллажи, полки и ячейки.'
+              : 'Ячейки заводит сотрудник с правом управления складом.'
+          }
+        />
+      </ScreenSectionScrollView>
     );
   } else if (filtered.length === 0) {
     content = (
-      <EmptyState icon="search" title="Ячейки не найдены" description={`По запросу «${search.trim()}» ничего нет.`} />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+      >
+        <EmptyState icon="search" title="Ячейки не найдены" description={`По запросу «${search.trim()}» ничего нет.`} />
+      </ScreenSectionScrollView>
     );
   } else {
     content = (
-      <FlashList
+      <ScreenSectionFlashList
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
         data={filtered}
         keyExtractor={keyExtractor}
         renderItem={renderCell}
@@ -933,100 +1019,139 @@ export default function StorageCellsScreen() {
             colors={[colors.primary[600]]}
           />
         }
-        contentContainerStyle={{
-          paddingHorizontal: spacing[4],
-          paddingTop: spacing[2],
-          paddingBottom: tabBarHeight + spacing[4],
-        }}
+        contentContainerStyle={[
+          {
+            paddingHorizontal: spacing[4],
+            paddingTop: spacing[2],
+            paddingBottom: tabBarHeight + spacing[4],
+          },
+          { paddingTop: section.contentTop + spacing[2] },
+        ]}
         ItemSeparatorComponent={ItemSeparator}
       />
     );
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-      <IosScreenHeader
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ScreenSectionHeader
+        scroll={section}
         title="Ячейки хранения"
         subtitle={subtitle}
-        onBack={() => navigation.goBack()}
-        trailing={
-          deleting ? (
-            <View style={styles.headerSpinner}>
-              <ActivityIndicator size="small" color={colors.primary[600]} />
+        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+      >
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {deleting ? (
+                <View style={styles.headerSpinner}>
+                  <ActivityIndicator size="small" color={colors.primary[600]} />
+                </View>
+              ) : undefined}
             </View>
-          ) : undefined
-        }
-      />
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
-
-      {warehouses && warehouses.length > 1 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipsOuter}
-          contentContainerStyle={styles.chipsScroll}
-        >
-          {warehouses.map((w) => {
-            const active = w.id === activeWarehouseId;
-            return (
+          </View>
+          {warehouses && warehouses.length > 1 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={[styles.chipsOuter, { flexGrow: 0, flexShrink: 0 }]}
+              contentContainerStyle={styles.chipsScroll}
+            >
+              {warehouses.map((w) => {
+                const active = w.id === activeWarehouseId;
+                return (
+                  <TouchableOpacity
+                    key={w.id}
+                    onPress={() => {
+                      if (active) return;
+                      haptic('select');
+                      setSelectedWarehouseId(w.id);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={[
+                      [
+                        styles.chip,
+                        {
+                          backgroundColor: active ? colors.primary[600] : palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                        },
+                      ],
+                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                    ]}
+                  >
+                    <Text
+                      variant="caption"
+                      color={active ? colors.white : palette.text.secondary}
+                      style={styles.chipText}
+                    >
+                      {w.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : null}
+          <View style={styles.searchWrap}>
+            <HeaderSearch
+              timing={{ debounceMs: 300 }}
+              focusOnClear={false}
+              value={search}
+              onChange={setSearch}
+              placeholder="Поиск ячейки..."
+            />
+          </View>
+          {canManage && activeWarehouse ? (
+            <View style={styles.actionRow}>
               <TouchableOpacity
-                key={w.id}
-                onPress={() => {
-                  if (active) return;
-                  haptic('select');
-                  setSelectedWarehouseId(w.id);
-                }}
+                onPress={openCreateForm}
+                activeOpacity={0.85}
                 accessibilityRole="button"
-                accessibilityState={{ selected: active }}
+                accessibilityLabel="Добавить ячейку"
                 style={[
-                  styles.chip,
-                  {
-                    backgroundColor: active ? colors.primary[600] : palette.bg.muted,
-                    borderColor: palette.border.subtle,
-                  },
+                  [styles.actionBtn, { backgroundColor: colors.primary[600] }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
                 ]}
               >
-                <Text variant="caption" color={active ? colors.white : palette.text.secondary} style={styles.chipText}>
-                  {w.name}
+                <Ionicons name="add" size={18} color={colors.white} />
+                <Text variant="footnote" color={colors.white} style={styles.actionBtnText} numberOfLines={1}>
+                  Добавить
                 </Text>
               </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      ) : null}
-
-      <View style={styles.searchWrap}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск ячейки..." />
-      </View>
-
-      {canManage && activeWarehouse ? (
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            onPress={openCreateForm}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Добавить ячейку"
-            style={[styles.actionBtn, { backgroundColor: colors.primary[600] }]}
-          >
-            <Ionicons name="add" size={18} color={colors.white} />
-            <Text variant="footnote" color={colors.white} style={styles.actionBtnText} numberOfLines={1}>
-              Добавить
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => setGridOpen(true)}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Создать сетку ячеек"
-            style={[styles.actionBtn, { backgroundColor: palette.accent.primarySoft }]}
-          >
-            <Ionicons name="grid-outline" size={16} color={palette.accent.primaryText} />
-            <Text variant="footnote" color={palette.accent.primaryText} style={styles.actionBtnText} numberOfLines={1}>
-              Создать сетку
-            </Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+              <TouchableOpacity
+                onPress={() => setGridOpen(true)}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Создать сетку ячеек"
+                style={[
+                  [styles.actionBtn, { backgroundColor: palette.accent.primarySoft }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
+              >
+                <Ionicons name="grid-outline" size={16} color={palette.accent.primaryText} />
+                <Text
+                  variant="footnote"
+                  color={palette.accent.primaryText}
+                  style={styles.actionBtnText}
+                  numberOfLines={1}
+                >
+                  Создать сетку
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       {content}
 
@@ -1098,17 +1223,17 @@ export default function StorageCellsScreen() {
           if (target && moveCell) deleteMutation.mutate({ cell: moveCell, moveTo: target.id });
         }}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
+  pointChipRow: { marginHorizontal: 0, marginBottom: 0, alignSelf: 'flex-start' },
   headerSpinner: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
 
   chipsOuter: { flexGrow: 0, flexShrink: 0 },
-  chipsScroll: { gap: spacing[2], paddingHorizontal: spacing[4], paddingVertical: spacing[1], alignItems: 'center' },
+  chipsScroll: { gap: spacing[2], paddingHorizontal: 0, paddingVertical: 0, alignItems: 'center' },
   chip: {
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1.5],
@@ -1116,8 +1241,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   chipText: { fontWeight: fontWeight.medium },
-  searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[2], paddingBottom: spacing[1] },
-  actionRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  searchWrap: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
+  actionRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: 0, paddingBottom: 0, flexWrap: 'wrap' },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',

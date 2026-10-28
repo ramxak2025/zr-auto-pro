@@ -1062,9 +1062,12 @@ export default function IntegrationsPage() {
         title="Интеграции"
         icon={Plug}
         subtitle="Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet"
+        toolbar={
+          <>
+            <Tabs items={TAB_ITEMS} value={tab} onChange={setTab} aria-label="Интеграции" idPrefix="integrations" />
+          </>
+        }
       />
-
-      <Tabs items={TAB_ITEMS} value={tab} onChange={setTab} aria-label="Интеграции" idPrefix="integrations" />
 
       <div className="max-w-3xl">
         <Panel active={tab === 'acquiring'} tabKey="acquiring">

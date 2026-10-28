@@ -218,16 +218,19 @@ export default function CarsPage() {
         title="Автомобили"
         icon={Car}
         subtitle={data ? `${total.toLocaleString('ru-RU')} в базе` : undefined}
+        toolbar={
+          <>
+            <Toolbar>
+              <SearchInput
+                value={search}
+                onChange={(val) => updateParams({ q: val, page: 1 })}
+                placeholder={vinEnabled ? 'Госномер, марка или VIN' : 'Госномер или марка'}
+                className="w-full sm:w-80"
+              />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <SearchInput
-          value={search}
-          onChange={(val) => updateParams({ q: val, page: 1 })}
-          placeholder={vinEnabled ? 'Госномер, марка или VIN' : 'Госномер или марка'}
-          className="w-full sm:w-80"
-        />
-      </Toolbar>
 
       <DataTable
         caption="Список автомобилей"

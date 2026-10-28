@@ -23,14 +23,17 @@ import {
   shiftAttendanceStatus,
 } from './shiftAttendanceHelpers';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { ScreenSectionScrollController } from '../components/ScreenSectionHeader';
 
 interface Props {
   currentMonth: Date;
   onMonthChange: (month: Date) => void;
+  section?: ScreenSectionScrollController;
 }
 
 /** The journal reads recorded Shift openings; a planned schedule is a separate view. */
-export default function ShiftAttendanceHistory({ currentMonth, onMonthChange }: Props) {
+export default function ShiftAttendanceHistory({ currentMonth, onMonthChange, section }: Props) {
   const palette = useColors();
   const timeZone = useTenantTimezone();
   const { user } = useAuth();
@@ -70,8 +73,14 @@ export default function ShiftAttendanceHistory({ currentMonth, onMonthChange }: 
   });
 
   return (
-    <ScrollView
-      contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
+    <ScreenSectionScrollView
+      onScroll={section?.onScroll}
+      scrollEventThrottle={16}
+      contentInsetAdjustmentBehavior="never"
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: (section?.contentTop ?? 0) + spacing[4], paddingBottom: tabBarHeight + spacing[4] },
+      ]}
       refreshControl={
         <RefreshControl
           refreshing={isFetching && !isPending}
@@ -216,7 +225,7 @@ export default function ShiftAttendanceHistory({ currentMonth, onMonthChange }: 
           )}
         </>
       )}
-    </ScrollView>
+    </ScreenSectionScrollView>
   );
 }
 

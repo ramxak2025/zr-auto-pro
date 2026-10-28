@@ -16,12 +16,16 @@
  *   • month        — optional 'YYYY-MM' to open on (owner passes the month
  *                    they were viewing in the list).
  */
-import React from 'react';
+
 import { View, StyleSheet } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import SalaryEmployeeCard from '../components/salary/SalaryEmployeeCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import IosScreenHeader from '../components/IosScreenHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import React from 'react';
 
 interface SalaryEmployeeRouteParams {
   employeeId: string;
@@ -30,6 +34,7 @@ interface SalaryEmployeeRouteParams {
 }
 
 export default function SalaryEmployeeScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute();
   const { hasPermission } = useAuth();
@@ -54,8 +59,19 @@ export default function SalaryEmployeeScreen() {
   const canManageRates = hasPermission('user_management');
 
   if (!employeeId) {
-    // Defensive — a malformed deep-link without an id just bounces back.
-    return <View style={[styles.flex, { backgroundColor: palette.bg.canvas }]} />;
+    // A malformed deep-link keeps the normal functional Back affordance.
+    return (
+      <View style={[styles.flex, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader scroll={section} title={employeeName} onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        />
+      </View>
+    );
   }
 
   return (

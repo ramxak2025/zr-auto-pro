@@ -35,7 +35,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { adminApi } from '../../api/services';
-import IosScreenHeader from '../../components/IosScreenHeader';
 import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -47,6 +46,9 @@ import { formatPhone } from '../../../../shared/validation/phone';
 import type { RegistrationRequest, Tenant } from '../../../../shared/types';
 import { formatDateTime, formatFullDate, StatusChip, InitialAvatar, type StatusInfo } from './adminShared';
 import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
+import { HeaderAction, HeaderIsland, headerTouchSize } from '../../components/ScreenHeaderControls';
 
 type StatusFilter = 'pending' | 'approved' | 'rejected';
 
@@ -90,6 +92,7 @@ function requestStatusInfo(status: RegistrationRequest['status'], mode: 'light' 
 }
 
 export default function AdminRegistrationRequestsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -234,42 +237,56 @@ export default function AdminRegistrationRequestsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Заявки на регистрацию"
-        subtitle="Самостоятельная регистрация"
-        onBack={() => navigation.goBack()}
-      />
+      <ScreenSectionHeader scroll={section} title="Заявки на регистрацию" subtitle="Самостоятельная регистрация">
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          </View>
+          <View style={styles.filterRow}>
+            {FILTERS.map((f) => {
+              const on = filter === f.key;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={f.key}
+                  onPress={() => {
+                    haptic('select');
+                    setFilter(f.key);
+                  }}
+                  style={[
+                    [
+                      styles.filterChip,
+                      {
+                        backgroundColor: on ? palette.accent.primary : palette.bg.card,
+                        borderColor: on ? palette.accent.primary : palette.border.subtle,
+                      },
+                    ],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                >
+                  <Text style={[styles.filterChipText, { color: on ? colors.white : palette.text.secondary }]}>
+                    {f.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       {/* Status filter */}
-      <View style={styles.filterRow}>
-        {FILTERS.map((f) => {
-          const on = filter === f.key;
-          return (
-            <Pressable
-              key={f.key}
-              onPress={() => {
-                haptic('select');
-                setFilter(f.key);
-              }}
-              style={[
-                styles.filterChip,
-                {
-                  backgroundColor: on ? palette.accent.primary : palette.bg.card,
-                  borderColor: on ? palette.accent.primary : palette.border.subtle,
-                },
-              ]}
-            >
-              <Text style={[styles.filterChipText, { color: on ? colors.white : palette.text.secondary }]}>
-                {f.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         contentInset={contentInset}
-        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -396,7 +413,7 @@ export default function AdminRegistrationRequestsScreen() {
             </View>
           ))
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Approve — trial sheet */}
       <Modal
@@ -609,7 +626,7 @@ export default function AdminRegistrationRequestsScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  filterRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  filterRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: 0, paddingBottom: 0, flexWrap: 'wrap' },
   filterChip: {
     flex: 1,
     alignItems: 'center',

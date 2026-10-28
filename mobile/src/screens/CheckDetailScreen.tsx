@@ -12,12 +12,11 @@ import {
   StyleSheet,
   Alert,
   Animated,
-  Modal as RNModal,
   ActivityIndicator,
   Platform,
   Linking,
+  Modal as RNModal,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,9 +28,9 @@ import {
   myCompanyApi,
   checkPhotosApi,
   returnsApi,
-  knowledgeApi,
   fiscalApi,
   voiceApi,
+  knowledgeApi,
 } from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
 import { formatQty, formatQtyUnit } from '../utils/units';
@@ -74,6 +73,9 @@ import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/t
 // для web и mobile; локальные копии словаря запрещены.
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -139,6 +141,7 @@ const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
 };
 
 export default function CheckDetailScreen() {
+  const section = useScreenSectionScroll();
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -871,38 +874,45 @@ export default function CheckDetailScreen() {
   // transparent navigation stack — this is the «пустой экран» fix. Stale data
   // keeps showing through `resolveCheckDetailState` (stale-while-revalidate).
   const viewState = resolveCheckDetailState({ hasCheck: !!check, isLoading, isError });
+  // A replacement native scroller starts at zero; keep the heading on that same offset.
+  const sectionBody = viewState !== 'content' || !check ? 'terminal' : 'check';
+  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+
   if (viewState !== 'content' || !check) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-        <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={[styles.backBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-          >
-            <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{'Чек'}</Text>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <ScreenSectionHeader scroll={section} title="Чек">
+          <HeaderIsland>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          </HeaderIsland>
+        </ScreenSectionHeader>
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.terminalStateWrap}>
+            {viewState === 'loading' ? (
+              <LoadingSpinner />
+            ) : viewState === 'error' ? (
+              <QueryErrorState
+                description="Не удалось загрузить чек. Проверьте соединение."
+                onRetry={() => refetch()}
+              />
+            ) : (
+              <EmptyState
+                icon="receipt"
+                title="Чек не найден"
+                description="Возможно, он был удалён."
+                action={{ label: 'Назад', onPress: () => navigation.goBack() }}
+              />
+            )}
           </View>
-          {/* Invisible spacer (width only) — balances the back chevron so the
-              title stays optically centered without drawing a stray circle. */}
-          <View style={{ width: 38 }} />
-        </View>
-        <View style={styles.terminalStateWrap}>
-          {viewState === 'loading' ? (
-            <LoadingSpinner />
-          ) : viewState === 'error' ? (
-            <QueryErrorState description="Не удалось загрузить чек. Проверьте соединение." onRetry={() => refetch()} />
-          ) : (
-            <EmptyState
-              icon="receipt"
-              title="Чек не найден"
-              description="Возможно, он был удалён."
-              action={{ label: 'Назад', onPress: () => navigation.goBack() }}
-            />
-          )}
-        </View>
-      </SafeAreaView>
+        </ScreenSectionScrollView>
+      </View>
     );
   }
 
@@ -980,109 +990,123 @@ export default function CheckDetailScreen() {
   const clientPhone = check.client?.phone?.trim() ?? '';
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-      {/* Modern header with gradient accent */}
-      <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flexWrap: 'wrap' }}>
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
-              {'Чек'} #{check.number}
-            </Text>
-            {isReturned && (
-              <View style={styles.returnedHeaderBadge}>
-                <Ionicons name="arrow-undo" size={11} color={colors.white} />
-                <Text style={styles.returnedHeaderBadgeText}>ВОЗВРАЩЁН</Text>
-              </View>
-            )}
-          </View>
-          <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>
-            {formatShortDate(check.date, tenantTz)}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            onPress={generatePdf}
-            style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
-            accessibilityRole="button"
-            accessibilityLabel="Печать / PDF заказ-наряда"
-            hitSlop={6}
-          >
-            <Ionicons name="print-outline" size={17} color={colors.violet[600]} />
-          </TouchableOpacity>
-          {/* Возврат заказ-наряда — компактная trailing-иконка в шапке.
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ScreenSectionHeader
+        scroll={section}
+        title={`Чек #${check.number}`}
+        subtitle={formatShortDate(check.date, tenantTz)}
+        context={
+          isReturned ? (
+            <View style={styles.returnedHeaderBadge}>
+              <Ionicons name="arrow-undo" size={11} color={colors.white} />
+              <Text style={styles.returnedHeaderBadgeText}>ВОЗВРАЩЁН</Text>
+            </View>
+          ) : null
+        }
+      >
+        <HeaderIsland>
+          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6 }}>
+            <TouchableOpacity
+              onPress={generatePdf}
+              style={[
+                [styles.actionBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Печать / PDF заказ-наряда"
+              hitSlop={6}
+            >
+              <Ionicons name="print-outline" size={17} color={colors.violet[600]} />
+            </TouchableOpacity>
+            {/* Возврат заказ-наряда — компактная trailing-иконка в шапке.
               Видна только директору/админу/superadmin. На уже возвращённом
               чеке остаётся, но в disabled-состоянии (приглушённая, без
               нажатия) — пользователь видит, что возврат уже оформлен, и
               понимает почему действие недоступно. */}
-          {canFileReturn && (
-            <TouchableOpacity
-              onPress={openReturnModal}
-              disabled={!!returnUnavailableReason}
-              style={[
-                styles.actionBtn,
-                {
-                  backgroundColor: returnUnavailableReason
-                    ? palette.bg.muted
-                    : isDark
-                      ? softTint(colors.red[600], 'dark')
-                      : colors.red[50],
-                },
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={returnUnavailableReason ?? 'Оформить возврат'}
-              accessibilityHint={isDeferred ? 'Сначала проведите отложенный чек.' : undefined}
-              accessibilityState={{ disabled: !!returnUnavailableReason }}
-              hitSlop={6}
-            >
-              <Ionicons
-                name="arrow-undo-outline"
-                size={17}
-                color={returnUnavailableReason ? palette.text.tertiary : colors.red[600]}
-              />
-            </TouchableOpacity>
-          )}
-          {canEdit && (
-            <TouchableOpacity
-              onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
-              style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
-            >
-              <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
-            </TouchableOpacity>
-          )}
-          {canDelete && (
-            <TouchableOpacity
-              onPress={() => {
-                // Корзина (106): DELETE — софт-удаление, чек можно вернуть
-                // 30 дней (Журнал → Корзина, owner-class). Старое «Это
-                // действие необратимо» стало неправдой.
-                Alert.alert('Удалить?', 'Заказ-наряд будет перемещён в корзину (хранится 30 дней).', [
-                  { text: 'Отмена', style: 'cancel' },
-                  {
-                    text: 'Удалить',
-                    style: 'destructive',
-                    onPress: () => deleteMutation.mutate(),
-                  },
-                ]);
-              }}
-              style={[
-                styles.actionBtn,
-                { backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50] },
-              ]}
-            >
-              <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+            {canFileReturn && (
+              <TouchableOpacity
+                onPress={openReturnModal}
+                disabled={!!returnUnavailableReason}
+                style={[
+                  [
+                    styles.actionBtn,
+                    {
+                      backgroundColor: returnUnavailableReason
+                        ? palette.bg.muted
+                        : isDark
+                          ? softTint(colors.red[600], 'dark')
+                          : colors.red[50],
+                    },
+                  ],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={returnUnavailableReason ?? 'Оформить возврат'}
+                accessibilityHint={isDeferred ? 'Сначала проведите отложенный чек.' : undefined}
+                accessibilityState={{ disabled: !!returnUnavailableReason }}
+                hitSlop={6}
+              >
+                <Ionicons
+                  name="arrow-undo-outline"
+                  size={17}
+                  color={returnUnavailableReason ? palette.text.tertiary : colors.red[600]}
+                />
+              </TouchableOpacity>
+            )}
+            {canEdit && (
+              <TouchableOpacity
+                accessibilityLabel="Редактировать чек"
+                accessibilityRole="button"
+                onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
+                style={[
+                  [styles.actionBtn, { backgroundColor: palette.bg.muted }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
+              >
+                <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
+              </TouchableOpacity>
+            )}
+            {canDelete && (
+              <TouchableOpacity
+                accessibilityLabel="Удалить чек"
+                accessibilityRole="button"
+                onPress={() => {
+                  // Корзина (106): DELETE — софт-удаление, чек можно вернуть
+                  // 30 дней (Журнал → Корзина, owner-class). Старое «Это
+                  // действие необратимо» стало неправдой.
+                  Alert.alert('Удалить?', 'Заказ-наряд будет перемещён в корзину (хранится 30 дней).', [
+                    { text: 'Отмена', style: 'cancel' },
+                    {
+                      text: 'Удалить',
+                      style: 'destructive',
+                      onPress: () => deleteMutation.mutate(),
+                    },
+                  ]);
+                }}
+                style={[
+                  [styles.actionBtn, { backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50] }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
+              >
+                <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       <Animated.ScrollView
+        onScroll={section.onNativeScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
         style={[styles.scroll, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
-        contentInset={{ bottom: tabBarHeight }}
+        contentInset={{ bottom: 0 }}
         automaticallyAdjustContentInsets={false}
         showsVerticalScrollIndicator={false}
       >
@@ -2499,7 +2523,7 @@ export default function CheckDetailScreen() {
           />
         )}
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

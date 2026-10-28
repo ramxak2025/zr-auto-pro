@@ -34,8 +34,10 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { extractApiErrorMessage } from '../../utils/apiError';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
 import type { Plan, Tenant, FeatureCatalogItem, PlatformSettings } from '../../../../shared/types';
-import { formatMoney, FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER } from './adminShared';
+import { FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER, formatMoney } from './adminShared';
 import { AdminSheet, SheetHint, SheetInput } from './adminSheet';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { headerTouchSize } from '../../components/ScreenHeaderControls';
 
 interface PlanDraft {
   id?: string;
@@ -65,6 +67,7 @@ function toDraft(plan?: Plan): PlanDraft {
 }
 
 export default function AdminPlansScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();
@@ -250,16 +253,22 @@ export default function AdminPlansScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Тарифы"
         onBack={() => navigation.goBack()}
         subtitle={`${plans.length} планов`}
         trailing={
           <Pressable
+            accessibilityLabel="Добавить тариф"
+            accessibilityRole="button"
             onPress={() => {
               haptic('tap');
               setEditing(toDraft());
             }}
-            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
+            style={[
+              [styles.headerAdd, { backgroundColor: palette.accent.primary }],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
             hitSlop={6}
           >
             <Ionicons name="add" size={22} color={colors.white} />
@@ -268,9 +277,17 @@ export default function AdminPlansScreen() {
       />
 
       <KeyboardAwareScroll
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         reserveTabBar={false}
         extraKeyboardBottomOffset={tabBarHeight}
-        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Платформенный лимит бесплатных минут голосового ввода (116) */}

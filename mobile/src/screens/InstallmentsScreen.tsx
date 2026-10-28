@@ -12,11 +12,9 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
-
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRoute, type RouteProp, useNavigation } from '@react-navigation/native';
-import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -29,11 +27,14 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentPlan } from '../../../shared/types';
-import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
 
 type Filter = 'open' | 'closed' | 'overdue';
 
 export default function InstallmentsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -142,8 +143,12 @@ export default function InstallmentsScreen() {
           const active = filter === seg.key;
           return (
             <TouchableOpacity
+              accessibilityRole="button"
               key={seg.key}
-              style={[styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]]}
+              style={[
+                [styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
               onPress={() => {
                 haptic('tap');
                 setFilter(seg.key);
@@ -167,58 +172,99 @@ export default function InstallmentsScreen() {
     </View>
   );
 
+  // A replacement native scroller starts at zero; keep the heading on that same offset.
+  const sectionBody = sorted === undefined || sorted.length === 0 ? 'terminal' : 'list';
+  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Рассрочка"
-        onBack={() => navigation.goBack()}
-        centerTitle
-        trailing={
-          isOwnerClass ? (
-            <TouchableOpacity
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate('InstallmentReminderSettings');
+      <ScreenSectionHeader scroll={section} title="Рассрочка">
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
               }}
-              style={[styles.gearBtn, { backgroundColor: palette.bg.muted }]}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessibilityLabel="Напоминания о платежах"
             >
-              <Ionicons name="notifications-outline" size={19} color={palette.text.secondary} />
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
-
-      {segmented}
+              {isOwnerClass ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => {
+                    haptic('tap');
+                    navigation.navigate('InstallmentReminderSettings');
+                  }}
+                  style={[
+                    [styles.gearBtn, { backgroundColor: palette.bg.muted }],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Напоминания о платежах"
+                >
+                  <Ionicons name="notifications-outline" size={19} color={palette.text.secondary} />
+                </TouchableOpacity>
+              ) : undefined}
+            </View>
+          </View>
+          {segmented}
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       {sorted === undefined ? (
-        <ListSkeleton count={6} />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <ListSkeleton count={6} />
+        </ScreenSectionScrollView>
       ) : sorted.length === 0 ? (
-        <EmptyState
-          icon={filter === 'closed' ? 'check' : 'card'}
-          title={
-            filter === 'overdue'
-              ? 'Просроченных рассрочек нет'
-              : filter === 'open'
-                ? 'Открытых рассрочек нет'
-                : 'Закрытых рассрочек нет'
-          }
-          description={
-            filter === 'overdue'
-              ? 'Платежей с прошедшей датой нет.'
-              : filter === 'open'
-                ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
-                : 'Здесь появятся полностью погашенные рассрочки.'
-          }
-        />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <EmptyState
+            icon={filter === 'closed' ? 'check' : 'card'}
+            title={
+              filter === 'overdue'
+                ? 'Просроченных рассрочек нет'
+                : filter === 'open'
+                  ? 'Открытых рассрочек нет'
+                  : 'Закрытых рассрочек нет'
+            }
+            description={
+              filter === 'overdue'
+                ? 'Платежей с прошедшей датой нет.'
+                : filter === 'open'
+                  ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
+                  : 'Здесь появятся полностью погашенные рассрочки.'
+            }
+          />
+        </ScreenSectionScrollView>
       ) : (
-        <FlashList
+        <ScreenSectionFlashList
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          style={{ flex: 1 }}
+          reserveSafeAreaBottom
           data={sorted}
           keyExtractor={(i) => i.id}
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingTop: section.contentTop + spacing[1] }]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           refreshControl={
@@ -237,7 +283,7 @@ const styles = StyleSheet.create({
   gearBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
 
   // Segmented control
-  segmentedWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[2] },
+  segmentedWrap: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
   segmentedControl: { flexDirection: 'row', borderRadius: borderRadius.lg, padding: 3 },
   segmentBtn: {
     flex: 1,

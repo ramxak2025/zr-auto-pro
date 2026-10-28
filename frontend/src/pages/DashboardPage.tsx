@@ -40,13 +40,10 @@ const quickLinks: QuickLink[] = [
   { label: 'Отчёты', to: '/reports', icon: BarChart3, permission: 'financial_reports' },
 ];
 
-function QuickLinks() {
-  const { hasPermission } = useAuth();
-  const visible = quickLinks.filter((a) => !a.permission || hasPermission(a.permission));
-  if (visible.length === 0) return null;
+function QuickLinks({ links }: { links: QuickLink[] }) {
   return (
     <>
-      {visible.map((a) => {
+      {links.map((a) => {
         const Icon = a.icon;
         return (
           <Link key={a.to} to={a.to} className={buttonClasses({ variant: 'secondary' })}>
@@ -121,11 +118,12 @@ function AdminDashboard() {
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   // Приветствие и дата — по времени АВТОСЕРВИСА (157), а не машины владельца.
   const tenantTz = useTenantTimezone();
   const { today } = useTenantCalendar();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
+  const visibleQuickLinks = isMaster ? [] : quickLinks.filter((a) => !a.permission || hasPermission(a.permission));
   const isOwner =
     user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
   const attendanceMode = user?.tenant?.attendanceMode ?? (user?.tenant?.shiftsEnabled ? 'manual' : 'admin');
@@ -139,7 +137,7 @@ export default function DashboardPage() {
       <PageHeader
         title={displayName ? `${greeting}, ${displayName}` : greeting}
         subtitle={`${todayLabel.charAt(0).toUpperCase()}${todayLabel.slice(1)} · обзор автосервиса`}
-        actions={!isMaster ? <QuickLinks /> : undefined}
+        actions={visibleQuickLinks.length > 0 ? <QuickLinks links={visibleQuickLinks} /> : undefined}
       />
 
       {/* Смена — сотрудникам; владельцу/директору не показывается */}

@@ -32,6 +32,9 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { User } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 
 // ── Android LayoutAnimation enable ──────────────────────────────────────
 // Required for collapsible day cards to animate height changes on Android.
@@ -352,6 +355,7 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 
 // ── Screen ─────────────────────────────────────────────────────────────
 export default function CashFlowScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
@@ -760,7 +764,10 @@ export default function CashFlowScreen() {
         return (
           <TouchableOpacity
             key={p}
-            style={[styles.periodSegBtn, active && [styles.periodSegBtnActive, { backgroundColor: palette.bg.card }]]}
+            style={[
+              [styles.periodSegBtn, active && [styles.periodSegBtnActive, { backgroundColor: palette.bg.card }]],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
             onPress={() => handlePickPeriod(p)}
             activeOpacity={0.7}
             accessibilityRole="button"
@@ -787,26 +794,45 @@ export default function CashFlowScreen() {
   if (!canViewCashFlow) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
-        <View style={styles.noAccessWrap}>
-          <EmptyState
-            title="Нет доступа"
-            description="Движение денег доступно владельцу, администратору и сотрудникам, которым выдали это право."
-            icon="lock"
-          />
-        </View>
+        <IosScreenHeader scroll={section} title="Движение денег" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.noAccessWrap}>
+            <EmptyState
+              title="Нет доступа"
+              description="Движение денег доступно владельцу, администратору и сотрудникам, которым выдали это право."
+              icon="lock"
+            />
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} trailing={periodSwitcher} />
+      <IosScreenHeader
+        scroll={section}
+        title="Движение денег"
+        onBack={() => navigation.goBack()}
+        trailing={periodSwitcher}
+      />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4] },
+          [styles.scrollContent, { paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -1436,7 +1462,7 @@ export default function CashFlowScreen() {
             </Text>
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Employee picker modal */}
       <Modal

@@ -32,13 +32,16 @@ import { knowledgeApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
-import type { KnowledgeCourse, KnowledgeLesson, KnowledgeQuizQuestion } from '../../../shared/types';
+import { type KnowledgeCourse, type KnowledgeLesson, type KnowledgeQuizQuestion } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type ParamList = { KnowledgeCourseEditor: { id?: string } };
 type Palette = ReturnType<typeof useColors>;
 
 export default function KnowledgeCourseEditorScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseEditor'>>();
   const palette = useColors();
@@ -173,8 +176,15 @@ export default function KnowledgeCourseEditorScreen() {
   if (isEdit && loadingExisting && !existing) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Редактирование" onBack={() => navigation.goBack()} />
-        <LoadingSpinner />
+        <IosScreenHeader scroll={section} title="Редактирование" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -197,13 +207,20 @@ export default function KnowledgeCourseEditorScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={isEdit ? 'Редактирование курса' : 'Новый курс'}
         onBack={() => navigation.goBack()}
         trailing={saveTrailing}
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[8] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.content, { paddingBottom: tabBarHeight + spacing[8] }],
+          { paddingTop: section.contentTop + spacing[2] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -349,7 +366,7 @@ export default function KnowledgeCourseEditorScreen() {
             Сохраните курс, чтобы добавить уроки.
           </Text>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Lesson editor sheet */}
       {lessonEditor && editId ? (

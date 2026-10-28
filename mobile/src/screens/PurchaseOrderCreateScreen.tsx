@@ -1,3 +1,5 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
+
 import { captureDataSession } from '../contexts/dataSession';
 /**
  * PurchaseOrderCreateScreen — создание (и редактирование черновика) заказа
@@ -26,7 +28,7 @@ import { captureDataSession } from '../contexts/dataSession';
  *
  * Android-safe: ProductPickerScreen + inline-пикеры кроссплатформенны.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -62,6 +64,7 @@ import {
   roundPurchaseOrderQuantity as roundQty,
   type PurchaseOrderLineValue,
 } from '../../../shared/utils/purchaseOrderInput';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 interface DraftLine {
   productId: string;
@@ -85,6 +88,7 @@ interface DraftLine {
 const SAVE_BAR_HEIGHT = spacing[3] + 24 + spacing[2.5] + spacing[3.5] * 2 + 16 + spacing[3];
 
 export default function PurchaseOrderCreateScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -440,16 +444,20 @@ export default function PurchaseOrderCreateScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={isEdit ? 'Изменить заказ' : 'Новый заказ'}
         onBack={() => navigation.goBack()}
         trailing={
           !isEdit ? (
             <TouchableOpacity
               style={[
-                styles.suggestBtn,
-                dark
-                  ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: 'rgba(217, 119, 6, 0.40)' }
-                  : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+                [
+                  styles.suggestBtn,
+                  dark
+                    ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: 'rgba(217, 119, 6, 0.40)' }
+                    : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+                ],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
               ]}
               onPress={() => {
                 haptic('tap');
@@ -476,8 +484,14 @@ export default function PurchaseOrderCreateScreen() {
           нижний паддинг задаём сами. */}
       <View style={styles.flexFill}>
         <KeyboardAwareScroll
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
           style={styles.flexFill}
-          contentContainerStyle={[styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }]}
+          contentContainerStyle={[
+            [styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }],
+            { paddingTop: section.contentTop + spacing[1] },
+          ]}
           reserveTabBar={false}
           extraKeyboardBottomOffset={SAVE_BAR_HEIGHT}
         >

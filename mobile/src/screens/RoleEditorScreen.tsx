@@ -26,7 +26,7 @@
  * beforeRemove-гвардом. Смена матрицы применяется у назначенных сотрудников
  * ~30 секунд (сервер сбрасывает их auth-кэш) или при следующем действии.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -55,7 +55,9 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
-import type { RoleScope } from '../../../shared/types';
+import { type RoleScope } from '../../../shared/types';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // Иконки секций — те же глифы, что у групп матрицы прав в UsersScreen.
 const GROUP_ICONS: Record<PermissionGroupTitle, keyof typeof Ionicons.glyphMap> = {
@@ -155,6 +157,7 @@ function ScopeSegment({
 }
 
 export default function RoleEditorScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const roleId: string | undefined = route.params?.roleId;
@@ -345,8 +348,15 @@ export default function RoleEditorScreen() {
   if (!canManage) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Роль" onBack={() => navigation.goBack()} />
-        <EmptyState title="Нет доступа" description="Управлять ролями может владелец или администратор" />
+        <IosScreenHeader scroll={section} title="Роль" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState title="Нет доступа" description="Управлять ролями может владелец или администратор" />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -366,32 +376,53 @@ export default function RoleEditorScreen() {
   if (waitingForSource) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Роль" onBack={() => navigation.goBack()} />
-        <LoadingSpinner />
+        <IosScreenHeader scroll={section} title="Роль" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       </View>
     );
   }
   if (sourceError) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Роль" onBack={() => navigation.goBack()} />
-        <EmptyState
-          title="Не удалось загрузить"
-          description="Проверьте соединение и нажмите «Повторить»"
-          action={{ label: 'Повторить', onPress: () => refetch() }}
-        />
+        <IosScreenHeader scroll={section} title="Роль" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState
+            title="Не удалось загрузить"
+            description="Проверьте соединение и нажмите «Повторить»"
+            action={{ label: 'Повторить', onPress: () => refetch() }}
+          />
+        </ScreenSectionScrollView>
       </View>
     );
   }
   if (sourceMissing) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Роль" onBack={() => navigation.goBack()} />
-        <EmptyState
-          title="Роль не найдена"
-          description="Возможно, её удалили. Обновите список ролей."
-          action={{ label: 'К списку ролей', onPress: () => navigation.goBack() }}
-        />
+        <IosScreenHeader scroll={section} title="Роль" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState
+            title="Роль не найдена"
+            description="Возможно, её удалили. Обновите список ролей."
+            action={{ label: 'К списку ролей', onPress: () => navigation.goBack() }}
+          />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -407,11 +438,24 @@ export default function RoleEditorScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={headerTitle} subtitle={headerSubtitle} onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        scroll={section}
+        title={headerTitle}
+        subtitle={headerSubtitle}
+        onBack={() => navigation.goBack()}
+      />
 
       {/* KeyboardAwareScroll (Round 11 #1): поле названия роли держится над
           клавиатурой на iOS И Android. */}
-      <KeyboardAwareScroll contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
+      <KeyboardAwareScroll
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
+      >
         {/* Заблокированный «Директор» — вечно read-only плашка + «Создать копию». */}
         {isLocked && (
           <View

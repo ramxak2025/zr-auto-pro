@@ -1,3 +1,6 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 /**
  * ProductDetailScreen — premium drill-down for ONE warehouse product.
  *
@@ -78,11 +81,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
-import type { Product, StockMovement, ProductPriceHistoryEntry, StorageCell } from '../../../shared/types';
+import {
+  type Product,
+  type StockMovement,
+  type ProductPriceHistoryEntry,
+  type StorageCell,
+} from '../../../shared/types';
 // Round 12 #6/#8: `barcode` now lives on the shared contract types — the old
 // local ProductEditPayload superset-hack is gone.
-import type { UpdateProductRequest } from '../../../shared/api/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type UpdateProductRequest } from '../../../shared/api/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const RECENT_COUNT = 4;
@@ -181,6 +188,14 @@ export default function ProductDetailScreen() {
   // FolderPickerModal to drop the product into another folder of the SAME
   // warehouse without manual category typing.
   const [editing, setEditing] = useState(false);
+  const detailSection = useScreenSectionScroll();
+  const editSection = useScreenSectionScroll();
+  const section = editing ? editSection : detailSection;
+  // Switching edit mode unmounts the previous native scroller.
+  useEffect(() => {
+    section.reset();
+  }, [editing, section.reset]);
+
   const [moveOpen, setMoveOpen] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoUploadPending = useRef(false);
@@ -580,32 +595,39 @@ export default function ProductDetailScreen() {
   if (!product) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Товар" onBack={() => navigation.goBack()} />
-        <View style={styles.terminalState}>
-          {!!productId && productPending && !productError ? (
-            <ActivityIndicator color={palette.accent.primary} />
-          ) : (
-            <>
-              <Ionicons name="cube-outline" size={48} color={palette.text.tertiary} />
-              <Text variant="title3" color={palette.text.primary} style={styles.terminalTitle}>
-                Товар удалён со склада
-              </Text>
-              <Text variant="footnote" color={palette.text.tertiary} style={styles.terminalText}>
-                Карточка недоступна: товар удалён или больше не существует. Строка в чеке при этом сохранена.
-              </Text>
-              <TouchableOpacity
-                style={[styles.terminalBackBtn, { backgroundColor: palette.accent.primary }]}
-                onPress={() => navigation.goBack()}
-                accessibilityRole="button"
-                accessibilityLabel="Назад"
-              >
-                <Text variant="bodyEmph" color={colors.white}>
-                  Назад
+        <IosScreenHeader scroll={section} title="Товар" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.terminalState}>
+            {!!productId && productPending && !productError ? (
+              <ActivityIndicator color={palette.accent.primary} />
+            ) : (
+              <>
+                <Ionicons name="cube-outline" size={48} color={palette.text.tertiary} />
+                <Text variant="title3" color={palette.text.primary} style={styles.terminalTitle}>
+                  Товар удалён со склада
                 </Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
+                <Text variant="footnote" color={palette.text.tertiary} style={styles.terminalText}>
+                  Карточка недоступна: товар удалён или больше не существует. Строка в чеке при этом сохранена.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.terminalBackBtn, { backgroundColor: palette.accent.primary }]}
+                  onPress={() => navigation.goBack()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Назад"
+                >
+                  <Text variant="bodyEmph" color={colors.white}>
+                    Назад
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -613,6 +635,7 @@ export default function ProductDetailScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={editing ? 'Редактирование' : product.name}
         subtitle={editing ? undefined : categoryLabel}
         onBack={editing ? cancelEdit : () => navigation.goBack()}
@@ -621,7 +644,10 @@ export default function ProductDetailScreen() {
             editing ? (
               <TouchableOpacity
                 onPress={handleSave}
-                style={[styles.saveBtn, { backgroundColor: palette.accent.primary }]}
+                style={[
+                  [styles.saveBtn, { backgroundColor: palette.accent.primary }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
                 accessibilityRole="button"
                 accessibilityLabel="Сохранить изменения"
                 disabled={saveMutation.isPending || uploadingPhoto || pickingPhoto}
@@ -638,7 +664,10 @@ export default function ProductDetailScreen() {
             ) : (
               <TouchableOpacity
                 onPress={enterEdit}
-                style={[styles.editBtn, { backgroundColor: palette.bg.muted }]}
+                style={[
+                  [styles.editBtn, { backgroundColor: palette.bg.muted }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
                 accessibilityRole="button"
                 accessibilityLabel="Изменить товар"
                 hitSlop={8}
@@ -655,9 +684,15 @@ export default function ProductDetailScreen() {
         // вместо RN-core KAV с ручным offset=8 — offset берётся из insets,
         // одинаково на iOS и Android.
         <KeyboardAwareView style={{ flex: 1 }}>
-          <ScrollView
+          <ScreenSectionScrollView
+            contentInsetAdjustmentBehavior="never"
+            scrollEventThrottle={16}
+            onScroll={section.onScroll}
             style={styles.scroll}
-            contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[10] }]}
+            contentContainerStyle={[
+              [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[10] }],
+              { paddingTop: section.contentTop + spacing[4] },
+            ]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
@@ -939,12 +974,18 @@ export default function ProductDetailScreen() {
                 )}
               </TouchableOpacity>
             </View>
-          </ScrollView>
+          </ScreenSectionScrollView>
         </KeyboardAwareView>
       ) : (
-        <ScrollView
+        <ScreenSectionScrollView
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          onScroll={section.onScroll}
           style={styles.scroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
+          contentContainerStyle={[
+            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
+            { paddingTop: section.contentTop + spacing[4] },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -1265,7 +1306,7 @@ export default function ProductDetailScreen() {
               )}
             </TouchableOpacity>
           ) : null}
-        </ScrollView>
+        </ScreenSectionScrollView>
       )}
 
       {/* Folder picker — «Перенести» / category field. Scoped to the product's

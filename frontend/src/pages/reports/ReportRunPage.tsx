@@ -198,43 +198,55 @@ export default function ReportRunPage() {
             </Button>
           </>
         }
-      />
-
-      <Toolbar
-        end={
-          <Button
-            icon={RefreshCw}
-            onClick={() => report.refetch()}
-            loading={report.isFetching && !report.isPlaceholderData}
-            disabled={periodInvalid}
-          >
-            Сформировать
-          </Button>
+        toolbar={
+          <>
+            <Toolbar
+              end={
+                <Button
+                  icon={RefreshCw}
+                  onClick={() => report.refetch()}
+                  loading={report.isFetching && !report.isPlaceholderData}
+                  disabled={periodInvalid}
+                >
+                  Сформировать
+                </Button>
+              }
+            >
+              <MonthPager
+                from={period.from}
+                to={period.to}
+                todayKey={today}
+                onChange={(from, to) => update({ from, to })}
+              />
+              <DatePeriodPicker
+                dateFrom={period.from}
+                dateTo={period.to}
+                onChange={(from, to) => update({ from, to })}
+              />
+              {def.entityFilter && !filterHidden && (
+                <EntityFilter
+                  label={def.entityFilter.label}
+                  options={filterQuery.data?.options}
+                  selected={ids}
+                  onChange={(list) => update({ ids: list.join(',') })}
+                  isLoading={filterQuery.isLoading}
+                  isError={filterQuery.isError}
+                  isFetching={filterQuery.isFetching}
+                  onRetry={() => filterQuery.refetch()}
+                />
+              )}
+              {groupBy && (
+                <SegmentedControl
+                  aria-label="Группировка"
+                  options={groupByOptions.map((o) => ({ value: o.value, label: o.label }))}
+                  value={groupBy}
+                  onChange={(v) => update({ groupBy: v })}
+                />
+              )}
+            </Toolbar>
+          </>
         }
-      >
-        <MonthPager from={period.from} to={period.to} todayKey={today} onChange={(from, to) => update({ from, to })} />
-        <DatePeriodPicker dateFrom={period.from} dateTo={period.to} onChange={(from, to) => update({ from, to })} />
-        {def.entityFilter && !filterHidden && (
-          <EntityFilter
-            label={def.entityFilter.label}
-            options={filterQuery.data?.options}
-            selected={ids}
-            onChange={(list) => update({ ids: list.join(',') })}
-            isLoading={filterQuery.isLoading}
-            isError={filterQuery.isError}
-            isFetching={filterQuery.isFetching}
-            onRetry={() => filterQuery.refetch()}
-          />
-        )}
-        {groupBy && (
-          <SegmentedControl
-            aria-label="Группировка"
-            options={groupByOptions.map((o) => ({ value: o.value, label: o.label }))}
-            value={groupBy}
-            onChange={(v) => update({ groupBy: v })}
-          />
-        )}
-      </Toolbar>
+      />
 
       {def.entityFilter && filterQuery.isError && !filterQuery.data && (
         <ErrorRow

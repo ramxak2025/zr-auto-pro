@@ -1,3 +1,4 @@
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 /**
@@ -24,7 +25,7 @@ import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel
  *
  * Android-safe: ScrollView + навигация на экран приёмки, без iOS-only API.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Alert, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -42,7 +43,7 @@ import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { PurchaseOrder, Supplier } from '../../../shared/types';
+import { type PurchaseOrder, type Supplier } from '../../../shared/types';
 import {
   getPoStatusMeta,
   formatMoney,
@@ -54,9 +55,11 @@ import {
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 export default function PurchaseOrderDetailScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -226,15 +229,29 @@ export default function PurchaseOrderDetailScreen() {
             }}
           />
         )}
-        <IosScreenHeader title="Заказ" onBack={() => navigation.goBack()} />
+        <IosScreenHeader scroll={section} title="Заказ" onBack={() => navigation.goBack()} />
         {isError ? (
-          <QueryErrorState
-            title="Не удалось загрузить заказ"
-            description="Проверьте подключение к интернету и попробуйте ещё раз"
-            onRetry={() => refetch()}
-          />
+          <ScreenSectionScrollView
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+          >
+            <QueryErrorState
+              title="Не удалось загрузить заказ"
+              description="Проверьте подключение к интернету и попробуйте ещё раз"
+              onRetry={() => refetch()}
+            />
+          </ScreenSectionScrollView>
         ) : (
-          <ListSkeleton count={5} />
+          <ScreenSectionScrollView
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+          >
+            <ListSkeleton count={5} />
+          </ScreenSectionScrollView>
         )}
       </View>
     );
@@ -264,10 +281,21 @@ export default function PurchaseOrderDetailScreen() {
           }}
         />
       )}
-      <IosScreenHeader title={po.supplierName || 'Заказ'} subtitle={meta?.label} onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        scroll={section}
+        title={po.supplierName || 'Заказ'}
+        subtitle={meta?.label}
+        onBack={() => navigation.goBack()}
+      />
 
-      <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[10] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: tabBarHeight + spacing[10] }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         keyboardShouldPersistTaps="handled"
@@ -441,7 +469,7 @@ export default function PurchaseOrderDetailScreen() {
             </Text>
           </View>
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* ── Action bar (write-роль). Для received бар остаётся ради «Изменить
           дату» — смены даты проведённой поставки задним числом (159). ── */}

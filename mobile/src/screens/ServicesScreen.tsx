@@ -1,3 +1,8 @@
+import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
+
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
@@ -10,15 +15,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 
-import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import SearchInput from '../components/SearchInput';
+
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
@@ -33,8 +37,13 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Crypto from 'expo-crypto';
 import * as XLSX from 'xlsx';
-import type { Service, ServiceVisibilityConfig, ServicePriceHistoryEntry, ServiceFolder } from '../../../shared/types';
-import type { ServiceImportPreview } from '../../../shared/api/types';
+import {
+  type Service,
+  type ServiceVisibilityConfig,
+  type ServicePriceHistoryEntry,
+  type ServiceFolder,
+} from '../../../shared/types';
+import { type ServiceImportPreview } from '../../../shared/api/types';
 import { normalizeServiceCategoryPath } from '../../../shared/utils/normalizeServiceCategoryPath';
 import {
   assertNoServiceWorkbookFormulas,
@@ -46,7 +55,7 @@ import {
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { serviceBrowserLevel } from '../../../shared/utils/serviceBrowser';
 import { servicePriceFormValue, preservePlaceholderServicePrice } from '../../../shared/utils/servicePrices';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (
@@ -103,6 +112,7 @@ const ServiceRow = React.memo(function ServiceRow({ item, onHistory, palette }: 
 });
 
 export default function ServicesScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -553,21 +563,8 @@ export default function ServicesScreen() {
     [openEdit, canManageServices, openVisibility, visibilityConfigQuery.isSuccess, palette],
   );
 
-  return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Услуги"
-        subtitle={total > 0 ? `Услуг: ${total}` : undefined}
-        onBack={() => navigation.goBack()}
-        trailing={
-          canManageServices ? (
-            <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-              <Text style={styles.addBtnText}>+ Новая</Text>
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
-
+  const catalogTools = (
+    <>
       <View
         style={{
           flexDirection: 'row',
@@ -630,7 +627,6 @@ export default function ServicesScreen() {
           </TouchableOpacity>
         </View>
       )}
-
       {canManageServices && (
         <View
           style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], paddingHorizontal: spacing[4] }}
@@ -656,46 +652,6 @@ export default function ServicesScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      {/* Breadcrumbs — appear when navigating folders */}
-      {!search && activePath.length > 0 && (
-        <View style={styles.breadcrumb}>
-          <TouchableOpacity onPress={() => setActivePath([])} style={styles.breadcrumbItem}>
-            <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-            <Text style={styles.breadcrumbText}>Все</Text>
-          </TouchableOpacity>
-          {activePath.map((seg, i) => (
-            <React.Fragment key={i}>
-              <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
-              <TouchableOpacity
-                onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
-                style={styles.breadcrumbItem}
-              >
-                <Text
-                  style={[
-                    styles.breadcrumbText,
-                    { color: palette.text.secondary },
-                    i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
-                  ]}
-                >
-                  {seg}
-                </Text>
-              </TouchableOpacity>
-            </React.Fragment>
-          ))}
-        </View>
-      )}
-
-      <View style={styles.searchWrap}>
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-          }}
-          placeholder="Поиск во всех папках"
-        />
-      </View>
-
       {canManageServices && !search && (
         <View
           style={{
@@ -725,48 +681,169 @@ export default function ServicesScreen() {
           )}
         </View>
       )}
+    </>
+  );
+
+  // Reset only when React replaces this screen's native root scroller.
+  const sectionRootKind =
+    isError ||
+    folderQuery.isError ||
+    data === undefined ||
+    (!search && folders.length === 0 && currentServices.length === 0 && !isLoading)
+      ? 'state-scroll'
+      : 'service-list';
+  const previousSectionRootKind = React.useRef(sectionRootKind);
+  React.useEffect(() => {
+    if (previousSectionRootKind.current !== sectionRootKind) {
+      previousSectionRootKind.current = sectionRootKind;
+      section.reset();
+    }
+  }, [sectionRootKind, section.reset]);
+
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ScreenSectionHeader scroll={section} title="Услуги" subtitle={total > 0 ? `Услуг: ${total}` : undefined}>
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {canManageServices ? (
+                <TouchableOpacity
+                  style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  onPress={openCreate}
+                >
+                  <Text style={styles.addBtnText}>+ Новая</Text>
+                </TouchableOpacity>
+              ) : undefined}
+            </View>
+          </View>
+          <View style={styles.searchWrap}>
+            <HeaderSearch
+              timing={{ debounceMs: 300 }}
+              focusOnClear={false}
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+              }}
+              placeholder="Поиск во всех папках"
+            />
+          </View>
+          {!search && activePath.length > 0 && (
+            <View style={styles.breadcrumb}>
+              <TouchableOpacity
+                onPress={() => setActivePath([])}
+                style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+              >
+                <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
+                <Text style={styles.breadcrumbText}>Все</Text>
+              </TouchableOpacity>
+              {activePath.map((seg, i) => (
+                <React.Fragment key={i}>
+                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+                  <TouchableOpacity
+                    onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
+                    style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  >
+                    <Text
+                      style={[
+                        styles.breadcrumbText,
+                        { color: palette.text.secondary },
+                        i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
+                      ]}
+                    >
+                      {seg}
+                    </Text>
+                  </TouchableOpacity>
+                </React.Fragment>
+              ))}
+            </View>
+          )}
+        </HeaderIsland>
+      </ScreenSectionHeader>
+
+      {/* Breadcrumbs — appear when navigating folders */}
+
       {isError || folderQuery.isError ? (
-        <View style={{ padding: spacing[4] }}>
-          <Text style={{ color: palette.text.primary }}>Не удалось загрузить каталог.</Text>
-          <TouchableOpacity
-            onPress={() => {
-              void refetch();
-              void folderQuery.refetch();
-            }}
-            style={{ paddingVertical: 12 }}
-          >
-            <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          {catalogTools}
+          <View style={{ padding: spacing[4] }}>
+            <Text style={{ color: palette.text.primary }}>Не удалось загрузить каталог.</Text>
+            <TouchableOpacity
+              onPress={() => {
+                void refetch();
+                void folderQuery.refetch();
+              }}
+              style={{ paddingVertical: 12 }}
+            >
+              <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        </ScreenSectionScrollView>
       ) : data === undefined ? (
         // Cold-start: skeleton until ANY data (cached or freshly
         // fetched) lands. After that, SWR keeps the list visible
         // across filter mutations.
-        <ListSkeleton count={8} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          {catalogTools}
+          <ListSkeleton count={8} />
+        </ScreenSectionScrollView>
       ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
-        <EmptyState
-          title={preferredOnly ? 'Нет услуг по вашей роли' : 'Нет услуг'}
-          description={
-            preferredOnly
-              ? 'Покажите полный каталог или попросите владельца настроить видимость.'
-              : canManageServices
-                ? 'Добавьте первую услугу'
-                : 'Каталог услуг пуст'
-          }
-          action={
-            preferredOnly
-              ? { label: 'Показать все услуги', onPress: () => setShowAllServices(true) }
-              : canManageServices
-                ? { label: 'Добавить', onPress: openCreate }
-                : undefined
-          }
-        />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          {catalogTools}
+          <EmptyState
+            title={preferredOnly ? 'Нет услуг по вашей роли' : 'Нет услуг'}
+            description={
+              preferredOnly
+                ? 'Покажите полный каталог или попросите владельца настроить видимость.'
+                : canManageServices
+                  ? 'Добавьте первую услугу'
+                  : 'Каталог услуг пуст'
+            }
+            action={
+              preferredOnly
+                ? { label: 'Показать все услуги', onPress: () => setShowAllServices(true) }
+                : canManageServices
+                  ? { label: 'Добавить', onPress: openCreate }
+                  : undefined
+            }
+          />
+        </ScreenSectionScrollView>
       ) : (
-        <FlashList
+        <ScreenSectionFlashList
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
           data={currentServices}
           keyExtractor={(item) => item.id}
           renderItem={renderService}
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+          contentContainerStyle={[
+            { ...styles.list, paddingBottom: tabBarHeight + spacing[4] },
+            { paddingTop: section.contentTop },
+          ]}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
@@ -782,49 +859,52 @@ export default function ServicesScreen() {
             ) : null
           }
           ListHeaderComponent={
-            !search && folders.length > 0 ? (
-              <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
-                {folders.map(([folderName, count]) => (
-                  <TouchableOpacity
-                    key={folderName}
-                    style={[styles.folderRow, { borderBottomColor: palette.border.subtle }]}
-                    onPress={() => setActivePath((prev) => [...prev, folderName])}
-                    activeOpacity={0.6}
-                  >
-                    <View
-                      style={[
-                        styles.folderIconBox,
-                        palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
-                      ]}
+            <>
+              {catalogTools}
+              {!search && folders.length > 0 ? (
+                <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
+                  {folders.map(([folderName, count]) => (
+                    <TouchableOpacity
+                      key={folderName}
+                      style={[styles.folderRow, { borderBottomColor: palette.border.subtle }]}
+                      onPress={() => setActivePath((prev) => [...prev, folderName])}
+                      activeOpacity={0.6}
                     >
-                      <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
-                    </View>
-                    <View style={styles.folderInfo}>
-                      <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={1}>
-                        {folderName}
-                      </Text>
-                      <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
-                        {count ? `${count} услуг` : 'Пустая папка'}
-                      </Text>
-                    </View>
-                    {canManageServices && (
-                      <TouchableOpacity
-                        disabled={!visibilityConfigQuery.isSuccess}
-                        onPress={() =>
-                          openVisibility({ kind: 'category', path: [...activePath, folderName].join('/') })
-                        }
-                        accessibilityRole="button"
-                        accessibilityLabel={`Видимость папки ${folderName}`}
-                        style={{ padding: spacing[2] }}
+                      <View
+                        style={[
+                          styles.folderIconBox,
+                          palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                        ]}
                       >
-                        <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
-                      </TouchableOpacity>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : null
+                        <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                      </View>
+                      <View style={styles.folderInfo}>
+                        <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {folderName}
+                        </Text>
+                        <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
+                          {count ? `${count} услуг` : 'Пустая папка'}
+                        </Text>
+                      </View>
+                      {canManageServices && (
+                        <TouchableOpacity
+                          disabled={!visibilityConfigQuery.isSuccess}
+                          onPress={() =>
+                            openVisibility({ kind: 'category', path: [...activePath, folderName].join('/') })
+                          }
+                          accessibilityRole="button"
+                          accessibilityLabel={`Видимость папки ${folderName}`}
+                          style={{ padding: spacing[2] }}
+                        >
+                          <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
+                        </TouchableOpacity>
+                      )}
+                      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+            </>
           }
         />
       )}
@@ -1535,7 +1615,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  searchWrap: { paddingHorizontal: spacing[4] },
+  searchWrap: { paddingHorizontal: 0 },
   // iOS plain-list style (matches warehouse).
   list: { paddingHorizontal: 0, paddingBottom: 120, paddingTop: 0 },
   serviceCard: {
@@ -1563,10 +1643,11 @@ const styles = StyleSheet.create({
   breadcrumb: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing[4],
+    paddingHorizontal: 0,
     paddingBottom: spacing[2],
     gap: spacing[1],
     flexWrap: 'wrap',
+    paddingVertical: 0,
   },
   breadcrumbItem: {
     flexDirection: 'row',

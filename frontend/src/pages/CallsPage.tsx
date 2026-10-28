@@ -463,48 +463,55 @@ export default function CallsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Звонки" icon={Phone} subtitle="История и записи разговоров по дням" />
-
-      <Toolbar>
-        <ToolbarGroup>
-          <IconButton
-            label="Предыдущий день"
-            icon={ChevronLeft}
-            variant="secondary"
-            onClick={() => updateParams({ date: shiftDayKey(dateStr, -1) })}
-          />
-          <span className="min-w-[7.5rem] text-center text-sm font-semibold text-ink" aria-live="polite">
-            {dateLabel}
-          </span>
-          <IconButton
-            label="Следующий день"
-            icon={ChevronRight}
-            variant="secondary"
-            disabled={isToday}
-            onClick={() => updateParams({ date: shiftDayKey(dateStr, 1) })}
-          />
-        </ToolbarGroup>
-        <ToolbarSeparator />
-        <ToolbarGroup>
-          <Input
-            type="date"
-            aria-label="Выбрать день"
-            value={dateStr}
-            max={today}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (DAY_KEY_RE.test(v) && v <= today) updateParams({ date: v });
-            }}
-            leftIcon={CalendarDays}
-            className="!w-44"
-          />
-          {!isToday && (
-            <Button variant="ghost" onClick={() => updateParams({ date: today })}>
-              Сегодня
-            </Button>
-          )}
-        </ToolbarGroup>
-      </Toolbar>
+      <PageHeader
+        title="Звонки"
+        icon={Phone}
+        subtitle="История и записи разговоров по дням"
+        toolbar={
+          <>
+            <Toolbar>
+              <ToolbarGroup>
+                <IconButton
+                  label="Предыдущий день"
+                  icon={ChevronLeft}
+                  variant="secondary"
+                  onClick={() => updateParams({ date: shiftDayKey(dateStr, -1) })}
+                />
+                <span className="min-w-[7.5rem] text-center text-sm font-semibold text-ink" aria-live="polite">
+                  {dateLabel}
+                </span>
+                <IconButton
+                  label="Следующий день"
+                  icon={ChevronRight}
+                  variant="secondary"
+                  disabled={isToday}
+                  onClick={() => updateParams({ date: shiftDayKey(dateStr, 1) })}
+                />
+              </ToolbarGroup>
+              <ToolbarSeparator />
+              <ToolbarGroup>
+                <Input
+                  type="date"
+                  aria-label="Выбрать день"
+                  value={dateStr}
+                  max={today}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (DAY_KEY_RE.test(v) && v <= today) updateParams({ date: v });
+                  }}
+                  leftIcon={CalendarDays}
+                  className="!w-44"
+                />
+                {!isToday && (
+                  <Button variant="ghost" onClick={() => updateParams({ date: today })}>
+                    Сегодня
+                  </Button>
+                )}
+              </ToolbarGroup>
+            </Toolbar>
+          </>
+        }
+      />
 
       {/* Summary strip */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

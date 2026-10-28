@@ -26,7 +26,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { tenantsApi, plansApi, managerApi, adminManagersApi } from '../../api/services';
-import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
@@ -49,7 +48,10 @@ import {
   InitialAvatar,
 } from './adminShared';
 import ManagerCreateTenantSheet from './ManagerCreateTenantSheet';
-import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
+import { HeaderIsland, headerTouchSize } from '../../components/ScreenHeaderControls';
 
 type FilterKey = 'all' | 'active' | 'expiring' | 'expired' | 'suspended';
 
@@ -149,6 +151,7 @@ function parseDate(value: string): string | undefined {
 }
 
 export default function AdminTenantsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -397,72 +400,97 @@ export default function AdminTenantsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Клиенты"
-        subtitle={`${tenants.length} организаций`}
-        trailing={
-          <Pressable
-            onPress={() => {
-              haptic('tap');
-              if (isManager) setManagerCreateOpen(true);
-              else {
-                setStarterDirections([]);
-                setEditing(toDraft());
-              }
-            }}
-            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
-            hitSlop={6}
-          >
-            <Ionicons name="add" size={22} color={colors.white} />
-          </Pressable>
-        }
-      />
-
-      <View style={styles.controls}>
-        {/* Search */}
-        <View style={[styles.searchRow, surface.cardCompact]}>
-          <Ionicons name="search-outline" size={18} color={palette.text.tertiary} />
-          <TextInput
-            style={[styles.searchInput, { color: palette.text.primary }]}
-            placeholder="Поиск по названию, телефону…"
-            placeholderTextColor={palette.text.tertiary}
-            value={search}
-            onChangeText={setSearch}
-            autoCorrect={false}
-          />
-          {search.length > 0 && (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+      <ScreenSectionHeader scroll={section} title="Клиенты" subtitle={`${tenants.length} организаций`}>
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={[styles.searchRow, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="search-outline" size={18} color={palette.text.tertiary} />
+                <TextInput
+                  style={[styles.searchInput, { color: palette.text.primary }]}
+                  placeholder="Поиск по названию, телефону…"
+                  placeholderTextColor={palette.text.tertiary}
+                  value={search}
+                  onChangeText={setSearch}
+                  autoCorrect={false}
+                />
+                {search.length > 0 && (
+                  <Pressable
+                    accessibilityLabel="Очистить поиск"
+                    accessibilityRole="button"
+                    style={{
+                      minWidth: headerTouchSize,
+                      minHeight: headerTouchSize,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onPress={() => setSearch('')}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+                  </Pressable>
+                )}
+              </View>
+            </View>
+            <Pressable
+              accessibilityLabel="Добавить автосервис"
+              accessibilityRole="button"
+              onPress={() => {
+                haptic('tap');
+                if (isManager) setManagerCreateOpen(true);
+                else {
+                  setStarterDirections([]);
+                  setEditing(toDraft());
+                }
+              }}
+              style={[
+                [styles.headerAdd, { backgroundColor: palette.accent.primary }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              hitSlop={6}
+            >
+              <Ionicons name="add" size={22} color={colors.white} />
             </Pressable>
-          )}
-        </View>
+          </View>
+          <View style={styles.controls}>
+            {/* Search */}
 
-        {/* Status filter chips */}
-        <FilterChips
-          items={FILTERS}
-          value={filter}
-          onChange={setFilter}
-          activeColor={palette.accent.primary}
-          palette={palette}
-        />
+            {/* Status filter chips */}
+            <FilterChips
+              items={FILTERS}
+              value={filter}
+              onChange={setFilter}
+              activeColor={palette.accent.primary}
+              palette={palette}
+            />
 
-        {/* Manager filter chips — суперадмин, когда менеджеры уже заведены */}
-        {!isManager && managers.length > 0 ? (
-          <FilterChips
-            items={managerChips}
-            value={managerFilter}
-            onChange={setManagerFilter}
-            activeColor={palette.accent.primary}
-            palette={palette}
-          />
-        ) : null}
-      </View>
+            {/* Manager filter chips — суперадмин, когда менеджеры уже заведены */}
+            {!isManager && managers.length > 0 ? (
+              <FilterChips
+                items={managerChips}
+                value={managerFilter}
+                onChange={setManagerFilter}
+                activeColor={palette.accent.primary}
+                palette={palette}
+              />
+            ) : null}
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
-      <FlatList
+      <ScreenSectionFlatList
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         data={filtered}
         keyExtractor={(t) => t.id}
         contentInset={contentInset}
-        contentContainerStyle={[styles.listContent, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.listContent, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
@@ -909,17 +937,21 @@ function FilterChips<T extends string>({
         const active = value === f.key;
         return (
           <Pressable
+            accessibilityRole="button"
             key={f.key}
             onPress={() => {
               haptic('select');
               onChange(f.key);
             }}
             style={[
-              styles.chip,
-              {
-                backgroundColor: active ? activeColor : palette.bg.card,
-                borderColor: active ? activeColor : palette.border.subtle,
-              },
+              [
+                styles.chip,
+                {
+                  backgroundColor: active ? activeColor : palette.bg.card,
+                  borderColor: active ? activeColor : palette.border.subtle,
+                },
+              ],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
             ]}
           >
             <Text style={[styles.chipText, { color: active ? '#fff' : palette.text.secondary }]}>{f.label}</Text>
@@ -954,7 +986,7 @@ function Field({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   headerAdd: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  controls: { paddingHorizontal: spacing[4], gap: spacing[2.5], paddingBottom: spacing[2] },
+  controls: { paddingHorizontal: 0, gap: spacing[2.5], paddingBottom: 0 },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',

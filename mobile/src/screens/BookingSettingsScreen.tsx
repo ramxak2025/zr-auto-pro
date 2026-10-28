@@ -12,7 +12,7 @@
  *
  * Android-safe: только Switch + TouchableOpacity, никаких iOS-only API.
  */
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Switch, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -27,13 +27,16 @@ import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { BookingSettings } from '../../../shared/types';
-import type { UpdateBookingSettingsRequest } from '../../../shared/api/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type BookingSettings } from '../../../shared/types';
+import { type UpdateBookingSettingsRequest } from '../../../shared/api/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const REMINDER_HOUR_OPTIONS = [1, 2, 3, 6, 12, 24];
 
 export default function BookingSettingsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -81,19 +84,33 @@ export default function BookingSettingsScreen() {
     if (isError) {
       return (
         <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-          <IosScreenHeader title="Настройки записей" onBack={() => navigation.goBack()} />
-          <QueryErrorState
-            title="Не удалось загрузить настройки"
-            description="Проверьте подключение к интернету и попробуйте ещё раз"
-            onRetry={() => refetch()}
-          />
+          <IosScreenHeader scroll={section} title="Настройки записей" onBack={() => navigation.goBack()} />
+          <ScreenSectionScrollView
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+          >
+            <QueryErrorState
+              title="Не удалось загрузить настройки"
+              description="Проверьте подключение к интернету и попробуйте ещё раз"
+              onRetry={() => refetch()}
+            />
+          </ScreenSectionScrollView>
         </View>
       );
     }
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Настройки записей" onBack={() => navigation.goBack()} />
-        <ListSkeleton count={3} />
+        <IosScreenHeader scroll={section} title="Настройки записей" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <ListSkeleton count={3} />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -102,10 +119,16 @@ export default function BookingSettingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Настройки записей" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Настройки записей" onBack={() => navigation.goBack()} />
 
-      <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
       >
@@ -221,7 +244,7 @@ export default function BookingSettingsScreen() {
             <Text style={[styles.savingText, { color: palette.text.tertiary }]}>Сохраняю…</Text>
           </View>
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

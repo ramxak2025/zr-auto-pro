@@ -1295,14 +1295,17 @@ export default function EquipmentPage() {
         title="Имущество"
         icon={Package}
         subtitle="Инструменты и форма: у сотрудников, в подсобке, в корзине"
-      />
-
-      <Tabs
-        aria-label="Разделы имущества"
-        idPrefix="equipment"
-        items={TABS}
-        value={tab}
-        onChange={(key) => setParam({ tab: key === 'employees' ? null : key, cat: null, q: null })}
+        toolbar={
+          <>
+            <Tabs
+              aria-label="Разделы имущества"
+              idPrefix="equipment"
+              items={TABS}
+              value={tab}
+              onChange={(key) => setParam({ tab: key === 'employees' ? null : key, cat: null, q: null })}
+            />
+          </>
+        }
       />
 
       <TabPanel idPrefix="equipment" tabKey="employees" active={tab === 'employees'}>

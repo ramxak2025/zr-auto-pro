@@ -29,10 +29,12 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { ManagerSummary, RegistrationRequest } from '../../../../shared/types';
 import { balanceCaption, balanceColor, useAdminMode } from './adminShared';
 import AccountPickerSheet from '../AccountPickerSheet';
-import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 import { AdminGroup, AdminRow } from './AdminUI';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
 
 export default function AdminMoreScreen() {
+  const section = useScreenSectionScroll({ hasControls: false });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<{ AdminMoreHome: { accountPickerRequest?: number } }, 'AdminMoreHome'>>();
   const palette = useColors();
@@ -85,11 +87,23 @@ export default function AdminMoreScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Ещё" subtitle={user?.fullName ?? (isManager ? 'Менеджер' : 'Суперадмин')} />
+      <IosScreenHeader
+        scroll={section}
+        title="Ещё"
+        subtitle={user?.fullName ?? (isManager ? 'Менеджер' : 'Суперадмин')}
+      />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         contentInset={contentInset}
-        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -216,7 +230,7 @@ export default function AdminMoreScreen() {
           <Ionicons name="log-out-outline" size={20} color={colors.red[600]} />
           <Text style={styles.logoutText}>Выйти</Text>
         </Pressable>
-      </ScrollView>
+      </ScreenSectionScrollView>
       <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </View>
   );

@@ -1,3 +1,7 @@
+import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView, ScreenSectionFlatList } from '../components/ScreenSectionScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -9,13 +13,13 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { type NativeStackNavigationProp } from '@react-navigation/native-stack';
+
 import { Ionicons } from '@expo/vector-icons';
 import { randomUUID } from 'expo-crypto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import IosScreenHeader from '../components/IosScreenHeader';
+
 import PointIndicator from '../components/PointIndicator';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
@@ -33,7 +37,7 @@ import { colors, spacing, fontWeight, borderRadius } from '../theme';
 import { formatQty, unitLabel } from '../utils/units';
 import { productsCountText } from '../utils/storageCellsUi';
 import { productFolderParts } from '../../../shared/utils/productFolders';
-import type { Product, Warehouse } from '../../../shared/types';
+import { type Product, type Warehouse } from '../../../shared/types';
 import { TabBarFlatList } from '../components/TabBarScrollable';
 import {
   inventoryError,
@@ -67,6 +71,7 @@ export default function InventoryScreen() {
 }
 
 function InventoryWorkspace() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, undefined>>>();
   const route = useRoute<RouteProp<InventoryRoute, 'Inventory'>>();
   const queryClient = useQueryClient();
@@ -626,199 +631,283 @@ function InventoryWorkspace() {
     warehouseQuery.isError;
   const loading = warehouseQuery.isLoading || (!!warehouseId && (catalog.isLoading || folders.isLoading));
   const loadError = warehouseQuery.isError || catalog.isError || folders.isError;
+  const inventoryNotices = (
+    <>
+      {scanFeedback ? (
+        <Text variant="caption" color={palette.accent.primaryText} numberOfLines={2} style={styles.notice}>
+          {scanFeedback}
+        </Text>
+      ) : null}
+      {displayNotice || summary.invalid || summary.review || missingDrafts.length ? (
+        <View style={styles.notice}>
+          <Text variant="caption" color={palette.text.secondary}>
+            {displayNotice ??
+              (summary.review ? 'Сверьте изменившийся учёт перед проведением.' : 'Исправьте неверные значения факта.')}
+          </Text>
+          {summary.review ? (
+            <TouchableOpacity
+              style={styles.reviewButton}
+              onPress={() => void refresh()}
+              accessibilityRole="button"
+              accessibilityLabel="Обновить учёт"
+            >
+              <Text variant="callout" color={palette.accent.primaryText}>
+                Обновить учёт
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+    </>
+  );
+
+  // Reset only when React replaces this screen's native root scroller.
+  const sectionRootKind = !canWrite
+    ? 'permission-scroll'
+    : loading || loadError || !warehouseId
+      ? 'workspace-state-scroll'
+      : 'inventory-list';
+  const previousSectionRootKind = React.useRef(sectionRootKind);
+  React.useEffect(() => {
+    if (previousSectionRootKind.current !== sectionRootKind) {
+      previousSectionRootKind.current = sectionRootKind;
+      section.reset();
+    }
+  }, [sectionRootKind, section.reset]);
+
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: palette.bg.canvas }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <IosScreenHeader
+      <ScreenSectionHeader
+        scroll={section}
         title="Инвентаризация"
-        onBack={() => navigation.goBack()}
-        trailing={
+        context={
           canWrite ? (
-            <TouchableOpacity
-              onPress={handleApply}
-              disabled={applyDisabled}
-              accessibilityRole="button"
-              accessibilityLabel="Провести инвентаризацию"
-              accessibilityState={{ disabled: applyDisabled }}
-              style={[styles.apply, { opacity: applyDisabled ? 0.45 : 1 }]}
-            >
-              <Text variant="callout" color={palette.accent.primaryText} style={styles.semibold}>
-                {progress ? `${progress.done}/${progress.total}` : 'Провести'}
+            <>
+              <PointIndicator style={styles.point} />
+              <Text variant="caption" color={palette.text.secondary}>
+                Посчитано {summary.counted} · Изменено {summary.changed}
               </Text>
-            </TouchableOpacity>
-          ) : undefined
+            </>
+          ) : null
         }
-      />
-      {!canWrite ? (
-        <EmptyState icon="lock" title="Недостаточно прав" description="Нужно право управления складом." />
-      ) : (
-        <>
-          <View style={styles.scope}>
-            <TouchableOpacity
-              style={styles.warehouseButton}
-              disabled={busy || warehouses.length < 2}
-              onPress={() => {
-                Keyboard.dismiss();
-                setWarehouseMenu((open) => !open);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={`Склад: ${activeWarehouse?.name ?? 'Загрузка'}`}
-              accessibilityState={{ expanded: warehouseMenu, disabled: busy || warehouses.length < 2 }}
-            >
-              <Ionicons name="cube-outline" size={18} color={palette.accent.primaryText} />
-              <Text variant="callout" color={palette.text.primary} numberOfLines={1} style={styles.warehouseName}>
-                {activeWarehouse?.name ?? 'Склад'}
-              </Text>
-              {warehouses.length > 1 ? (
-                <Ionicons
-                  name={warehouseMenu ? 'chevron-up' : 'chevron-down'}
-                  size={15}
-                  color={palette.text.secondary}
-                />
-              ) : null}
-            </TouchableOpacity>
-            <PointIndicator style={styles.point} />
-            <TouchableOpacity
-              style={styles.iconButton}
-              disabled={busy || !warehouseId || loading}
-              accessibilityRole="button"
-              accessibilityLabel="Сканировать штрих-код"
-              onPress={() => {
-                if (!warehouseId || busyRef.current) return;
-                scannerScope.current = { session: captureInventorySession(), warehouseId };
-                setShowScanner(true);
-              }}
-            >
-              <Ionicons name="barcode-outline" size={25} color={palette.accent.primaryText} />
-            </TouchableOpacity>
-          </View>
-          {warehouseMenu ? (
+      >
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
             <View
-              style={[styles.warehouseMenu, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
+              }}
             >
-              {warehouses.map((warehouse) => (
+              {canWrite ? (
                 <TouchableOpacity
-                  key={warehouse.id}
-                  style={styles.menuRow}
-                  onPress={() => chooseWarehouse(warehouse.id)}
+                  onPress={handleApply}
+                  disabled={applyDisabled}
                   accessibilityRole="button"
-                  accessibilityLabel={warehouse.name}
+                  accessibilityLabel="Провести инвентаризацию"
+                  accessibilityState={{ disabled: applyDisabled }}
+                  style={[
+                    [styles.apply, { opacity: applyDisabled ? 0.45 : 1 }],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
                 >
-                  <Text variant="callout" color={palette.text.primary} style={styles.rowInfo}>
-                    {warehouse.name}
+                  <Text variant="callout" color={palette.accent.primaryText} style={styles.semibold}>
+                    {progress ? `${progress.done}/${progress.total}` : 'Провести'}
                   </Text>
-                  {warehouse.id === warehouseId ? (
-                    <Ionicons name="checkmark" size={20} color={palette.accent.primaryText} />
+                </TouchableOpacity>
+              ) : undefined}
+            </View>
+          </View>
+          {canWrite ? (
+            <>
+              <View style={styles.scope}>
+                <TouchableOpacity
+                  style={[styles.warehouseButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  disabled={busy || warehouses.length < 2}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    setWarehouseMenu((open) => !open);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Склад: ${activeWarehouse?.name ?? 'Загрузка'}`}
+                  accessibilityState={{ expanded: warehouseMenu, disabled: busy || warehouses.length < 2 }}
+                >
+                  <Ionicons name="cube-outline" size={18} color={palette.accent.primaryText} />
+                  <Text variant="callout" color={palette.text.primary} numberOfLines={1} style={styles.warehouseName}>
+                    {activeWarehouse?.name ?? 'Склад'}
+                  </Text>
+                  {warehouses.length > 1 ? (
+                    <Ionicons
+                      name={warehouseMenu ? 'chevron-up' : 'chevron-down'}
+                      size={15}
+                      color={palette.text.secondary}
+                    />
                   ) : null}
                 </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
-          <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="search" size={18} color={palette.text.secondary} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              style={[styles.searchInput, { color: palette.text.primary }]}
-              placeholder="Название, штрих-код или ячейка"
-              placeholderTextColor={palette.text.secondary}
-              accessibilityLabel="Поиск по всем товарам склада"
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-            />
-            {search ? (
-              <TouchableOpacity
-                onPress={() => setSearch('')}
-                style={styles.clearButton}
-                accessibilityRole="button"
-                accessibilityLabel="Очистить поиск"
-              >
-                <Ionicons name="close-circle" size={20} color={palette.text.secondary} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          <View style={[styles.statusRow, { borderBottomColor: palette.border.subtle }]}>
-            <TouchableOpacity
-              style={styles.breadcrumb}
-              disabled={!folderPath.length && !search.trim()}
-              onPress={() => {
-                setSearch('');
-                if (!search.trim()) setFolderPath((path) => path.slice(0, -1));
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Назад к папкам"
-            >
-              {folderPath.length || search.trim() ? (
-                <Ionicons name="chevron-back" size={16} color={palette.accent.primaryText} />
-              ) : null}
-              <Text variant="caption" color={palette.accent.primaryText} numberOfLines={1}>
-                {search.trim() ? 'По всему складу' : (folderPath[folderPath.length - 1] ?? 'Все папки')}
-              </Text>
-            </TouchableOpacity>
-            <Text variant="caption" color={palette.text.secondary}>
-              Посчитано {summary.counted} · Изменено {summary.changed}
-            </Text>
-          </View>
-          {scanFeedback ? (
-            <Text variant="caption" color={palette.accent.primaryText} numberOfLines={2} style={styles.notice}>
-              {scanFeedback}
-            </Text>
-          ) : null}
-          {displayNotice || summary.invalid || summary.review || missingDrafts.length ? (
-            <View style={styles.notice}>
-              <Text variant="caption" color={palette.text.secondary}>
-                {displayNotice ??
-                  (summary.review
-                    ? 'Сверьте изменившийся учёт перед проведением.'
-                    : 'Исправьте неверные значения факта.')}
-              </Text>
-              {summary.review ? (
+
                 <TouchableOpacity
-                  style={styles.reviewButton}
-                  onPress={() => void refresh()}
+                  style={[styles.iconButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  disabled={busy || !warehouseId || loading}
                   accessibilityRole="button"
-                  accessibilityLabel="Обновить учёт"
+                  accessibilityLabel="Сканировать штрих-код"
+                  onPress={() => {
+                    if (!warehouseId || busyRef.current) return;
+                    scannerScope.current = { session: captureInventorySession(), warehouseId };
+                    setShowScanner(true);
+                  }}
                 >
-                  <Text variant="callout" color={palette.accent.primaryText}>
-                    Обновить учёт
+                  <Ionicons name="barcode-outline" size={25} color={palette.accent.primaryText} />
+                </TouchableOpacity>
+              </View>
+              {warehouseMenu ? (
+                <View
+                  style={[
+                    styles.warehouseMenu,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  {warehouses.map((warehouse) => (
+                    <TouchableOpacity
+                      key={warehouse.id}
+                      style={[styles.menuRow, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                      onPress={() => chooseWarehouse(warehouse.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={warehouse.name}
+                    >
+                      <Text variant="callout" color={palette.text.primary} style={styles.rowInfo}>
+                        {warehouse.name}
+                      </Text>
+                      {warehouse.id === warehouseId ? (
+                        <Ionicons name="checkmark" size={20} color={palette.accent.primaryText} />
+                      ) : null}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+              <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="search" size={18} color={palette.text.secondary} />
+                <TextInput
+                  value={search}
+                  onChangeText={setSearch}
+                  style={[styles.searchInput, { color: palette.text.primary }]}
+                  placeholder="Название, штрих-код или ячейка"
+                  placeholderTextColor={palette.text.secondary}
+                  accessibilityLabel="Поиск по всем товарам склада"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                />
+                {search ? (
+                  <TouchableOpacity
+                    onPress={() => setSearch('')}
+                    style={[styles.clearButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Очистить поиск"
+                  >
+                    <Ionicons name="close-circle" size={20} color={palette.text.secondary} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <View style={[styles.statusRow, { borderBottomColor: palette.border.subtle }]}>
+                <TouchableOpacity
+                  style={[styles.breadcrumb, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  disabled={!folderPath.length && !search.trim()}
+                  onPress={() => {
+                    setSearch('');
+                    if (!search.trim()) setFolderPath((path) => path.slice(0, -1));
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Назад к папкам"
+                >
+                  {folderPath.length || search.trim() ? (
+                    <Ionicons name="chevron-back" size={16} color={palette.accent.primaryText} />
+                  ) : null}
+                  <Text variant="caption" color={palette.accent.primaryText} numberOfLines={1}>
+                    {search.trim() ? 'По всему складу' : (folderPath[folderPath.length - 1] ?? 'Все папки')}
                   </Text>
                 </TouchableOpacity>
-              ) : null}
-            </View>
+              </View>
+            </>
           ) : null}
+        </HeaderIsland>
+      </ScreenSectionHeader>
+      {!canWrite ? (
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          {canWrite ? inventoryNotices : null}
+          <EmptyState icon="lock" title="Недостаточно прав" description="Нужно право управления складом." />
+        </ScreenSectionScrollView>
+      ) : (
+        <>
           <View style={styles.viewport}>
             {loading ? (
-              <ListSkeleton />
+              <ScreenSectionScrollView
+                onScroll={section.onScroll}
+                scrollEventThrottle={16}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+              >
+                {canWrite ? inventoryNotices : null}
+                <ListSkeleton />
+              </ScreenSectionScrollView>
             ) : loadError ? (
-              <EmptyState
-                icon="warning"
-                title="Не удалось загрузить склад"
-                description="Обновите список, чтобы пересчитать все товары."
-                action={{
-                  label: 'Повторить',
-                  onPress: () => {
-                    void warehouseQuery.refetch();
-                    if (warehouseId) {
-                      void catalog.refetch();
-                      void folders.refetch();
-                    }
-                  },
-                }}
-              />
+              <ScreenSectionScrollView
+                onScroll={section.onScroll}
+                scrollEventThrottle={16}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+              >
+                {canWrite ? inventoryNotices : null}
+                <EmptyState
+                  icon="warning"
+                  title="Не удалось загрузить склад"
+                  description="Обновите список, чтобы пересчитать все товары."
+                  action={{
+                    label: 'Повторить',
+                    onPress: () => {
+                      void warehouseQuery.refetch();
+                      if (warehouseId) {
+                        void catalog.refetch();
+                        void folders.refetch();
+                      }
+                    },
+                  }}
+                />
+              </ScreenSectionScrollView>
             ) : !warehouseId ? (
-              <EmptyState icon="cube" title="Нет складов" description="Сначала создайте склад в разделе «Склад»." />
+              <ScreenSectionScrollView
+                onScroll={section.onScroll}
+                scrollEventThrottle={16}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+              >
+                {canWrite ? inventoryNotices : null}
+                <EmptyState icon="cube" title="Нет складов" description="Сначала создайте склад в разделе «Склад»." />
+              </ScreenSectionScrollView>
             ) : (
-              <TabBarFlatList
+              <ScreenSectionFlatList
+                onScroll={section.onScroll}
+                contentInsetAdjustmentBehavior="never"
+                scrollEventThrottle={16}
                 ref={listRef}
                 data={rows}
                 keyExtractor={(row) => row.key}
                 renderItem={renderItem}
                 extraData={drafts}
                 style={styles.viewport}
-                contentContainerStyle={styles.listContent}
+                contentContainerStyle={[styles.listContent, { paddingTop: section.contentTop }]}
                 reserveBottomNavigation={!keyboardVisible}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="on-drag"
@@ -829,7 +918,12 @@ function InventoryWorkspace() {
                 }}
                 refreshing={catalog.isFetching && !catalog.isLoading}
                 onRefresh={() => void refresh()}
-                ListHeaderComponent={missingDrafts.length ? missingContent : null}
+                ListHeaderComponent={
+                  <>
+                    {inventoryNotices}
+                    {missingDrafts.length ? missingContent : null}
+                  </>
+                }
                 ListEmptyComponent={
                   <EmptyState
                     icon="cube"
@@ -883,12 +977,12 @@ const styles = StyleSheet.create({
   viewport: { flex: 1 },
   apply: { minHeight: 44, justifyContent: 'center', paddingHorizontal: spacing[1] },
   semibold: { fontWeight: fontWeight.semibold },
-  scope: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4] },
+  scope: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: 0 },
   warehouseButton: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   warehouseName: { flexShrink: 1 },
   point: { maxWidth: 112, flexShrink: 1 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  warehouseMenu: { marginHorizontal: spacing[4], borderRadius: borderRadius.lg, borderWidth: StyleSheet.hairlineWidth },
+  warehouseMenu: { marginHorizontal: 0, borderRadius: borderRadius.lg, borderWidth: StyleSheet.hairlineWidth },
   menuRow: {
     minHeight: 48,
     flexDirection: 'row',
@@ -900,18 +994,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    marginHorizontal: spacing[4],
+    marginHorizontal: 0,
     borderRadius: borderRadius.lg,
     paddingLeft: spacing[3],
   },
-  searchInput: { flex: 1, minWidth: 0, minHeight: 44, fontSize: 15, paddingVertical: spacing[2] },
+  searchInput: { flex: 1, minWidth: 0, minHeight: headerTouchSize, fontSize: 15, paddingVertical: spacing[2] },
   clearButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    paddingHorizontal: spacing[4],
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 0,
+    borderBottomWidth: 0,
   },
   breadcrumb: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
   notice: { marginHorizontal: spacing[4], paddingVertical: spacing[2] },
