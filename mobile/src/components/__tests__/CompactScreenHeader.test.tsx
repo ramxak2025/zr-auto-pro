@@ -45,6 +45,7 @@ jest.mock('react-native', () => ({
 }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 59, bottom: 34 }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('../ScreenSectionHeader', () => ({ __esModule: true, default: 'ScreenSectionHeader' }));
 jest.mock('../../platform/Typography', () => ({ Text: 'Text', textVariantStyles: { body: {} } }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({

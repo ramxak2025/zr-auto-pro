@@ -20,8 +20,8 @@
  * `paddingBottom >= useTabBarHeight()`. Здесь мы прокидываем это в
  * `bottomOffset`/contentContainerStyle, а не хардкодим.
  */
-import React from 'react';
-import { RefreshControlProps, StyleProp, StyleSheet, ViewProps, ViewStyle } from 'react-native';
+import React, { forwardRef } from 'react';
+import { ScrollView, ScrollViewProps, StyleProp, StyleSheet, ViewProps, ViewStyle } from 'react-native';
 import {
   KeyboardAvoidingView as KCAvoidingView,
   KeyboardAwareScrollView as KCAwareScrollView,
@@ -70,9 +70,7 @@ export function KeyboardAwareView({ style, children, extraOffset = 0, pointerEve
   );
 }
 
-interface KeyboardAwareScrollProps {
-  style?: StyleProp<ViewStyle>;
-  contentContainerStyle?: StyleProp<ViewStyle>;
+export interface KeyboardAwareScrollProps extends ScrollViewProps {
   children: React.ReactNode;
   /**
    * Резервируем место под плавающий tab bar по правилу проекта. Если экран
@@ -80,12 +78,10 @@ interface KeyboardAwareScrollProps {
    * paddingBottom в contentContainerStyle.
    */
   reserveTabBar?: boolean;
+  /** Edge-to-edge standalone forms reserve the Home Indicator inside their content. */
+  reserveSafeAreaBottom?: boolean;
   /** Доп. нижний отступ фокуса — напр. высота фикс-кнопки «Сохранить». */
   extraKeyboardBottomOffset?: number;
-  refreshControl?: React.ReactElement<RefreshControlProps>;
-  showsVerticalScrollIndicator?: boolean;
-  /** Проброс на нативный ScrollView для «липких» шапок и т.п. */
-  stickyHeaderIndices?: number[];
 }
 
 /**
@@ -98,30 +94,41 @@ interface KeyboardAwareScrollProps {
  * `bottomOffset` — на сколько ПОДНЯТЬ фокус над клавиатурой: высота
  * tab bar (чтобы поле не оказалось под плавающим баром) + доп. отступ.
  */
-export function KeyboardAwareScroll({
-  style,
-  contentContainerStyle,
-  children,
-  reserveTabBar = true,
-  extraKeyboardBottomOffset = 0,
-  refreshControl,
-  showsVerticalScrollIndicator = false,
-  stickyHeaderIndices,
-}: KeyboardAwareScrollProps) {
+export const KeyboardAwareScroll = forwardRef<ScrollView, KeyboardAwareScrollProps>(function KeyboardAwareScroll(
+  {
+    style,
+    contentContainerStyle,
+    children,
+    reserveTabBar = true,
+    reserveSafeAreaBottom = false,
+    extraKeyboardBottomOffset = 0,
+    refreshControl,
+    showsVerticalScrollIndicator = false,
+    stickyHeaderIndices,
+    contentInset,
+    scrollIndicatorInsets,
+    ...scrollProps
+  },
+  ref,
+) {
   const tabBarHeight = useTabBarHeight();
   const reservation = useBottomNavigationReservation();
+  const insets = useSafeAreaInsets();
+  const bottomReservation = Math.max(reserveTabBar ? reservation : 0, reserveSafeAreaBottom ? insets.bottom : 0);
   const contentStyle = StyleSheet.flatten(contentContainerStyle) ?? {};
+  const declaredBottom = contentStyle.paddingBottom ?? contentStyle.paddingVertical ?? contentStyle.padding;
+  const declaredPadding = typeof declaredBottom === 'number' ? declaredBottom : 0;
+  const declaredInset = contentInset?.bottom ?? 0;
   const reservedContentStyle =
-    reserveTabBar && reservation > 0
+    bottomReservation > 0
       ? [
           contentContainerStyle,
           {
-            paddingBottom: reservedScrollBottom(
-              typeof (contentStyle.paddingBottom ?? contentStyle.paddingVertical ?? contentStyle.padding) === 'number'
-                ? ((contentStyle.paddingBottom ?? contentStyle.paddingVertical ?? contentStyle.padding) as number)
-                : 0,
-              0,
-              reservation,
+            paddingBottom: Math.max(
+              reserveTabBar && reservation > 0
+                ? reservedScrollBottom(declaredPadding, declaredInset, reservation)
+                : Math.max(declaredPadding, declaredInset),
+              reserveSafeAreaBottom ? insets.bottom : 0,
             ),
           },
         ]
@@ -131,11 +138,22 @@ export function KeyboardAwareScroll({
   const bottomOffset = (reserveTabBar ? tabBarHeight : 0) + extraKeyboardBottomOffset;
   return (
     <KCAwareScrollView
+      {...scrollProps}
+      ref={ref}
       style={style}
       contentContainerStyle={reservedContentStyle}
+      contentInset={bottomReservation > 0 ? { ...contentInset, bottom: 0 } : contentInset}
+      scrollIndicatorInsets={
+        bottomReservation > 0
+          ? {
+              ...scrollIndicatorInsets,
+              bottom: Math.max(scrollIndicatorInsets?.bottom ?? 0, bottomReservation),
+            }
+          : scrollIndicatorInsets
+      }
       bottomOffset={bottomOffset}
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="interactive"
+      keyboardShouldPersistTaps={scrollProps.keyboardShouldPersistTaps ?? 'handled'}
+      keyboardDismissMode={scrollProps.keyboardDismissMode ?? 'interactive'}
       showsVerticalScrollIndicator={showsVerticalScrollIndicator}
       refreshControl={refreshControl}
       stickyHeaderIndices={stickyHeaderIndices}
@@ -143,4 +161,4 @@ export function KeyboardAwareScroll({
       {children}
     </KCAwareScrollView>
   );
-}
+});

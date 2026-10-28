@@ -124,6 +124,8 @@ function load(relative) {
       };
     if (name.endsWith('/iosSurface')) return { useIosSurface: () => ({ card: {}, cardCompact: {} }) };
     if (name.endsWith('/KeyboardAware')) return { KeyboardAwareScroll: 'KeyboardAwareScroll' };
+    if (name.endsWith('/ScreenSectionHeader'))
+      return { useScreenSectionScroll: () => ({ contentTop: 186, onScroll() {} }) };
     if (name.endsWith('/TabBarScrollable')) return { TabBarScrollView: 'TabBarScrollView' };
     if (name.endsWith('/useAdminTabBarHeight'))
       return {
@@ -386,6 +388,19 @@ test('admin pages with editable fields use the common keyboard and tab-bar reser
   assert.ok(scroller, 'inputs must be lifted above the keyboard');
   assert.ok(scroller.props.extraKeyboardBottomOffset > 0);
   assert.equal(scroller.props.reserveTabBar, undefined, 'common navigation reservation remains enabled by default');
+  assert.equal(
+    scroller.props.reserveSafeAreaBottom,
+    true,
+    'standalone forms keep their bottom safe area inside content',
+  );
+  assert.equal(scroller.props.contentInsetAdjustmentBehavior, 'never');
+  assert.equal(scroller.props.scrollEventThrottle, 16);
+  assert.equal(typeof scroller.props.onScroll, 'function');
+  assert.equal(
+    scroller.props.contentContainerStyle[1].paddingTop,
+    202,
+    'measured heading and controls reserve content, not the viewport',
+  );
 });
 
 test('native capability reads actual registration metadata before accepting an Expo wrapper', () => {

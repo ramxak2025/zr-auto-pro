@@ -4,6 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../platform/Typography';
+import ScreenSectionHeader, { type ScreenSectionScrollController } from './ScreenSectionHeader';
+import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 export const compactTouchSize = Platform.OS === 'android' ? 48 : 44;
 
@@ -16,6 +18,8 @@ interface HeaderProps {
   actions?: React.ReactNode;
   context?: React.ReactNode;
   status?: React.ReactNode;
+  scroll?: ScreenSectionScrollController;
+  children?: React.ReactNode;
 }
 
 /** Local toolbar for warehouse, journal and check creation. Owns the top inset. */
@@ -28,9 +32,29 @@ export default function CompactScreenHeader({
   actions,
   context,
   status,
+  scroll,
+  children,
 }: HeaderProps) {
   const p = useColors();
   const insets = useSafeAreaInsets();
+  if (scroll) {
+    const hasControls = Boolean(onBack || onTitlePress || actions || context || children);
+    return (
+      <ScreenSectionHeader scroll={scroll} title={title} subtitle={subtitle} context={status}>
+        {hasControls && (
+          <HeaderIsland>
+            {onBack && <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} />}
+            {onTitlePress && (
+              <HeaderAction label={titleLabel || title} title={title} icon="chevron-down" onPress={onTitlePress} />
+            )}
+            {context}
+            {actions && <View style={s.actions}>{actions}</View>}
+            {children}
+          </HeaderIsland>
+        )}
+      </ScreenSectionHeader>
+    );
+  }
   const heading = (
     <>
       <View style={s.titleRow}>
