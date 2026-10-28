@@ -34,6 +34,7 @@ export default function AdminIncomeScreen() {
   };
   return (
     <AdminPage
+      composition="section"
       title="Доход"
       subtitle="Мои оплаты и доли"
       refreshing={summary.isRefetching || analytics.isRefetching}

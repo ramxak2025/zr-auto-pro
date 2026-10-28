@@ -123,7 +123,7 @@ function extractServerMessage(error: unknown): string {
 }
 
 export default function AdminBroadcastScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();

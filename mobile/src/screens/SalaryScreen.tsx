@@ -303,7 +303,7 @@ function ListSeparator() {
 // ── Main screen ────────────────────────────────────────────────────────────
 
 export default function SalaryScreen() {
-  const pendingSection = useScreenSectionScroll();
+  const pendingSection = useScreenSectionScroll({ composition: 'navigation' });
 
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -602,12 +602,15 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
       </TouchableOpacity>
       <TouchableOpacity
         accessibilityRole="button"
-        style={{
-          minWidth: headerTouchSize,
-          minHeight: headerTouchSize,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
+        style={[
+          {
+            minWidth: headerTouchSize,
+            minHeight: headerTouchSize,
+            alignItems: 'center',
+            justifyContent: 'center',
+          },
+          { flexShrink: 1, maxWidth: '100%' },
+        ]}
         onPress={resetMonth}
         activeOpacity={0.7}
       >
@@ -713,6 +716,7 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        subtitle="Команда"
         scroll={section}
         title="Зарплата"
         onBack={() => navigation.goBack()}
@@ -949,6 +953,9 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
 
   monthChip: {
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'transparent',
@@ -958,6 +965,8 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
+    flexShrink: 1,
+    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 72,

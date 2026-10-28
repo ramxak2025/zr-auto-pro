@@ -48,7 +48,8 @@ import { formatDateTime, formatFullDate, StatusChip, InitialAvatar, type StatusI
 import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../../components/ScreenHeaderControls';
+import { HeaderAction } from '../../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 type StatusFilter = 'pending' | 'approved' | 'rejected';
 
@@ -92,7 +93,7 @@ function requestStatusInfo(status: RegistrationRequest['status'], mode: 'light' 
 }
 
 export default function AdminRegistrationRequestsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -237,42 +238,27 @@ export default function AdminRegistrationRequestsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Заявки на регистрацию" subtitle="Самостоятельная регистрация">
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          </View>
-          <View style={styles.filterRow}>
-            {FILTERS.map((f) => {
-              const on = filter === f.key;
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  key={f.key}
-                  onPress={() => {
-                    haptic('select');
-                    setFilter(f.key);
-                  }}
-                  style={[
-                    [
-                      styles.filterChip,
-                      {
-                        backgroundColor: on ? palette.accent.primary : palette.bg.card,
-                        borderColor: on ? palette.accent.primary : palette.border.subtle,
-                      },
-                    ],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                >
-                  <Text style={[styles.filterChipText, { color: on ? colors.white : palette.text.secondary }]}>
-                    {f.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </HeaderIsland>
-      </ScreenSectionHeader>
+      <ScreenSectionHeader
+        scroll={section}
+        title="Заявки на регистрацию"
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        actions={
+          <ScreenHeaderMenu
+            label="Статус заявок"
+            icon="filter-outline"
+            title={FILTERS.find((f) => f.key === filter)?.label}
+            items={FILTERS.map((f) => ({
+              id: f.key,
+              label: f.label,
+              selected: filter === f.key,
+              onSelect: () => {
+                haptic('select');
+                setFilter(f.key);
+              },
+            }))}
+          />
+        }
+      />
 
       {/* Status filter */}
 

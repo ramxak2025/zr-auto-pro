@@ -145,6 +145,7 @@ jest.mock('../../components/ScreenHeaderControls', () => ({
   HeaderIsland: 'HeaderIsland',
   headerTouchSize: 44,
 }));
+jest.mock('../../components/ScreenHeaderMenu', () => ({ __esModule: true, default: 'ScreenHeaderMenu' }));
 const MotivationScreen = jest.requireActual<{ default: () => React.ReactElement }>('../MotivationScreen').default;
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
@@ -400,20 +401,26 @@ it('revenue save has a contrasting disabled surface/text during a pending mutati
   expect(nodes(save.props.children as React.ReactNode).find((node) => node.type === 'Text')!.props.color).toBe('#555');
 });
 
-it('employee filter scroll does not grow vertically and its chips wrap with a minimum touch target', () => {
+it('employee selector keeps full names and applies or clears the existing scoped filter', () => {
   mockAccruals = [
     { id: 'a1', employeeId: 'employee', employeeName: 'Очень длинное имя сотрудника QA', amount: 1 },
   ] as MotivationAccrualV2[];
   (nodes(render()).find((node) => node.props.label === 'Начисления')!.props.onPress as () => void)();
-  const scroll = nodes(render()).find((node) => node.type === 'ScrollView' && node.props.horizontal)!;
-  expect((scroll.props.style as { flexGrow: number }).flexGrow).toBe(0);
-  expect((scroll.props.contentContainerStyle as { alignItems: string }).alignItems).toBe('center');
-  const chip = nodes(scroll.props.children as React.ReactNode).find((node) => node.props.label === 'Все')!;
-  const rendered = (chip.type as (props: unknown) => Element)(chip.props);
-  const chipStyle = Object.assign({}, ...(rendered.props.style as object[]));
-  expect(chipStyle.minHeight).toBeGreaterThanOrEqual(44);
-  expect(chipStyle.height).toBeUndefined();
-  expect(nodes(rendered).find((node) => node.type === 'Text')!.props.numberOfLines).toBeUndefined();
+  type Choice = { id: string; label: string; selected: boolean; onSelect: () => void };
+  const selector = () =>
+    nodes(render()).find((node) => node.type === 'ScreenHeaderMenu' && node.props.label === 'Сотрудник в начислениях')!;
+  const choices = () => selector().props.items as Choice[];
+  expect(choices().find((choice) => choice.id === 'employee')!.label).toBe('Очень длинное имя сотрудника QA');
+  choices()
+    .find((choice) => choice.id === 'employee')!
+    .onSelect();
+  expect(selector().props.title).toBe('Очень длинное имя сотрудника QA');
+  expect(choices().find((choice) => choice.id === 'employee')!.selected).toBe(true);
+  choices()
+    .find((choice) => choice.id === 'all')!
+    .onSelect();
+  expect(choices().find((choice) => choice.id === 'all')!.selected).toBe(true);
+  expect(selector().props.title).toBe('Все сотрудники');
 });
 
 it('loads before-discount basis in the rule editor and sends the changed boolean', async () => {

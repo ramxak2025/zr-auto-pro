@@ -164,7 +164,7 @@ const Tile = React.memo(function Tile({ label, value, icon, tint, tintBg, palett
 // ────────────────────────────────────────────────────────────────────────
 
 export default function CashShiftScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute();
   const queryClient = useQueryClient();

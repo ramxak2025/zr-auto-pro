@@ -39,7 +39,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import type { Check, ChecksBoard } from '../../../shared/types';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 
@@ -252,38 +252,36 @@ export default function CashierPaymentScreen() {
         subtitle={board ? `${ready.length} готов${ready.length === 1 ? '' : 'ы'} к оплате` : undefined}
         context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
       >
-        <HeaderIsland layout="column">
-          <View style={[styles.searchBox, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="search" size={20} color={palette.text.tertiary} />
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              style={[styles.searchInput, { color: palette.text.primary }]}
-              placeholder="Госномер"
-              placeholderTextColor={palette.text.tertiary}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              returnKeyType="search"
-              accessibilityLabel="Поиск заказа по госномеру"
-            />
-            {query.length > 0 && (
-              <TouchableOpacity
-                accessibilityRole="button"
-                style={{
-                  minWidth: headerTouchSize,
-                  minHeight: headerTouchSize,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                onPress={() => setQuery('')}
-                hitSlop={8}
-                accessibilityLabel="Очистить поиск"
-              >
-                <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </HeaderIsland>
+        <View style={[styles.searchBox, { backgroundColor: palette.bg.muted }]}>
+          <Ionicons name="search" size={20} color={palette.text.tertiary} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            style={[styles.searchInput, { color: palette.text.primary }]}
+            placeholder="Госномер"
+            placeholderTextColor={palette.text.tertiary}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="search"
+            accessibilityLabel="Поиск заказа по госномеру"
+          />
+          {query.length > 0 && (
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={{
+                minWidth: headerTouchSize,
+                minHeight: headerTouchSize,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              onPress={() => setQuery('')}
+              hitSlop={8}
+              accessibilityLabel="Очистить поиск"
+            >
+              <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
       </ScreenSectionHeader>
 
       {board === undefined && isLoading ? (

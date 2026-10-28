@@ -17,7 +17,7 @@ import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { colors, spacing } from '../../theme';
+import { spacing } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { formatPhone } from '../../../../shared/validation/phone';
@@ -26,7 +26,7 @@ import { InitialAvatar, StatusChip, balanceCaption, balanceColor, inactiveStatus
 import ManagerFormSheet from './ManagerFormSheet';
 import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../../components/ScreenHeaderControls';
+import { HeaderAction } from '../../components/ScreenHeaderControls';
 
 /** Активные выше отключённых; внутри — по убыванию долга, затем по имени. */
 function sortManagers(list: PlatformManager[]): PlatformManager[] {
@@ -124,21 +124,16 @@ export default function AdminManagersScreen() {
         subtitle={`${managers.length} ${pluralRu(managers.length, 'менеджер', 'менеджера', 'менеджеров')}`}
         onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
         trailing={
-          <Pressable
+          <HeaderAction
+            label="Новый менеджер"
+            title="Добавить"
+            icon="add"
+            tone="primary"
             onPress={() => {
               haptic('tap');
               setCreateOpen(true);
             }}
-            style={[
-              [styles.headerAdd, { backgroundColor: palette.accent.primary }],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
-            ]}
-            hitSlop={6}
-            accessibilityRole="button"
-            accessibilityLabel="Новый менеджер"
-          >
-            <Ionicons name="add" size={22} color={colors.white} />
-          </Pressable>
+          />
         }
       />
 

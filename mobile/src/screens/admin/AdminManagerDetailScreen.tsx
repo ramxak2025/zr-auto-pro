@@ -51,7 +51,7 @@ import SettlementSheet from './SettlementSheet';
 import TransferManagerSheet from './TransferManagerSheet';
 import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionFlatList, ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../../components/ScreenHeaderControls';
+import { HeaderAction } from '../../components/ScreenHeaderControls';
 
 type DetailRow =
   | { kind: 'label'; key: string; title: string }
@@ -126,7 +126,7 @@ function InfoRow({
 }
 
 export default function AdminManagerDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const id: string = route.params?.id;
@@ -419,21 +419,16 @@ export default function AdminManagerDetailScreen() {
         subtitle="Менеджер платформы"
         onBack={() => navigation.goBack()}
         trailing={
-          <Pressable
+          <HeaderAction
+            label="Редактировать менеджера"
+            title="Редактировать"
+            icon="create-outline"
+            tone="primary"
             onPress={() => {
               haptic('tap');
               setEditOpen(true);
             }}
-            style={[
-              [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
-            ]}
-            hitSlop={6}
-            accessibilityRole="button"
-            accessibilityLabel="Редактировать менеджера"
-          >
-            <Ionicons name="create-outline" size={20} color={palette.text.primary} />
-          </Pressable>
+          />
         }
       />
 

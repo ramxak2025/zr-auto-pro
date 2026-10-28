@@ -122,7 +122,12 @@ const nodes = (node: React.ReactNode): Element[] =>
   Array.isArray(node)
     ? node.flatMap(nodes)
     : React.isValidElement(node)
-      ? [node as Element, ...nodes((node as Element).props.children)]
+      ? [
+          node as Element,
+          ...['children', 'leading', 'actions'].flatMap((slot) =>
+            nodes((node as Element).props[slot] as React.ReactNode),
+          ),
+        ]
       : [];
 const words = (node: React.ReactNode): string =>
   Array.isArray(node)

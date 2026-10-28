@@ -94,7 +94,7 @@ type HistoryEvent =
   | { kind: 'reschedule'; ts: number; reschedule: InstallmentReschedule };
 
 export default function InstallmentDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const palette = useColors();

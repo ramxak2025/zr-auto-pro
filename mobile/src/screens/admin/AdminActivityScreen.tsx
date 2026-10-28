@@ -22,6 +22,7 @@ export default function AdminActivityScreen() {
   });
   return (
     <AdminPage
+      composition="navigation"
       title="Журнал действий"
       subtitle={role === 'manager' ? 'Мои действия' : 'Действия на платформе'}
       back

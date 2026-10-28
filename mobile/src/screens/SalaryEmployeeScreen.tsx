@@ -34,7 +34,7 @@ interface SalaryEmployeeRouteParams {
 }
 
 export default function SalaryEmployeeScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute();
   const { hasPermission } = useAuth();

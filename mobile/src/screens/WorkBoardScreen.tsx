@@ -67,6 +67,7 @@ import type { Check, ChecksBoard } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
 import ScreenSectionHeader from '../components/ScreenSectionHeader';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 
@@ -472,132 +473,100 @@ export default function WorkBoardScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader
+        composition="navigation"
         variant="static"
         title="Доска заказ-нарядов"
         subtitle={board ? `${totalActive} активных` : undefined}
         context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        actions={
+          <>
+            {orderMode && (
+              <HeaderAction
+                label="Создать заказ-наряд"
+                icon="add"
+                tone="primary"
+                onPress={() => {
+                  haptic('select');
+                  // Root-stack 'CheckCreate' (накрывает таб-бар, slide-up). Order-
+                  // режим определяется внутри CheckCreate по posSettings — параметры
+                  // не нужны. На сохранении заказ паркуется в первую колонку доски.
+                  navigation.navigate('CheckCreate');
+                }}
+              />
+            )}
+            {canConfigure && (
+              <HeaderAction
+                label="Настройка колонок доски"
+                icon="settings-outline"
+                onPress={() => {
+                  haptic('select');
+                  navigation.navigate('WorkBoardSettings');
+                }}
+              />
+            )}
+          </>
+        }
       >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View style={{ flex: 1, alignItems: 'flex-end' }}>
+        {canSeeAll &&
+          (isMasterRole ? (
+            <HeaderIsland>
               {
-                <View style={styles.headerTrailing}>
-                  {orderMode ? (
-                    <TouchableOpacity
-                      style={[
-                        [styles.addBtn, { backgroundColor: colors.primary[600] }],
-                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                      ]}
-                      onPress={() => {
-                        haptic('select');
-                        // Root-stack 'CheckCreate' (накрывает таб-бар, slide-up). Order-
-                        // режим определяется внутри CheckCreate по posSettings — параметры
-                        // не нужны. На сохранении заказ паркуется в первую колонку доски.
-                        navigation.navigate('CheckCreate');
-                      }}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel="Создать заказ-наряд"
-                    >
-                      <Ionicons name="add" size={22} color={colors.white} />
-                    </TouchableOpacity>
-                  ) : null}
-                  {canConfigure ? (
-                    <TouchableOpacity
-                      style={[
-                        [styles.gearBtn, { backgroundColor: palette.bg.muted }],
-                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                      ]}
-                      onPress={() => {
-                        haptic('select');
-                        navigation.navigate('WorkBoardSettings');
-                      }}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel="Настройка колонок доски"
-                    >
-                      <Ionicons name="settings-outline" size={18} color={palette.text.primary} />
-                    </TouchableOpacity>
-                  ) : null}
+                <View style={styles.filterRowWrap}>
+                  {(
+                    [
+                      { key: user?.id ?? null, label: 'Мои' },
+                      { key: null, label: 'Все' },
+                    ] as Array<{ key: string | null; label: string }>
+                  ).map((opt) => {
+                    const active = assigneeFilter === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.label}
+                        style={[
+                          [
+                            styles.filterChip,
+                            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                            active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+                          ],
+                          { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                        ]}
+                        onPress={() => {
+                          haptic('select');
+                          setAssigneeFilter(opt.key);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text
+                          style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               }
-            </View>
-          </View>
-          {canSeeAll &&
-            (isMasterRole ? (
-              <View style={styles.filterRowWrap}>
-                {(
-                  [
-                    { key: user?.id ?? null, label: 'Мои' },
-                    { key: null, label: 'Все' },
-                  ] as Array<{ key: string | null; label: string }>
-                ).map((opt) => {
-                  const active = assigneeFilter === opt.key;
-                  return (
-                    <TouchableOpacity
-                      key={opt.label}
-                      style={[
-                        [
-                          styles.filterChip,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                          active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
-                        ],
-                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                      ]}
-                      onPress={() => {
-                        haptic('select');
-                        setAssigneeFilter(opt.key);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: active }}
-                    >
-                      <Text style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}>
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ) : filterMasters.length > 0 ? (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.filterScroll}
-                contentContainerStyle={styles.filterRowWrap}
-              >
-                {[{ id: null as string | null, fullName: 'Все' }, ...filterMasters].map((m) => {
-                  const active = assigneeFilter === m.id;
-                  return (
-                    <TouchableOpacity
-                      key={m.id ?? 'all'}
-                      style={[
-                        [
-                          styles.filterChip,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                          active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
-                        ],
-                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                      ]}
-                      onPress={() => {
-                        haptic('select');
-                        setAssigneeFilter(m.id);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: active }}
-                    >
-                      <Text
-                        style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
-                        numberOfLines={1}
-                      >
-                        {m.id ? (m.fullName ?? '').split(' ')[0] || '—' : 'Все'}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            ) : null)}
-        </HeaderIsland>
+            </HeaderIsland>
+          ) : filterMasters.length > 0 ? (
+            <HeaderIsland>
+              <ScreenHeaderMenu
+                label="Исполнитель на доске"
+                icon="person-outline"
+                title={filterMasters.find((m) => m.id === assigneeFilter)?.fullName || 'Все исполнители'}
+                items={[{ id: null as string | null, fullName: 'Все' }, ...filterMasters].map((m) => ({
+                  id: m.id ?? 'all',
+                  label: m.fullName ?? '—',
+                  selected: assigneeFilter === m.id,
+                  onSelect: () => {
+                    haptic('select');
+                    setAssigneeFilter(m.id);
+                  },
+                }))}
+              />
+            </HeaderIsland>
+          ) : null)}
       </ScreenSectionHeader>
 
       {/* ── Фильтр по исполнителю (Round 14) ────────────────────────────

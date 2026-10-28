@@ -1,20 +1,28 @@
 import React from 'react';
 import { useNavigation } from '@react-navigation/native';
-import { AdminPage, AdminGroup, AdminRow, AdminState, AdminAction } from './AdminUI';
+import { AdminPage, AdminGroup, AdminRow, AdminState } from './AdminUI';
 import { formatDateTime } from './adminShared';
 import { usePlatformReminders } from './usePlatformData';
+import { HeaderAction } from '../../components/ScreenHeaderControls';
 export default function AdminRemindersScreen() {
   const navigation = useNavigation<any>();
   const query = usePlatformReminders();
   return (
     <AdminPage
+      trailing={
+        <HeaderAction
+          label="Настроить напоминания"
+          icon="settings-outline"
+          onPress={() => navigation.navigate('AdminReminderSettings')}
+        />
+      }
+      composition="navigation"
       title="Напоминания"
       subtitle={query.data ? `${query.data.total} к выполнению` : 'Подписки и контакты'}
       back
       onRefresh={() => void query.refetch()}
       refreshing={query.isRefetching}
     >
-      <AdminAction label="Настроить напоминания" onPress={() => navigation.navigate('AdminReminderSettings')} />
       <AdminState
         loading={query.isPending}
         error={query.isError}

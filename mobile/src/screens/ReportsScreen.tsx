@@ -66,9 +66,11 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import type { FinancialReport, DashboardV2 } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { HeaderAction, HeaderIsland } from '../components/ScreenHeaderControls';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -423,6 +425,7 @@ function ActivityRing({
 
 export default function ReportsScreen() {
   const section = useScreenSectionScroll();
+  const deniedSection = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
@@ -792,18 +795,18 @@ export default function ReportsScreen() {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader
-          scroll={section}
+          scroll={deniedSection}
           title="Финансовые отчёты"
           subtitle="Полный контроль над деньгами"
           onBack={() => navigation.goBack()}
         />
         <ScreenSectionScrollView
           style={{ flex: 1 }}
-          onScroll={section.onScroll}
+          onScroll={deniedSection.onScroll}
           scrollEventThrottle={16}
           contentInsetAdjustmentBehavior="never"
           reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+          contentContainerStyle={{ flexGrow: 1, paddingTop: deniedSection.contentTop + 12, paddingBottom: 24 }}
         >
           <View style={styles.accessDenied}>
             <Ionicons name="lock-closed" size={40} color={palette.text.tertiary} />
@@ -897,13 +900,94 @@ export default function ReportsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
+      <ScreenSectionHeader
         scroll={section}
         title="Финансовые отчёты"
-        subtitle="Полный контроль над деньгами"
-        onBack={() => navigation.goBack()}
         context={<FreshnessBadge query={dashboardQuery} />}
-      />
+      >
+        <HeaderIsland>
+          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          {period === 'month' && (
+            <HeaderAction
+              label="Предыдущий месяц"
+              icon="chevron-back"
+              onPress={goPrevMonth}
+              disabled={isAtOldestMonth}
+            />
+          )}
+          <ScreenHeaderMenu
+            label="Период финансового отчёта"
+            icon="calendar-outline"
+            title={formatPeriodLabel(period, range)}
+            items={[
+              ...PERIODS.map((p) => ({
+                id: p.key,
+                label: p.label,
+                selected: period === p.key,
+                onSelect: () => handlePeriodChange(p.key),
+              })),
+              period === 'month' && { type: 'separator', id: 'month-line' },
+              period === 'month' && {
+                id: 'current',
+                label: 'Вернуться к текущему месяцу',
+                disabled: isAtCurrentMonth,
+                onSelect: resetMonthCursor,
+              },
+            ]}
+          />
+          {period === 'month' && (
+            <HeaderAction
+              label="Следующий месяц"
+              icon="chevron-forward"
+              onPress={goNextMonth}
+              disabled={isAtCurrentMonth}
+            />
+          )}
+          {report !== undefined && (
+            <ScreenHeaderMenu
+              label="Отчёт: экспорт и показатели"
+              loading={exporting !== null}
+              items={[
+                { type: 'label', id: 'export-label', label: 'Экспорт' },
+                {
+                  id: 'pdf',
+                  label: 'PDF для печати',
+                  icon: 'document-text-outline',
+                  onSelect: exportPdf,
+                  loading: exporting === 'pdf',
+                  disabled: exporting !== null,
+                },
+                {
+                  id: 'table',
+                  label: 'Таблица для печати',
+                  icon: 'grid-outline',
+                  onSelect: exportTablePdf,
+                  loading: exporting === 'table',
+                  disabled: exporting !== null,
+                },
+                {
+                  id: 'image',
+                  label: 'Картинка для Stories',
+                  icon: 'image-outline',
+                  onSelect: exportImage,
+                  loading: exporting === 'image',
+                  disabled: exporting !== null,
+                },
+                { type: 'separator', id: 'targets-line' },
+                {
+                  id: 'targets',
+                  label: 'Изменить цели',
+                  icon: 'options-outline',
+                  onSelect: () => {
+                    haptic('tap');
+                    setShowTargetsModal(true);
+                  },
+                },
+              ]}
+            />
+          )}
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       <ScreenSectionScrollView
         onScroll={section.onScroll}
@@ -927,92 +1011,9 @@ export default function ReportsScreen() {
         <View ref={captureViewRef} collapsable={false} style={{ gap: spacing[3] }}>
           {/* PERIOD SWITCHER */}
           <View style={styles.periodWrap}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
-              {PERIODS.map((p) => (
-                <TouchableOpacity
-                  key={p.key}
-                  style={[
-                    styles.periodChip,
-                    { backgroundColor: palette.bg.muted },
-                    period === p.key && styles.periodChipActive,
-                  ]}
-                  onPress={() => handlePeriodChange(p.key)}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.periodText,
-                      { color: palette.text.secondary },
-                      period === p.key && styles.periodTextActive,
-                    ]}
-                  >
-                    {p.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
             {/* MONTH PAGER — «← Июль 2026 →», любой месяц за MONTH_PAGER_DEPTH.
                 Паттерн месячного чипа зарплаты: стрелки листают, тап по
                 заголовку возвращает к текущему месяцу. */}
-            {period === 'month' && (
-              <View style={[styles.monthPagerRow, { backgroundColor: palette.bg.muted }]}>
-                <TouchableOpacity
-                  onPress={goPrevMonth}
-                  disabled={isAtOldestMonth}
-                  hitSlop={8}
-                  style={styles.monthPagerBtn}
-                  activeOpacity={0.6}
-                  accessibilityRole="button"
-                  accessibilityLabel="Предыдущий месяц"
-                  accessibilityState={{ disabled: isAtOldestMonth }}
-                >
-                  <Ionicons
-                    name="chevron-back"
-                    size={18}
-                    color={palette.text.secondary}
-                    style={isAtOldestMonth && styles.monthPagerArrowDisabled}
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={resetMonthCursor}
-                  disabled={isAtCurrentMonth}
-                  activeOpacity={0.7}
-                  style={styles.monthPagerLabelBtn}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: isAtCurrentMonth }}
-                  accessibilityLabel={
-                    isAtCurrentMonth
-                      ? `Выбран ${monthTitle(monthCursor)} — текущий месяц`
-                      : `Выбран ${monthTitle(monthCursor)}. Нажмите, чтобы вернуться к текущему месяцу`
-                  }
-                >
-                  <Text style={[styles.monthPagerLabel, { color: palette.text.primary }]}>
-                    {monthTitle(monthCursor)}
-                  </Text>
-                  {!isAtCurrentMonth && (
-                    <Text style={[styles.monthPagerHint, { color: palette.text.tertiary }]}>к текущему</Text>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={goNextMonth}
-                  disabled={isAtCurrentMonth}
-                  hitSlop={8}
-                  style={styles.monthPagerBtn}
-                  activeOpacity={0.6}
-                  accessibilityRole="button"
-                  accessibilityLabel="Следующий месяц"
-                  accessibilityState={{ disabled: isAtCurrentMonth }}
-                >
-                  <Ionicons
-                    name="chevron-forward"
-                    size={18}
-                    color={palette.text.secondary}
-                    style={isAtCurrentMonth && styles.monthPagerArrowDisabled}
-                  />
-                </TouchableOpacity>
-              </View>
-            )}
 
             {/* Compare toggle */}
             <View style={styles.compareRow}>
@@ -1220,10 +1221,6 @@ export default function ReportsScreen() {
                     ))}
                     <View style={[styles.pnlDivider, { backgroundColor: palette.border.subtle }]} />
                     <PnLRow label="Чистая прибыль" amount={netProfit} palette={palette} tone="bold" />
-                    <TouchableOpacity style={styles.pnlPdfBtn} onPress={exportPdf} activeOpacity={0.85}>
-                      <Ionicons name="document-text-outline" size={16} color={colors.white} />
-                      <Text style={styles.pnlPdfText}>Скачать PDF</Text>
-                    </TouchableOpacity>
                   </View>
                 )}
               </AnimatedCard>
@@ -1426,15 +1423,6 @@ export default function ReportsScreen() {
               >
                 <View style={styles.kpiHeader}>
                   <Text style={[styles.cardTitle, { color: palette.text.tertiary, padding: 0 }]}>KPI ЦЕЛИ</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      haptic('tap');
-                      setShowTargetsModal(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.kpiEdit, { color: colors.primary[600] }]}>Изменить цели</Text>
-                  </TouchableOpacity>
                 </View>
                 <View style={styles.kpiBody}>
                   <View style={styles.kpiRingsWrap}>
@@ -1585,50 +1573,6 @@ export default function ReportsScreen() {
               )}
 
               {/* 12. ЭКСПОРТ */}
-              <AnimatedCard
-                index={15}
-                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ЭКСПОРТ</Text>
-                <View style={styles.exportRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.exportBtn,
-                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
-                    ]}
-                    onPress={exportImage}
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name="sparkles-outline" size={20} color={colors.amber[600]} />
-                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Для Stories</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.exportBtn,
-                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
-                    ]}
-                    onPress={exportPdf}
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name="document-text-outline" size={20} color={colors.primary[600]} />
-                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>PDF</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.exportBtn,
-                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
-                    ]}
-                    onPress={exportTablePdf}
-                    activeOpacity={0.85}
-                  >
-                    <Ionicons name="grid-outline" size={20} color={colors.green[600]} />
-                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Таблица</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={[styles.cardCaption, { color: palette.text.tertiary, marginTop: spacing[2] }]}>
-                  «Для Stories» — вертикальная картинка с ключевыми цифрами. PDF и Таблица — для печати и Numbers/Excel.
-                </Text>
-              </AnimatedCard>
             </>
           )}
         </View>

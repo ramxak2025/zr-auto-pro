@@ -200,7 +200,7 @@ const TrashRow = React.memo(function TrashRow({ item, restoring, onRestore, pale
 });
 
 export default function CheckTrashScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();

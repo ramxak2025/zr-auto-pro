@@ -119,7 +119,7 @@ function HubRow({ icon, color, title, description, disabled, last, onPress, onPr
 }
 
 export default function ReportsHubScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -189,12 +189,7 @@ export default function ReportsHubScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="Отчёты"
-        subtitle="Период, фильтры, экспорт в PDF"
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader scroll={section} title="Отчёты" onBack={() => navigation.goBack()} />
       <ScreenSectionScrollView
         onScroll={section.onScroll}
         scrollEventThrottle={16}

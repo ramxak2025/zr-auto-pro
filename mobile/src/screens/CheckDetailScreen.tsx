@@ -74,8 +74,9 @@ import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/t
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { HeaderAction } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -141,7 +142,7 @@ const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
 };
 
 export default function CheckDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -881,11 +882,11 @@ export default function CheckDetailScreen() {
   if (viewState !== 'content' || !check) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <ScreenSectionHeader scroll={section} title="Чек">
-          <HeaderIsland>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          </HeaderIsland>
-        </ScreenSectionHeader>
+        <ScreenSectionHeader
+          scroll={section}
+          title="Чек"
+          leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        />
         <ScreenSectionScrollView
           style={{ flex: 1 }}
           onScroll={section.onScroll}
@@ -1003,98 +1004,54 @@ export default function CheckDetailScreen() {
             </View>
           ) : null
         }
-      >
-        <HeaderIsland>
-          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6 }}>
-            <TouchableOpacity
-              onPress={generatePdf}
-              style={[
-                [styles.actionBtn, { backgroundColor: palette.bg.muted }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel="Печать / PDF заказ-наряда"
-              hitSlop={6}
-            >
-              <Ionicons name="print-outline" size={17} color={colors.violet[600]} />
-            </TouchableOpacity>
-            {/* Возврат заказ-наряда — компактная trailing-иконка в шапке.
-              Видна только директору/админу/superadmin. На уже возвращённом
-              чеке остаётся, но в disabled-состоянии (приглушённая, без
-              нажатия) — пользователь видит, что возврат уже оформлен, и
-              понимает почему действие недоступно. */}
-            {canFileReturn && (
-              <TouchableOpacity
-                onPress={openReturnModal}
-                disabled={!!returnUnavailableReason}
-                style={[
-                  [
-                    styles.actionBtn,
-                    {
-                      backgroundColor: returnUnavailableReason
-                        ? palette.bg.muted
-                        : isDark
-                          ? softTint(colors.red[600], 'dark')
-                          : colors.red[50],
-                    },
-                  ],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={returnUnavailableReason ?? 'Оформить возврат'}
-                accessibilityHint={isDeferred ? 'Сначала проведите отложенный чек.' : undefined}
-                accessibilityState={{ disabled: !!returnUnavailableReason }}
-                hitSlop={6}
-              >
-                <Ionicons
-                  name="arrow-undo-outline"
-                  size={17}
-                  color={returnUnavailableReason ? palette.text.tertiary : colors.red[600]}
-                />
-              </TouchableOpacity>
-            )}
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        actions={
+          <>
             {canEdit && (
-              <TouchableOpacity
-                accessibilityLabel="Редактировать чек"
-                accessibilityRole="button"
+              <HeaderAction
+                label="Редактировать чек"
+                title="Редактировать"
+                icon="create-outline"
+                tone="primary"
                 onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
-                style={[
-                  [styles.actionBtn, { backgroundColor: palette.bg.muted }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-              >
-                <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
-              </TouchableOpacity>
+              />
             )}
-            {canDelete && (
-              <TouchableOpacity
-                accessibilityLabel="Удалить чек"
-                accessibilityRole="button"
-                onPress={() => {
-                  // Корзина (106): DELETE — софт-удаление, чек можно вернуть
-                  // 30 дней (Журнал → Корзина, owner-class). Старое «Это
-                  // действие необратимо» стало неправдой.
-                  Alert.alert('Удалить?', 'Заказ-наряд будет перемещён в корзину (хранится 30 дней).', [
-                    { text: 'Отмена', style: 'cancel' },
-                    {
-                      text: 'Удалить',
-                      style: 'destructive',
-                      onPress: () => deleteMutation.mutate(),
-                    },
-                  ]);
-                }}
-                style={[
-                  [styles.actionBtn, { backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50] }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-              >
-                <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </HeaderIsland>
-      </ScreenSectionHeader>
+            <ScreenHeaderMenu
+              label="Заказ-наряд: документы и действия"
+              items={[
+                { id: 'print', label: 'Печать / PDF заказ-наряда', icon: 'print-outline', onSelect: generatePdf },
+                canFileReturn && {
+                  id: 'return',
+                  label: returnUnavailableReason ?? 'Оформить возврат',
+                  icon: 'arrow-undo-outline',
+                  danger: true,
+                  disabled: !!returnUnavailableReason,
+                  onSelect: openReturnModal,
+                },
+                canDelete && {
+                  id: 'delete',
+                  label: 'Удалить чек',
+                  icon: 'trash-outline',
+                  danger: true,
+                  onSelect: () => {
+                    // Корзина (106): DELETE — софт-удаление, чек можно вернуть
+                    // 30 дней (Журнал → Корзина, owner-class). Старое «Это
+                    // действие необратимо» стало неправдой.
+                    Alert.alert('Удалить?', 'Заказ-наряд будет перемещён в корзину (хранится 30 дней).', [
+                      { text: 'Отмена', style: 'cancel' },
+                      {
+                        text: 'Удалить',
+                        style: 'destructive',
+                        onPress: () => deleteMutation.mutate(),
+                      },
+                    ]);
+                  },
+                },
+              ]}
+            />
+          </>
+        }
+      />
 
       <Animated.ScrollView
         onScroll={section.onNativeScroll}
