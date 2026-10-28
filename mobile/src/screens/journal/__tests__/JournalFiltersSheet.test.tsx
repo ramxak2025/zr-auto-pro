@@ -1,6 +1,7 @@
-const mockStates: unknown[] = [];
-const mockDeps: unknown[][] = [];
+const mockStates: unknown[] = [],
+  mockDeps: unknown[][] = [];
 let mockIndex = 0;
+let mockFontScale = 1;
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useState: (initial: unknown) => {
@@ -15,56 +16,56 @@ jest.mock('react', () => ({
       },
     ];
   },
+  useRef: (initial: unknown) => {
+    const index = mockIndex++;
+    if (!(index in mockStates)) mockStates[index] = { current: initial };
+    return mockStates[index];
+  },
   useEffect: (effect: () => void, deps: unknown[]) => {
     const index = mockIndex++;
-    if (!mockDeps[index] || deps.some((value, offset) => value !== mockDeps[index][offset])) {
+    if (!mockDeps[index] || deps.some((v, i) => v !== mockDeps[index][i])) {
       mockDeps[index] = deps;
       effect();
     }
   },
 }));
 jest.mock('react-native', () => ({
-  Modal: 'Modal',
-  Pressable: 'Pressable',
   Keyboard: { dismiss: jest.fn() },
   View: 'View',
   TouchableOpacity: 'TouchableOpacity',
   ActivityIndicator: 'ActivityIndicator',
   TextInput: 'TextInput',
-  Switch: 'Switch',
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ height: 844, width: 390, fontScale: 1 }),
+  useWindowDimensions: () => ({ height: 844, width: 390, fontScale: mockFontScale }),
   StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 },
 }));
-jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 48, bottom: 34 }) }));
-jest.mock('react-native-keyboard-controller', () => ({
-  KeyboardProvider: 'KeyboardProvider',
-  KeyboardAvoidingView: 'KeyboardAvoidingView',
-  KeyboardAwareScrollView: 'ScrollView',
-}));
+jest.mock('react-native-keyboard-controller', () => ({ KeyboardAwareScrollView: 'ScrollView' }));
+jest.mock('../JournalMotion', () => ({ JournalPressable: 'TouchableOpacity' }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('../../../platform/Typography', () => ({ Text: 'Text', textVariantStyles: { body: {} } }));
-jest.mock('../../../theme', () => ({ colors: { red: { 600: '#dc2626' } } }));
 jest.mock('../../../contexts/ThemeContext', () => ({
   useColors: () => ({
     bg: { canvas: '#fff', card: '#fff', muted: '#eee' },
     text: { primary: '#111', secondary: '#555', inverse: '#fff' },
     border: { subtle: '#ddd' },
-    accent: { primary: '#2563eb' },
+    accent: { primary: '#2563eb', primaryText: '#1d4ed8' },
   }),
 }));
 jest.mock('../../../components/DateTimePickerModal', () => ({ __esModule: true, default: 'DatePicker' }));
-jest.mock('../JournalHeader', () => ({ useJournalReducedMotion: () => false }));
+jest.mock('../JournalModal', () => ({ __esModule: true, default: 'JournalModal', JournalFilterPage: 'Page' }));
 jest.mock('../../../components/CompactScreenHeader', () => ({ CompactSearchInput: 'SearchInput' }));
 import React from 'react';
 import JournalFiltersSheet from '../JournalFiltersSheet';
 import { emptyJournalFilters } from '../filters';
 import type { User } from '../../../../../shared/types';
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
-const nodes = (node: React.ReactNode): Element[] =>
-  React.isValidElement(node)
-    ? [node as Element, ...React.Children.toArray((node as Element).props.children).flatMap(nodes)]
-    : [];
+const nodes = (node: React.ReactNode): Element[] => {
+  if (!React.isValidElement(node)) return [];
+  const element = node as Element;
+  if (typeof element.type === 'function')
+    return nodes((element.type as (props: unknown) => React.ReactNode)(element.props));
+  return [element, ...React.Children.toArray(element.props.children).flatMap(nodes)];
+};
 const words = (node: React.ReactNode): string =>
   typeof node === 'string'
     ? node
@@ -74,20 +75,27 @@ const words = (node: React.ReactNode): string =>
           .join(' ')
       : '';
 const press = (tree: React.ReactNode, label: string) => {
-  const target = nodes(tree).find((node) => node.type === 'TouchableOpacity' && words(node).includes(label));
+  const target = nodes(tree).find(
+    (node) =>
+      node.type === 'TouchableOpacity' &&
+      (words(node).includes(label) || String(node.props.accessibilityLabel).includes(label)),
+  );
   expect(target).toBeDefined();
   (target!.props.onPress as () => void)();
 };
-const apply = jest.fn();
-const close = jest.fn();
+const apply = jest.fn(),
+  close = jest.fn();
 let props: Parameters<typeof JournalFiltersSheet>[0];
 const render = () => {
   mockIndex = 0;
   return JournalFiltersSheet(props);
 };
+const back = (tree: React.ReactNode) =>
+  (nodes(tree).find((node) => node.type === 'JournalModal')!.props.onRequestClose as () => void)();
 beforeEach(() => {
   mockStates.length = 0;
   mockDeps.length = 0;
+  mockFontScale = 1;
   apply.mockReset();
   close.mockReset();
   props = {
@@ -105,12 +113,28 @@ beforeEach(() => {
     onApply: apply,
   };
 });
-it('draft changes do not apply until Apply, reset remains draft, cancel discards on reopening', () => {
+it('starts with three summaries and flags; details are reached one at a time', () => {
+  const tree = render();
+  expect(
+    nodes(tree).filter((node) => String(node.props.accessibilityLabel).match(/^(Период|По сотруднику|Сумма чека):/)),
+  ).toHaveLength(3);
+  expect(words(tree)).not.toContain('Сегодня');
+  expect(nodes(tree).some((node) => node.type === 'TextInput')).toBe(false);
+  expect(nodes(tree).filter((node) => node.props.accessibilityRole === 'checkbox')).toHaveLength(3);
+});
+it('keeps draft across detail back, applied object rerenders, and reset; cancel discards on reopen', () => {
   let tree = render();
-  press(tree, 'Дополнительно');
+  press(tree, 'Сумма чека');
   tree = render();
-  const input = nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!;
-  (input.props.onChangeText as (v: string) => void)('0');
+  (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!.props.onChangeText as (
+      v: string,
+    ) => void
+  )('0');
+  props = { ...props, applied: { ...props.applied } };
+  tree = render();
+  expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!.props.value).toBe('0');
+  back(tree);
   tree = render();
   expect(apply).not.toHaveBeenCalled();
   press(tree, 'Применить');
@@ -119,40 +143,43 @@ it('draft changes do not apply until Apply, reset remains draft, cancel discards
   press(tree, 'Сбросить');
   tree = render();
   expect(apply).not.toHaveBeenCalled();
-  const modal = nodes(tree).find((node) => node.type === 'Modal')!;
-  (modal.props.onRequestClose as () => void)();
+  back(tree);
   expect(close).toHaveBeenCalled();
   props = { ...props, visible: false };
   render();
   props = { ...props, visible: true, applied: { ...emptyJournalFilters(), amountTo: '12,50' } };
   render();
   tree = render();
+  press(tree, 'Сумма чека');
+  tree = render();
   expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма до, рубли')!.props.value).toBe('12,50');
 });
-it('employee picker is searchable, keeps full names, and back returns to draft', () => {
+it('employee detail preserves full names, search, selected draft and back behavior', () => {
   let tree = render();
   press(tree, 'По сотруднику');
   tree = render();
   expect(words(tree)).toContain('Александр Оченьдлинная Фамилия');
-  const search = nodes(tree).find((node) => node.type === 'SearchInput')!;
-  (search.props.onChange as (v: string) => void)('БОР');
+  (
+    nodes(tree).find((node) => node.props.accessibilityLabel === 'Найти сотрудника')!.props.onChangeText as (
+      v: string,
+    ) => void
+  )('БОР');
   tree = render();
   expect(words(tree)).not.toContain('Александр');
   press(tree, 'Борис');
   tree = render();
   expect(apply).not.toHaveBeenCalled();
-  expect(words(tree)).toContain('Борис');
   press(tree, 'По сотруднику');
   tree = render();
-  (nodes(tree).find((node) => node.type === 'Modal')!.props.onRequestClose as () => void)();
+  back(tree);
   tree = render();
   expect(close).not.toHaveBeenCalled();
   press(tree, 'Применить');
   expect(apply.mock.calls[0][0].masterId).toBe('b');
 });
-it('invalid range stays open with a recoverable error; employee loading/error/empty are visible', () => {
+it('invalid range stays in detail with recoverable error; users loading/error/retry/empty remain available', () => {
   let tree = render();
-  press(tree, 'Дополнительно');
+  press(tree, 'Сумма чека');
   tree = render();
   for (const [label, value] of [
     ['Сумма от, рубли', '10'],
@@ -162,10 +189,12 @@ it('invalid range stays open with a recoverable error; employee loading/error/em
       value,
     );
   tree = render();
-  press(tree, 'Применить');
+  press(tree, 'Готово');
   tree = render();
   expect(apply).not.toHaveBeenCalled();
   expect(nodes(tree).some((node) => node.props.accessibilityRole === 'alert')).toBe(true);
+  back(tree);
+  tree = render();
   press(tree, 'По сотруднику');
   props = { ...props, usersLoading: true };
   tree = render();
@@ -173,57 +202,73 @@ it('invalid range stays open with a recoverable error; employee loading/error/em
   props = { ...props, usersLoading: false, usersError: true };
   tree = render();
   expect(words(tree)).toContain('Не удалось загрузить сотрудников.');
+  press(tree, 'Повторить');
+  expect(props.retryUsers).toHaveBeenCalledTimes(1);
   props = { ...props, usersError: false, users: [] };
   tree = render();
   expect(words(tree)).toContain('Сотрудники не найдены');
 });
-
-it('basic filters remain visible while optional criteria are folded; folding preserves draft values', () => {
+it('presets, timezone picker, clearing dates, and flags stay draft until apply', () => {
   let tree = render();
-  expect(words(tree)).toContain('Все сотрудники');
-  expect(words(tree)).toContain('Сегодня');
-  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Сумма от, рубли')).toBe(false);
-  press(tree, 'Дополнительно');
+  press(tree, 'Период');
   tree = render();
-  const input = nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!;
-  (input.props.onChangeText as (value: string) => void)('1000');
-  tree = render();
-  press(tree, 'Дополнительно');
-  tree = render();
-  expect(words(tree)).toContain('Сумма: 1000');
-  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Сумма от, рубли')).toBe(false);
-  press(tree, 'Применить');
-  expect(apply).toHaveBeenCalledWith({ ...emptyJournalFilters(), amountFrom: '1000' });
-});
-it('active optional criteria autoexpand and remain discoverable after folding', () => {
-  props = { ...props, applied: { ...emptyJournalFilters(), amountTo: '2500', isReturned: true } };
-  render();
-  let tree = render();
-  expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма до, рубли')!.props.value).toBe('2500');
-  const returned = nodes(tree).find((node) => node.props.accessibilityLabel === 'Только возвраты клиентов')!;
-  expect(returned.props.value).toBe(true);
-  press(tree, 'Дополнительно');
-  tree = render();
-  expect(words(tree)).toContain('Возвраты клиентов');
-  press(tree, 'Применить');
-  expect(apply).toHaveBeenCalledWith(props.applied);
-});
-it('date presets, date clearing and employee retry remain draft actions', () => {
-  let tree = render();
   press(tree, 'Сегодня');
   tree = render();
-  const clearFrom = nodes(tree).find((node) => node.props.accessibilityLabel === 'Очистить дату от')!;
-  (clearFrom.props.onPress as () => void)();
+  (nodes(tree).find((node) => node.props.accessibilityLabel === 'Очистить дату от')!.props.onPress as () => void)();
+  tree = render();
+  expect(nodes(tree).find((node) => node.type === 'DatePicker')!.props.timeZone).toBe('Europe/Moscow');
+  back(tree);
+  tree = render();
+  press(tree, 'Только возвраты клиентов');
   tree = render();
   expect(apply).not.toHaveBeenCalled();
-  press(tree, 'По сотруднику');
-  props = { ...props, usersError: true };
-  tree = render();
-  press(tree, 'Повторить');
-  expect(props.retryUsers).toHaveBeenCalledTimes(1);
-  (nodes(tree).find((node) => node.type === 'Modal')!.props.onRequestClose as () => void)();
-  tree = render();
   press(tree, 'Применить');
-  expect(apply.mock.calls[0][0]).toMatchObject({ dateFrom: '', masterId: '' });
+  expect(apply.mock.calls[0][0]).toMatchObject({ dateFrom: '', isReturned: true });
   expect(apply.mock.calls[0][0].dateTo).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+});
+
+it('boolean criteria are independent checkboxes, preserve combinations and remain draft until Apply', () => {
+  let tree = render();
+  for (const label of ['Только чеки со скидкой', 'Только возвраты клиентов', 'Только отложенные']) {
+    press(tree, label);
+    tree = render();
+  }
+  const checked = () =>
+    nodes(tree)
+      .filter((node) => node.props.accessibilityRole === 'checkbox')
+      .map((node) => (node.props.accessibilityState as { checked: boolean }).checked);
+  expect(checked()).toEqual([true, true, true]);
+  press(tree, 'Только возвраты клиентов');
+  tree = render();
+  expect(checked()).toEqual([true, false, true]);
+  expect(apply).not.toHaveBeenCalled();
+  press(tree, 'Применить');
+  expect(apply).toHaveBeenCalledWith({ ...emptyJournalFilters(), hasDiscount: true, isDeferred: true });
+});
+
+it('retains zero and comma amounts through a live text-size change, Done, Back and Apply', () => {
+  let tree = render();
+  press(tree, 'Сумма чека');
+  tree = render();
+  const change = (label: string, value: string) => {
+    (nodes(tree).find((node) => node.props.accessibilityLabel === label)!.props.onChangeText as (next: string) => void)(
+      value,
+    );
+    tree = render();
+  };
+  change('Сумма от, рубли', '0');
+  mockFontScale = 1.35;
+  tree = render();
+  change('Сумма до, рубли', '12,50');
+  press(tree, 'Готово');
+  tree = render();
+  press(tree, 'Сумма чека');
+  tree = render();
+  expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма от, рубли')!.props.value).toBe('0');
+  expect(nodes(tree).find((node) => node.props.accessibilityLabel === 'Сумма до, рубли')!.props.value).toBe('12,50');
+  back(tree);
+  tree = render();
+  expect(apply).not.toHaveBeenCalled();
+  press(tree, 'Применить');
+  expect(apply).toHaveBeenCalledWith({ ...emptyJournalFilters(), amountFrom: '0', amountTo: '12,50' });
 });

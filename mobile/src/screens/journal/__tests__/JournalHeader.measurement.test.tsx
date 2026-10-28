@@ -7,91 +7,77 @@ jest.mock('react', () => ({
   useState: (initial: unknown) => [initial, (update: (previous: number) => number) => mockDeferredUpdates.push(update)],
 }));
 jest.mock('react-native', () => ({
-  Animated: {
-    View: 'AnimatedView',
-    Value: class {
-      interpolate() {
-        return 0;
-      }
-    },
-  },
-  Easing: { out: jest.fn(), cubic: jest.fn() },
   Platform: { OS: 'ios' },
   useWindowDimensions: () => ({ fontScale: mockFontScale, width: 402, height: 874 }),
   View: 'View',
   StyleSheet: { create: (styles: unknown) => styles },
 }));
+jest.mock('react-native-reanimated', () => ({
+  __esModule: true,
+  default: { View: 'AnimatedView', Text: 'AnimatedText' },
+  useAnimatedStyle: (compute: () => unknown) => compute(),
+  useAnimatedReaction: jest.fn(),
+  interpolate: (value: number, input: number[], output: number[]) => {
+    const index = Math.min(
+      input.length - 2,
+      input.findIndex((point) => point >= value) <= 0 ? 0 : input.findIndex((point) => point >= value) - 1,
+    );
+    return (
+      output[index] + (output[index + 1] - output[index]) * ((value - input[index]) / (input[index + 1] - input[index]))
+    );
+  },
+}));
+jest.mock('../JournalMotion', () => ({ JournalPressable: 'Pressable', useJournalReducedMotion: () => false }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 62, bottom: 34 }) }));
 jest.mock('../../../contexts/ThemeContext', () => ({
   useColors: () => ({ bg: { canvas: '#fff' }, text: { primary: '#111' } }),
 }));
-jest.mock('../../../platform/Typography', () => ({ Text: 'Text', textVariantStyles: { title2: { lineHeight: 28 } } }));
+jest.mock('../../../platform/Typography', () => ({
+  Text: 'Text',
+  textVariantStyles: { display: { fontSize: 34, lineHeight: 40 } },
+}));
 import React from 'react';
+import type { SharedValue } from 'react-native-reanimated';
 import JournalHeader from '../JournalHeader';
-type Element = React.ReactElement<{
-  children?: React.ReactNode;
-  onLayout?: (event: unknown) => void;
-  style?: unknown;
-  accessibilityRole?: string;
-  allowFontScaling?: boolean;
-  maxFontSizeMultiplier?: number;
-}>;
+type Element = React.ReactElement<
+  Record<string, unknown> & { children?: React.ReactNode; onLayout?: (event: unknown) => void }
+>;
 function nodes(node: React.ReactNode): Element[] {
   return React.isValidElement(node)
     ? [node as Element, ...React.Children.toArray((node as Element).props.children).flatMap(nodes)]
     : [];
 }
-it('captures measured height before a pooled native layout event is released', () => {
+function style(value: unknown): Record<string, unknown> {
+  return Array.isArray(value)
+    ? Object.assign({}, ...value.map(style))
+    : value && typeof value === 'object'
+      ? (value as Record<string, unknown>)
+      : {};
+}
+const render = (value: number) =>
+  JournalHeader({ progress: { value } as SharedValue<number>, context: 'Север', onContentTop: jest.fn() });
+it('captures measured context before the pooled native layout event is released', () => {
   mockDeferredUpdates.length = 0;
-  const tree = JournalHeader({ compact: false, context: 'Север', actions: null });
-  const onLayout = nodes(tree).find((node) => node.props.onLayout)!.props.onLayout!;
+  const tree = render(0);
   const event: { nativeEvent: { layout: { height: number } } | null } = { nativeEvent: { layout: { height: 38 } } };
-  onLayout(event);
-  // React Native releases the synthetic event before a deferred updater may run.
+  nodes(tree).find((node) => node.props.onLayout)!.props.onLayout!(event);
   event.nativeEvent = null;
   expect(mockDeferredUpdates).toHaveLength(1);
   expect(mockDeferredUpdates[0](0)).toBe(38);
-  expect(mockDeferredUpdates[0](38)).toBe(38);
 });
-
-function flattenStyle(style: unknown): Record<string, unknown> {
-  return Array.isArray(style)
-    ? Object.assign({}, ...style.map(flattenStyle))
-    : style && typeof style === 'object'
-      ? (style as Record<string, unknown>)
-      : {};
-}
-it.each([1.4, 2, 3])('gives scaled title and actions intrinsic separate rows at fontScale %s', (fontScale) => {
+it.each([1, 1.4, 2, 3])('keeps one scalable title and a fixed list viewport at fontScale %s', (fontScale) => {
   mockFontScale = fontScale;
-  const tree = JournalHeader({ compact: false, context: 'Север', actions: <ViewAction /> });
-  const title = nodes(tree).find((node) => node.props.accessibilityRole === 'header')!;
-  const toolbar = nodes(tree).find((node) =>
-    React.Children.toArray(node.props.children).some(
-      (child) =>
-        React.isValidElement(child) && (child.props as { accessibilityRole?: string }).accessibilityRole === 'header',
-    ),
-  )!;
-  const toolbarStyle = flattenStyle(toolbar.props.style);
-  expect(toolbarStyle.height).toBeUndefined();
-  expect(toolbarStyle.minHeight).toBeGreaterThanOrEqual(28 * fontScale + 12);
-  expect(toolbarStyle.flexDirection).toBe('column');
-  expect(flattenStyle(title.props.style).flex).toBe(0);
-  expect(title.props.allowFontScaling).not.toBe(false);
-  expect(title.props.maxFontSizeMultiplier).toBeUndefined();
-});
-function ViewAction() {
-  return null;
-}
-it('keeps the normal reading-size toolbar compact and horizontal', () => {
-  mockFontScale = 1;
-  const tree = JournalHeader({ compact: false, context: 'Север', actions: null });
-  const title = nodes(tree).find((node) => node.props.accessibilityRole === 'header')!;
-  const toolbar = nodes(tree).find((node) =>
-    React.Children.toArray(node.props.children).some(
-      (child) =>
-        React.isValidElement(child) && (child.props as { accessibilityRole?: string }).accessibilityRole === 'header',
-    ),
-  )!;
-  expect(flattenStyle(toolbar.props.style)).toMatchObject({ flexDirection: 'row', minHeight: 48 });
+  const heights: unknown[] = [];
+  for (const progress of [0, 0.5, 1]) {
+    const tree = render(progress);
+    const titles = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
+    expect(titles).toHaveLength(1);
+    expect(style(titles[0].props.style).fontSize).toBe(34 - 17 * progress);
+    expect(titles[0].props.allowFontScaling).toBe(true);
+    expect(titles[0].props.maxFontSizeMultiplier).toBeUndefined();
+    const reservation = nodes(tree).find((node) => node.props.testID === 'journal-header-reservation')!;
+    heights.push(style(reservation.props.style).height);
+  }
+  expect(new Set(heights).size).toBe(1);
 });

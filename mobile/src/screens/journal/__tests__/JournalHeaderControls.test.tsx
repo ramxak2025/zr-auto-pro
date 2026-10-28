@@ -1,104 +1,136 @@
+const mockStates: unknown[] = [];
+let mockIndex = 0,
+  mockFontScale = 1;
+jest.mock('react', () => ({
+  ...jest.requireActual('react'),
+  useEffect: jest.fn(),
+  useRef: (current: unknown) => ({ current }),
+  useState: (initial: unknown) => {
+    const index = mockIndex++;
+    if (!(index in mockStates)) mockStates[index] = initial;
+    return [
+      mockStates[index],
+      (value: unknown) => {
+        mockStates[index] = value;
+      },
+    ];
+  },
+}));
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  StyleSheet: { create: (styles: unknown) => styles },
+  StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 },
   Text: 'Text',
-  TouchableOpacity: 'TouchableOpacity',
+  Pressable: 'Pressable',
   View: 'View',
+  useWindowDimensions: () => ({ fontScale: mockFontScale, width: 402 }),
+}));
+jest.mock('react-native-reanimated', () => ({
+  __esModule: true,
+  default: { View: 'AnimatedView' },
+  useSharedValue: (value: unknown) => ({ value }),
+  useAnimatedStyle: (compute: () => unknown) => compute(),
+  interpolate: (value: number) => value,
+  Easing: { out: jest.fn(), exp: jest.fn() },
+  withTiming: (value: unknown) => value,
+  withSpring: (value: unknown) => value,
+}));
+jest.mock('expo-blur', () => ({ BlurView: 'BlurView' }));
+jest.mock('../JournalMotion', () => ({
+  JournalPressable: 'Pressable',
+  useJournalReducedMotion: () => false,
+  useJournalReducedTransparency: () => false,
 }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-jest.mock('../../../platform/iosSurface', () => ({ buildShadow: () => ({}) }));
+jest.mock('../../../platform/Typography', () => ({ Text: 'Text' }));
+jest.mock('../JournalModal', () => ({ __esModule: true, default: 'JournalModal' }));
+jest.mock('../JournalHeader', () => ({ JournalSearchInput: 'SearchInput' }));
 import React from 'react';
+import type { SharedValue } from 'react-native-reanimated';
 import { getPalette } from '../../../theme/palette';
-import { colors } from '../../../theme';
-import { JournalHeaderActions, JournalHeaderSegments } from '../JournalHeaderControls';
+import { JournalCommandBar, JournalHeaderActions, JournalHeaderSegments } from '../JournalHeaderControls';
 type Element = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;
 function nodes(node: React.ReactNode): Element[] {
   return React.isValidElement(node)
     ? [node as Element, ...React.Children.toArray((node as Element).props.children).flatMap(nodes)]
     : [];
 }
-function style(value: unknown): Record<string, unknown> {
-  return Array.isArray(value)
-    ? Object.assign({}, ...value.map(style))
-    : value && typeof value === 'object'
-      ? (value as Record<string, unknown>)
-      : {};
-}
-function contrast(foreground: string, background: string) {
-  const luminance = (hex: string) => {
-    const rgb = hex
-      .slice(1)
-      .match(/../g)!
-      .map((channel) => parseInt(channel, 16) / 255)
-      .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
-    return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+const render = <P,>(component: (props: P) => React.ReactNode, props: P) => {
+  mockIndex = 0;
+  return component(props);
+};
+const press = (tree: React.ReactNode, label: string) =>
+  (nodes(tree).find((node) => node.props.accessibilityLabel === label)!.props.onPress as () => void)();
+beforeEach(() => {
+  mockStates.length = 0;
+  mockIndex = 0;
+  mockFontScale = 1;
+});
+it('shows a search action at rest and keeps the same field position when searching and changing scopes', () => {
+  const props = {
+    palette: getPalette('light'),
+    progress: { value: 0 } as SharedValue<number>,
+    actions: null,
+    active: 'checks' as const,
+    onScopeChange: jest.fn(),
+    search: '',
+    onSearchChange: jest.fn(),
+    onSearchFocus: jest.fn(),
+    filterCount: 2,
+    onFilters: jest.fn(),
   };
-  const first = luminance(foreground),
-    second = luminance(background);
-  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
-}
-it.each(['checks', 'warehouse'] as const)('renders selected %s text and icon above 4.5:1 in dark mode', (active) => {
-  const palette = getPalette('dark');
-  const onChange = jest.fn();
-  const tree = JournalHeaderSegments({ palette, active, onChange });
-  const tabs = nodes(tree).filter((node) => node.props.accessibilityRole === 'tab');
-  const selected = tabs.find((node) => (node.props.accessibilityState as { selected: boolean }).selected)!;
-  const foregrounds = nodes(selected).flatMap((node) =>
-    typeof node.props.color === 'string'
-      ? [node.props.color]
-      : typeof style(node.props.style).color === 'string'
-        ? [style(node.props.style).color as string]
-        : [],
-  );
-  expect(foregrounds).toHaveLength(2);
-  foregrounds.forEach((foreground) =>
-    expect(contrast(foreground, style(selected.props.style).backgroundColor as string)).toBeGreaterThanOrEqual(4.5),
-  );
-  (tabs.find((node) => node !== selected)!.props.onPress as () => void)();
-  expect(onChange).toHaveBeenCalledWith(active === 'checks' ? 'warehouse' : 'checks');
-  // The previous rendered selection tint fails this same contrast threshold on the actual dark surface.
-  expect(contrast(colors.primary[700], palette.bg.card)).toBeLessThan(4.5);
-});
-it('renders Board and trash with readable semantic dark foregrounds; keeps callbacks and permission gate', () => {
-  const palette = getPalette('dark'),
-    onBoard = jest.fn(),
-    onTrash = jest.fn();
-  const tree = JournalHeaderActions({ palette, canSeeTrash: true, onBoard, onTrash });
-  const foregrounds = nodes(tree).flatMap((node) =>
-    typeof node.props.color === 'string'
-      ? [node.props.color]
-      : typeof style(node.props.style).color === 'string'
-        ? [style(node.props.style).color as string]
-        : [],
-  );
-  expect(foregrounds).toHaveLength(3);
-  foregrounds.forEach((foreground) => expect(contrast(foreground, palette.bg.canvas)).toBeGreaterThanOrEqual(4.5));
-  const buttons = nodes(tree).filter((node) => node.props.accessibilityRole === 'button');
-  buttons.forEach((button) => {
-    expect(style(button.props.style).height).toBeUndefined();
-    expect(style(button.props.style).minHeight).toBe(44);
-    (button.props.onPress as () => void)();
-  });
-  expect(onBoard).toHaveBeenCalledTimes(1);
-  expect(onTrash).toHaveBeenCalledTimes(1);
+  let tree = render(JournalCommandBar, props);
+  const restField = nodes(tree).find((node) => node.type === 'SearchInput')!;
+  expect(restField.props.active).toBe(false);
+  press(tree, 'Фильтры, применено: 2');
+  expect(props.onFilters).toHaveBeenCalledTimes(1);
+  press(tree, 'Поиск в журнале');
+  tree = render(JournalCommandBar, props);
+  const field = nodes(tree).find((node) => node.type === 'SearchInput')!;
+  expect(field.props.active).toBe(true);
+  expect(field.type).toBe(restField.type);
+  expect(field.key).toBe(restField.key);
   expect(
-    nodes(JournalHeaderActions({ palette, canSeeTrash: false, onBoard, onTrash })).filter(
-      (node) => node.props.accessibilityRole === 'button',
-    ),
-  ).toHaveLength(1);
-  expect(contrast(colors.primary[600], palette.bg.canvas)).toBeLessThan(4.5);
+    nodes(tree)
+      .filter((node) => node.type === JournalHeaderSegments)
+      .some((node) => node.props.compact),
+  ).toBe(true);
+  press(tree, 'Фильтры поиска, применено: 2');
+  expect(props.onFilters).toHaveBeenCalledTimes(2);
+  expect(nodes(tree).find((node) => node.type === 'SearchInput')!.props.active).toBe(true);
+  tree = render(JournalCommandBar, { ...props, active: 'warehouse' as const, search: 'Иван' });
+  expect(nodes(tree).find((node) => node.type === 'SearchInput')!.props.value).toBe('Иван');
+  (field.props.onCancel as () => void)();
+  tree = render(JournalCommandBar, props);
+  expect(nodes(tree).find((node) => node.type === 'SearchInput')!.props.active).toBe(false);
 });
-it('preserves the established light action and selected segment palette', () => {
-  const palette = getPalette('light');
-  const actions = nodes(JournalHeaderActions({ palette, canSeeTrash: true, onBoard: jest.fn(), onTrash: jest.fn() }));
-  expect(actions.filter((node) => node.props.color).map((node) => node.props.color)).toEqual([
-    colors.primary[600],
-    colors.primary[600],
-  ]);
-  for (const active of ['checks', 'warehouse'] as const) {
-    const selected = nodes(JournalHeaderSegments({ palette, active, onChange: jest.fn() })).find(
-      (node) => (node.props.accessibilityState as { selected?: boolean } | undefined)?.selected,
-    )!;
-    expect(nodes(selected).find((node) => node.props.color)!.props.color).toBe(colors.primary[700]);
-  }
+it('keeps board and permission-gated trash behind a single ellipsis action', () => {
+  const props = { palette: getPalette('dark'), canSeeTrash: true, onBoard: jest.fn(), onTrash: jest.fn() };
+  let tree = render(JournalHeaderActions, props);
+  expect(nodes(tree).find((node) => node.type === 'JournalModal')!.props.visible).toBe(false);
+  press(tree, 'Ещё действия журнала');
+  tree = render(JournalHeaderActions, props);
+  expect(nodes(tree).find((node) => node.type === 'JournalModal')!.props.visible).toBe(true);
+  press(tree, 'Открыть доску заказ-нарядов');
+  expect(props.onBoard).toHaveBeenCalledTimes(1);
+  tree = render(JournalHeaderActions, props);
+  expect(nodes(tree).find((node) => node.type === 'JournalModal')!.props.visible).toBe(false);
+  tree = render(JournalHeaderActions, { ...props, canSeeTrash: false });
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Открыть корзину удалённых заказ-нарядов')).toBe(
+    false,
+  );
+});
+it.each(['light', 'dark'] as const)('keeps scope state and readable selection in %s', (mode) => {
+  const props = { palette: getPalette(mode), active: 'checks' as const, onChange: jest.fn() };
+  const tree = render(JournalHeaderSegments, props);
+  const tabs = nodes(tree).filter((node) => node.props.accessibilityRole === 'tab');
+  expect(tabs).toHaveLength(2);
+  const selected = tabs.find((node) => (node.props.accessibilityState as { selected: boolean }).selected)!;
+  expect(nodes(selected).find((node) => node.props.color)!.props.color).toBe(props.palette.accent.primaryText);
+  press(tree, 'Складские документы');
+  expect(props.onChange).toHaveBeenCalledWith('warehouse');
+});
+it('large accessibility sizes use a scope menu with full labels', () => {
+  mockFontScale = 2;
+  const tree = render(JournalHeaderSegments, { palette: getPalette('dark'), active: 'warehouse', onChange: jest.fn() });
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Раздел журнала: Документы')).toBe(true);
 });

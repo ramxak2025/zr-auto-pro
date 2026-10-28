@@ -17,8 +17,6 @@ import {
   Recycle,
   Undo2,
   CalendarRange,
-  SlidersHorizontal,
-  X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -27,13 +25,10 @@ import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { zoned } from '../utils/tenantTime';
 import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import JournalHeader from './journal/JournalHeader';
-import JournalFilters from './journal/JournalFilters';
+import JournalHeader, { JournalPanel } from './journal/JournalHeader';
 import Pagination from '../components/Pagination';
-import JournalSearch from './journal/JournalSearch';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
-import { Tabs, TabPanel } from '../ui/Tabs';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -238,7 +233,6 @@ export default function ChecksPage() {
     setParams(next, { replace: true });
   };
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Check | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<TrashedCheck | null>(null);
 
@@ -679,12 +673,6 @@ export default function ChecksPage() {
     [timeZone, restoreMutation.isPending, restoreMutation.variables],
   );
 
-  const tabItems = [
-    { key: 'checks' as const, label: 'Чеки', icon: BookOpen },
-    { key: 'docs' as const, label: 'Документы', icon: Package },
-    ...(canSeeTrash ? [{ key: 'trash' as const, label: 'Корзина', icon: Trash2 }] : []),
-  ];
-
   const subtitle =
     view === 'checks'
       ? isLoading
@@ -704,85 +692,19 @@ export default function ChecksPage() {
           </button>
         </div>
       )}
-      <JournalHeader subtitle={subtitle}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <Tabs
-            aria-label="Разделы журнала"
-            idPrefix="journal"
-            items={tabItems}
-            value={view}
-            variant="pills"
-            className="max-w-full self-start [&_button]:min-h-10 [&_button]:px-2.5 sm:[&_button]:px-3"
-            onChange={(v) => patchParams({ view: v === 'checks' ? null : v })}
-          />
-          {view !== 'trash' && (
-            <div className="flex min-w-0 items-center gap-2 lg:w-[25rem]">
-              {view === 'checks' && (
-                <div className="min-w-0 flex-1">
-                  <JournalSearch value={search} onChange={(v) => patchParams({ q: v })} />
-                </div>
-              )}
-              <Button
-                variant={masterId || hasPeriod ? 'soft' : 'secondary'}
-                icon={SlidersHorizontal}
-                className="h-11 shrink-0"
-                onClick={() => setFiltersOpen(true)}
-              >
-                Фильтры
-                {Number(!!masterId) + Number(hasPeriod) > 0 ? ` · ${Number(!!masterId) + Number(hasPeriod)}` : ''}
-              </Button>
-            </div>
-          )}
-        </div>
-        {view !== 'trash' && (masterId || hasPeriod) && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {[
-              ...(masterId
-                ? [
-                    {
-                      label: masterOptions.find((option) => option.value === masterId)?.label ?? 'Мастер выбран',
-                      clear: () => patchParams({ masterId: null }),
-                    },
-                  ]
-                : []),
-              ...(hasPeriod
-                ? [
-                    {
-                      label: `${dateFrom || 'Любая дата'} — ${dateTo || 'Любая дата'}`,
-                      clear: () => patchParams({ from: null, to: null }),
-                    },
-                  ]
-                : []),
-            ].map((chip) => (
-              <button
-                key={chip.label}
-                type="button"
-                aria-label={`Убрать фильтр: ${chip.label}`}
-                onClick={chip.clear}
-                className={cn(
-                  'inline-flex min-h-8 max-w-full items-center gap-2 rounded-lg bg-accent-soft px-2.5 text-xs font-medium text-accent-text',
-                  focusRing,
-                )}
-              >
-                <span className="truncate">{chip.label}</span>
-                <X className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              </button>
-            ))}
-            <Button variant="ghost" size="sm" onClick={() => patchParams({ masterId: null, from: null, to: null })}>
-              Сбросить
-            </Button>
-          </div>
-        )}
-      </JournalHeader>
-      <JournalFilters
-        open={filtersOpen}
-        onClose={() => setFiltersOpen(false)}
+      <JournalHeader
+        subtitle={subtitle}
+        view={view}
+        onViewChange={(next) => patchParams({ view: next === 'checks' ? null : next })}
+        canSeeTrash={canSeeTrash}
+        search={search}
+        onSearchChange={(value) => patchParams({ q: value })}
         applied={{ from: dateFrom, to: dateTo, masterId }}
         options={masterOptions}
         onApply={(values) => patchParams(values)}
       />
 
-      <TabPanel idPrefix="journal" tabKey="checks" active={view === 'checks'} className="space-y-4">
+      <JournalPanel tabKey="checks" active={view === 'checks'} className="space-y-4">
         {/* Мобильные карточки (< md): владелец открывает журнал с телефона. */}
         <div className="space-y-3 md:hidden">
           {isLoading ? (
@@ -842,9 +764,9 @@ export default function ChecksPage() {
         </div>
 
         <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => patchParams({ page: String(p) }, false)} />
-      </TabPanel>
+      </JournalPanel>
 
-      <TabPanel idPrefix="journal" tabKey="docs" active={view === 'docs'}>
+      <JournalPanel tabKey="docs" active={view === 'docs'}>
         {!hasPeriod ? (
           <DataTable
             columns={movementColumns}
@@ -874,10 +796,10 @@ export default function ChecksPage() {
             }}
           />
         )}
-      </TabPanel>
+      </JournalPanel>
 
       {canSeeTrash && (
-        <TabPanel idPrefix="journal" tabKey="trash" active={view === 'trash'}>
+        <JournalPanel tabKey="trash" active={view === 'trash'}>
           <DataTable
             caption="Корзина заказ-нарядов"
             columns={trashColumns}
@@ -894,7 +816,7 @@ export default function ChecksPage() {
               description: `Удалённые заказ-наряды хранятся здесь ${TRASH_RETENTION_DAYS} дней, затем удаляются навсегда`,
             }}
           />
-        </TabPanel>
+        </JournalPanel>
       )}
 
       <ConfirmDialog
