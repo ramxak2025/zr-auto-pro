@@ -49,7 +49,7 @@ const docsLabel = (n: number) =>
   `${n} ${plural(n, 'документ требует', 'документа требуют', 'документов требуют')} «Ознакомлен»`;
 
 export default function KnowledgeBaseScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -135,12 +135,7 @@ export default function KnowledgeBaseScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="База знаний"
-        subtitle="Регламенты, учебный центр и статьи"
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader scroll={section} title="База знаний" onBack={() => navigation.goBack()} />
 
       <ScreenSectionScrollView
         onScroll={section.onScroll}

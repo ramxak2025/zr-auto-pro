@@ -8,6 +8,7 @@ import { SectionHeaderContext } from '../ui/SectionHeaderContext';
 import './page-header.css';
 
 export interface PageHeaderProps {
+  composition?: 'section' | 'navigation';
   /** Название страницы уходит с холстом при прокрутке, как в Журнале и Складе. */
   title: string;
   icon?: LucideIcon;
@@ -47,6 +48,7 @@ export default function PageHeader({
   backTo,
   meta,
   toolbar,
+  composition = 'section',
   variant = 'sticky',
   className = '',
 }: PageHeaderProps) {
@@ -57,7 +59,8 @@ export default function PageHeader({
   const onBack = typeof backTo === 'function' ? backTo : backTo ? () => navigate(backTo) : undefined;
   const hasToolbar = hasContent(toolbar);
   const hasActions = hasContent(actions);
-  const hasCommands = Boolean(onBack || hasToolbar || hasActions);
+  const navigation = composition === 'navigation';
+  const hasCommands = Boolean(navigation || onBack || hasToolbar || hasActions);
   const sticky = hasCommands && variant === 'sticky';
 
   useLayoutEffect(() => {
@@ -65,7 +68,7 @@ export default function PageHeader({
     const titleNode = heading.current;
     const dock = command.current;
     const scroll = node?.closest('main');
-    if (!node || !titleNode || !dock || !scroll || !sticky) return;
+    if (!node || !dock || !scroll || !sticky) return;
     const parent = node.parentElement;
     const context = gsap.context(() => {}, node);
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -76,13 +79,17 @@ export default function PageHeader({
     const update = () => {
       frame = 0;
       // Read natural scrolling, not a translated title or a guessed scroll distance.
-      const progress = Math.max(
-        0,
-        Math.min(
-          1,
-          (scroll.getBoundingClientRect().top - titleNode.getBoundingClientRect().top) / Math.max(1, headingHeight),
-        ),
-      );
+      const progress =
+        navigation || !titleNode
+          ? 1
+          : Math.max(
+              0,
+              Math.min(
+                1,
+                (scroll.getBoundingClientRect().top - titleNode.getBoundingClientRect().top) /
+                  Math.max(1, headingHeight),
+              ),
+            );
       timeline.progress(reduced.matches ? Number(progress >= 0.99) : progress);
       node.dataset.sectionCompact = String(progress >= 0.99);
       node.dataset.sectionProgress = progress.toFixed(3);
@@ -91,7 +98,7 @@ export default function PageHeader({
       if (!frame) frame = requestAnimationFrame(update);
     };
     const measure = () => {
-      headingHeight = titleNode.getBoundingClientRect().height;
+      headingHeight = navigation ? 0 : (titleNode?.getBoundingClientRect().height ?? 0);
       const style = getComputedStyle(scroll);
       const inset = Number.parseFloat(style.paddingTop) || 0;
       const bottomInset = Number.parseFloat(style.paddingBottom) || 0;
@@ -110,7 +117,7 @@ export default function PageHeader({
       schedule();
     };
     const resize = new ResizeObserver(measure);
-    resize.observe(titleNode);
+    if (titleNode) resize.observe(titleNode);
     resize.observe(dock);
     resize.observe(scroll);
     scroll.addEventListener('scroll', schedule, { passive: true });
@@ -129,43 +136,65 @@ export default function PageHeader({
       context.revert();
       timeline.kill();
     };
-  }, [sticky]);
+  }, [sticky, navigation]);
+
+  const identity = (
+    <>
+      <div className="section-heading-line">
+        {Icon && <Icon className="section-heading-icon" aria-hidden="true" />}
+        <h1 className="section-title">{title}</h1>
+        {meta && <div className="section-heading-meta">{meta}</div>}
+      </div>
+      {subtitle && <p className="section-subtitle">{subtitle}</p>}
+    </>
+  );
+  const back = onBack ? (
+    <IconButton label="Назад" icon={ArrowLeft} variant="ghost" onClick={onBack} className="section-back" />
+  ) : null;
 
   return (
     <header
       ref={root}
-      className={cn('section-header', sticky && 'section-header--sticky', className)}
+      className={cn(
+        'section-header',
+        navigation && 'section-header--navigation',
+        sticky && 'section-header--sticky',
+        className,
+      )}
+      data-section-composition={composition}
       data-section-variant={sticky ? 'sticky' : 'static'}
-      data-section-compact="false"
-      data-section-progress="0"
+      data-section-compact={navigation ? 'true' : 'false'}
+      data-section-progress={navigation ? '1' : '0'}
     >
-      <div ref={heading} className="section-heading">
-        <div className="section-heading-line">
-          {Icon && <Icon className="section-heading-icon" aria-hidden="true" />}
-          <h1 className="section-title">{title}</h1>
-          {meta && <div className="section-heading-meta">{meta}</div>}
+      {!navigation && (
+        <div ref={heading} className="section-heading">
+          {identity}
         </div>
-        {subtitle && <p className="section-subtitle">{subtitle}</p>}
-      </div>
+      )}
       {hasCommands && (
         <SectionHeaderContext.Provider value={true}>
           <div className="section-command-material" aria-hidden="true" />
           <div ref={command} className="section-command">
-            {(onBack || hasToolbar) && (
-              <div className="section-command-main">
-                {onBack && (
-                  <IconButton
-                    label="Назад"
-                    icon={ArrowLeft}
-                    variant="ghost"
-                    onClick={onBack}
-                    className="section-back"
-                  />
+            {navigation ? (
+              <>
+                <div className="section-navigation-row">
+                  {back}
+                  <div className="section-navigation-identity">{identity}</div>
+                  {hasActions && <div className="section-actions">{actions}</div>}
+                </div>
+                {hasToolbar && <div className="section-toolbar section-navigation-toolbar">{toolbar}</div>}
+              </>
+            ) : (
+              <>
+                {(onBack || hasToolbar) && (
+                  <div className="section-command-main">
+                    {back}
+                    {hasToolbar && <div className="section-toolbar">{toolbar}</div>}
+                  </div>
                 )}
-                {hasToolbar && <div className="section-toolbar">{toolbar}</div>}
-              </div>
+                {hasActions && <div className="section-actions">{actions}</div>}
+              </>
             )}
-            {hasActions && <div className="section-actions">{actions}</div>}
           </div>
         </SectionHeaderContext.Provider>
       )}

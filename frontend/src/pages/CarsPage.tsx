@@ -216,7 +216,6 @@ export default function CarsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Автомобили"
-        icon={Car}
         subtitle={data ? `${total.toLocaleString('ru-RU')} в базе` : undefined}
         toolbar={
           <>

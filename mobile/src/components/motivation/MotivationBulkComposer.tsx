@@ -79,7 +79,7 @@ export function MotivationBulkForm({
   onSaved,
   onCloseBlockedChange,
 }: Omit<Props, 'sessionId' | 'onDismiss'> & { onCloseBlockedChange?: (blocked: boolean) => void }) {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
@@ -338,45 +338,37 @@ export function MotivationBulkForm({
 
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title={reviewing ? 'Проверка правила' : 'Товары и папки'}>
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction
-              label="Назад"
-              icon="chevron-back"
-              onPress={
-                reviewing
-                  ? () => {
-                      if (!busy.current && !uncertain) setReviewing(false);
-                    }
-                  : close
-              }
-            />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {
-                <Pressable
-                  accessibilityState={{ disabled: Boolean(locked) }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Закрыть выбор"
-                  onPress={close}
-                  disabled={locked}
-                  style={[styles.iconButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                >
-                  <Ionicons name="close" size={24} color={palette.text.secondary} />
-                </Pressable>
-              }
-            </View>
-          </View>
-          {!reviewing ? (
+      <ScreenSectionHeader
+        scroll={section}
+        title={reviewing ? 'Проверка правила' : 'Товары и папки'}
+        leading={
+          <HeaderAction
+            label="Назад"
+            icon="chevron-back"
+            onPress={
+              reviewing
+                ? () => {
+                    if (!busy.current && !uncertain) setReviewing(false);
+                  }
+                : close
+            }
+          />
+        }
+        actions={
+          <Pressable
+            accessibilityState={{ disabled: Boolean(locked) }}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть выбор"
+            onPress={close}
+            disabled={locked}
+            style={[styles.iconButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+          >
+            <Ionicons name="close" size={24} color={palette.text.secondary} />
+          </Pressable>
+        }
+      >
+        {!reviewing && (
+          <HeaderIsland layout="column">
             <View style={styles.controls}>
               {!searchFocused ? (
                 <>
@@ -468,8 +460,8 @@ export function MotivationBulkForm({
                 </View>
               ) : null}
             </View>
-          ) : null}
-        </HeaderIsland>
+          </HeaderIsland>
+        )}
       </ScreenSectionHeader>
 
       {reviewing ? (

@@ -52,6 +52,7 @@ import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollabl
 import ScreenSectionHeader, { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
 import { HeaderIsland, headerTouchSize } from '../../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 type FilterKey = 'all' | 'active' | 'expiring' | 'expired' | 'suspended';
 
@@ -452,29 +453,45 @@ export default function AdminTenantsScreen() {
               <Ionicons name="add" size={22} color={colors.white} />
             </Pressable>
           </View>
-          <View style={styles.controls}>
-            {/* Search */}
-
-            {/* Status filter chips */}
-            <FilterChips
-              items={FILTERS}
-              value={filter}
-              onChange={setFilter}
-              activeColor={palette.accent.primary}
-              palette={palette}
-            />
-
-            {/* Manager filter chips — суперадмин, когда менеджеры уже заведены */}
-            {!isManager && managers.length > 0 ? (
-              <FilterChips
-                items={managerChips}
-                value={managerFilter}
-                onChange={setManagerFilter}
-                activeColor={palette.accent.primary}
-                palette={palette}
-              />
-            ) : null}
-          </View>
+          <ScreenHeaderMenu
+            label="Фильтры клиентов"
+            icon="filter-outline"
+            title={[
+              FILTERS.find((f) => f.key === filter)?.label,
+              !isManager && managerFilter !== MANAGER_ALL
+                ? managerChips.find((m) => m.key === managerFilter)?.label
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            items={[
+              { type: 'label', id: 'status-heading', label: 'Статус' },
+              ...FILTERS.map((f) => ({
+                id: 'status-' + f.key,
+                label: f.label,
+                selected: filter === f.key,
+                onSelect: () => {
+                  haptic('select');
+                  setFilter(f.key);
+                },
+              })),
+              ...(!isManager && managers.length > 0
+                ? [
+                    { type: 'separator' as const, id: 'manager-line' },
+                    { type: 'label' as const, id: 'manager-heading', label: 'Менеджер' },
+                    ...managerChips.map((m) => ({
+                      id: 'manager-' + m.key,
+                      label: m.label,
+                      selected: managerFilter === m.key,
+                      onSelect: () => {
+                        haptic('select');
+                        setManagerFilter(m.key);
+                      },
+                    })),
+                  ]
+                : []),
+            ]}
+          />
         </HeaderIsland>
       </ScreenSectionHeader>
 

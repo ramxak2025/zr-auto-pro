@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 import { headerTouchSize } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -225,7 +226,7 @@ interface CommissionItem {
 }
 
 export default function UsersScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const { hasPermission, user: currentUser, refreshUser } = useAuth();
   const queryClient = useQueryClient();
@@ -628,11 +629,32 @@ export default function UsersScreen() {
         subtitle={users.length ? `Всего: ${users.length}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
-          <View style={styles.headerActions}>
-            {/* Роли (ROLE-ONLY) — управление ролями-базами прав. Виден только
-                owner-class (director/admin/superadmin) — тот же серверный гейт,
-                что у GET /roles. */}
-            {canManageRoles && (
+          <>
+            {canManageRoles && canManageDirections ? (
+              <ScreenHeaderMenu
+                label="Управление командой"
+                items={[
+                  {
+                    id: 'roles',
+                    label: 'Роли',
+                    icon: 'shield-checkmark-outline',
+                    onSelect: () => {
+                      haptic('tap');
+                      navigation.navigate('Roles');
+                    },
+                  },
+                  {
+                    id: 'directions',
+                    label: 'Направления сотрудников',
+                    icon: 'git-branch-outline',
+                    onSelect: () => {
+                      haptic('tap');
+                      setDirectionsModalOpen(true);
+                    },
+                  },
+                ]}
+              />
+            ) : canManageRoles ? (
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
@@ -647,8 +669,7 @@ export default function UsersScreen() {
               >
                 <Ionicons name="key-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
-            )}
-            {canManageDirections && (
+            ) : canManageDirections ? (
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
@@ -663,14 +684,14 @@ export default function UsersScreen() {
               >
                 <Ionicons name="git-network-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
-            )}
+            ) : null}
             <TouchableOpacity
               onPress={openCreate}
               style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
             >
               <Ionicons name="add" size={20} color={colors.white} />
             </TouchableOpacity>
-          </View>
+          </>
         }
       />
 

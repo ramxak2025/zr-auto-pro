@@ -1,4 +1,6 @@
-import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
@@ -77,7 +79,6 @@ import {
 import { MAX_BULK_CELLS, normalizeCellCode } from '../../../shared/utils/storageCells';
 import { type UpdateStorageCellRequest } from '../../../shared/api/types';
 import { type StorageCell, type Warehouse } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 /** Пауза между закрытием одной модалки и открытием следующей — та же, что в ProductsScreen. */
 const MODAL_CHAIN_DELAY_MS = 300;
@@ -645,7 +646,7 @@ function CellGridBody({
 // ─── Экран ────────────────────────────────────────────────────────────────────
 
 export default function StorageCellsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -1035,122 +1036,61 @@ export default function StorageCellsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        actions={
+          <>
+            {deleting ? (
+              <View style={styles.headerSpinner}>
+                <ActivityIndicator size="small" color={colors.primary[600]} />
+              </View>
+            ) : undefined}
+            {canManage && activeWarehouse ? (
+              <>
+                <HeaderAction
+                  label="Создать сетку ячеек"
+                  title="Сетка"
+                  icon="grid-outline"
+                  onPress={() => setGridOpen(true)}
+                />
+                <HeaderAction label="Добавить ячейку" icon="add" tone="primary" onPress={openCreateForm} />
+              </>
+            ) : null}
+          </>
+        }
         scroll={section}
         title="Ячейки хранения"
         subtitle={subtitle}
         context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
       >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {deleting ? (
-                <View style={styles.headerSpinner}>
-                  <ActivityIndicator size="small" color={colors.primary[600]} />
-                </View>
-              ) : undefined}
-            </View>
-          </View>
+        <View style={{ gap: 6 }}>
+          <HeaderSearch
+            timing={{ debounceMs: 300 }}
+            focusOnClear={false}
+            value={search}
+            onChange={setSearch}
+            placeholder="Поиск ячейки..."
+          />
           {warehouses && warehouses.length > 1 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={[styles.chipsOuter, { flexGrow: 0, flexShrink: 0 }]}
-              contentContainerStyle={styles.chipsScroll}
-            >
-              {warehouses.map((w) => {
+            <ScreenHeaderMenu
+              label="Склад ячеек"
+              title={activeWarehouse?.name ?? 'Склад'}
+              icon="cube-outline"
+              items={warehouses.map((w) => {
                 const active = w.id === activeWarehouseId;
-                return (
-                  <TouchableOpacity
-                    key={w.id}
-                    onPress={() => {
-                      if (active) return;
-                      haptic('select');
-                      setSelectedWarehouseId(w.id);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    style={[
-                      [
-                        styles.chip,
-                        {
-                          backgroundColor: active ? colors.primary[600] : palette.bg.muted,
-                          borderColor: palette.border.subtle,
-                        },
-                      ],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                  >
-                    <Text
-                      variant="caption"
-                      color={active ? colors.white : palette.text.secondary}
-                      style={styles.chipText}
-                    >
-                      {w.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
+                return {
+                  id: w.id,
+                  label: w.name,
+                  selected: active,
+                  onSelect: () => {
+                    if (active) return;
+                    haptic('select');
+                    setSelectedWarehouseId(w.id);
+                  },
+                };
               })}
-            </ScrollView>
-          ) : null}
-          <View style={styles.searchWrap}>
-            <HeaderSearch
-              timing={{ debounceMs: 300 }}
-              focusOnClear={false}
-              value={search}
-              onChange={setSearch}
-              placeholder="Поиск ячейки..."
             />
-          </View>
-          {canManage && activeWarehouse ? (
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                onPress={openCreateForm}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Добавить ячейку"
-                style={[
-                  [styles.actionBtn, { backgroundColor: colors.primary[600] }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-              >
-                <Ionicons name="add" size={18} color={colors.white} />
-                <Text variant="footnote" color={colors.white} style={styles.actionBtnText} numberOfLines={1}>
-                  Добавить
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setGridOpen(true)}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Создать сетку ячеек"
-                style={[
-                  [styles.actionBtn, { backgroundColor: palette.accent.primarySoft }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-              >
-                <Ionicons name="grid-outline" size={16} color={palette.accent.primaryText} />
-                <Text
-                  variant="footnote"
-                  color={palette.accent.primaryText}
-                  style={styles.actionBtnText}
-                  numberOfLines={1}
-                >
-                  Создать сетку
-                </Text>
-              </TouchableOpacity>
-            </View>
           ) : null}
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       {content}

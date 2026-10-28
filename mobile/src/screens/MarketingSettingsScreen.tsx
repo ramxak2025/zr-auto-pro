@@ -723,7 +723,7 @@ function InstallmentReminderSection() {
 // ─────────────────────────────────────────────────────────────────────
 
 export default function MarketingSettingsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();

@@ -1,4 +1,5 @@
-import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { headerTouchSize, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
@@ -22,7 +23,6 @@ import { carVin } from '../utils/vinUi';
 import { normalizePlateQuery, plateMatches, looksLikePlateQuery } from '../utils/plateNormalize';
 import { haptic } from '../platform/haptics';
 import { type Car, type Check } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatDateShort(d?: string | null): string {
   if (!d) return '—';
@@ -38,7 +38,7 @@ function formatMoney(v: number): string {
 }
 
 export default function CarsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -184,14 +184,41 @@ export default function CarsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader
+        actions={
+          <ScreenHeaderMenu
+            label="Фильтр автомобилей"
+            icon="options-outline"
+            title={noPlateOnly ? 'Без номеров' : 'Все авто'}
+            items={[
+              {
+                id: 'all',
+                label: 'Все',
+                selected: !noPlateOnly,
+                onSelect: () => {
+                  haptic('select');
+                  setNoPlateOnly(false);
+                  setPage(1);
+                },
+              },
+              {
+                id: 'no-plate',
+                label: 'Без номеров',
+                selected: noPlateOnly,
+                onSelect: () => {
+                  haptic('select');
+                  setNoPlateOnly((v) => !v);
+                  setPage(1);
+                },
+              },
+            ]}
+          />
+        }
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
         scroll={section}
         title="Авто"
         context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
       >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          </View>
+        <View style={{ gap: 6 }}>
           <View style={styles.searchWrap}>
             <HeaderSearch
               timing={{ debounceMs: 300 }}
@@ -204,36 +231,7 @@ export default function CarsScreen() {
               placeholder={vinEnabled ? 'Госномер (RU/INT), марка или VIN' : 'Госномер (RU/INT) или марка'}
             />
           </View>
-          <ScrollView
-            style={{ flexGrow: 0, flexShrink: 0 }}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipsRow}
-          >
-            <CarFilterChip
-              active={!noPlateOnly}
-              label="Все"
-              icon="apps-outline"
-              onPress={() => {
-                haptic('select');
-                setNoPlateOnly(false);
-                setPage(1);
-              }}
-              palette={palette}
-            />
-            <CarFilterChip
-              active={noPlateOnly}
-              label="Без номеров"
-              icon="help-circle-outline"
-              onPress={() => {
-                haptic('select');
-                setNoPlateOnly((v) => !v);
-                setPage(1);
-              }}
-              palette={palette}
-            />
-          </ScrollView>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       {data === undefined ? (

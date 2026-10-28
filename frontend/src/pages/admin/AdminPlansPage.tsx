@@ -290,16 +290,12 @@ export default function AdminPlansPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Тарифы"
-        icon={CreditCard}
-        subtitle="Планы подписки и платформенные лимиты"
-        actions={
-          <Button icon={Plus} onClick={openCreate}>
-            Новый тариф
-          </Button>
-        }
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader variant="static" title="Тарифы" />
+        <Button icon={Plus} onClick={openCreate}>
+          Новый тариф
+        </Button>
+      </div>
 
       {/* Платформенная настройка: бесплатные минуты голосового ввода всем автосервисам */}
       <Card padding="none">

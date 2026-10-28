@@ -252,7 +252,6 @@ export default function BookingsPage() {
     <div className="mx-auto max-w-6xl space-y-6 p-6 lg:p-9">
       <PageHeader
         title="Онлайн-запись"
-        subtitle="Настройте страницу для клиентов и разберите входящие заявки."
         toolbar={
           <>
             {canManage && canReview && (

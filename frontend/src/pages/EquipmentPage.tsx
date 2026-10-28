@@ -311,6 +311,7 @@ function EmployeeDetail({
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={employee.fullName}
         backTo={onBack}
         subtitle={
@@ -1165,7 +1166,6 @@ export default function EquipmentPage() {
       <div className="space-y-5">
         <PageHeader
           title="Моё имущество"
-          icon={Package}
           subtitle={
             myQuery.data
               ? `${countLabel(items.length, ['предмет', 'предмета', 'предметов'])} на ${formatMoney(total)}`
@@ -1194,7 +1194,11 @@ export default function EquipmentPage() {
     if (!summaryQuery.data) {
       return (
         <div className="space-y-5">
-          <PageHeader title="Имущество сотрудника" backTo={() => setParam({ employee: null })} />
+          <PageHeader
+            composition="navigation"
+            title="Имущество сотрудника"
+            backTo={() => setParam({ employee: null })}
+          />
           <QueryState
             isLoading={summaryQuery.isLoading}
             isError={summaryQuery.isError}
@@ -1210,7 +1214,11 @@ export default function EquipmentPage() {
     if (!employee) {
       return (
         <div className="space-y-5">
-          <PageHeader title="Имущество сотрудника" backTo={() => setParam({ employee: null })} />
+          <PageHeader
+            composition="navigation"
+            title="Имущество сотрудника"
+            backTo={() => setParam({ employee: null })}
+          />
           <Card>
             <EmptyState
               icon={Users}
@@ -1293,8 +1301,6 @@ export default function EquipmentPage() {
     <div className="space-y-5">
       <PageHeader
         title="Имущество"
-        icon={Package}
-        subtitle="Инструменты и форма: у сотрудников, в подсобке, в корзине"
         toolbar={
           <>
             <Tabs

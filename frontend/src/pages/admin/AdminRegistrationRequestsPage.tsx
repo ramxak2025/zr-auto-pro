@@ -138,8 +138,6 @@ export default function AdminRegistrationRequestsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Заявки"
-        icon={Inbox}
-        subtitle="Заявки на подключение автосервисов со страницы входа"
         toolbar={
           <>
             <Toolbar>

@@ -38,7 +38,7 @@ import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 const WHATSAPP_PHONE = '79884444436';
 export default function SubscriptionScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, undefined>>>();
   const queryClient = useQueryClient();
   const palette = useColors();

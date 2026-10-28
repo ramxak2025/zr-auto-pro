@@ -217,7 +217,7 @@ const pickerStyles = StyleSheet.create({
 type FolderModalState = { mode: 'create'; isShared: boolean } | { mode: 'rename'; folder: CheckTemplateFolder } | null;
 
 export default function TemplatesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const focused = useIsFocused();
   const queryClient = useQueryClient();

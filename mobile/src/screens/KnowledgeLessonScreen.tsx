@@ -54,7 +54,7 @@ interface QuizError {
 }
 
 export default function KnowledgeLessonScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeLesson'>>();
   const palette = useColors();

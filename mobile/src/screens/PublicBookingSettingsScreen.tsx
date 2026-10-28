@@ -57,7 +57,7 @@ export default function PublicBookingSettingsScreen({
   sectionController?: ScreenSectionScrollController;
   sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
 } = {}) {
-  const ownSection = useScreenSectionScroll();
+  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
   const section = sectionController ?? ownSection;
 
   const navigation = useNavigation<any>();

@@ -1,4 +1,4 @@
-import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 /**
@@ -900,7 +900,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
 // ─────────────────────────────────────────────────────────────────────
 
 export default function ReviewsReputationScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -932,39 +932,29 @@ export default function ReviewsReputationScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Отзывы и репутация">
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {
-                <TouchableOpacity
-                  onPress={() => {
-                    haptic('tap');
-                    setRequestOpen(true);
-                  }}
-                  hitSlop={10}
-                  style={[
-                    [styles.headerAction, { backgroundColor: palette.accent.primarySoft }],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Запросить отзыв"
-                >
-                  <Ionicons name="paper-plane" size={16} color={palette.accent.primary} />
-                </TouchableOpacity>
-              }
-            </View>
-          </View>
+      <ScreenSectionHeader
+        actions={
+          <TouchableOpacity
+            onPress={() => {
+              haptic('tap');
+              setRequestOpen(true);
+            }}
+            hitSlop={10}
+            style={[
+              [styles.headerAction, { backgroundColor: palette.accent.primarySoft }],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Запросить отзыв"
+          >
+            <Ionicons name="paper-plane" size={16} color={palette.accent.primary} />
+          </TouchableOpacity>
+        }
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        scroll={section}
+        title="Отзывы и репутация"
+      >
+        <View style={{ gap: 6 }}>
           <View style={[styles.tabBar, { backgroundColor: palette.bg.canvas }]}>
             {tabs.map((tab) => {
               const active = activeTab === tab.key;
@@ -1006,7 +996,7 @@ export default function ReviewsReputationScreen() {
               );
             })}
           </View>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       <ScreenSectionScrollView

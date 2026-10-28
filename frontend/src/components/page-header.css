@@ -1,6 +1,6 @@
 .section-header {
   --section-material: 0;
-  --section-heading-height: 80px;
+  --section-heading-height: 0px;
   --section-sticky-inset: 0px;
   --section-inline-inset: 0px;
   position: relative;
@@ -28,10 +28,10 @@
   margin: 0;
   min-width: 0;
   color: rgb(var(--c-ink));
-  font-size: 2rem;
-  line-height: 2.375rem;
-  font-weight: 700;
-  letter-spacing: -0.028em;
+  font-size: 1.5rem;
+  line-height: 1.875rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
   overflow-wrap: anywhere;
 }
 .section-heading-icon {
@@ -57,19 +57,18 @@
 .section-command-material {
   position: absolute;
   top: var(--section-heading-height);
-  right: calc(-1 * var(--section-inline-inset));
+  right: 0;
   bottom: 0;
-  left: calc(-1 * var(--section-inline-inset));
+  left: 0;
   background: rgb(var(--c-surface));
   opacity: var(--section-material);
-  box-shadow: 0 8px 20px rgb(var(--c-ink) / 0.04);
   pointer-events: none;
 }
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .section-command-material {
     background: rgb(var(--c-surface) / 0.88);
-    backdrop-filter: blur(18px) saturate(1.12);
-    -webkit-backdrop-filter: blur(18px) saturate(1.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
 }
 .section-command {
@@ -79,7 +78,38 @@
   align-items: center;
   gap: 8px 16px;
   min-width: 0;
-  min-height: 3.5rem;
+  min-height: 2.25rem;
+}
+.section-header--navigation .section-title {
+  font-size: 1.125rem;
+  line-height: 1.5rem;
+  font-weight: 600;
+}
+.section-header--navigation .section-heading-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+.section-header--navigation .section-subtitle {
+  margin-top: 2px;
+}
+.section-header--navigation .section-command-material {
+  opacity: 1;
+}
+.section-navigation-row {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.section-navigation-identity {
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.section-navigation-toolbar {
+  flex-basis: 100%;
 }
 .section-command-main {
   display: flex;
@@ -116,46 +146,19 @@
   max-width: 100%;
   margin-left: auto;
 }
-.section-actions :is(button, a) {
+.section-actions :is(button, a).whitespace-nowrap {
   height: auto;
-  min-height: 2.75rem;
+  min-height: 2.25rem;
   max-width: 100%;
   padding-block: 0.375rem;
-  border-radius: 18px;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .section-actions :is(button, a) > span {
   min-width: 0;
 }
-.section-actions button[aria-label] {
-  width: 2.75rem;
-  border-radius: 50%;
-}
-.section-toolbar input[inputmode='search'] {
-  height: auto;
-  min-height: 2.75rem;
-  border-color: transparent;
-  border-radius: 18px;
-  box-shadow: 0 3px 10px rgb(var(--c-ink) / 0.06);
-  caret-color: rgb(var(--c-accent));
-}
-.section-toolbar input[inputmode='search']:focus-visible {
-  outline: 2px solid rgb(var(--c-accent) / 0.5);
-  outline-offset: 2px;
-}
 .section-command .section-back {
-  width: 2.75rem;
-  height: auto;
-  min-height: 2.75rem;
   flex-shrink: 0;
-  border-radius: 50%;
-  color: rgb(var(--c-ink-2));
-  background: rgb(var(--c-surface));
-  box-shadow: 0 3px 10px rgb(var(--c-ink) / 0.06);
-}
-.section-command .section-back:hover {
-  background: rgb(var(--c-surface-3));
 }
 .section-header .section-selection {
   position: relative;
@@ -163,30 +166,28 @@
   gap: 2px;
   min-width: 0;
   max-width: 100%;
-  padding: 6px;
+  padding: 2px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 10px;
   background: rgb(var(--c-surface-3));
-  box-shadow: 0 3px 10px rgb(var(--c-ink) / 0.045);
 }
 .section-selection-backplate {
   position: absolute;
   top: 0;
   left: 0;
   z-index: -1;
-  border-radius: 13px;
+  border-radius: 8px;
   background: rgb(var(--c-surface));
-  box-shadow: 0 2px 6px rgb(var(--c-ink) / 0.08);
   pointer-events: none;
 }
 .section-selection > button {
   height: auto;
-  min-height: 2.75rem;
+  min-height: 2.25rem;
   max-width: 100%;
   margin: 0;
   padding: 0.375rem 1rem;
   border: 0;
-  border-radius: 13px;
+  border-radius: 8px;
   color: rgb(var(--c-ink-2));
   background: transparent;
   box-shadow: none;
@@ -201,6 +202,16 @@
 }
 .section-selection > button:focus-visible {
   outline-offset: -2px;
+}
+@media (pointer: coarse), (max-width: 639px) {
+  .section-header .section-command :is(button, a, input, select),
+  .section-header .section-actions :is(button, a).whitespace-nowrap,
+  .section-menu-responsive [role='menuitem'] {
+    min-height: 2.75rem;
+  }
+  .section-header .section-command :is(button, a) {
+    min-width: 2.75rem;
+  }
 }
 @media (max-width: 639px) {
   .section-command-main {

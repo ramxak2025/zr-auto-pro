@@ -37,7 +37,8 @@ import type { Plan, Tenant, FeatureCatalogItem, PlatformSettings } from '../../.
 import { FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER, formatMoney } from './adminShared';
 import { AdminSheet, SheetHint, SheetInput } from './adminSheet';
 import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { headerTouchSize } from '../../components/ScreenHeaderControls';
+import { HeaderAction } from '../../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 interface PlanDraft {
   id?: string;
@@ -258,21 +259,30 @@ export default function AdminPlansScreen() {
         onBack={() => navigation.goBack()}
         subtitle={`${plans.length} планов`}
         trailing={
-          <Pressable
-            accessibilityLabel="Добавить тариф"
-            accessibilityRole="button"
-            onPress={() => {
-              haptic('tap');
-              setEditing(toDraft());
-            }}
-            style={[
-              [styles.headerAdd, { backgroundColor: palette.accent.primary }],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
-            ]}
-            hitSlop={6}
-          >
-            <Ionicons name="add" size={22} color={colors.white} />
-          </Pressable>
+          <>
+            <HeaderAction
+              label="Добавить тариф"
+              title="Добавить"
+              icon="add"
+              tone="primary"
+              onPress={() => {
+                haptic('tap');
+                setEditing(toDraft());
+              }}
+            />
+            <ScreenHeaderMenu
+              label="Настройки тарифов"
+              items={[
+                {
+                  id: 'trial',
+                  label: `Пробный доступ у менеджера: ${managerMaxFreeDays !== undefined ? `${managerMaxFreeDays} дн.` : '—'}`,
+                  icon: 'options-outline',
+                  disabled: settings == null,
+                  onSelect: openTrialLimit,
+                },
+              ]}
+            />
+          </>
         }
       />
 
@@ -341,28 +351,6 @@ export default function AdminPlansScreen() {
         </View>
 
         {/* Потолок бесплатных дней у менеджера: пробный период автосервиса и «Бесплатно» в продлении */}
-        <Pressable
-          onPress={openTrialLimit}
-          disabled={settings == null}
-          accessibilityRole="button"
-          style={[styles.card, surface.card]}
-        >
-          <View style={[styles.settingsHead, styles.settingsHeadCenter]}>
-            <View style={[styles.settingsIcon, { backgroundColor: palette.accent.primarySoft }]}>
-              <Ionicons name="hourglass-outline" size={18} color={palette.accent.primaryText} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.settingsTitle, { color: palette.text.primary }]}>Пробный доступ у менеджера</Text>
-              <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>
-                Максимум дней бесплатного доступа, который менеджер выдаёт сам.
-              </Text>
-            </View>
-            <Text style={[styles.settingsValue, { color: palette.text.primary }]}>
-              {managerMaxFreeDays !== undefined ? `${managerMaxFreeDays} дн.` : '—'}
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-          </View>
-        </Pressable>
 
         {sorted.length === 0 ? (
           <View style={[styles.card, surface.card, styles.emptyBlock]}>

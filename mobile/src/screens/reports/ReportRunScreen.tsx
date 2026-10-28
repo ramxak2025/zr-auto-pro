@@ -88,9 +88,10 @@ import {
   type PeriodKey,
 } from './reportPeriod';
 import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionFlashList, ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../../components/ScreenHeaderControls';
+import { HeaderAction, HeaderIsland } from '../../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 export interface ReportRunParams {
   reportId: ReportId;
@@ -313,7 +314,7 @@ export default function ReportRunScreen() {
       setPinnedTotals(show);
     }
   }, [totalsIndex, stickyIndex, tabBarHeight]);
-  const section = useScreenSectionScroll({ onScroll: updatePinned });
+  const section = useScreenSectionScroll({ composition: 'navigation', onScroll: updatePinned });
   // FlashList 2.0.2 pins its overlay at top: 0. Offset only that render target
   // below the measured functional island; keep normal cells and sticky indices unchanged.
   // Padding expands the overlay's native hit bounds; a transform would move sort
@@ -607,94 +608,6 @@ export default function ReportRunScreen() {
 
   const controls = def ? (
     <View style={[styles.gutter, styles.controls]}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.periodRow}
-        keyboardShouldPersistTaps="handled"
-      >
-        {PERIODS.map((p) => {
-          const active = period === p.key;
-          return (
-            <TouchableOpacity
-              key={p.key}
-              style={[styles.periodChip, { backgroundColor: active ? palette.accent.primary : palette.bg.muted }]}
-              onPress={() => handlePeriod(p.key)}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-            >
-              <Text style={[styles.periodText, { color: active ? colors.white : palette.text.secondary }]}>
-                {p.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {period === 'month' && (
-        <View style={[styles.monthPagerRow, { backgroundColor: palette.bg.muted }]}>
-          <TouchableOpacity
-            onPress={() => {
-              haptic('select');
-              setMonthCursor((c) => shiftMonth(c, -1));
-            }}
-            disabled={isAtOldestMonth}
-            hitSlop={8}
-            style={styles.monthPagerBtn}
-            activeOpacity={0.6}
-            accessibilityRole="button"
-            accessibilityLabel="Предыдущий месяц"
-          >
-            <Ionicons
-              name="chevron-back"
-              size={18}
-              color={palette.text.secondary}
-              style={isAtOldestMonth && styles.disabled}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              haptic('select');
-              setMonthCursor(startOfMonth(new Date()));
-            }}
-            disabled={isAtCurrentMonth}
-            activeOpacity={0.7}
-            style={styles.monthPagerLabelBtn}
-            accessibilityRole="button"
-            accessibilityLabel={
-              isAtCurrentMonth
-                ? `${monthTitle(monthCursor)} — текущий месяц`
-                : `${monthTitle(monthCursor)}. Нажмите, чтобы вернуться к текущему месяцу`
-            }
-          >
-            <Text style={[styles.monthPagerLabel, { color: palette.text.primary }]}>{monthTitle(monthCursor)}</Text>
-            {!isAtCurrentMonth && (
-              <Text style={[styles.monthPagerHint, { color: palette.text.tertiary }]}>к текущему</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              haptic('select');
-              setMonthCursor((c) => shiftMonth(c, 1));
-            }}
-            disabled={isAtCurrentMonth}
-            hitSlop={8}
-            style={styles.monthPagerBtn}
-            activeOpacity={0.6}
-            accessibilityRole="button"
-            accessibilityLabel="Следующий месяц"
-          >
-            <Ionicons
-              name="chevron-forward"
-              size={18}
-              color={palette.text.secondary}
-              style={isAtCurrentMonth && styles.disabled}
-            />
-          </TouchableOpacity>
-        </View>
-      )}
-
       {period === 'custom' && (
         <View style={styles.customRangeRow}>
           <TouchableOpacity
@@ -725,48 +638,13 @@ export default function ReportRunScreen() {
         </View>
       )}
 
-      {showEntityFilter && (
+      {showEntityFilter && selectedIds.length > 0 && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterRow}
           keyboardShouldPersistTaps="handled"
         >
-          <TouchableOpacity
-            style={[
-              styles.filterBtn,
-              {
-                backgroundColor: selectedIds.length > 0 ? palette.accent.primarySoft : palette.bg.card,
-                borderColor: selectedIds.length > 0 ? palette.accent.primary : palette.border.subtle,
-              },
-            ]}
-            onPress={() => {
-              haptic('tap');
-              setFilterOpen(true);
-            }}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel={`${filterLabel}: ${filterSummary}`}
-          >
-            <Ionicons
-              name="funnel-outline"
-              size={14}
-              color={selectedIds.length > 0 ? palette.accent.primaryText : palette.text.secondary}
-            />
-            <Text
-              style={[
-                styles.filterBtnText,
-                { color: selectedIds.length > 0 ? palette.accent.primaryText : palette.text.primary },
-              ]}
-            >
-              {filterLabel} · {filterSummary}
-            </Text>
-            <Ionicons
-              name="chevron-down"
-              size={14}
-              color={selectedIds.length > 0 ? palette.accent.primaryText : palette.text.tertiary}
-            />
-          </TouchableOpacity>
           {selectedIds.map((id, i) => (
             <TouchableOpacity
               key={id}
@@ -786,37 +664,6 @@ export default function ReportRunScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-      )}
-
-      {def.groupByOptions && def.groupByOptions.length > 1 && (
-        <View style={[styles.segmentRow, { backgroundColor: palette.bg.muted }]}>
-          {def.groupByOptions.map((opt) => {
-            const active = (groupBy ?? def.groupByOptions![0].value) === opt.value;
-            return (
-              <TouchableOpacity
-                key={opt.value}
-                style={[styles.segment, active && [styles.segmentActive, { backgroundColor: palette.bg.card }]]}
-                onPress={() => {
-                  haptic('select');
-                  setGroupBy(opt.value);
-                }}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-              >
-                <Text
-                  style={[
-                    styles.segmentText,
-                    { color: active ? palette.text.primary : palette.text.secondary },
-                    active && styles.segmentTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       )}
 
       <Button
@@ -857,7 +704,9 @@ export default function ReportRunScreen() {
     </View>
   );
 
-  const subtitle = reportQuery.isFetching && result ? 'Обновляется…' : periodLabel;
+  const subtitle = result
+    ? `Данные: ${formatPeriodLabel('custom', { from: result.period.from, to: result.period.to })}${reportQuery.isFetching ? ' · обновляется…' : ''}`
+    : periodLabel;
 
   if (!def) {
     return (
@@ -886,27 +735,103 @@ export default function ReportRunScreen() {
     // нет глобального корня RNGH (BottomSheet поднимает свой внутри Modal), без
     // него GestureDetector не распознаёт жесты (в dev — Render Error).
     <GestureHandlerRootView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
+      <ScreenSectionHeader
         scroll={section}
         title={def.title}
         subtitle={subtitle}
-        onBack={() => navigation.goBack()}
-        trailing={
-          <TouchableOpacity
-            accessibilityState={{ disabled: Boolean(!result || exporting) }}
-            style={[
-              [styles.headerBtn, { backgroundColor: palette.bg.muted }, (!result || exporting) && styles.disabled],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        actions={
+          <ScreenHeaderMenu
+            label="Действия отчёта"
+            loading={exporting}
+            items={[
+              {
+                id: 'pdf',
+                label: 'Экспорт в PDF',
+                icon: 'share-outline',
+                disabled: !result || exporting,
+                loading: exporting,
+                onSelect: handleExport,
+              },
             ]}
-            onPress={handleExport}
-            disabled={!result || exporting}
-            accessibilityRole="button"
-            accessibilityLabel="Экспорт в PDF"
-          >
-            <Ionicons name="share-outline" size={19} color={palette.text.primary} />
-          </TouchableOpacity>
+          />
         }
-      />
+      >
+        <HeaderIsland>
+          {period === 'month' && (
+            <HeaderAction
+              label="Предыдущий месяц"
+              icon="chevron-back"
+              onPress={() => {
+                haptic('select');
+                setMonthCursor((c) => shiftMonth(c, -1));
+              }}
+              disabled={isAtOldestMonth}
+            />
+          )}
+          <ScreenHeaderMenu
+            label="Период отчёта"
+            icon="calendar-outline"
+            title={period === 'month' ? monthTitle(monthCursor) : PERIODS.find((p) => p.key === period)?.label}
+            items={[
+              ...PERIODS.map((p) => ({
+                id: p.key,
+                label: p.label,
+                selected: period === p.key,
+                onSelect: () => handlePeriod(p.key),
+              })),
+              period === 'month' && { type: 'separator', id: 'month-line' },
+              period === 'month' && {
+                id: 'current-month',
+                label: 'Вернуться к текущему месяцу',
+                disabled: isAtCurrentMonth,
+                onSelect: () => {
+                  haptic('select');
+                  setMonthCursor(startOfMonth(new Date()));
+                },
+              },
+            ]}
+          />
+          {period === 'month' && (
+            <HeaderAction
+              label="Следующий месяц"
+              icon="chevron-forward"
+              onPress={() => {
+                haptic('select');
+                setMonthCursor((c) => shiftMonth(c, 1));
+              }}
+              disabled={isAtCurrentMonth}
+            />
+          )}
+          {showEntityFilter && (
+            <HeaderAction
+              label={`${filterLabel}: ${filterSummary}`}
+              title={`${filterLabel} · ${filterSummary}`}
+              icon="funnel-outline"
+              onPress={() => {
+                haptic('tap');
+                setFilterOpen(true);
+              }}
+            />
+          )}
+          {def.groupByOptions && def.groupByOptions.length > 1 && (
+            <ScreenHeaderMenu
+              label="Группировка отчёта"
+              icon="options-outline"
+              title={def.groupByOptions.find((opt) => opt.value === (groupBy ?? def.groupByOptions![0].value))?.label}
+              items={def.groupByOptions.map((opt) => ({
+                id: opt.value,
+                label: opt.label,
+                selected: (groupBy ?? def.groupByOptions![0].value) === opt.value,
+                onSelect: () => {
+                  haptic('select');
+                  setGroupBy(opt.value);
+                },
+              }))}
+            />
+          )}
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       <ScreenSectionFlashList
         contentInsetAdjustmentBehavior="never"

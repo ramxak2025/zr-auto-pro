@@ -59,7 +59,7 @@ import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 export default function PurchaseOrderDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();

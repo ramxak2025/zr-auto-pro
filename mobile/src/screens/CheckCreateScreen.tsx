@@ -130,8 +130,9 @@ import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { HeaderAction } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -428,7 +429,7 @@ const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
 const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
 export default function CheckCreateScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const { user: catalogActor } = useAuth();
   const catalogOwner = catalogActor?.role === 'director' || catalogActor?.role === 'superadmin';
   const navigation = useNavigation<any>();
@@ -3120,13 +3121,12 @@ export default function CheckCreateScreen() {
               <PointIndicator variant="chip" style={styles.pointContext} />
             </View>
           }
-        >
-          {isStackScreen || (!editId && canEditCheckDate) ? (
-            <HeaderIsland>
-              {isStackScreen && <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-            </HeaderIsland>
-          ) : null}
-        </ScreenSectionHeader>
+          leading={
+            isStackScreen ? (
+              <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            ) : undefined
+          }
+        />
         <ScreenSectionScrollView
           style={{ flex: 1 }}
           onScroll={section.onScroll}
@@ -3160,43 +3160,41 @@ export default function CheckCreateScreen() {
             ) : undefined}
           </View>
         }
-      >
-        {isStackScreen || (!editId && canEditCheckDate) ? (
-          <HeaderIsland>
-            {isStackScreen && <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-            {!editId && canEditCheckDate ? (
-              <>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel="Выбрать дату заказ-наряда"
-                  onPress={() => openCheckPicker('date')}
-                  style={[styles.dateHeaderAction, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                >
-                  <Ionicons name="calendar-outline" size={21} color={palette.accent.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel="Выбрать время заказ-наряда"
-                  onPress={() => openCheckPicker('time')}
-                  style={[styles.dateHeaderAction, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                >
-                  <Ionicons name="time-outline" size={21} color={palette.accent.primary} />
-                </TouchableOpacity>
-              </>
-            ) : undefined}
-            {!editId && canEditCheckDate && manualDate ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel="Использовать время создания чека"
-                onPress={() => setManualDate(null)}
-                style={[styles.dateHeaderAction, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-              >
-                <Ionicons name="close-circle" size={18} color={palette.text.secondary} />
-              </TouchableOpacity>
-            ) : null}
-          </HeaderIsland>
-        ) : null}
-      </ScreenSectionHeader>
+        leading={
+          isStackScreen ? (
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          ) : undefined
+        }
+        actions={
+          !editId && canEditCheckDate ? (
+            <ScreenHeaderMenu
+              label="Дата заказ-наряда"
+              icon="calendar-outline"
+              title={manualDate ? dateStr : undefined}
+              items={[
+                {
+                  id: 'date',
+                  label: 'Выбрать дату заказ-наряда',
+                  icon: 'calendar-outline',
+                  onSelect: () => openCheckPicker('date'),
+                },
+                {
+                  id: 'time',
+                  label: 'Выбрать время заказ-наряда',
+                  icon: 'time-outline',
+                  onSelect: () => openCheckPicker('time'),
+                },
+                manualDate && {
+                  id: 'now',
+                  label: 'Использовать время создания чека',
+                  icon: 'refresh-outline',
+                  onSelect: () => setManualDate(null),
+                },
+              ]}
+            />
+          ) : undefined
+        }
+      />
 
       {/* KeyboardAwareScroll (Round 11 #1): активное поле Кассы (имя/телефон
           клиента, пробег, комментарий) держится над клавиатурой на iOS И

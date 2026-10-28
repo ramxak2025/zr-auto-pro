@@ -65,6 +65,7 @@ import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
+import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -139,7 +140,7 @@ function toPointDraft(p?: TenantPoint): PointDraft {
 }
 
 export default function AdminTenantDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const id: string = route.params?.id;
@@ -630,7 +631,57 @@ export default function AdminTenantDetailScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title={tenant.name} onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        trailing={
+          <>
+            {
+              <ScreenHeaderMenu
+                label="Автосервис: управление и история"
+                items={[
+                  {
+                    id: 'audit',
+                    label: 'Журнал действий',
+                    icon: 'document-text-outline',
+                    onSelect: () => navigation.navigate('AdminTenantAudit', { id: tenant.id, name: tenant.name }),
+                  },
+                  { type: 'separator', id: 'manage-line' },
+                  {
+                    id: 'suspend',
+                    label: suspended ? 'Возобновить работу' : 'Приостановить',
+                    icon: suspended ? 'play-circle-outline' : 'pause-circle-outline',
+                    danger: !suspended,
+                    loading: busy === 'suspend',
+                    onSelect: suspended ? handleUnsuspend : openSuspend,
+                  },
+                  {
+                    id: 'password',
+                    label: 'Сбросить пароль владельца',
+                    icon: 'lock-closed-outline',
+                    onSelect: () => {
+                      haptic('tap');
+                      setResetPasswordOpen(true);
+                    },
+                  },
+                  {
+                    id: 'impersonate',
+                    label: 'Войти как владелец',
+                    icon: 'enter-outline',
+                    loading: busy === 'impersonate',
+                    disabled: busy === 'impersonate',
+                    onSelect: handleImpersonate,
+                  },
+                ]}
+              />
+            }
+            {(busy === 'impersonate' || busy === 'suspend') && (
+              <ActivityIndicator size="small" color={palette.accent.primary} />
+            )}
+          </>
+        }
+        scroll={section}
+        title={tenant.name}
+        onBack={() => navigation.goBack()}
+      />
 
       <KeyboardAwareScroll
         onScroll={section.onScroll}
@@ -758,40 +809,8 @@ export default function AdminTenantDetailScreen() {
             palette={palette}
             surfaceCard={surface.card}
           />
-          <ActionButton
-            icon={suspended ? 'play-circle-outline' : 'pause-circle-outline'}
-            label={suspended ? 'Возобновить работу' : 'Приостановить'}
-            onPress={suspended ? handleUnsuspend : openSuspend}
-            loading={busy === 'suspend'}
-            danger={!suspended}
-            palette={palette}
-            surfaceCard={surface.card}
-          />
-          <ActionButton
-            icon="lock-closed-outline"
-            label="Сбросить пароль владельца"
-            onPress={() => {
-              haptic('tap');
-              setResetPasswordOpen(true);
-            }}
-            palette={palette}
-            surfaceCard={surface.card}
-          />
+
           {/* Impersonation — primary destructive accent. */}
-          <Pressable
-            onPress={handleImpersonate}
-            disabled={busy === 'impersonate'}
-            style={[styles.impersonateBtn, { backgroundColor: palette.accent.primary }]}
-          >
-            {busy === 'impersonate' ? (
-              <ActivityIndicator size="small" color={colors.white} />
-            ) : (
-              <>
-                <Ionicons name="enter-outline" size={18} color={colors.white} />
-                <Text style={styles.impersonateText}>Войти как владелец</Text>
-              </>
-            )}
-          </Pressable>
         </View>
 
         <TenantNotes key={tenant.id} tenantId={tenant.id} />
@@ -937,18 +956,6 @@ export default function AdminTenantDetailScreen() {
             )}
           </>
         ) : null}
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => navigation.navigate('AdminTenantAudit', { id: tenant.id, name: tenant.name })}
-          style={[styles.card, surface.card, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}
-        >
-          <Ionicons name="document-text-outline" size={22} color={palette.accent.primary} />
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: palette.text.primary, fontSize: 16, fontWeight: '600' }}>Журнал действий</Text>
-            <Text style={{ color: palette.text.tertiary, marginTop: spacing[1] }}>История этого автосервиса</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
-        </Pressable>
       </KeyboardAwareScroll>
 
       {/* Продление — общая шторка суперадмина и менеджера (сумма, срок, доля владельца). */}

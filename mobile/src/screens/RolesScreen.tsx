@@ -139,7 +139,7 @@ function RoleRow({ role, employeeCount, isLast, onPress, onMenu }: RoleRowProps)
 }
 
 export default function RolesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();

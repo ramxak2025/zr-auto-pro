@@ -287,7 +287,7 @@ type PickerListRow =
   | { type: 'product'; key: string; product: Product };
 
 export default function ProductPickerScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const isFocused = useIsFocused();
@@ -748,60 +748,64 @@ export default function ProductPickerScreen() {
     >
       {/* ── Шапка: X (корень) / назад-шеврон (глубже) + заголовок + свитчер
              склада (только корень). ────────────────────────────────────── */}
-      <ScreenSectionHeader scroll={section} title={title}>
+      <ScreenSectionHeader
+        scroll={section}
+        title={title}
+        leading={
+          isRoot ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={handleDone}
+              style={[
+                [styles.headerBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              accessibilityLabel="Закрыть пикер товаров"
+            >
+              <Ionicons name="close" size={22} color={palette.text.secondary} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => navigation.goBack()}
+              style={[
+                [styles.headerBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              accessibilityLabel="Назад на уровень выше"
+            >
+              <Ionicons name="chevron-back" size={22} color={palette.text.secondary} />
+            </TouchableOpacity>
+          )
+        }
+        actions={
+          isRoot && warehouses.length > 0 ? (
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => setShowWarehouseDropdown((v) => !v)}
+              style={[
+                [
+                  styles.headerWarehouseChip,
+                  { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
+                ],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              activeOpacity={0.7}
+              accessibilityLabel="Выбрать склад"
+            >
+              <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]}>
+                {warehouseLabel}
+              </Text>
+              <Ionicons
+                name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color={palette.accent.primaryText}
+              />
+            </TouchableOpacity>
+          ) : null
+        }
+      >
         <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            {isRoot ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={handleDone}
-                style={[
-                  [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-                accessibilityLabel="Закрыть пикер товаров"
-              >
-                <Ionicons name="close" size={22} color={palette.text.secondary} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={() => navigation.goBack()}
-                style={[
-                  [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-                accessibilityLabel="Назад на уровень выше"
-              >
-                <Ionicons name="chevron-back" size={22} color={palette.text.secondary} />
-              </TouchableOpacity>
-            )}
-
-            {isRoot && warehouses.length > 0 ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                onPress={() => setShowWarehouseDropdown((v) => !v)}
-                style={[
-                  [
-                    styles.headerWarehouseChip,
-                    { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
-                  ],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-                activeOpacity={0.7}
-                accessibilityLabel="Выбрать склад"
-              >
-                <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]} numberOfLines={1}>
-                  {warehouseLabel}
-                </Text>
-                <Ionicons
-                  name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={palette.accent.primaryText}
-                />
-              </TouchableOpacity>
-            ) : null}
-          </View>
           {isRoot && showWarehouseDropdown ? (
             <View
               style={[
@@ -1091,6 +1095,7 @@ const styles = StyleSheet.create({
   },
   headerSpacer: { width: 36 },
   headerWarehouseChip: {
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[1],
@@ -1098,9 +1103,10 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     paddingHorizontal: spacing[3],
     paddingVertical: 6,
-    maxWidth: 160,
+    maxWidth: '100%',
   },
   headerWarehouseChipText: {
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: fontWeight.semibold,
     letterSpacing: -0.1,

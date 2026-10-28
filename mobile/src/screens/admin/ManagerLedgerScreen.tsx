@@ -38,7 +38,7 @@ const keyExtractor = (item: LedgerFeedItem) => item.key;
 const renderItem = ({ item }: { item: LedgerFeedItem }) => <LedgerFeedRow item={item} />;
 
 export default function ManagerLedgerScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();

@@ -254,7 +254,6 @@ export default function WorkBoardPage() {
     <div className="space-y-5">
       <PageHeader
         title="Доска работ"
-        icon={LayoutGrid}
         subtitle={
           isLoading
             ? 'Активные заказ-наряды по стадиям. Не влияет на оплату.'
@@ -263,8 +262,13 @@ export default function WorkBoardPage() {
         actions={
           <>
             {canConfigure && (
-              <Button variant="secondary" icon={Settings2} onClick={() => setSettingsOpen(true)}>
-                Настроить колонки
+              <Button
+                variant="secondary"
+                icon={Settings2}
+                onClick={() => setSettingsOpen(true)}
+                aria-label="Настроить колонки"
+              >
+                Колонки
               </Button>
             )}
             <IconButton

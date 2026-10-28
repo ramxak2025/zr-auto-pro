@@ -994,11 +994,9 @@ export default function SchedulePage() {
     <div className="space-y-5">
       <PageHeader
         title="Расписание"
-        icon={CalendarDays}
-        subtitle="График смен, посещаемость и режимы работы"
         actions={
           canEdit ? (
-            <Button variant="secondary" icon={Plus} onClick={() => openCreate()}>
+            <Button variant={pendingCount > 0 ? 'secondary' : 'primary'} icon={Plus} onClick={() => openCreate()}>
               Добавить запись
             </Button>
           ) : undefined

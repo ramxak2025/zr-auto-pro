@@ -1,0 +1,66 @@
+.section-header.report-header .section-navigation-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.section-header.report-header .section-navigation-identity {
+  min-width: 0;
+}
+.section-header.report-header .section-actions {
+  margin-left: 0;
+}
+.section-header.report-header :is(.section-back, .report-export) {
+  width: auto;
+  height: auto;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px;
+}
+.report-command-controls {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.report-month-pager {
+  flex: 0 1 auto;
+}
+.report-current-range {
+  flex: 1 1 100%;
+  margin: 0;
+  color: rgb(var(--c-ink-2));
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  overflow-wrap: anywhere;
+}
+.report-parameters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-width: 0;
+}
+.report-description {
+  flex: 1 1 18rem;
+  margin: 0;
+  color: rgb(var(--c-ink-3));
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+}
+.report-parameters > [data-toolbar] {
+  flex: 2 1 36rem;
+  min-width: 0;
+}
+@media (pointer: coarse), (max-width: 639px) {
+  .section-header.report-header :is(.section-back, .report-export) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+@media (max-width: 639px) {
+  .report-month-pager {
+    flex: 1 1 10rem;
+  }
+}

@@ -5,7 +5,6 @@ import {
   Building2,
   CalendarDays,
   CalendarPlus,
-  ChevronDown,
   CreditCard,
   Info,
   LogIn,
@@ -30,6 +29,7 @@ import { Tenant, User, UserRole, TenantCabinet, SubscriptionStatus } from '../..
 import { formatMoney, roleLabels } from '../../../../shared/utils/formatters';
 import { formatPhone } from '../../../../shared/validation/phone';
 import PageHeader from '../../components/PageHeader';
+import HeaderActionMenu from '../../components/HeaderActionMenu';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
@@ -40,7 +40,7 @@ import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Card, CardHeader } from '../../ui/Card';
 import { DataTable, type DataTableColumn } from '../../ui/DataTable';
-import { DropdownMenu, type MenuEntry } from '../../ui/DropdownMenu';
+import type { MenuEntry } from '../../ui/DropdownMenu';
 import { Field } from '../../ui/Field';
 import { IconButton } from '../../ui/IconButton';
 import { Input } from '../../ui/Input';
@@ -351,7 +351,7 @@ export default function AdminTenantDetailPage() {
   if (isLoading || isError) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Автосервис" icon={Building2} backTo="/admin/tenants" />
+        <PageHeader composition="navigation" title="Автосервис" backTo="/admin/tenants" />
         {isLoading ? (
           <div className="space-y-5" aria-busy="true">
             <Card padding="md">
@@ -390,7 +390,7 @@ export default function AdminTenantDetailPage() {
   if (!tenant) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Автосервис" icon={Building2} backTo="/admin/tenants" />
+        <PageHeader composition="navigation" title="Автосервис" backTo="/admin/tenants" />
         <Card padding="md">
           <EmptyState
             icon={Building2}
@@ -481,8 +481,8 @@ export default function AdminTenantDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={tenant.name}
-        icon={Building2}
         backTo="/admin/tenants"
         subtitle={
           tenant.plan?.name
@@ -510,20 +510,37 @@ export default function AdminTenantDetailPage() {
             <Button icon={CalendarPlus} onClick={() => setExtendModalOpen(true)}>
               Продлить
             </Button>
-            <Button variant="secondary" icon={CreditCard} onClick={() => setPlanModalOpen(true)}>
+            <Button
+              variant="secondary"
+              icon={CreditCard}
+              onClick={() => setPlanModalOpen(true)}
+              className="hidden md:inline-flex"
+            >
               Тариф
             </Button>
-            <Button variant="secondary" icon={Pencil} onClick={openTenantEdit}>
+            <Button variant="secondary" icon={Pencil} onClick={openTenantEdit} className="hidden md:inline-flex">
               Редактировать
             </Button>
-            <DropdownMenu
-              aria-label="Ещё действия"
-              items={moreItems}
-              trigger={
-                <Button variant="secondary" iconRight={ChevronDown}>
-                  Ещё
-                </Button>
-              }
+            <HeaderActionMenu
+              items={[
+                {
+                  key: 'plan',
+                  label: 'Тариф',
+                  icon: CreditCard,
+                  onSelect: () => setPlanModalOpen(true),
+                  selectTiming: 'after-close',
+                  narrowOnly: true,
+                },
+                {
+                  key: 'edit',
+                  label: 'Редактировать',
+                  icon: Pencil,
+                  onSelect: openTenantEdit,
+                  selectTiming: 'after-close',
+                  narrowOnly: true,
+                },
+                ...moreItems,
+              ]}
             />
           </>
         }

@@ -117,7 +117,6 @@ export default function PurchaseOrdersPage() {
     <div className="space-y-5">
       <PageHeader
         title="Заказы поставщикам"
-        icon={ShoppingCart}
         subtitle={data ? countLabel(total, ['заказ', 'заказа', 'заказов']) : undefined}
         actions={
           canWrite ? (

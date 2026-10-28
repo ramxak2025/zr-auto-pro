@@ -46,7 +46,7 @@ const phaseLabels: Record<EnrollmentPhase, string> = {
 };
 
 export default function NfcTagsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const navigation = useNavigation();
   const tabBarHeight = useTabBarHeight();

@@ -1,4 +1,5 @@
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
+
 import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 /**
@@ -188,8 +189,8 @@ export default function ProductDetailScreen() {
   // FolderPickerModal to drop the product into another folder of the SAME
   // warehouse without manual category typing.
   const [editing, setEditing] = useState(false);
-  const detailSection = useScreenSectionScroll();
-  const editSection = useScreenSectionScroll();
+  const detailSection = useScreenSectionScroll({ composition: 'navigation' });
+  const editSection = useScreenSectionScroll({ composition: 'navigation' });
   const section = editing ? editSection : detailSection;
   // Switching edit mode unmounts the previous native scroller.
   useEffect(() => {
@@ -642,25 +643,14 @@ export default function ProductDetailScreen() {
         trailing={
           canManageWarehouse ? (
             editing ? (
-              <TouchableOpacity
+              <HeaderAction
+                label="Сохранить изменения"
+                title="Сохранить"
+                tone="primary"
                 onPress={handleSave}
-                style={[
-                  [styles.saveBtn, { backgroundColor: palette.accent.primary }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel="Сохранить изменения"
                 disabled={saveMutation.isPending || uploadingPhoto || pickingPhoto}
-                hitSlop={8}
-              >
-                {saveMutation.isPending || uploadingPhoto ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text variant="bodyEmph" color={colors.white}>
-                    Сохранить
-                  </Text>
-                )}
-              </TouchableOpacity>
+                loading={saveMutation.isPending || uploadingPhoto}
+              />
             ) : (
               <TouchableOpacity
                 onPress={enterEdit}

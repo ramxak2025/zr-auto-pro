@@ -1,6 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { FileText, ShoppingBag } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { checksApi } from '../api/services';
@@ -93,8 +93,8 @@ export default function RetailChecksPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title="Розничный покупатель"
-        icon={ShoppingBag}
         backTo="/clients"
         subtitle={total > 0 ? `Чеки без привязки к клиенту · ${total}` : 'Чеки без привязки к клиенту'}
       />

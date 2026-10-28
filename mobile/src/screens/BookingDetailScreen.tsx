@@ -44,7 +44,7 @@ import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 export default function BookingDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();

@@ -38,7 +38,7 @@ export function HeaderIsland({
       style={[
         s.island,
         layout === 'column' && s.column,
-        { backgroundColor: p.bg.elevated, shadowColor: p.shadow.color, shadowOpacity: p.mode === 'dark' ? 0.24 : 0.09 },
+        { backgroundColor: p.bg.elevated, shadowColor: p.shadow.color, shadowOpacity: p.mode === 'dark' ? 0.12 : 0.04 },
         style,
       ]}
     >
@@ -93,7 +93,7 @@ export function HeaderAction({
         <Ionicons name={icon} size={22} color={color} />
       ) : null}
       {!!title && (
-        <Text variant="bodyEmph" color={color}>
+        <Text variant="bodyEmph" color={color} style={s.actionTitle}>
           {title}
         </Text>
       )}
@@ -261,11 +261,11 @@ export const HeaderSearch = forwardRef<TextInput, HeaderSearchProps>(function He
 
 const s = StyleSheet.create({
   island: {
-    borderRadius: 28,
+    borderRadius: 16,
     borderCurve: 'continuous',
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 18,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 1,
     padding: 6,
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -276,13 +276,14 @@ const s = StyleSheet.create({
   action: {
     minWidth: headerTouchSize,
     minHeight: headerTouchSize,
-    borderRadius: headerTouchSize / 2,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 6,
   },
   textAction: { paddingHorizontal: 14, paddingVertical: 8, flexShrink: 1 },
+  actionTitle: { flexShrink: 1 },
   searchRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
   search: {
     flex: 1,

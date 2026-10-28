@@ -1338,7 +1338,7 @@ export default function CheckCreatePage() {
   if (isEditMode && (existingLoading || existingError || !existingCheck)) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Правка чека" backTo={`/checks/${editCheckId}`} />
+        <PageHeader composition="navigation" title="Правка чека" backTo={`/checks/${editCheckId}`} />
         <QueryState
           isLoading={existingLoading}
           isError={existingError || !existingCheck}
@@ -1368,8 +1368,8 @@ export default function CheckCreatePage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={pageTitle}
-        icon={Receipt}
         backTo={requestLeave}
         subtitle={`Заказ-наряд от ${format(new Date((displayDate || tenantToday) + 'T00:00:00'), 'd MMMM yyyy', { locale: ruLocale })}${
           isDeferred && !cashierLocked ? ' · черновик' : ''

@@ -40,6 +40,7 @@ import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -736,37 +737,33 @@ export default function MotivationScreen() {
                   </TouchableOpacity>
                 </View>
               </View>
-              {employeeChips.length > 0 ? (
-                <ScrollView
-                  horizontal
-                  style={styles.chipScroll}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.chipsRow}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  <FilterChip
-                    label="Все"
-                    active={employeeFilter === null}
-                    onPress={() => {
-                      haptic('select');
-                      setEmployeeFilter(null);
-                    }}
-                    palette={palette}
-                  />
-                  {employeeChips.map((e) => (
-                    <FilterChip
-                      key={e.id}
-                      label={e.name}
-                      active={employeeFilter === e.id}
-                      onPress={() => {
+              {employeeChips.length > 0 && (
+                <ScreenHeaderMenu
+                  label="Сотрудник в начислениях"
+                  icon="person-outline"
+                  title={employeeChips.find((e) => e.id === employeeFilter)?.name || 'Все сотрудники'}
+                  items={[
+                    {
+                      id: 'all',
+                      label: 'Все',
+                      selected: employeeFilter === null,
+                      onSelect: () => {
+                        haptic('select');
+                        setEmployeeFilter(null);
+                      },
+                    },
+                    ...employeeChips.map((e) => ({
+                      id: e.id,
+                      label: e.name,
+                      selected: employeeFilter === e.id,
+                      onSelect: () => {
                         haptic('select');
                         setEmployeeFilter(e.id);
-                      }}
-                      palette={palette}
-                    />
-                  ))}
-                </ScrollView>
-              ) : null}
+                      },
+                    })),
+                  ]}
+                />
+              )}
             </>
           ) : null}
         </HeaderIsland>
@@ -1376,6 +1373,9 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
   },
   monthChip: {
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: borderRadius.full,
@@ -1384,6 +1384,8 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
+    flexShrink: 1,
+    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 96,

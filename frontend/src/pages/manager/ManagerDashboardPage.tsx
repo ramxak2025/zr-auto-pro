@@ -2,17 +2,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
-import {
-  Building2,
-  CalendarClock,
-  CalendarPlus,
-  CheckCircle2,
-  LayoutDashboard,
-  PiggyBank,
-  Plus,
-  Scale,
-  Wallet,
-} from 'lucide-react';
+import { Building2, CalendarClock, CalendarPlus, CheckCircle2, PiggyBank, Plus, Scale, Wallet } from 'lucide-react';
 
 import { managerApi } from '../../api/services';
 import type { Tenant } from '../../types';
@@ -90,16 +80,12 @@ export default function ManagerDashboardPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Обзор"
-        icon={LayoutDashboard}
-        subtitle="Ваши автосервисы, оплаты за месяц и расчёты с владельцем"
-        actions={
-          <Button icon={Plus} onClick={() => navigate('/manager/tenants?new=1')}>
-            Новый автосервис
-          </Button>
-        }
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader variant="static" title="Обзор" />
+        <Button icon={Plus} onClick={() => navigate('/manager/tenants?new=1')}>
+          Новый автосервис
+        </Button>
+      </div>
 
       {summaryError && !summary ? (
         <ErrorRow message="Не удалось загрузить сводку" onRetry={() => refetchSummary()} loading={summaryFetching} />

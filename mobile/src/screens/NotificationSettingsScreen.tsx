@@ -384,7 +384,7 @@ function currentTzOffsetMinutes(): number {
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function NotificationSettingsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<{ goBack: () => void }>();
   const palette = useColors();
   const shadow = useShadow();

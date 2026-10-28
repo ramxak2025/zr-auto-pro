@@ -4,7 +4,7 @@ import { attendanceModePresentation, companyModeFlows } from '../../../shared/ut
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Building2, Car, Gift, LayoutGrid, Receipt, Settings, Wallet } from 'lucide-react';
+import { Building2, Car, Gift, LayoutGrid, Receipt, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { checksApi, loyaltyApi, myCompanyApi } from '../api/services';
@@ -912,12 +912,6 @@ export default function CompanySettingsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Настройки компании"
-        icon={Settings}
-        subtitle={
-          canManageCompany
-            ? 'Реквизиты, автомобили, кассовая смена и программа лояльности'
-            : 'Кассовая смена и программа лояльности'
-        }
         toolbar={
           <>
             {tabs.length > 0 && tab && (

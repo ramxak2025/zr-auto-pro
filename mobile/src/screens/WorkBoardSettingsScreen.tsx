@@ -50,7 +50,7 @@ const BOARD_KEY = ['checks', 'board'] as const;
 type Editing = { mode: 'new' } | { mode: 'edit'; column: WorkBoardColumn } | null;
 
 export default function WorkBoardSettingsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();

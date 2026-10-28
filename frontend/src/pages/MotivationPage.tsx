@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Coins, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { MotivationPromo, MotivationRule } from '../../../shared/types';
 import { motivationApi, usersApi } from '../api/services';
@@ -133,7 +133,7 @@ export default function MotivationPage() {
   if (!canView)
     return (
       <div className="space-y-4">
-        <PageHeader title="Мотивация сотрудников" icon={Coins} />
+        <PageHeader variant="static" title="Мотивация сотрудников" />
         <p className="text-sm text-ink-2">Нет доступа к мотивации сотрудников. Обратитесь к владельцу автосервиса.</p>
       </div>
     );
@@ -141,8 +141,6 @@ export default function MotivationPage() {
     <div className="space-y-5">
       <PageHeader
         title="Мотивация сотрудников"
-        icon={Coins}
-        subtitle="Процент с продажи товаров"
         actions={
           canManage && !composer ? (
             <Button

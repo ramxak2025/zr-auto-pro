@@ -62,8 +62,8 @@ function PlatformOverview() {
   };
   return (
     <AdminPage
+      composition="navigation"
       title="Обзор"
-      subtitle="Autexa · платформа"
       trailing={<ReminderBell />}
       refreshing={stats.isRefetching || tenants.isRefetching}
       onRefresh={refresh}
@@ -152,6 +152,7 @@ function ManagerToday() {
   };
   return (
     <AdminPage
+      composition="navigation"
       title="Сегодня"
       subtitle="Мои клиенты и задачи"
       trailing={<ReminderBell />}

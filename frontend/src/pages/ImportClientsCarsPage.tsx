@@ -560,7 +560,7 @@ export default function ImportClientsCarsPage() {
   if (!canImport) {
     return (
       <div className="space-y-5">
-        <PageHeader backTo="/clients" title="Импорт клиентов и авто" />
+        <PageHeader composition="navigation" backTo="/clients" title="Импорт клиентов и авто" />
         <Card>
           <EmptyState
             icon={Upload}
@@ -576,7 +576,7 @@ export default function ImportClientsCarsPage() {
   if (isMobileViewport) {
     return (
       <div className="space-y-5">
-        <PageHeader backTo="/clients" title="Импорт клиентов и авто" />
+        <PageHeader composition="navigation" backTo="/clients" title="Импорт клиентов и авто" />
         <Card>
           <EmptyState
             icon={FileSpreadsheet}
@@ -595,8 +595,8 @@ export default function ImportClientsCarsPage() {
   return (
     <div className="space-y-5 pb-10">
       <PageHeader
+        composition="navigation"
         backTo="/clients"
-        icon={Upload}
         title="Импорт клиентов и авто"
         subtitle="Excel или CSV → клиенты и их автомобили"
         actions={

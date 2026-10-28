@@ -1,4 +1,4 @@
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import { formatMoney as formatPreciseMoney, formatDayKey } from '../../../shared/utils/formatters';
 import { accrualBreakdown } from '../../../shared/utils/accrualBreakdown';
@@ -4681,7 +4681,7 @@ function CashierShiftCard() {
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
-  const section = useScreenSectionScroll({ hasControls: false });
+  const safeTop = useSafeAreaInsets().top;
 
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
@@ -4766,12 +4766,10 @@ export default function DashboardScreen() {
 
   return (
     /* Edge-to-edge wrapper — gray-50 canvas flows under the glass tab bar.
-       The measured section header reserve lives inside scroll content. */
+       Safe-area reserve stays inside the existing hero scroll content. */
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Главная" />
       <ScreenSectionScrollView
         contentInsetAdjustmentBehavior="never"
-        onScroll={section.onScroll}
         style={styles.scroll}
         contentContainerStyle={[
           [
@@ -4784,7 +4782,7 @@ export default function DashboardScreen() {
               paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
             },
           ],
-          { paddingTop: section.contentTop + spacing[2] },
+          { paddingTop: safeTop + spacing[2] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -4800,7 +4798,6 @@ export default function DashboardScreen() {
         // only the visible viewport composites per frame. Net: scroll
         // fps stabilises to display refresh on a 6.7" iPhone.
         removeClippedSubviews
-        // The same native offset drives the section title.
         scrollEventThrottle={16}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />

@@ -107,7 +107,7 @@ export default function EmployeeDetailPage() {
   if (userLoading) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Сотрудник" backTo="/employees" />
+        <PageHeader composition="navigation" title="Сотрудник" backTo="/employees" />
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
           <div className="space-y-5 xl:col-span-2">
             <SkeletonCard lines={3} />
@@ -122,7 +122,7 @@ export default function EmployeeDetailPage() {
   if (userError) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Сотрудник" backTo="/employees" />
+        <PageHeader composition="navigation" title="Сотрудник" backTo="/employees" />
         <ErrorRow
           message="Не удалось загрузить карточку сотрудника"
           onRetry={() => refetchUser()}
@@ -135,7 +135,7 @@ export default function EmployeeDetailPage() {
   if (!user) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Сотрудник" backTo="/employees" />
+        <PageHeader composition="navigation" title="Сотрудник" backTo="/employees" />
         <EmptyState
           icon={AlertTriangle}
           title="Сотрудник не найден"
@@ -152,6 +152,7 @@ export default function EmployeeDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={user.fullName}
         backTo="/employees"
         subtitle={[user.phone ? formatPhone(user.phone) : null, user.username ? `@${user.username}` : null]

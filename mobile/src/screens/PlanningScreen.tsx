@@ -63,6 +63,7 @@ import type {
 import { formatMoney, roleLabels } from '../../../shared/utils/formatters';
 import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { HeaderAction } from '../components/ScreenHeaderControls';
 
 // ── Метаданные категорий постоянных расходов ────────────────────────────────
 
@@ -117,6 +118,7 @@ function initials(name: string): string {
 
 export default function PlanningScreen() {
   const section = useScreenSectionScroll();
+  const deniedSection = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const shadow = useShadow();
@@ -434,14 +436,14 @@ export default function PlanningScreen() {
   if (!isOwner) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Постоянные расходы" onBack={() => navigation.goBack()} />
+        <IosScreenHeader scroll={deniedSection} title="Постоянные расходы" onBack={() => navigation.goBack()} />
         <ScreenSectionScrollView
           style={{ flex: 1 }}
-          onScroll={section.onScroll}
+          onScroll={deniedSection.onScroll}
           scrollEventThrottle={16}
           contentInsetAdjustmentBehavior="never"
           reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+          contentContainerStyle={{ flexGrow: 1, paddingTop: deniedSection.contentTop + 12, paddingBottom: 24 }}
         >
           <View style={styles.restricted}>
             <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
@@ -459,6 +461,9 @@ export default function PlanningScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        trailing={
+          <HeaderAction label="Добавить расход" title="Добавить" icon="add" tone="primary" onPress={openFixedCreate} />
+        }
         context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
         scroll={section}
         title="Постоянные расходы"
@@ -551,14 +556,6 @@ export default function PlanningScreen() {
               <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>
                 Постоянные расходы
               </Text>
-              <TouchableOpacity
-                style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
-                onPress={openFixedCreate}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="add" size={16} color={colors.white} />
-                <Text style={styles.addBtnText}>Добавить</Text>
-              </TouchableOpacity>
             </View>
 
             {fixedCosts.length === 0 ? (

@@ -1,3 +1,4 @@
+import { HeaderAction } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeEditorScreen — create / edit a Knowledge Base article (manager only).
  *
@@ -50,7 +51,7 @@ import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 type ParamList = { KnowledgeEditor: { id?: string; categoryId?: string; type?: KnowledgeArticleType } };
 
 export default function KnowledgeEditorScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeEditor'>>();
   const palette = useColors();
@@ -277,18 +278,14 @@ export default function KnowledgeEditorScreen() {
   }
 
   const saveTrailing = (
-    <Pressable
+    <HeaderAction
+      label="Сохранить"
+      title="Сохранить"
+      tone="primary"
       onPress={onSave}
       disabled={saveMutation.isPending}
-      hitSlop={10}
-      style={[styles.saveBtn, { backgroundColor: palette.accent.primary, opacity: saveMutation.isPending ? 0.6 : 1 }]}
-      accessibilityRole="button"
-      accessibilityLabel="Сохранить"
-    >
-      <Text variant="footnote" color={colors.white} style={{ fontWeight: '700' }}>
-        {saveMutation.isPending ? '…' : 'Готово'}
-      </Text>
-    </Pressable>
+      loading={saveMutation.isPending}
+    />
   );
 
   return (

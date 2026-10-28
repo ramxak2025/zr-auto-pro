@@ -11,8 +11,8 @@
  * downstream are role-gated AND enforced server-side.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, StyleSheet, RefreshControl } from 'react-native';
+
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRoute, type RouteProp, useNavigation } from '@react-navigation/native';
 import { Text } from '../platform/Typography';
@@ -29,7 +29,8 @@ import { haptic } from '../platform/haptics';
 import type { InstallmentPlan } from '../../../shared/types';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { HeaderAction, HeaderIsland } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 type Filter = 'open' | 'closed' | 'overdue';
 
@@ -130,48 +131,6 @@ export default function InstallmentsScreen() {
       </View>
     ) : null;
 
-  const segmented = (
-    <View style={styles.segmentedWrap}>
-      <View style={[styles.segmentedControl, { backgroundColor: palette.bg.muted }]}>
-        {(
-          [
-            { key: 'open', label: 'Открытые', icon: 'time-outline' },
-            { key: 'closed', label: 'Закрытые', icon: 'checkmark-done-outline' },
-            { key: 'overdue', label: 'Просроченные', icon: 'alert-circle-outline' },
-          ] as const
-        ).map((seg) => {
-          const active = filter === seg.key;
-          return (
-            <TouchableOpacity
-              accessibilityRole="button"
-              key={seg.key}
-              style={[
-                [styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              onPress={() => {
-                haptic('tap');
-                setFilter(seg.key);
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name={seg.icon} size={15} color={active ? colors.primary[700] : palette.text.secondary} />
-              <Text
-                style={[
-                  styles.segmentBtnText,
-                  { color: active ? colors.primary[700] : palette.text.secondary },
-                  active && styles.segmentBtnTextActive,
-                ]}
-              >
-                {seg.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    </View>
-  );
-
   // A replacement native scroller starts at zero; keep the heading on that same offset.
   const sectionBody = sorted === undefined || sorted.length === 0 ? 'terminal' : 'list';
   React.useEffect(() => section.reset(), [sectionBody, section.reset]);
@@ -179,39 +138,38 @@ export default function InstallmentsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader scroll={section} title="Рассрочка">
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
+        <HeaderIsland>
+          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          <ScreenHeaderMenu
+            label="Статус рассрочки"
+            icon="filter-outline"
+            title={filter === 'open' ? 'Открытые' : filter === 'closed' ? 'Закрытые' : 'Просроченные'}
+            items={(
+              [
+                { key: 'open', label: 'Открытые' },
+                { key: 'closed', label: 'Закрытые' },
+                { key: 'overdue', label: 'Просроченные' },
+              ] as const
+            ).map((seg) => ({
+              id: seg.key,
+              label: seg.label,
+              selected: filter === seg.key,
+              onSelect: () => {
+                haptic('tap');
+                setFilter(seg.key);
+              },
+            }))}
+          />
+          {isOwnerClass && (
+            <HeaderAction
+              label="Напоминания о платежах"
+              icon="notifications-outline"
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('InstallmentReminderSettings');
               }}
-            >
-              {isOwnerClass ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  onPress={() => {
-                    haptic('tap');
-                    navigation.navigate('InstallmentReminderSettings');
-                  }}
-                  style={[
-                    [styles.gearBtn, { backgroundColor: palette.bg.muted }],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityLabel="Напоминания о платежах"
-                >
-                  <Ionicons name="notifications-outline" size={19} color={palette.text.secondary} />
-                </TouchableOpacity>
-              ) : undefined}
-            </View>
-          </View>
-          {segmented}
+            />
+          )}
         </HeaderIsland>
       </ScreenSectionHeader>
 

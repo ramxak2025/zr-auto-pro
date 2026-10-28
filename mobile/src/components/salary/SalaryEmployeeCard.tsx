@@ -194,7 +194,7 @@ export default function SalaryEmployeeCard({
   canManageRates = false,
   initialMonth,
 }: SalaryEmployeeCardProps) {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -523,12 +523,15 @@ export default function SalaryEmployeeCard({
       </TouchableOpacity>
       <TouchableOpacity
         accessibilityRole="button"
-        style={{
-          minWidth: headerTouchSize,
-          minHeight: headerTouchSize,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
+        style={[
+          {
+            minWidth: headerTouchSize,
+            minHeight: headerTouchSize,
+            alignItems: 'center',
+            justifyContent: 'center',
+          },
+          { flexShrink: 1, maxWidth: '100%' },
+        ]}
         onPress={resetMonth}
         activeOpacity={0.7}
       >
@@ -2207,6 +2210,9 @@ const styles = StyleSheet.create({
 
   // Header month chip
   monthChip: {
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: borderRadius.full,
@@ -2215,6 +2221,8 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
+    flexShrink: 1,
+    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 72,

@@ -1,5 +1,5 @@
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { HeaderAction } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React, { useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
@@ -500,7 +500,7 @@ const MenuRow = React.memo(function MenuRow({
 });
 
 export default function MoreScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'section', hasControls: false });
 
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<{ MoreHome: { accountPickerRequest?: number } }, 'MoreHome'>>();
@@ -639,24 +639,7 @@ export default function MoreScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Ещё">
-        <HeaderIsland>
-          <HeaderAction
-            label="Управление аккаунтами"
-            title="Аккаунты"
-            icon="people-outline"
-            onPress={() => setAccountsOpen(true)}
-          >
-            <Text style={{ color: palette.text.secondary }}>{savedAccounts.length}/3</Text>
-          </HeaderAction>
-          <View style={{ flex: 1 }} />
-          <HeaderAction
-            label="Настройки уведомлений"
-            icon="notifications-outline"
-            onPress={() => navigation.navigate('NotificationSettings')}
-          />
-        </HeaderIsland>
-      </ScreenSectionHeader>
+      <ScreenSectionHeader scroll={section} title="Ещё" />
       <ScreenSectionScrollView
         contentInsetAdjustmentBehavior="never"
         scrollEventThrottle={16}
@@ -725,8 +708,25 @@ export default function MoreScreen() {
               <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
             </TouchableOpacity>
             {/* Notifications — every user picks their own categories. */}
+            <HeaderAction
+              label="Настройки уведомлений"
+              icon="notifications-outline"
+              onPress={() => navigation.navigate('NotificationSettings')}
+            />
           </View>
         </Animated.View>
+        <TouchableOpacity
+          style={[styles.accountPickerButton, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          onPress={() => setAccountsOpen(true)}
+          activeOpacity={0.65}
+          accessibilityRole="button"
+          accessibilityLabel="Управление аккаунтами"
+        >
+          <Ionicons name="people-outline" size={19} color={palette.accent.primaryText} />
+          <Text style={[styles.accountPickerText, { color: palette.text.primary }]}>Аккаунты</Text>
+          <Text style={[styles.accountPickerCount, { color: palette.text.tertiary }]}>{savedAccounts.length}/3</Text>
+          <Ionicons name="chevron-forward" size={17} color={palette.text.tertiary} />
+        </TouchableOpacity>
 
         {/* Grouped sections — iOS Settings pattern */}
         {menuSections.map((section) => {

@@ -86,7 +86,7 @@ const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Deve
 // ── Screen ─────────────────────────────────────────────────────────────
 
 export default function PaymentIntegrationsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();

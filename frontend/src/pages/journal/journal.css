@@ -16,9 +16,9 @@
 .journal-title {
   margin: 0;
   color: rgb(var(--c-ink));
-  font-size: 32px;
-  line-height: 38px;
-  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1.875rem;
+  font-weight: 600;
   letter-spacing: -0.028em;
 }
 .journal-subtitle {
@@ -764,8 +764,9 @@
 }
 @media (max-width: 639px) {
   .journal-title {
-    font-size: 32px;
-    line-height: 38px;
+    font-size: 1.5rem;
+    line-height: 1.875rem;
+    font-weight: 600;
   }
   .journal-overlay--filters .journal-popover {
     border-radius: 28px;

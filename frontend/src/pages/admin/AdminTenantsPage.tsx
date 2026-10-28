@@ -353,7 +353,6 @@ export default function AdminTenantsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Автосервисы"
-        icon={Building2}
         subtitle={`Всего: ${tenants.length}`}
         actions={
           <Button icon={Plus} onClick={openCreate}>
@@ -389,7 +388,7 @@ export default function AdminTenantsPage() {
                   aria-label="Тариф"
                   value={planFilter}
                   onChange={(e) => patch({ plan: e.target.value, page: null })}
-                  className="w-44"
+                  className="w-full sm:w-44"
                 >
                   <option value="">Все тарифы</option>
                   {(plansData ?? []).map((p) => (
@@ -404,7 +403,7 @@ export default function AdminTenantsPage() {
                   aria-label="Менеджер"
                   value={managerFilter}
                   onChange={(e) => patch({ manager: e.target.value, page: null })}
-                  className="w-48"
+                  className="w-full sm:w-48"
                 >
                   <option value="">Все менеджеры</option>
                   <option value={NO_MANAGER}>Без менеджера</option>

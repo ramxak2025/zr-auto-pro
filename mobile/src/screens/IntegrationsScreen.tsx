@@ -896,7 +896,7 @@ function ProviderModal({
 // ─────────────────────────────────────────────────────────────────────
 
 export default function IntegrationsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();

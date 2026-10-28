@@ -8,8 +8,9 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { useScreenSectionScroll, type ScreenHeaderComposition } from '../../components/ScreenSectionHeader';
 export function AdminPage({
+  composition = 'section',
   title,
   subtitle,
   back,
@@ -18,6 +19,7 @@ export function AdminPage({
   onRefresh,
   children,
 }: {
+  composition?: ScreenHeaderComposition;
   title: string;
   subtitle?: string;
   back?: boolean;
@@ -29,7 +31,7 @@ export function AdminPage({
   const palette = useColors(),
     navigation = useNavigation();
   const { contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
-  const section = useScreenSectionScroll({ hasControls: Boolean(back || trailing) });
+  const section = useScreenSectionScroll({ composition, hasControls: Boolean(back || trailing) });
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader

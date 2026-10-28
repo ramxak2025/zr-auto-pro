@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, BarChart3, LineChart, Lock, type LucideIcon } from 'lucide-react';
+import { ArrowRight, LineChart, Lock, type LucideIcon } from 'lucide-react';
 
 import { reportBuilderApi } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
@@ -145,11 +145,7 @@ export default function ReportsHubPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Отчёты"
-        icon={BarChart3}
-        subtitle="Выберите отчёт, задайте период и фильтры — результат можно скачать в Excel или PDF"
-      />
+      <PageHeader variant="static" title="Отчёты" />
 
       {catalog.isLoading && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

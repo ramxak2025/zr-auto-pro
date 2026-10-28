@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 
@@ -112,7 +113,7 @@ const ServiceRow = React.memo(function ServiceRow({ item, onHistory, palette }: 
 });
 
 export default function ServicesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'section' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -253,6 +254,7 @@ export default function ServicesScreen() {
   const [importPreview, setImportPreview] = useState<ServiceImportPreview | null>(null);
   const [importRequestId, setImportRequestId] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const importStatusLabel = importPreview ? 'Импорт услуг…' : 'Подготовка импорта…';
 
   const { data, isLoading, isError, refetch } = useQuery<Service[]>({
     queryKey: ['services', { preferredOnly }],
@@ -565,52 +567,6 @@ export default function ServicesScreen() {
 
   const catalogTools = (
     <>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing[4],
-          marginHorizontal: spacing[4],
-          paddingVertical: spacing[2],
-        }}
-      >
-        {!isOwner && (
-          <TouchableOpacity
-            onPress={() => {
-              setShowAllServices((value) => !value);
-            }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: showAllServices }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
-              <Ionicons
-                name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
-                size={18}
-                color={colors.primary[600]}
-              />
-              <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
-                {showAllServices ? 'Показ по роли' : 'Все услуги'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        )}
-        {canManageServices && (
-          <TouchableOpacity
-            disabled={!visibilityConfigQuery.isSuccess}
-            onPress={() => setFolderListOpen(true)}
-            accessibilityRole="button"
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: spacing[1],
-              opacity: visibilityConfigQuery.isSuccess ? 1 : 0.45,
-            }}
-          >
-            <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Видимость</Text>
-          </TouchableOpacity>
-        )}
-      </View>
       {canManageServices && visibilityConfigQuery.isError && (
         <View
           style={{
@@ -625,60 +581,6 @@ export default function ServicesScreen() {
           <TouchableOpacity onPress={() => void visibilityConfigQuery.refetch()} accessibilityRole="button">
             <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
           </TouchableOpacity>
-        </View>
-      )}
-      {canManageServices && (
-        <View
-          style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], paddingHorizontal: spacing[4] }}
-        >
-          <TouchableOpacity
-            onPress={() => void exportCatalog()}
-            accessibilityRole="button"
-            accessibilityLabel="Экспортировать каталог в Excel"
-          >
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Экспорт Excel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => void chooseImportFile()}
-            disabled={importBusy}
-            accessibilityRole="button"
-            accessibilityLabel="Импортировать услуги из Excel"
-          >
-            <Text
-              style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, opacity: importBusy ? 0.5 : 1 }}
-            >
-              Импорт Excel
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {canManageServices && !search && (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: spacing[4],
-            paddingVertical: spacing[3],
-          }}
-        >
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={{ minHeight: 44, justifyContent: 'center' }}
-            accessibilityLabel="Новая папка"
-            onPress={() => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() })}
-          >
-            <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Новая папка</Text>
-          </TouchableOpacity>
-          {activePath.length > 0 && (
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={{ minHeight: 44, justifyContent: 'center' }}
-              onPress={() => folderActions(activePath.join('/'))}
-            >
-              <Text style={{ color: palette.accent.primaryText }}>Управление папкой</Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
     </>
@@ -703,30 +605,9 @@ export default function ServicesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader scroll={section} title="Услуги" subtitle={total > 0 ? `Услуг: ${total}` : undefined}>
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <HeaderIsland layout="column" style={{ flexWrap: 'nowrap' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', gap: 6 }}>
             <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {canManageServices ? (
-                <TouchableOpacity
-                  style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                  onPress={openCreate}
-                >
-                  <Text style={styles.addBtnText}>+ Новая</Text>
-                </TouchableOpacity>
-              ) : undefined}
-            </View>
-          </View>
-          <View style={styles.searchWrap}>
             <HeaderSearch
               timing={{ debounceMs: 300 }}
               focusOnClear={false}
@@ -734,8 +615,89 @@ export default function ServicesScreen() {
               onChange={(v) => {
                 setSearch(v);
               }}
-              placeholder="Поиск во всех папках"
+              placeholder="Поиск"
+              nativeProps={{ accessibilityLabel: 'Поиск во всех папках' }}
             />
+            {canManageServices ? (
+              <HeaderAction label="Добавить услугу" icon="add" tone="primary" onPress={openCreate} />
+            ) : undefined}
+            {canManageServices ? (
+              <ScreenHeaderMenu
+                label="Действия каталога услуг"
+                items={[
+                  !isOwner && {
+                    id: 'visibility-scope',
+                    label: showAllServices ? 'Показ по роли' : 'Все услуги',
+                    icon: 'eye-outline',
+                    onSelect: () => {
+                      setShowAllServices((value) => !value);
+                    },
+                    selected: showAllServices,
+                  },
+                  canManageServices && {
+                    id: 'visibility',
+                    label: 'Видимость услуг',
+                    icon: 'shield-checkmark-outline',
+                    onSelect: () => setFolderListOpen(true),
+                    disabled: !visibilityConfigQuery.isSuccess,
+                  },
+                  canManageServices && {
+                    id: 'export',
+                    label: 'Экспорт Excel',
+                    icon: 'download-outline',
+                    onSelect: () => void exportCatalog(),
+                  },
+                  canManageServices && {
+                    id: 'import',
+                    label: 'Импорт Excel',
+                    icon: 'cloud-upload-outline',
+                    onSelect: () => void chooseImportFile(),
+                    disabled: importBusy,
+                    loading: importBusy,
+                  },
+                  canManageServices &&
+                    !search && {
+                      id: 'new-folder',
+                      label: 'Новая папка',
+                      icon: 'folder-open-outline',
+                      onSelect: () => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() }),
+                    },
+                  canManageServices &&
+                    !search &&
+                    activePath.length > 0 && {
+                      id: 'folder-actions',
+                      label: 'Управление папкой',
+                      icon: 'folder-outline',
+                      onSelect: () => folderActions(activePath.join('/')),
+                    },
+                ]}
+              />
+            ) : !isOwner ? (
+              <TouchableOpacity
+                style={{
+                  minWidth: headerTouchSize,
+                  minHeight: headerTouchSize,
+                  justifyContent: 'center',
+                  flexShrink: 1,
+                }}
+                onPress={() => {
+                  setShowAllServices((value) => !value);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: showAllServices }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
+                  <Ionicons
+                    name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
+                    size={18}
+                    color={colors.primary[600]}
+                  />
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, flexShrink: 1 }}>
+                    {showAllServices ? 'Показ по роли' : 'Все услуги'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
           </View>
           {!search && activePath.length > 0 && (
             <View style={styles.breadcrumb}>
@@ -765,6 +727,19 @@ export default function ServicesScreen() {
                   </TouchableOpacity>
                 </React.Fragment>
               ))}
+            </View>
+          )}
+          {importBusy && (
+            <View
+              accessible
+              accessibilityRole="progressbar"
+              accessibilityLabel={importStatusLabel}
+              accessibilityState={{ busy: true }}
+              accessibilityLiveRegion="polite"
+              style={styles.importStatus}
+            >
+              <ActivityIndicator size="small" color={palette.accent.primary} accessible={false} />
+              <Text style={{ flex: 1, fontSize: fontSize.sm, color: palette.text.secondary }}>{importStatusLabel}</Text>
             </View>
           )}
         </HeaderIsland>
@@ -1608,13 +1583,13 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  addBtn: {
-    backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+  importStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[2],
+    paddingBottom: spacing[1],
   },
-  addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: 0 },
   // iOS plain-list style (matches warehouse).
   list: { paddingHorizontal: 0, paddingBottom: 120, paddingTop: 0 },
@@ -1652,11 +1627,13 @@ const styles = StyleSheet.create({
   breadcrumbItem: {
     flexDirection: 'row',
     alignItems: 'center',
+    maxWidth: '100%',
+    flexShrink: 1,
     gap: 3,
     paddingVertical: 2,
     paddingHorizontal: spacing[1],
   },
-  breadcrumbText: { fontSize: 13, color: colors.primary[600], fontWeight: '500' },
+  breadcrumbText: { fontSize: 13, color: colors.primary[600], fontWeight: '500', flexShrink: 1 },
   foldersList: { backgroundColor: colors.white, marginBottom: spacing[2] },
   folderRow: {
     flexDirection: 'row',

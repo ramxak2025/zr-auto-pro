@@ -36,7 +36,7 @@ import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 const REMINDER_HOUR_OPTIONS = [1, 2, 3, 6, 12, 24];
 
 export default function BookingSettingsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();

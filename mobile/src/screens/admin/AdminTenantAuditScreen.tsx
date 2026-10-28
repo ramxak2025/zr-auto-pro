@@ -19,7 +19,7 @@ const PAGE_SIZE = 50;
 
 /** Mounted only after an explicit entry from the selected car-service card. */
 export default function AdminTenantAuditScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation();
   const { id, name } = useRoute<any>().params as { id: string; name: string };
   const mode = useAdminMode();

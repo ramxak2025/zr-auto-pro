@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
@@ -60,7 +61,6 @@ import { useAllStaff, decideStaffListView } from '../hooks/useUsers';
 import { colors, spacing } from '../theme';
 import { type User, type TodayEmployeeStatus, type EmployeeRanking } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SCREEN_PADDING = spacing[4]; // 16pt
 const AVATAR_SIZE = 44;
@@ -183,7 +183,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
 });
 
 export default function EmployeesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'section' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -440,80 +440,67 @@ export default function EmployeesScreen() {
         subtitle={users === undefined ? undefined : `На смене: ${onSmena} из ${sortedUsers.length}`}
         context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
       >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <HeaderIsland
+          layout="column"
+          style={
+            staffView === 'error' || staffView === 'skeleton' || staffView === 'empty'
+              ? { alignSelf: 'flex-start' }
+              : undefined
+          }
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {canManageDismissed ? (
-                <TouchableOpacity
-                  style={[
-                    [styles.addBtn, { backgroundColor: palette.accent.primary }],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                  onPress={onAddEmployee}
-                  accessibilityRole="button"
-                  accessibilityLabel="Добавить сотрудника"
-                >
-                  <Ionicons name="add" size={18} color={colors.white} />
-                </TouchableOpacity>
-              ) : undefined}
-            </View>
+            {staffView !== 'error' && staffView !== 'skeleton' && staffView !== 'empty' ? (
+              <HeaderSearch
+                timing={{ debounceMs: 300 }}
+                focusOnClear={false}
+                value={search}
+                onChange={setSearch}
+                placeholder="Имя, роль или телефон"
+              />
+            ) : null}
+            {canManageDismissed ? (
+              <TouchableOpacity
+                style={[
+                  [styles.addBtn, { backgroundColor: palette.accent.primary }],
+                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                ]}
+                onPress={onAddEmployee}
+                accessibilityRole="button"
+                accessibilityLabel="Добавить сотрудника"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            ) : undefined}
           </View>
-          {staffView !== 'error' && staffView !== 'skeleton' && staffView !== 'empty' ? (
-            <>
-              <View style={styles.searchWrap}>
-                <HeaderSearch
-                  timing={{ debounceMs: 300 }}
-                  focusOnClear={false}
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="Имя, роль или телефон"
-                />
-              </View>
-              {presentRoles.length >= 2 ? (
-                <View style={styles.chipsBar}>
-                  <ScrollView
-                    style={{ flexGrow: 0, flexShrink: 0 }}
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.chipsRow}
-                  >
-                    <RoleChip
-                      active={roleFilter === 'all'}
-                      label="Все"
-                      icon="apps-outline"
-                      onPress={() => {
-                        haptic('select');
-                        setRoleFilter('all');
-                      }}
-                      palette={palette}
-                    />
-                    {presentRoles.map((r) => (
-                      <RoleChip
-                        key={r}
-                        active={roleFilter === r}
-                        label={roleLabels[r] || r}
-                        icon={(ROLE_META[r] || ROLE_META.master).chipIcon}
-                        onPress={() => {
-                          haptic('select');
-                          setRoleFilter((prev) => (prev === r ? 'all' : r));
-                        }}
-                        palette={palette}
-                      />
-                    ))}
-                  </ScrollView>
-                </View>
-              ) : null}
-            </>
+          {staffView !== 'error' && staffView !== 'skeleton' && staffView !== 'empty' && presentRoles.length >= 2 ? (
+            <ScreenHeaderMenu
+              label="Фильтр сотрудников по роли"
+              icon="options-outline"
+              title={roleFilter === 'all' ? 'Все роли' : roleLabels[roleFilter] || roleFilter}
+              items={[
+                {
+                  id: 'all',
+                  label: 'Все роли',
+                  selected: roleFilter === 'all',
+                  icon: 'apps-outline',
+                  onSelect: () => {
+                    haptic('select');
+                    setRoleFilter('all');
+                  },
+                },
+                ...presentRoles.map((r) => ({
+                  id: r,
+                  label: roleLabels[r] || r,
+                  selected: roleFilter === r,
+                  icon: (ROLE_META[r] || ROLE_META.master).chipIcon,
+                  onSelect: () => {
+                    haptic('select');
+                    setRoleFilter((prev) => (prev === r ? 'all' : r));
+                  },
+                })),
+              ]}
+            />
           ) : null}
         </HeaderIsland>
       </ScreenSectionHeader>

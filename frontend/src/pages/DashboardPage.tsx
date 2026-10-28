@@ -9,6 +9,7 @@ import { getGreeting } from '../../../shared/utils/formatters';
 import type { UserPermissions, UserRole } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 import PageHeader from '../components/PageHeader';
+import HeaderActionMenu from '../components/HeaderActionMenu';
 import InstallmentsWidget from '../components/InstallmentsWidget';
 import { buttonClasses } from '../ui/Button';
 import KpiStrip from '../components/dashboard/KpiStrip';
@@ -134,11 +135,31 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={displayName ? `${greeting}, ${displayName}` : greeting}
-        subtitle={`${todayLabel.charAt(0).toUpperCase()}${todayLabel.slice(1)} · обзор автосервиса`}
-        actions={visibleQuickLinks.length > 0 ? <QuickLinks links={visibleQuickLinks} /> : undefined}
-      />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader
+          variant="static"
+          className="min-w-0 flex-1"
+          title={displayName ? `${greeting}, ${displayName}` : greeting}
+          subtitle={`${todayLabel.charAt(0).toUpperCase()}${todayLabel.slice(1)} · обзор автосервиса`}
+        />
+        {visibleQuickLinks.length > 0 && (
+          <>
+            <div className="hidden flex-wrap items-center gap-2 md:flex">
+              <QuickLinks links={visibleQuickLinks} />
+            </div>
+            <HeaderActionMenu
+              className="md:hidden"
+              label="Переходы"
+              items={visibleQuickLinks.map((link) => ({
+                key: link.to,
+                label: link.label,
+                to: link.to,
+                icon: link.icon,
+              }))}
+            />
+          </>
+        )}
+      </div>
 
       {/* Смена — сотрудникам; владельцу/директору не показывается */}
       {!isOwner && attendanceMode === 'manual' && <ShiftControl />}

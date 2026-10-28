@@ -1,4 +1,4 @@
-import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 /**
@@ -943,7 +943,7 @@ function AutoTab() {
 // ─────────────────────────────────────────────────────────────────────
 
 export default function MailingsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -975,11 +975,12 @@ export default function MailingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Рассылки">
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          </View>
+      <ScreenSectionHeader
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        scroll={section}
+        title="Рассылки"
+      >
+        <View style={{ gap: 6 }}>
           <View style={styles.tabBarWrap}>
             <View style={[styles.tabBar, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
               {tabs.map((tab) => {
@@ -1018,7 +1019,7 @@ export default function MailingsScreen() {
               })}
             </View>
           </View>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       {/* KeyboardAwareScroll (Round 11 #1): поле сообщения (multiline) держится
