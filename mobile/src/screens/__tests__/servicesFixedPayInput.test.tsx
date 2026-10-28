@@ -1,5 +1,5 @@
 jest.mock('../../components/ScreenHeaderMenu', () => ({ __esModule: true, default: 'HeaderMenu' }));
-// Screen chrome is inert here; these suites exercise the existing business handlers.
+// Screen chrome is inert here; these suites exercise screen state and the existing business handlers.
 const mockSectionScroll = {
   scrollY: { value: 0 },
   titleHeight: { value: 64 },
@@ -31,13 +31,17 @@ jest.mock('../../components/ScreenHeaderControls', () => ({
 // Native hosts and transport are inert fixtures: this harness does not prove hit-testing or keyboard geometry.
 import React from 'react';
 import type { Service } from '../../../../shared/types';
+import type { ServiceImportPreview } from '../../../../shared/api/types';
 const mockStates: unknown[] = [],
   mockEffects: { deps?: unknown[] }[] = [],
   mockPending: (() => void)[] = [];
 let mockIndex = 0;
 const mockCreate = jest.fn(),
   mockUpdate = jest.fn(),
-  mockAlert = jest.fn();
+  mockAlert = jest.fn(),
+  mockPickDocument = jest.fn(),
+  mockReadImportFile = jest.fn(),
+  mockPreviewImport = jest.fn();
 const mockServices: Service[] = [];
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
@@ -81,15 +85,17 @@ jest.mock('react-native', () => ({
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ goBack: jest.fn() }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
-jest.mock('expo-document-picker', () => ({}));
-jest.mock('expo-file-system/legacy', () => ({}));
+jest.mock('expo-document-picker', () => ({ getDocumentAsync: (...args: unknown[]) => mockPickDocument(...args) }));
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: (...args: unknown[]) => mockReadImportFile(...args),
+}));
 jest.mock('expo-sharing', () => ({}));
-jest.mock('expo-crypto', () => ({}));
-jest.mock('xlsx', () => ({}));
+jest.mock('expo-crypto', () => ({ randomUUID: () => 'import-request-id' }));
 jest.mock('../../api/services', () => ({
   servicesApi: {
     create: (...args: unknown[]) => mockCreate(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
+    previewImport: (...args: unknown[]) => mockPreviewImport(...args),
   },
 }));
 jest.mock('../../contexts/AuthContext', () => ({
@@ -234,7 +240,11 @@ function enter(label: string, raw: string) {
   return input(label);
 }
 function create() {
-  press(button(render(), '+ Новая'));
+  press(
+    nodes(render()).find(
+      (node) => node.type === 'TouchableOpacity' && node.props.accessibilityLabel === 'Добавить услугу',
+    )!,
+  );
   enter('Замена масла...', 'Работа');
   enter('0', '1000');
 }
@@ -264,6 +274,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockCreate.mockImplementation(async (payload: object) => ({ data: { ...payload, id: 'created', createdAt: '' } }));
   mockUpdate.mockImplementation(async (id: string, payload: object) => ({ data: { ...payload, id } }));
+  mockPickDocument.mockReset();
+  mockPreviewImport.mockReset();
+  mockReadImportFile.mockResolvedValue(Buffer.from('name,priceType,price\nOil change,fixed,1000\n').toString('base64'));
 });
 it('actual create flow accepts sequential fixed digits, editing, comma fractions and clearing without losing the controlled string', async () => {
   create();
@@ -352,3 +365,117 @@ it.each<[string, string, number | null]>([
     masterFixedAmount: null,
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const header = (tree: React.ReactNode) => nodes(tree).find((node) => node.type === 'HeaderIsland')!;
+const headerMenu = (tree: React.ReactNode) => nodes(header(tree)).find((node) => node.type === 'HeaderMenu')!;
+const importStatus = (tree: React.ReactNode) =>
+  nodes(header(tree)).find((node) => node.props.accessibilityRole === 'progressbar');
+
+function expectImportPending(tree: React.ReactNode) {
+  const status = importStatus(tree);
+  expect(status).toBeDefined();
+  expect(status!.props.accessibilityState).toMatchObject({ busy: true });
+  expect(status!.props.accessibilityLiveRegion).toBe('polite');
+  expect(status!.props.accessibilityLabel).toBe('Подготовка импорта…');
+  expect(text(status)).toBe('Подготовка импорта…');
+  expect(nodes(status).some((node) => node.type === 'ActivityIndicator')).toBe(true);
+  // The status is screen content, so the closed HeaderMenu host cannot hide it.
+  expect(nodes(headerMenu(tree))).not.toContain(status);
+  expect(headerMenu(tree).props.loading).not.toBe(true);
+  expect(headerMenu(tree).props.disabled).not.toBe(true);
+  expect(button(tree, 'Импорт Excel').props.disabled).toBe(true);
+  for (const label of ['Видимость услуг', 'Экспорт Excel', 'Новая папка']) {
+    expect(button(tree, label).props.disabled).toBe(false);
+  }
+}
+
+it('keeps import progress visible with the menu closed while choosing a document and awaiting its preview', async () => {
+  const picked = deferred<import('expo-document-picker').DocumentPickerResult>();
+  const preview = deferred<{ data: ServiceImportPreview }>();
+  mockPickDocument.mockReturnValueOnce(picked.promise);
+  mockPreviewImport.mockReturnValueOnce(preview.promise);
+  expect(importStatus(render())).toBeUndefined();
+  press(button(render(), 'Импорт Excel'));
+  expectImportPending(render());
+
+  picked.resolve({
+    canceled: false,
+    assets: [{ name: 'services.csv', uri: 'file:///services.csv', size: 64, lastModified: 0 }],
+  });
+  await picked.promise;
+  await Promise.resolve();
+  expect(mockPreviewImport).toHaveBeenCalledWith([
+    { sourceRow: 2, name: 'Oil change', priceType: 'fixed', defaultPrice: 1000 },
+  ]);
+  expectImportPending(render());
+
+  preview.resolve({
+    data: {
+      previewId: 'preview-id',
+      rows: [{ sourceRow: 2, name: 'Oil change', action: 'create' }],
+      errors: [],
+      summary: { totalRows: 1, create: 1, update: 0, errors: 0 },
+    },
+  });
+  await preview.promise;
+  const completed = render();
+  expect(importStatus(completed)).toBeUndefined();
+  expect(button(completed, 'Импорт Excel').props.disabled).toBe(false);
+  expect(
+    nodes(completed).find((node) => node.type === 'Modal' && node.props.title === 'Просмотр импорта')!.props.visible,
+  ).toBe(true);
+  expect(mockAlert).not.toHaveBeenCalled();
+});
+
+it.each(['cancel', 'picker-error', 'preview-error'] as const)(
+  'clears visible import progress after %s and permits another attempt',
+  async (outcome) => {
+    const picked = deferred<import('expo-document-picker').DocumentPickerResult>();
+    const preview = deferred<{ data: ServiceImportPreview }>();
+    mockPickDocument.mockReturnValueOnce(picked.promise);
+    mockPreviewImport.mockReturnValueOnce(preview.promise);
+    press(button(render(), 'Импорт Excel'));
+    expectImportPending(render());
+    if (outcome === 'cancel') picked.resolve({ canceled: true, assets: null });
+    else if (outcome === 'picker-error') picked.reject(new Error('Не удалось открыть файл'));
+    else {
+      picked.resolve({
+        canceled: false,
+        assets: [{ name: 'services.csv', uri: 'file:///services.csv', size: 64, lastModified: 0 }],
+      });
+      await picked.promise;
+      await Promise.resolve();
+      expect(mockPreviewImport).toHaveBeenCalledTimes(1);
+      expectImportPending(render());
+      preview.reject(new Error('Не удалось подготовить импорт'));
+    }
+    await Promise.resolve();
+    const settled = render();
+    expect(importStatus(settled)).toBeUndefined();
+    expect(button(settled, 'Импорт Excel').props.disabled).toBe(false);
+    expect(
+      nodes(settled).find((node) => node.type === 'Modal' && node.props.title === 'Просмотр импорта')!.props.visible,
+    ).toBe(false);
+    if (outcome === 'cancel') expect(mockAlert).not.toHaveBeenCalled();
+    else expect(mockAlert).toHaveBeenCalledWith('Импорт не выполнен', expect.any(String));
+
+    const retry = deferred<import('expo-document-picker').DocumentPickerResult>();
+    mockPickDocument.mockReturnValueOnce(retry.promise);
+    press(button(settled, 'Импорт Excel'));
+    expect(mockPickDocument).toHaveBeenCalledTimes(2);
+    expectImportPending(render());
+    retry.resolve({ canceled: true, assets: null });
+    await retry.promise;
+    expect(importStatus(render())).toBeUndefined();
+  },
+);

@@ -254,6 +254,7 @@ export default function ServicesScreen() {
   const [importPreview, setImportPreview] = useState<ServiceImportPreview | null>(null);
   const [importRequestId, setImportRequestId] = useState<string | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const importStatusLabel = importPreview ? 'Импорт услуг…' : 'Подготовка импорта…';
 
   const { data, isLoading, isError, refetch } = useQuery<Service[]>({
     queryKey: ['services', { preferredOnly }],
@@ -614,58 +615,12 @@ export default function ServicesScreen() {
               onChange={(v) => {
                 setSearch(v);
               }}
-              placeholder="Поиск во всех папках"
+              placeholder="Поиск"
+              nativeProps={{ accessibilityLabel: 'Поиск во всех папках' }}
             />
             {canManageServices ? (
-              <TouchableOpacity
-                style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                onPress={openCreate}
-              >
-                <Text style={styles.addBtnText}>+ Новая</Text>
-              </TouchableOpacity>
+              <HeaderAction label="Добавить услугу" icon="add" tone="primary" onPress={openCreate} />
             ) : undefined}
-          </View>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 6,
-            }}
-          >
-            <View style={{ flex: 1, minWidth: 0 }}>
-              {!search && activePath.length > 0 && (
-                <View style={styles.breadcrumb}>
-                  <TouchableOpacity
-                    onPress={() => setActivePath([])}
-                    style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                  >
-                    <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-                    <Text style={styles.breadcrumbText}>Все</Text>
-                  </TouchableOpacity>
-                  {activePath.map((seg, i) => (
-                    <React.Fragment key={i}>
-                      <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
-                      <TouchableOpacity
-                        onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
-                        style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                      >
-                        <Text
-                          style={[
-                            styles.breadcrumbText,
-                            { color: palette.text.secondary },
-                            i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
-                          ]}
-                        >
-                          {seg}
-                        </Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
-                  ))}
-                </View>
-              )}
-            </View>
             {canManageServices ? (
               <ScreenHeaderMenu
                 label="Действия каталога услуг"
@@ -719,7 +674,12 @@ export default function ServicesScreen() {
               />
             ) : !isOwner ? (
               <TouchableOpacity
-                style={{ minWidth: headerTouchSize, minHeight: headerTouchSize, justifyContent: 'center' }}
+                style={{
+                  minWidth: headerTouchSize,
+                  minHeight: headerTouchSize,
+                  justifyContent: 'center',
+                  flexShrink: 1,
+                }}
                 onPress={() => {
                   setShowAllServices((value) => !value);
                 }}
@@ -732,13 +692,56 @@ export default function ServicesScreen() {
                     size={18}
                     color={colors.primary[600]}
                   />
-                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, flexShrink: 1 }}>
                     {showAllServices ? 'Показ по роли' : 'Все услуги'}
                   </Text>
                 </View>
               </TouchableOpacity>
             ) : null}
           </View>
+          {!search && activePath.length > 0 && (
+            <View style={styles.breadcrumb}>
+              <TouchableOpacity
+                onPress={() => setActivePath([])}
+                style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+              >
+                <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
+                <Text style={styles.breadcrumbText}>Все</Text>
+              </TouchableOpacity>
+              {activePath.map((seg, i) => (
+                <React.Fragment key={i}>
+                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+                  <TouchableOpacity
+                    onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
+                    style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                  >
+                    <Text
+                      style={[
+                        styles.breadcrumbText,
+                        { color: palette.text.secondary },
+                        i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
+                      ]}
+                    >
+                      {seg}
+                    </Text>
+                  </TouchableOpacity>
+                </React.Fragment>
+              ))}
+            </View>
+          )}
+          {importBusy && (
+            <View
+              accessible
+              accessibilityRole="progressbar"
+              accessibilityLabel={importStatusLabel}
+              accessibilityState={{ busy: true }}
+              accessibilityLiveRegion="polite"
+              style={styles.importStatus}
+            >
+              <ActivityIndicator size="small" color={palette.accent.primary} accessible={false} />
+              <Text style={{ flex: 1, fontSize: fontSize.sm, color: palette.text.secondary }}>{importStatusLabel}</Text>
+            </View>
+          )}
         </HeaderIsland>
       </ScreenSectionHeader>
 
@@ -1580,13 +1583,13 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  addBtn: {
-    backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+  importStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[2],
+    paddingBottom: spacing[1],
   },
-  addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: 0 },
   // iOS plain-list style (matches warehouse).
   list: { paddingHorizontal: 0, paddingBottom: 120, paddingTop: 0 },
@@ -1624,11 +1627,13 @@ const styles = StyleSheet.create({
   breadcrumbItem: {
     flexDirection: 'row',
     alignItems: 'center',
+    maxWidth: '100%',
+    flexShrink: 1,
     gap: 3,
     paddingVertical: 2,
     paddingHorizontal: spacing[1],
   },
-  breadcrumbText: { fontSize: 13, color: colors.primary[600], fontWeight: '500' },
+  breadcrumbText: { fontSize: 13, color: colors.primary[600], fontWeight: '500', flexShrink: 1 },
   foldersList: { backgroundColor: colors.white, marginBottom: spacing[2] },
   folderRow: {
     flexDirection: 'row',
