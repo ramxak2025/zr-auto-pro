@@ -4,7 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../platform/Typography';
-import ScreenSectionHeader, { type ScreenSectionScrollController } from './ScreenSectionHeader';
+import ScreenSectionHeader, {
+  type ScreenHeaderComposition,
+  type ScreenSectionScrollController,
+} from './ScreenSectionHeader';
 import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 export const compactTouchSize = Platform.OS === 'android' ? 48 : 44;
@@ -19,6 +22,8 @@ interface HeaderProps {
   context?: React.ReactNode;
   status?: React.ReactNode;
   scroll?: ScreenSectionScrollController;
+  sectionVariant?: 'static';
+  composition?: ScreenHeaderComposition;
   children?: React.ReactNode;
 }
 
@@ -33,25 +38,40 @@ export default function CompactScreenHeader({
   context,
   status,
   scroll,
+  sectionVariant,
+  composition = 'section',
   children,
 }: HeaderProps) {
   const p = useColors();
   const insets = useSafeAreaInsets();
-  if (scroll) {
-    const hasControls = Boolean(onBack || onTitlePress || actions || context || children);
-    return (
-      <ScreenSectionHeader scroll={scroll} title={title} subtitle={subtitle} context={status}>
-        {hasControls && (
-          <HeaderIsland>
-            {onBack && <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} />}
-            {onTitlePress && (
-              <HeaderAction label={titleLabel || title} title={title} icon="chevron-down" onPress={onTitlePress} />
-            )}
-            {context}
-            {actions && <View style={s.actions}>{actions}</View>}
-            {children}
-          </HeaderIsland>
-        )}
+  if (scroll || sectionVariant === 'static') {
+    const resolvedComposition = sectionVariant === 'static' ? composition : (scroll?.composition ?? 'section');
+    const navigation = resolvedComposition === 'navigation';
+    const identityProps = {
+      title,
+      subtitle,
+      context: status,
+      onTitlePress,
+      titleLabel,
+      leading: navigation && onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : undefined,
+      actions: navigation ? actions : undefined,
+    };
+    const hasControls = Boolean((!navigation && (onBack || actions)) || context || children);
+    const controls = hasControls ? (
+      <HeaderIsland>
+        {!navigation && onBack && <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} />}
+        {context}
+        {!navigation && actions && <View style={s.actions}>{actions}</View>}
+        {children}
+      </HeaderIsland>
+    ) : null;
+    return sectionVariant === 'static' ? (
+      <ScreenSectionHeader {...identityProps} variant="static" composition={composition}>
+        {controls}
+      </ScreenSectionHeader>
+    ) : (
+      <ScreenSectionHeader {...identityProps} scroll={scroll!}>
+        {controls}
       </ScreenSectionHeader>
     );
   }

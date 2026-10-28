@@ -56,6 +56,8 @@ jest.mock('../../contexts/ThemeContext', () => ({
 }));
 import React from 'react';
 import CompactScreenHeader, { CompactSearchInput } from '../CompactScreenHeader';
+import IosScreenHeader from '../IosScreenHeader';
+import type { ScreenSectionScrollController } from '../ScreenSectionHeader';
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
   React.isValidElement(node)
@@ -129,4 +131,38 @@ it('external clear cancels a pending query instead of restoring the typed text',
   jest.advanceTimersByTime(300);
   expect(change).not.toHaveBeenCalled();
   expect(nodes(render()).find((node) => node.type === 'TextInput')!.props.value).toBe('');
+});
+
+it('navigation wrappers pass the exact identity, back and save slots without a second title action', () => {
+  const scroll = { composition: 'navigation' } as ScreenSectionScrollController;
+  const back = jest.fn();
+  const select = jest.fn();
+  const save = <React.Fragment>Сохранить</React.Fragment>;
+  const functionalContext = <React.Fragment>Выбор точки</React.Fragment>;
+  const status = <React.Fragment>Черновик</React.Fragment>;
+  const compact = CompactScreenHeader({
+    title: 'Касса',
+    scroll,
+    onBack: back,
+    onTitlePress: select,
+    actions: save,
+    context: functionalContext,
+    status,
+  });
+  expect(compact.props.onTitlePress).toBe(select);
+  expect(compact.props.actions).toBe(save);
+  expect(compact.props.context).toBe(status);
+  expect(compact.props.leading.props.onPress).toBe(back);
+  expect(compact.props.children.props.children).toContain(functionalContext);
+  expect(nodes(compact.props.children).filter((node) => node.props.onPress === select)).toHaveLength(0);
+  const leading = <React.Fragment>Исходная leading-команда</React.Fragment>;
+  const ios = IosScreenHeader({ title: 'Детали', scroll, leading, onBack: back, trailing: save, context: status });
+  expect(ios.props.leading).toBe(leading);
+  expect(ios.props.actions).toBe(save);
+  expect(ios.props.context).toBe(status);
+  expect(ios.props.children).toBeUndefined();
+  const canvas = IosScreenHeader({ title: 'Доска', sectionVariant: 'static', composition: 'navigation', onBack: back });
+  expect(canvas.props.variant).toBe('static');
+  expect(canvas.props.composition).toBe('navigation');
+  expect(canvas.props.scroll).toBeUndefined();
 });

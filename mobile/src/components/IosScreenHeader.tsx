@@ -5,7 +5,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
-import ScreenSectionHeader, { type ScreenSectionScrollController } from './ScreenSectionHeader';
+import ScreenSectionHeader, {
+  type ScreenHeaderComposition,
+  type ScreenSectionScrollController,
+} from './ScreenSectionHeader';
 import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 /**
@@ -57,6 +60,8 @@ export interface IosScreenHeaderProps {
   scroll?: ScreenSectionScrollController;
   /** Only for synchronized canvases with no single main vertical scroller. */
   sectionVariant?: 'static';
+  /** Static composition only; a scrolling header inherits it from its controller. */
+  composition?: ScreenHeaderComposition;
   context?: React.ReactNode;
 }
 
@@ -72,6 +77,7 @@ export default function IosScreenHeader({
   style,
   scroll,
   sectionVariant,
+  composition = 'section',
   context,
 }: IosScreenHeaderProps) {
   const insets = useSafeAreaInsets();
@@ -81,6 +87,16 @@ export default function IosScreenHeader({
   const effectiveCenterTitle = isAndroid ? false : centerTitle;
 
   if (scroll || sectionVariant === 'static') {
+    const resolvedComposition = sectionVariant === 'static' ? composition : (scroll?.composition ?? 'section');
+    const back = leading ?? (onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : null);
+    if (resolvedComposition === 'navigation') {
+      const identityProps = { title, subtitle, context, leading: back, actions: trailing };
+      return sectionVariant === 'static' ? (
+        <ScreenSectionHeader {...identityProps} variant="static" composition="navigation" />
+      ) : (
+        <ScreenSectionHeader {...identityProps} scroll={scroll!} />
+      );
+    }
     const controls =
       leading || onBack || trailing ? (
         <HeaderIsland
@@ -88,12 +104,18 @@ export default function IosScreenHeader({
             scroll && sectionVariant !== 'static' && onBack && !leading && !trailing ? styles.backOnlyIsland : undefined
           }
         >
-          {leading ?? (onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : null)}
+          {back}
           {trailing ? <View style={styles.sectionTrailing}>{trailing}</View> : null}
         </HeaderIsland>
       ) : null;
     return sectionVariant === 'static' ? (
-      <ScreenSectionHeader variant="static" title={title} subtitle={subtitle} context={context}>
+      <ScreenSectionHeader
+        variant="static"
+        composition={composition}
+        title={title}
+        subtitle={subtitle}
+        context={context}
+      >
         {controls}
       </ScreenSectionHeader>
     ) : (

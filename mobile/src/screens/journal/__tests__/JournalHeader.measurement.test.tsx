@@ -16,6 +16,7 @@ jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   useWindowDimensions: () => ({ fontScale: mockFontScale, width: 402, height: 874 }),
   View: 'View',
+  Pressable: 'Pressable',
   StyleSheet: { create: (styles: unknown) => styles },
 }));
 jest.mock('react-native-reanimated', () => ({
@@ -44,7 +45,7 @@ jest.mock('../../../contexts/ThemeContext', () => ({
 }));
 jest.mock('../../../platform/Typography', () => ({
   Text: 'Text',
-  textVariantStyles: { display: { fontSize: 34, lineHeight: 40 } },
+  textVariantStyles: { title2: { fontSize: 22, lineHeight: 28 }, title3: { fontSize: 17, lineHeight: 22 } },
 }));
 import React from 'react';
 import type { JournalScrollController } from '../JournalHeader';
@@ -103,8 +104,10 @@ it.each([1, 1.353, 2, 3])(
       const tree = render(offset);
       const title = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
       expect(title).toHaveLength(1);
-      expect(style(title[0].props.style).fontSize).toBe(34 * fontScale);
+      expect(style(title[0].props.style).fontSize).toBe(22 * fontScale);
       expect(title[0].props.allowFontScaling).toBe(false);
+      expect(title[0].props.variant).toBe('title2');
+      expect(style(title[0].props.style).fontWeight).toBe('600');
       const stage = style(nodes(tree).find((node) => node.props.testID === 'journal-title-stage')!.props.style);
       const controls = style(
         nodes(tree).find((node) => node.props.testID === 'journal-floating-controls')!.props.style,
@@ -131,11 +134,11 @@ it('leaves the native list viewport at the screen edge with no opaque cover over
 });
 
 it.each([
-  { safeTop: 0, fontScale: 1, contentTop: 124 },
-  { safeTop: 24, fontScale: 1, contentTop: 148 },
-  { safeTop: 62, fontScale: 1, contentTop: 186 },
-  { safeTop: 62, fontScale: 1.353, contentTop: 201 },
-  { safeTop: 62, fontScale: 3, contentTop: 300 },
+  { safeTop: 0, fontScale: 1, contentTop: 112 },
+  { safeTop: 24, fontScale: 1, contentTop: 136 },
+  { safeTop: 62, fontScale: 1, contentTop: 174 },
+  { safeTop: 62, fontScale: 1.353, contentTop: 184 },
+  { safeTop: 62, fontScale: 3, contentTop: 264 },
 ])('reserves the initial safe top once inside scroll content: %j', ({ safeTop, fontScale, contentTop }) => {
   mockSafeTop = safeTop;
   mockFontScale = fontScale;
@@ -172,12 +175,12 @@ it.each([
 
 it('omits the controls surface and its reserve when a section has no actions', () => {
   const scroll = useScreenSectionScroll({ hasControls: false });
-  expect(scroll.contentTop).toBe(126);
+  expect(scroll.contentTop).toBe(114);
   const onContentTop = jest.fn();
   const tree = ScreenSectionHeader({ title: 'Отчёт', scroll: { ...scroll, onContentTop } });
   expect(nodes(tree).some((node) => node.props.testID === 'screen-section-floating-controls')).toBe(false);
   (React.useLayoutEffect as jest.Mock).mock.calls[0][0]();
-  expect(onContentTop).toHaveBeenCalledWith(126);
+  expect(onContentTop).toHaveBeenCalledWith(114);
 });
 
 it('preserves the original native scroll observer and event identity without resetting on focus', () => {
@@ -199,3 +202,83 @@ it('makes the independent-axis canvas exception explicit and keeps it in normal 
   expect(style(tree.props.style).position).toBe('relative');
   expect(nodes(tree).some((node) => node.props.testID === 'screen-section-floating-controls')).toBe(false);
 });
+
+it.each([1, 1.353, 2, 3])(
+  'navigation reserves only its real row at full font scale %s, without a disappearing title stage',
+  (fontScale) => {
+    mockFontScale = fontScale;
+    const scroll = useScreenSectionScroll({ composition: 'navigation', hasControls: false });
+    expect(scroll.composition).toBe('navigation');
+    expect(scroll.titleHeight.value).toBe(0);
+    expect(scroll.contentTop).toBe(mockSafeTop + Math.max(44, Math.ceil(22 * fontScale)) + 12);
+    const action = <React.Fragment>Сохранить все изменения</React.Fragment>;
+    const input = <React.Fragment>Существующее поле</React.Fragment>;
+    for (const offset of [0, 400, 0]) {
+      scroll.scrollY.value = offset;
+      const tree = ScreenSectionHeader({
+        title: 'Редактирование длинного названия',
+        scroll,
+        actions: action,
+        children: input,
+      });
+      expect(nodes(tree).filter((node) => node.props.accessibilityRole === 'header')).toHaveLength(1);
+      expect(nodes(tree).some((node) => String(node.props.testID).includes('title-stage'))).toBe(false);
+      expect(nodes(tree).some((node) => String(node.props.testID).includes('floating-controls'))).toBe(false);
+      const identity = nodes(tree).find((node) => node.props.accessibilityRole === 'header')!;
+      expect(identity.props.variant).toBe('title3');
+      expect(style(identity.props.style).fontSize).toBe(17 * fontScale);
+      expect(style(identity.props.style).fontWeight).toBe('600');
+      expect(identity.props.numberOfLines).toBeUndefined();
+      expect(identity.props.maxFontSizeMultiplier).toBeUndefined();
+      const row = nodes(tree).find((node) => node.props.testID === 'screen-section-navigation-row')!;
+      expect(style(row.props.style).flexWrap).toBe('wrap');
+      expect(nodes(tree).some((node) => node.props.children === action)).toBe(true);
+      expect(nodes(tree).some((node) => node.props.children === input)).toBe(true);
+      const navigation = nodes(tree).find((node) => node.props.testID === 'screen-section-navigation')!;
+      expect(style(navigation.props.style).top).toBe(mockSafeTop);
+      expect(style(navigation.props.style).transform).toBeUndefined();
+    }
+  },
+);
+
+it('remeasures the complete wrapped navigation stack and never uses hideHeading to hide form identity', () => {
+  const scroll = useScreenSectionScroll({ composition: 'navigation' });
+  const onContentTop = jest.fn();
+  const tree = ScreenSectionHeader({ title: 'Форма', scroll: { ...scroll, onContentTop }, hideHeading: true });
+  const navigation = nodes(tree).find((node) => node.props.testID === 'screen-section-navigation')!;
+  const event: { nativeEvent: { layout: { height: number } } | null } = { nativeEvent: { layout: { height: 176 } } };
+  navigation.props.onLayout!(event);
+  event.nativeEvent = null;
+  expect(mockDeferredUpdates.at(-1)!(0)).toBe(176);
+  expect(nodes(tree).find((node) => node.props.accessibilityRole === 'header')).toBeDefined();
+  (React.useState as jest.Mock)
+    .mockImplementationOnce(() => [28, jest.fn()])
+    .mockImplementationOnce(() => [176, jest.fn()]);
+  (React.useLayoutEffect as jest.Mock).mockClear();
+  ScreenSectionHeader({ title: 'Форма', scroll: { ...scroll, onContentTop } });
+  (React.useLayoutEffect as jest.Mock).mock.calls[0][0]();
+  expect(scroll.titleHeight.value).toBe(0);
+  expect(onContentTop).toHaveBeenLastCalledWith(mockSafeTop + 176);
+});
+
+it.each(['section', 'navigation'] as const)(
+  'title selector is a single identity with the original callback in %s',
+  (composition) => {
+    const onTitlePress = jest.fn();
+    const tree = ScreenSectionHeader({
+      variant: 'static',
+      composition,
+      title: 'Склад Северный',
+      onTitlePress,
+      titleLabel: 'Сменить склад',
+    });
+    const selector = nodes(tree).filter((node) => node.props.accessibilityLabel === 'Сменить склад');
+    expect(selector).toHaveLength(1);
+    expect(selector[0].props.onPress).toBe(onTitlePress);
+    (selector[0].props.onPress as () => void)();
+    expect(onTitlePress).toHaveBeenCalledTimes(1);
+    expect(nodes(tree).filter((node) => node.props.children === 'Склад Северный')).toHaveLength(1);
+    expect(nodes(tree).filter((node) => node.props.accessibilityRole === 'header')).toHaveLength(0);
+    expect(nodes(tree).filter((node) => node.props.name === 'chevron-down')).toHaveLength(1);
+  },
+);

@@ -70,40 +70,43 @@ test('back invokes the original dirty-form guard; route back retains query state
   Renderer.act(() => route.unmount());
 });
 
-test('changing passive context keeps the same live input and pending save guard', () => {
-  let mounts = 0;
-  let unmounts = 0;
-  function Search() {
-    const [value, setValue] = React.useState('');
-    React.useEffect(() => {
-      mounts += 1;
-      return () => {
-        unmounts += 1;
-      };
-    }, []);
-    return h('input', { value, onChange: (event) => setValue(event.target.value) });
-  }
-  const save = () => {};
-  const props = {
-    title: 'Заказ поставщику',
-    toolbar: h(Search),
-    actions: h('button', { disabled: true, onClick: save }, 'Сохранить'),
-  };
-  const tree = render(h(Header, props));
-  const input = tree.root.findByType('input');
-  Renderer.act(() => input.props.onChange({ target: { value: 'масло' } }));
-  Renderer.act(() =>
-    tree.update(withRouter(h(Header, { ...props, subtitle: 'Новый период', meta: h('span', null, 'Черновик') }))),
-  );
-  assert.equal(tree.root.findByType('input'), input);
-  assert.equal(input.props.value, 'масло');
-  assert.equal(mounts, 1);
-  assert.equal(unmounts, 0);
-  assert.equal(tree.root.findByType('button').props.disabled, true);
-  assert.equal(tree.root.findByType('button').props.onClick, save);
-  Renderer.act(() => tree.unmount());
-  assert.equal(unmounts, 1);
-});
+for (const composition of ['section', 'navigation']) {
+  test(`changing passive context keeps the same live input and pending save guard in ${composition}`, () => {
+    let mounts = 0;
+    let unmounts = 0;
+    function Search() {
+      const [value, setValue] = React.useState('');
+      React.useEffect(() => {
+        mounts += 1;
+        return () => {
+          unmounts += 1;
+        };
+      }, []);
+      return h('input', { value, onChange: (event) => setValue(event.target.value) });
+    }
+    const save = () => {};
+    const props = {
+      composition,
+      title: 'Заказ поставщику',
+      toolbar: h(Search),
+      actions: h('button', { disabled: true, onClick: save }, 'Сохранить'),
+    };
+    const tree = render(h(Header, props));
+    const input = tree.root.findByType('input');
+    Renderer.act(() => input.props.onChange({ target: { value: 'масло' } }));
+    Renderer.act(() =>
+      tree.update(withRouter(h(Header, { ...props, subtitle: 'Новый период', meta: h('span', null, 'Черновик') }))),
+    );
+    assert.equal(tree.root.findByType('input'), input);
+    assert.equal(input.props.value, 'масло');
+    assert.equal(mounts, 1);
+    assert.equal(unmounts, 0);
+    assert.equal(tree.root.findByType('button').props.disabled, true);
+    assert.equal(tree.root.findByType('button').props.onClick, save);
+    Renderer.act(() => tree.unmount());
+    assert.equal(unmounts, 1);
+  });
+}
 
 for (const [name, Control, role, optionsProp, items, stateAttribute] of [
   [
@@ -238,106 +241,148 @@ test('dashboard resolves actual quick-link permissions before supplying the acti
   Renderer.act(() => tree.unmount());
 });
 
-test('sticky checkout budget uses main height and bottom padding, and resizes without stale viewport values', () => {
-  const originals = Object.fromEntries(
-    ['window', 'getComputedStyle', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame'].map((key) => [
-      key,
-      global[key],
-    ]),
-  );
-  const values = new Map();
-  const style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
-  const observed = new Set();
-  let onResize;
-  let disconnected = false;
-  let cancelled = false;
-  let topPadding = 24;
-  let bottomPadding = 32;
-  let dockHeight = 56;
-  const listeners = new Set();
-  const target = () => ({
-    addEventListener: (type, handler) => listeners.add(handler),
-    removeEventListener: (type, handler) => listeners.delete(handler),
-  });
-  const main = { ...target(), clientHeight: 844, getBoundingClientRect: () => ({ top: 56 }) };
-  const header = { closest: () => main, parentElement: { style }, style, dataset: {} };
-  const heading = { getBoundingClientRect: () => ({ top: 80, height: 80 }) };
-  const dock = { getBoundingClientRect: () => ({ height: dockHeight }) };
-  const timeline = {
-    to() {
-      return this;
-    },
-    progress() {
-      return this;
-    },
-    kill() {},
-  };
-  const MeasuredHeader = loadTsxWithMocks('../src/components/PageHeader.tsx', (request) =>
-    request === 'gsap'
-      ? {
-          __esModule: true,
-          default: { context: () => ({ add: (fn) => fn(), revert() {} }), timeline: () => timeline },
-        }
-      : undefined,
-  );
-  let tree;
-  try {
-    global.window = { ...target(), matchMedia: () => ({ ...target(), matches: false }) };
-    global.getComputedStyle = (node) =>
-      node === main
-        ? { paddingTop: `${topPadding}px`, paddingBottom: `${bottomPadding}px`, paddingLeft: '24px' }
-        : { paddingBottom: '12px' };
-    global.ResizeObserver = class {
-      constructor(callback) {
-        onResize = callback;
-      }
-      observe(node) {
-        observed.add(node);
-      }
-      disconnect() {
-        disconnected = true;
-      }
-    };
-    global.requestAnimationFrame = () => 1;
-    global.cancelAnimationFrame = () => {
-      cancelled = true;
-    };
-    Renderer.act(() => {
-      tree = Renderer.create(withRouter(h(MeasuredHeader, { title: 'Касса', actions: h('button', null, 'Шаблоны') })), {
-        createNodeMock: (node) =>
-          node.type === 'header'
-            ? header
-            : node.props.className === 'section-heading'
-              ? heading
-              : node.props.className === 'section-command'
-                ? dock
-                : null,
-      });
+for (const composition of ['section', 'navigation']) {
+  test(`sticky checkout budget measures ${composition} with main height, padding and live font/width changes`, () => {
+    const originals = Object.fromEntries(
+      ['window', 'getComputedStyle', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame'].map((key) => [
+        key,
+        global[key],
+      ]),
+    );
+    const values = new Map();
+    const style = { setProperty: (key, value) => values.set(key, value), removeProperty: (key) => values.delete(key) };
+    const observed = new Set();
+    let onResize;
+    let disconnected = false;
+    let cancelled = false;
+    let topPadding = 24;
+    let bottomPadding = 32;
+    let dockHeight = 56;
+    const listeners = new Set();
+    const target = () => ({
+      addEventListener: (type, handler) => listeners.add(handler),
+      removeEventListener: (type, handler) => listeners.delete(handler),
     });
-    assert.equal(values.get('--section-header-sticky-height'), '44px');
-    assert.equal(values.get('--section-header-available-height'), '744px');
-    assert.deepEqual(observed, new Set([heading, dock, main]));
-    // A larger shell, increased root font/paddings and a taller command area all
-    // consume the actual main viewport; no 100dvh assumption remains.
-    main.clientHeight = 788;
-    topPadding = 48;
-    bottomPadding = 64;
-    dockHeight = 112;
-    Renderer.act(() => onResize());
-    assert.equal(values.get('--section-header-sticky-height'), '76px');
-    assert.equal(values.get('--section-header-available-height'), '600px');
-    Renderer.act(() => tree.unmount());
-    tree = null;
-    assert.equal(values.has('--section-header-available-height'), false);
-    assert.equal(values.has('--section-header-sticky-height'), false);
-    assert.equal(listeners.size, 0);
-    assert.equal(disconnected, true);
-    assert.equal(cancelled, true);
-  } finally {
-    if (tree) Renderer.act(() => tree.unmount());
-    for (const [key, value] of Object.entries(originals)) {
-      if (value === undefined) delete global[key];
-      else global[key] = value;
+    const main = { ...target(), clientHeight: 844, getBoundingClientRect: () => ({ top: 56 }) };
+    const header = { closest: () => main, parentElement: { style }, style, dataset: {} };
+    const heading = { getBoundingClientRect: () => ({ top: 80, height: 80 }) };
+    const dock = { getBoundingClientRect: () => ({ height: dockHeight }) };
+    const progressValues = [];
+    const timeline = {
+      to() {
+        return this;
+      },
+      progress(value) {
+        progressValues.push(value);
+        return this;
+      },
+      kill() {},
+    };
+    const MeasuredHeader = loadTsxWithMocks('../src/components/PageHeader.tsx', (request) =>
+      request === 'gsap'
+        ? {
+            __esModule: true,
+            default: { context: () => ({ add: (fn) => fn(), revert() {} }), timeline: () => timeline },
+          }
+        : undefined,
+    );
+    let tree;
+    try {
+      global.window = { ...target(), matchMedia: () => ({ ...target(), matches: false }) };
+      global.getComputedStyle = (node) =>
+        node === main
+          ? { paddingTop: `${topPadding}px`, paddingBottom: `${bottomPadding}px`, paddingLeft: '24px' }
+          : { paddingBottom: '12px' };
+      global.ResizeObserver = class {
+        constructor(callback) {
+          onResize = callback;
+        }
+        observe(node) {
+          observed.add(node);
+        }
+        disconnect() {
+          disconnected = true;
+        }
+      };
+      global.requestAnimationFrame = () => 1;
+      global.cancelAnimationFrame = () => {
+        cancelled = true;
+      };
+      Renderer.act(() => {
+        tree = Renderer.create(
+          withRouter(h(MeasuredHeader, { composition, title: 'Касса', actions: h('button', null, 'Шаблоны') })),
+          {
+            createNodeMock: (node) =>
+              node.type === 'header'
+                ? header
+                : node.props.className === 'section-heading'
+                  ? heading
+                  : node.props.className === 'section-command'
+                    ? dock
+                    : null,
+          },
+        );
+      });
+      assert.equal(values.get('--section-header-sticky-height'), '44px');
+      assert.equal(values.get('--section-header-available-height'), '744px');
+      assert.deepEqual(observed, new Set(composition === 'navigation' ? [dock, main] : [heading, dock, main]));
+      assert.equal(values.get('--section-heading-height'), composition === 'navigation' ? '0px' : '80px');
+      if (composition === 'navigation')
+        assert.ok(
+          progressValues.every((value) => value === 1),
+          'navigation material has no disappearing title dependency',
+        );
+      // A larger shell, increased root font/paddings and a taller command area all
+      // consume the actual main viewport; no 100dvh assumption remains.
+      main.clientHeight = 788;
+      topPadding = 48;
+      bottomPadding = 64;
+      dockHeight = 112;
+      Renderer.act(() => onResize());
+      assert.equal(values.get('--section-header-sticky-height'), '76px');
+      assert.equal(values.get('--section-header-available-height'), '600px');
+      Renderer.act(() => tree.unmount());
+      tree = null;
+      assert.equal(values.has('--section-header-available-height'), false);
+      assert.equal(values.has('--section-header-sticky-height'), false);
+      assert.equal(listeners.size, 0);
+      assert.equal(disconnected, true);
+      assert.equal(cancelled, true);
+    } finally {
+      if (tree) Renderer.act(() => tree.unmount());
+      for (const [key, value] of Object.entries(originals)) {
+        if (value === undefined) delete global[key];
+        else global[key] = value;
+      }
     }
-  }
+  });
+}
+
+test('navigation has one identity in the Back/actions row and retains the exact guarded callbacks', () => {
+  const back = () => {};
+  const save = () => {};
+  const tree = render(
+    h(Header, {
+      composition: 'navigation',
+      title: 'Редактирование длинного названия',
+      backTo: back,
+      actions: h(
+        'button',
+        { onClick: save, disabled: true, 'aria-label': 'Сохранить все изменения' },
+        'Сохранить все изменения',
+      ),
+      toolbar: h('input', { 'aria-label': 'Период' }),
+    }),
+  );
+  assert.equal(tree.root.findAllByType('h1').length, 1);
+  const row = tree.root.find((node) => node.props.className === 'section-navigation-row');
+  assert.equal(row.findByType('h1').children[0], 'Редактирование длинного названия');
+  assert.equal(row.findAllByType('button').length, 2);
+  assert.equal(row.findAllByType('button')[0].props.onClick, back);
+  assert.equal(row.findAllByType('button')[1].props.onClick, save);
+  assert.equal(row.findAllByType('button')[1].props.disabled, true);
+  assert.equal(row.findAllByType('button')[1].props['aria-label'], 'Сохранить все изменения');
+  assert.equal(tree.root.findAll((node) => node.props.className === 'section-heading').length, 0);
+  assert.equal(tree.root.findAllByType('input').length, 1);
+  Renderer.act(() => tree.unmount());
 });
