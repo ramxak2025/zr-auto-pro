@@ -148,6 +148,7 @@ for (const name of [
 ]) {
   jest.doMock(`../../components/${name}`, () => ({ __esModule: true, default: name }));
 }
+jest.doMock('../warehouse/WarehouseHeader', () => ({ __esModule: true, default: 'WarehouseHeader' }));
 jest.doMock('../../components/CompactScreenHeader', () => ({
   __esModule: true,
   default: 'CompactScreenHeader',
@@ -181,6 +182,26 @@ const nodes = (node: React.ReactNode): Element[] =>
       ? [
           node as Element,
           ...React.Children.toArray((node as Element).props.children).flatMap(nodes),
+          // Header presentation has its own tests. Preserve its public callbacks
+          // while these fixtures exercise the real product/folder handlers.
+          ...nodes(
+            node.type === 'WarehouseHeader'
+              ? [
+                  (node as Element).props.onAdd
+                    ? React.createElement('TouchableOpacity', {
+                        key: 'warehouse-add',
+                        accessibilityLabel: 'Добавить товар',
+                        onPress: (node as Element).props.onAdd,
+                      })
+                    : null,
+                  React.createElement('SearchInput', {
+                    key: 'warehouse-search',
+                    value: (node as Element).props.search,
+                    onChange: (node as Element).props.onSearchChange,
+                  }),
+                ]
+              : null,
+          ),
           ...nodes((node as Element).props.ListHeaderComponent as React.ReactNode),
         ]
       : [];
