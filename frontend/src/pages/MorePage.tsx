@@ -277,7 +277,7 @@ export default function MorePage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
-      <PageHeader title="Ещё" />
+      <PageHeader variant="static" title="Ещё" />
 
       {/* Профиль */}
       <Card padding="md">

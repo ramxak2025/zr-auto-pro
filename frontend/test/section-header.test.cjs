@@ -194,7 +194,7 @@ function loadTsxWithMocks(relativePath, mock) {
   return module.exports.default;
 }
 
-test('dashboard resolves actual quick-link permissions before supplying the action slot', () => {
+test('dashboard keeps permission-filtered shortcuts reachable without a separate command band', () => {
   let role = 'admin';
   let granted = new Set();
   const Blank = () => null;
@@ -225,7 +225,7 @@ test('dashboard resolves actual quick-link permissions before supplying the acti
   ]) {
     granted = new Set([permission]);
     Renderer.act(() => tree.update(withRouter(h(Dashboard))));
-    assert.equal(command(tree).length, 1);
+    assert.equal(command(tree).length, 0);
     assert.deepEqual(
       tree.root.findAllByType('a').map((node) => node.props.href),
       [destination],

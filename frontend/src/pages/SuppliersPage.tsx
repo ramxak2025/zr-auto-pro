@@ -247,7 +247,6 @@ export default function SuppliersPage() {
     <div className="space-y-5">
       <PageHeader
         title="Поставщики"
-        icon={Truck}
         subtitle={data ? `${countLabel(total, ['поставщик', 'поставщика', 'поставщиков'])} в базе` : undefined}
         actions={
           canManage ? (

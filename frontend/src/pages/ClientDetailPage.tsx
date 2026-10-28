@@ -19,7 +19,6 @@ import {
   Wallet,
   Star,
   Tag,
-  ShoppingBag,
   ChevronRight,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -1055,8 +1054,8 @@ export default function ClientDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         backTo="/clients"
-        icon={client.isRetail ? ShoppingBag : User}
         title={client.fullName}
         subtitle={subtitleParts}
         meta={

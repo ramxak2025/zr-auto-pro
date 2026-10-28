@@ -25,6 +25,7 @@ import {
 } from '../ui';
 import type { DataTableColumn } from '../ui';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
+import HeaderActionMenu from '../components/HeaderActionMenu';
 
 import type { PurchaseOrder, PurchaseOrderItem, PurchaseReceiptContext } from '../types';
 import { formatMoney, formatDateTime, formatDateShort, formatDayKey } from '../../../shared/utils/formatters';
@@ -356,7 +357,7 @@ export default function PurchaseOrderDetailPage() {
             }}
           />
         )}
-        <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
+        <PageHeader composition="navigation" title="Заказ поставщику" backTo="/purchase-orders" />
         <QueryState
           isLoading={isLoading}
           isError={isError}
@@ -390,7 +391,7 @@ export default function PurchaseOrderDetailPage() {
             }}
           />
         )}
-        <PageHeader title="Заказ поставщику" icon={ShoppingCart} backTo="/purchase-orders" />
+        <PageHeader composition="navigation" title="Заказ поставщику" backTo="/purchase-orders" />
         <Card>
           <EmptyState
             icon={ShoppingCart}
@@ -565,15 +566,20 @@ export default function PurchaseOrderDetailPage() {
                 >
                   Редактировать
                 </Button>,
-                <Button
+                <HeaderActionMenu
                   key="cancel"
-                  variant="danger"
-                  icon={XCircle}
-                  onClick={() => setCancelOpen(true)}
-                  disabled={isBusy}
-                >
-                  Отменить
-                </Button>,
+                  items={[
+                    {
+                      key: 'cancel',
+                      label: 'Отменить заказ',
+                      icon: XCircle,
+                      danger: true,
+                      onSelect: () => setCancelOpen(true),
+                      disabled: isBusy,
+                      selectTiming: 'after-close',
+                    },
+                  ]}
+                />,
                 <Button
                   key="order"
                   icon={Send}
@@ -587,15 +593,20 @@ export default function PurchaseOrderDetailPage() {
             : []),
           ...(isOrdered
             ? [
-                <Button
+                <HeaderActionMenu
                   key="cancel"
-                  variant="danger"
-                  icon={XCircle}
-                  onClick={() => setCancelOpen(true)}
-                  disabled={isBusy}
-                >
-                  Отменить
-                </Button>,
+                  items={[
+                    {
+                      key: 'cancel',
+                      label: 'Отменить заказ',
+                      icon: XCircle,
+                      danger: true,
+                      onSelect: () => setCancelOpen(true),
+                      disabled: isBusy,
+                      selectTiming: 'after-close',
+                    },
+                  ]}
+                />,
                 <Button key="receive" icon={PackageCheck} onClick={enterReceiveMode} disabled={isBusy}>
                   Принять поставку
                 </Button>,
@@ -627,8 +638,8 @@ export default function PurchaseOrderDetailPage() {
         />
       )}
       <PageHeader
+        composition="navigation"
         title={po.supplierName || 'Без поставщика'}
-        icon={ShoppingCart}
         backTo="/purchase-orders"
         meta={<PurchaseOrderStatusBadge status={po.status} />}
         subtitle={`Заказ от ${formatDateTime(po.createdAt, tenantTz)}`}

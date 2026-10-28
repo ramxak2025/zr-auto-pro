@@ -19,6 +19,7 @@ import { formatPhone } from '../../../../shared/validation/phone';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import EmptyState from '../../components/EmptyState';
 import PageHeader from '../../components/PageHeader';
+import HeaderActionMenu from '../../components/HeaderActionMenu';
 import QueryState from '../../components/QueryState';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
@@ -94,7 +95,7 @@ export default function AdminManagerDetailPage() {
     const notFound = (isError && apiErrorStatus(error) === 404) || (!isLoading && !isError);
     return (
       <div className="space-y-5">
-        <PageHeader title="Менеджер" icon={UserCog} backTo="/admin/managers" />
+        <PageHeader composition="navigation" title="Менеджер" backTo="/admin/managers" />
         {isLoading ? (
           <div className="space-y-5" aria-busy="true">
             <Card padding="md">
@@ -141,8 +142,8 @@ export default function AdminManagerDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={manager.fullName}
-        icon={UserCog}
         backTo="/admin/managers"
         subtitle={`${formatPhone(manager.phone)} · доля владельца ${formatPercent(manager.ownerSharePercent)} %`}
         meta={
@@ -159,12 +160,29 @@ export default function AdminManagerDetailPage() {
         }
         actions={
           <>
-            <Button variant="secondary" icon={Pencil} onClick={() => setEditOpen(true)}>
+            <Button
+              variant="secondary"
+              icon={Pencil}
+              onClick={() => setEditOpen(true)}
+              className="hidden md:inline-flex"
+            >
               Редактировать
             </Button>
             <Button icon={Banknote} onClick={() => setSettlementOpen(true)}>
               Внести расчёт
             </Button>
+            <HeaderActionMenu
+              items={[
+                {
+                  key: 'edit',
+                  label: 'Редактировать',
+                  icon: Pencil,
+                  onSelect: () => setEditOpen(true),
+                  selectTiming: 'after-close',
+                  narrowOnly: true,
+                },
+              ]}
+            />
           </>
         }
         toolbar={

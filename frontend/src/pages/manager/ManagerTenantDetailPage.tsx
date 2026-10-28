@@ -5,7 +5,6 @@ import {
   Building2,
   CalendarDays,
   CalendarPlus,
-  ChevronDown,
   CreditCard,
   Info,
   KeyRound,
@@ -21,12 +20,13 @@ import { managerApi } from '../../api/services';
 import { formatMoney } from '../../../../shared/utils/formatters';
 import { formatPhone } from '../../../../shared/validation/phone';
 import PageHeader from '../../components/PageHeader';
+import HeaderActionMenu from '../../components/HeaderActionMenu';
 import QueryState from '../../components/QueryState';
 import EmptyState from '../../components/EmptyState';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 import { Button } from '../../ui/Button';
 import { Card, CardHeader } from '../../ui/Card';
-import { DropdownMenu, type MenuEntry } from '../../ui/DropdownMenu';
+import type { MenuEntry } from '../../ui/DropdownMenu';
 import { Skeleton } from '../../ui/Skeleton';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
@@ -122,7 +122,7 @@ export default function ManagerTenantDetailPage() {
   if (isLoading || isPlaceholderData) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Автосервис" icon={Building2} backTo={BACK_TO} />
+        <PageHeader composition="navigation" title="Автосервис" backTo={BACK_TO} />
         <div className="space-y-5" aria-busy="true">
           <Card padding="md">
             <Skeleton className="h-6 w-1/3" />
@@ -148,7 +148,7 @@ export default function ManagerTenantDetailPage() {
   if (isError && !tenant && !isUnavailable(error)) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Автосервис" icon={Building2} backTo={BACK_TO} />
+        <PageHeader composition="navigation" title="Автосервис" backTo={BACK_TO} />
         <Card padding="md">
           <QueryState
             isLoading={false}
@@ -167,7 +167,7 @@ export default function ManagerTenantDetailPage() {
   if (!tenant) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Автосервис" icon={Building2} backTo={BACK_TO} />
+        <PageHeader composition="navigation" title="Автосервис" backTo={BACK_TO} />
         <Card padding="md">
           <EmptyState
             icon={Building2}
@@ -208,8 +208,8 @@ export default function ManagerTenantDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={tenant.name}
-        icon={Building2}
         backTo={BACK_TO}
         subtitle={
           tenant.plan?.name
@@ -231,17 +231,26 @@ export default function ManagerTenantDetailPage() {
             <Button icon={CalendarPlus} onClick={() => setExtendModalOpen(true)}>
               Продлить
             </Button>
-            <Button variant="secondary" icon={CreditCard} onClick={() => setPlanModalOpen(true)}>
+            <Button
+              variant="secondary"
+              icon={CreditCard}
+              onClick={() => setPlanModalOpen(true)}
+              className="hidden md:inline-flex"
+            >
               Тариф
             </Button>
-            <DropdownMenu
-              aria-label="Ещё действия"
-              items={moreItems}
-              trigger={
-                <Button variant="secondary" iconRight={ChevronDown}>
-                  Ещё
-                </Button>
-              }
+            <HeaderActionMenu
+              items={[
+                {
+                  key: 'plan',
+                  label: 'Тариф',
+                  icon: CreditCard,
+                  onSelect: () => setPlanModalOpen(true),
+                  selectTiming: 'after-close',
+                  narrowOnly: true,
+                },
+                ...moreItems,
+              ]}
             />
           </>
         }

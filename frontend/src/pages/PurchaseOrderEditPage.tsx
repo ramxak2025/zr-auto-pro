@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Package, ShoppingCart, Sparkles, Send } from 'lucide-react';
+import { Plus, Trash2, Package, Sparkles, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi, suppliersApi, productsApi, warehousesApi } from '../api/services';
@@ -320,7 +320,7 @@ export default function PurchaseOrderEditPage() {
   if (isEdit && (loadingExisting || existingError)) {
     return (
       <div className="mx-auto w-full max-w-3xl space-y-5">
-        <PageHeader title={title} icon={ShoppingCart} backTo="/purchase-orders" />
+        <PageHeader composition="navigation" title={title} backTo="/purchase-orders" />
         <QueryState
           isLoading={loadingExisting}
           isError={existingError}
@@ -418,8 +418,8 @@ export default function PurchaseOrderEditPage() {
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
       <PageHeader
+        composition="navigation"
         title={title}
-        icon={ShoppingCart}
         backTo="/purchase-orders"
         subtitle={
           items.length > 0

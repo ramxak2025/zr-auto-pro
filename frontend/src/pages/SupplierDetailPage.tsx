@@ -817,7 +817,7 @@ export default function SupplierDetailPage() {
             }}
           />
         )}
-        <PageHeader title="Поставщик" icon={Truck} backTo="/suppliers" />
+        <PageHeader composition="navigation" title="Поставщик" backTo="/suppliers" />
         {!isLoading && (is404 || (!isError && !supplier)) ? (
           <Card>
             <EmptyState icon={Truck} title="Поставщик не найден" description="Возможно, он был удалён" />
@@ -1072,8 +1072,8 @@ export default function SupplierDetailPage() {
         />
       )}
       <PageHeader
+        composition="navigation"
         title={supplier.name}
-        icon={Truck}
         backTo="/suppliers"
         subtitle={subtitle}
         meta={
@@ -1086,7 +1086,11 @@ export default function SupplierDetailPage() {
         actions={
           canManage ? (
             supplier.isSystem ? (
-              <Button icon={Package} onClick={openUsedPurchaseModal}>
+              <Button
+                variant={activeTab === 'deliveries' ? 'primary' : 'secondary'}
+                icon={Package}
+                onClick={openUsedPurchaseModal}
+              >
                 Покупка б/у товара
               </Button>
             ) : (

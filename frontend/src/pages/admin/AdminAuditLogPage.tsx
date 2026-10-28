@@ -89,8 +89,6 @@ export default function AdminAuditLogPage() {
     <div className="space-y-5">
       <PageHeader
         title="Журнал действий"
-        icon={ScrollText}
-        subtitle="Операции администраторов платформы — новые сверху"
         toolbar={
           <>
             {presentActions.length > 1 && (
@@ -99,7 +97,7 @@ export default function AdminAuditLogPage() {
                   aria-label="Действие"
                   value={actionFilter}
                   onChange={(e) => setParams(e.target.value ? { action: e.target.value } : {}, { replace: true })}
-                  className="w-64"
+                  className="w-full sm:w-64"
                 >
                   <option value="">Все действия</option>
                   {presentActions.map((action) => (

@@ -65,7 +65,7 @@ export default function MarketingPage() {
   if (!canAccess) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Маркетинг" icon={Megaphone} />
+        <PageHeader variant="static" title="Маркетинг" />
         <Card>
           <EmptyState icon={Megaphone} title="Нет доступа" description="У вас нет права на раздел «Маркетинг»" />
         </Card>
@@ -86,8 +86,6 @@ export default function MarketingPage() {
     <div className="space-y-5">
       <PageHeader
         title="Маркетинг"
-        icon={Megaphone}
-        subtitle="Отзывы, рассылки, интеграции и лояльность"
         toolbar={
           <>
             <Tabs

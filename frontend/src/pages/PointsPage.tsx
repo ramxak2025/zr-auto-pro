@@ -272,7 +272,7 @@ export default function PointsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Филиалы" icon={Building2} subtitle="Основной сервис и филиалы — сводка по сети" />
+      <PageHeader variant="static" title="Филиалы" subtitle="Основной сервис и филиалы — сводка по сети" />
 
       {isLoading && rows.length === 0 ? (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">

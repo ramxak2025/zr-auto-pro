@@ -621,7 +621,6 @@ function MasterSalaryView() {
     <div className="space-y-5">
       <PageHeader
         title="Моя зарплата"
-        icon={Coins}
         subtitle={summary ? `${summary.masterName} · ставка ${summary.salaryPercent}%` : undefined}
       />
 
@@ -1254,8 +1253,6 @@ function AdminSalaryView() {
     <div className="space-y-5">
       <PageHeader
         title="Зарплата"
-        icon={Coins}
-        subtitle="Начисления, выплаты и остатки сотрудников за период"
         actions={
           // 149 — «Выплата вне программы»: получатель без аккаунта в системе.
           canPayout ? (

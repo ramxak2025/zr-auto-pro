@@ -20,6 +20,7 @@ import { knowledgeApi } from '../api/services';
 import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeCategory, KnowledgeCourse } from '../types';
 import { formatDateShort } from '../../../shared/utils/formatters';
 import PageHeader from '../components/PageHeader';
+import HeaderActionMenu from '../components/HeaderActionMenu';
 import EmptyState from '../components/EmptyState';
 import QueryState from '../components/QueryState';
 import SearchInput from '../components/SearchInput';
@@ -245,12 +246,29 @@ export default function KnowledgeBasePage() {
     if (isArticleSection) {
       actions = (
         <>
-          <Button variant="secondary" icon={FolderPlus} onClick={() => setFolderManager({ presetParent: folderId })}>
+          <Button
+            variant="secondary"
+            icon={FolderPlus}
+            onClick={() => setFolderManager({ presetParent: folderId })}
+            className="hidden md:inline-flex"
+          >
             Папки
           </Button>
           <Button icon={Plus} onClick={() => setEditorArticle('new')}>
             {section === 'regulations' ? 'Новый регламент' : 'Новая статья'}
           </Button>
+          <HeaderActionMenu
+            items={[
+              {
+                key: 'folders',
+                label: 'Папки',
+                icon: FolderPlus,
+                onSelect: () => setFolderManager({ presetParent: folderId }),
+                selectTiming: 'after-close',
+                narrowOnly: true,
+              },
+            ]}
+          />
         </>
       );
     } else if (section === 'learning' && !courseId) {
@@ -274,9 +292,9 @@ export default function KnowledgeBasePage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition={backTo ? 'navigation' : 'section'}
         title="База знаний"
-        icon={GraduationCap}
-        subtitle={subtitle}
+        subtitle={backTo ? subtitle : undefined}
         backTo={backTo}
         actions={actions}
         toolbar={

@@ -312,8 +312,6 @@ export default function InstallmentsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Рассрочка"
-        icon={CreditCard}
-        subtitle="Заказ-наряды, проданные в рассрочку, и график платежей"
         actions={
           canManage ? (
             <Button variant="secondary" icon={Bell} onClick={() => setRemindersOpen(true)}>

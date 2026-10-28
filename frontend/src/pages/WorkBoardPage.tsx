@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import PageHeader from '../components/PageHeader';
+import HeaderActionMenu from '../components/HeaderActionMenu';
 import QueryState from '../components/QueryState';
 import EmptyState from '../components/EmptyState';
 import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
@@ -254,7 +255,6 @@ export default function WorkBoardPage() {
     <div className="space-y-5">
       <PageHeader
         title="Доска работ"
-        icon={LayoutGrid}
         subtitle={
           isLoading
             ? 'Активные заказ-наряды по стадиям. Не влияет на оплату.'
@@ -263,9 +263,28 @@ export default function WorkBoardPage() {
         actions={
           <>
             {canConfigure && (
-              <Button variant="secondary" icon={Settings2} onClick={() => setSettingsOpen(true)}>
-                Настроить колонки
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  icon={Settings2}
+                  onClick={() => setSettingsOpen(true)}
+                  className="hidden md:inline-flex"
+                >
+                  Настроить колонки
+                </Button>
+                <HeaderActionMenu
+                  items={[
+                    {
+                      key: 'columns',
+                      label: 'Настроить колонки',
+                      icon: Settings2,
+                      onSelect: () => setSettingsOpen(true),
+                      selectTiming: 'after-close',
+                      narrowOnly: true,
+                    },
+                  ]}
+                />
+              </>
             )}
             <IconButton
               label="Обновить доску"

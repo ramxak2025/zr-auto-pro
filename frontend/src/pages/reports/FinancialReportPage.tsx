@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Coins,
-  LineChart,
   Lock,
   Package,
   PackageMinus,
@@ -131,7 +130,7 @@ export default function FinancialReportPage() {
   if (!canView) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Финансовый отчёт" icon={LineChart} backTo="/reports" />
+        <PageHeader composition="navigation" title="Финансовый отчёт" backTo="/reports" />
         <Card>
           <EmptyState
             icon={Lock}
@@ -218,8 +217,8 @@ export default function FinancialReportPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title="Финансовый отчёт"
-        icon={LineChart}
         subtitle="Прибыль, расходы, брак и списания, метки — за месяц или период"
         backTo="/reports"
         toolbar={

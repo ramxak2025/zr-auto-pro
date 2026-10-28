@@ -226,7 +226,6 @@ export default function ManagerTenantsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Мои автосервисы"
-        icon={Building2}
         subtitle={summary ? `Всего: ${summary.tenants.total}` : undefined}
         actions={
           <Button icon={Plus} onClick={openCreate}>

@@ -35,6 +35,7 @@ import QueryState from '../components/QueryState';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Modal from '../components/Modal';
 import PageHeader from '../components/PageHeader';
+import HeaderActionMenu from '../components/HeaderActionMenu';
 import EmptyState from '../components/EmptyState';
 import { WorkStatusBadge, WorkStatusPicker, resolveColumn } from '../components/WorkStatusPicker';
 import { CheckStatusBadge, PaymentBadge, PlateBadge } from '../components/checks/checkBadges';
@@ -404,7 +405,7 @@ export default function CheckDetailPage() {
   if (isLoading || isError) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Чек" backTo="/checks" />
+        <PageHeader composition="navigation" title="Чек" backTo="/checks" />
         <QueryState
           isLoading={isLoading}
           isError={isError}
@@ -422,7 +423,7 @@ export default function CheckDetailPage() {
   if (!check) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Чек" backTo="/checks" />
+        <PageHeader composition="navigation" title="Чек" backTo="/checks" />
         <EmptyState
           icon={FileText}
           title="Чек не найден"
@@ -457,6 +458,7 @@ export default function CheckDetailPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={`Чек №${check.number}`}
         backTo="/checks"
         subtitle={`${dateLabel} · ${timeLabel}${check.master?.fullName ? ` · ${check.master.fullName}` : ''}${check.point?.name ? ` · ${check.point.name}` : ''}`}
@@ -472,32 +474,40 @@ export default function CheckDetailPage() {
         }
         actions={
           <>
-            <Button
-              variant="secondary"
-              icon={FileText}
-              onClick={() => generateOrderPdf(check, company || user?.tenant, { vin })}
-            >
-              Заказ-наряд
-            </Button>
-            <IconButton
-              label="Печать чека"
-              icon={Printer}
-              variant="secondary"
-              onClick={() => generateReceiptPdf(check, company || user?.tenant)}
-            />
             {check.isDeferred && (
-              <Button variant="secondary" icon={Pencil} onClick={() => navigate(`/checks/${check.id}/edit`)}>
+              <Button icon={Pencil} onClick={() => navigate(`/checks/${check.id}/edit`)}>
                 Редактировать
               </Button>
             )}
-            {canDelete && (
-              <IconButton
-                label="Удалить чек"
-                icon={Trash2}
-                variant="danger"
-                onClick={() => setShowDeleteDialog(true)}
-              />
-            )}
+            <HeaderActionMenu
+              label="Документы и действия"
+              items={[
+                {
+                  key: 'order-pdf',
+                  label: 'Заказ-наряд',
+                  icon: FileText,
+                  onSelect: () => generateOrderPdf(check, company || user?.tenant, { vin }),
+                },
+                {
+                  key: 'receipt',
+                  label: 'Печать чека',
+                  icon: Printer,
+                  onSelect: () => generateReceiptPdf(check, company || user?.tenant),
+                },
+                ...(canDelete
+                  ? [
+                      {
+                        key: 'delete',
+                        label: 'Удалить чек',
+                        icon: Trash2,
+                        danger: true,
+                        onSelect: () => setShowDeleteDialog(true),
+                        selectTiming: 'after-close' as const,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           </>
         }
       />

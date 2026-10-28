@@ -446,7 +446,7 @@ export default function CallsPage() {
   if (!canView) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Звонки" icon={Phone} />
+        <PageHeader variant="static" title="Звонки" />
         <Card>
           <EmptyState icon={Phone} title="Доступ ограничен" description="У вас нет прав для просмотра звонков" />
         </Card>
@@ -465,8 +465,6 @@ export default function CallsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Звонки"
-        icon={Phone}
-        subtitle="История и записи разговоров по дням"
         toolbar={
           <>
             <Toolbar>
@@ -500,7 +498,7 @@ export default function CallsPage() {
                     if (DAY_KEY_RE.test(v) && v <= today) updateParams({ date: v });
                   }}
                   leftIcon={CalendarDays}
-                  className="!w-44"
+                  className="!w-full sm:!w-44"
                 />
                 {!isToday && (
                   <Button variant="ghost" onClick={() => updateParams({ date: today })}>

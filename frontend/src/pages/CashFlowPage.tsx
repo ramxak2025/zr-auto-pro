@@ -2,7 +2,6 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowDownToLine,
-  ArrowRightLeft,
   Banknote,
   CalendarClock,
   Coins,
@@ -338,8 +337,6 @@ export default function CashFlowPage() {
     <div className="space-y-5">
       <PageHeader
         title="Движение денег"
-        icon={ArrowRightLeft}
-        subtitle="Касса по дням: наличные, карта, рассрочка, погашения"
         toolbar={
           <>
             <Toolbar>
@@ -352,7 +349,7 @@ export default function CashFlowPage() {
                   options={mastersData.map((m) => ({ value: m.id, label: m.fullName }))}
                   value={masterId}
                   onChange={(e) => update({ masterId: e.target.value })}
-                  className="w-52"
+                  className="w-full sm:w-52"
                 />
               )}
             </Toolbar>

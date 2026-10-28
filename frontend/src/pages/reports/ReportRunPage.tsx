@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { BarChart3, FileQuestion, FileSpreadsheet, FileText, RefreshCw } from 'lucide-react';
+import { FileQuestion, FileSpreadsheet, FileText, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { reportBuilderApi } from '../../api/services';
@@ -11,6 +11,7 @@ import { getReportDefinition, isReportId } from '../../../../shared/reports/cata
 import { apiErrorMessage, apiErrorStatus } from '../../../../shared/utils/apiError';
 import type { ReportFilterKind, ReportResult } from '../../types';
 import PageHeader from '../../components/PageHeader';
+import HeaderActionMenu from '../../components/HeaderActionMenu';
 import DatePeriodPicker from '../../components/DatePeriodPicker';
 import EmptyState from '../../components/EmptyState';
 import { ErrorRow } from '../../components/dashboard/shared';
@@ -141,7 +142,7 @@ export default function ReportRunPage() {
   if (!def) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Отчёт не найден" icon={BarChart3} backTo="/reports" />
+        <PageHeader composition="navigation" title="Отчёт не найден" backTo="/reports" />
         <Card>
           <EmptyState
             icon={FileQuestion}
@@ -172,31 +173,32 @@ export default function ReportRunPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        composition="navigation"
         title={def.title}
-        icon={Icon}
         subtitle={def.description}
         backTo="/reports"
         actions={
-          <>
-            <Button
-              variant="secondary"
-              icon={FileSpreadsheet}
-              onClick={() => runExport('excel')}
-              loading={exporting === 'excel'}
-              disabled={!data || exporting !== null}
-            >
-              Excel
-            </Button>
-            <Button
-              variant="secondary"
-              icon={FileText}
-              onClick={() => runExport('pdf')}
-              loading={exporting === 'pdf'}
-              disabled={!data || exporting !== null}
-            >
-              PDF
-            </Button>
-          </>
+          <HeaderActionMenu
+            label="Выгрузить"
+            items={[
+              {
+                key: 'excel',
+                label: 'Excel',
+                icon: FileSpreadsheet,
+                onSelect: () => runExport('excel'),
+                loading: exporting === 'excel',
+                disabled: !data || exporting !== null,
+              },
+              {
+                key: 'pdf',
+                label: 'PDF',
+                icon: FileText,
+                onSelect: () => runExport('pdf'),
+                loading: exporting === 'pdf',
+                disabled: !data || exporting !== null,
+              },
+            ]}
+          />
         }
         toolbar={
           <>
