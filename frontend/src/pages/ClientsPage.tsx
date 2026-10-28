@@ -471,12 +471,14 @@ export default function ClientsPage() {
         toolbar={
           <>
             <Toolbar>
-              <SearchInput
-                value={search}
-                onChange={(val) => updateParams({ q: val, page: 1 })}
-                placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
-                className="w-full sm:w-80"
-              />
+              <div className="w-full sm:w-80">
+                <SearchInput
+                  value={search}
+                  onChange={(val) => updateParams({ q: val, page: 1 })}
+                  placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
+                  className="w-full"
+                />
+              </div>
             </Toolbar>
           </>
         }

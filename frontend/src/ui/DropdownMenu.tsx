@@ -228,7 +228,7 @@ export function DropdownMenu({
             className={cn(
               'fixed z-[10000] rounded-xl border border-line bg-surface p-1 shadow-pop outline-none',
               pos && 'motion-safe:animate-pop-in',
-              responsive && 'overflow-y-auto overscroll-contain',
+              responsive && 'section-menu-responsive overflow-y-auto overscroll-contain',
               className,
             )}
           >

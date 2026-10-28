@@ -204,10 +204,12 @@
   outline-offset: -2px;
 }
 @media (pointer: coarse), (max-width: 639px) {
-  .section-command :is(button, a, input, select) {
+  .section-header .section-command :is(button, a, input, select),
+  .section-header .section-actions :is(button, a).whitespace-nowrap,
+  .section-menu-responsive [role='menuitem'] {
     min-height: 2.75rem;
   }
-  .section-command :is(button, a) {
+  .section-header .section-command :is(button, a) {
     min-width: 2.75rem;
   }
 }
