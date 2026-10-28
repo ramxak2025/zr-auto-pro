@@ -42,7 +42,7 @@ import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 type ParamList = { KnowledgeCourseDetail: { id: string; title?: string } };
 
 export default function KnowledgeCourseDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseDetail'>>();
   const palette = useColors();

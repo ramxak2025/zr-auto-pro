@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 /**
  * MarketingReportsScreen — «Маркетинговые отчёты».
  *
@@ -561,7 +562,7 @@ function TrendsCard({ trends }: { trends: MarketingReport['trends'] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function MarketingReportsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -627,11 +628,23 @@ export default function MarketingReportsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        trailing={
+          <ScreenHeaderMenu
+            label="Период маркетингового отчёта"
+            icon="calendar-outline"
+            title={formatPeriodLabel(period, range)}
+            items={PERIODS.map((p) => ({
+              id: p.key,
+              label: p.label,
+              selected: period === p.key,
+              onSelect: () => handlePeriodChange(p.key),
+            }))}
+          />
+        }
         scroll={section}
         title="Маркетинговые отчёты"
-        subtitle={formatPeriodLabel(period, range)}
         onBack={() => navigation.goBack()}
-        trailing={<FreshnessBadge query={reportQuery} />}
+        context={<FreshnessBadge query={reportQuery} />}
       />
 
       <ScreenSectionScrollView
@@ -656,24 +669,6 @@ export default function MarketingReportsScreen() {
       >
         {/* ── ПЕРИОД ─────────────────────────────────────────────────────── */}
         <View style={styles.periodWrap}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
-            {PERIODS.map((p) => {
-              const active = period === p.key;
-              return (
-                <TouchableOpacity
-                  key={p.key}
-                  style={[styles.periodChip, { backgroundColor: active ? palette.accent.primary : palette.bg.muted }]}
-                  onPress={() => handlePeriodChange(p.key)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.periodText, { color: active ? colors.white : palette.text.secondary }]}>
-                    {p.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-
           {period === 'custom' && (
             <View style={styles.customRow}>
               <TouchableOpacity

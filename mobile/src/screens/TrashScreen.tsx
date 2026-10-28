@@ -1,6 +1,6 @@
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import { HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
 
 /**
  * TrashScreen — mobile counterpart to the web TrashModal.
@@ -37,7 +37,7 @@ interface TrashScreenProps {
 }
 
 export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -163,15 +163,14 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Корзина склада">
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction
-              label="Назад"
-              icon="chevron-back"
-              onPress={() => (onClose ? onClose() : navigation.goBack())}
-            />
-          </View>
+      <ScreenSectionHeader
+        leading={
+          <HeaderAction label="Назад" icon="chevron-back" onPress={() => (onClose ? onClose() : navigation.goBack())} />
+        }
+        scroll={section}
+        title="Корзина склада"
+      >
+        <View style={{ gap: 6 }}>
           <View style={styles.searchWrap}>
             <HeaderSearch
               timing={{ debounceMs: 300 }}
@@ -181,7 +180,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
               placeholder="Поиск..."
             />
           </View>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       {isLoading ? (

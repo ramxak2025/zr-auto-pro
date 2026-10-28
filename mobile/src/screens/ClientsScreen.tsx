@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -44,8 +45,7 @@ import PlateModeSwitcher from '../components/PlateModeSwitcher';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import type { Client, Car, Check, PaginatedResponse } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type Client, type Car, type Check, type PaginatedResponse } from '../../../shared/types';
 
 // Avatar helpers (initials / colour) moved to components/ClientListRow.tsx —
 // they belong to the row, and the row now lives at module scope behind
@@ -119,8 +119,8 @@ export default function ClientsScreen() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const palette = useColors();
-  const plateSection = useScreenSectionScroll();
-  const clientSection = useScreenSectionScroll();
+  const plateSection = useScreenSectionScroll({ composition: 'section' });
+  const clientSection = useScreenSectionScroll({ composition: 'section' });
   // Свайп-действия строки клиента — «Изменить» (PATCH → clients_edit) и
   // «Удалить» (DELETE → clients_delete). «Права как в Битрикс24»: матрица
   // авторитетна — admin живёт по эффективным правам из /auth/me,
@@ -928,27 +928,31 @@ export default function ClientsScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader scroll={section} title="Клиенты" context={<FreshnessBadge query={activeFreshness} />}>
         <HeaderIsland layout="column">
-          <View style={styles.headerActions}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View style={styles.headerActionSpacer} />
-            <HeaderAction
-              label={mode === 'plate' ? 'Искать клиентов' : 'Искать по госномеру'}
-              icon={mode === 'plate' ? 'people-outline' : 'car-sport-outline'}
-              onPress={toggleMode}
-            />
-            <HeaderAction label="Добавить клиента" icon="add" tone="primary" onPress={openCreateModal} />
-          </View>
           {mode === 'plate' ? (
-            <View style={styles.plateSearchWrap}>
-              <View style={styles.plateLabelRow}>
-                <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
-                <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+                <HeaderAction title="По имени" label="Искать клиентов" icon="people-outline" onPress={toggleMode} />
+                <View style={{ flex: 1 }} />
+                <HeaderAction label="Добавить клиента" icon="add" tone="primary" onPress={openCreateModal} />
               </View>
-              <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} mode={plateMode} autoFocus={false} />
-            </View>
+              <View style={styles.plateSearchWrap}>
+                <View style={styles.plateLabelRow}>
+                  <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
+                  <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+                </View>
+                <RussianPlateInput
+                  value={plateSearch}
+                  onChangeText={setPlateSearch}
+                  mode={plateMode}
+                  autoFocus={false}
+                />
+              </View>
+            </>
           ) : (
             <>
-              <View style={styles.searchWrap}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
                 <HeaderSearch
                   timing={{ debounceMs: 300 }}
                   focusOnClear={false}
@@ -961,77 +965,107 @@ export default function ClientsScreen() {
                   // 171 — сервер при включённой опции ищет клиента и по VIN его машин.
                   placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, авто или телефон'}
                 />
+                <HeaderAction label="Добавить клиента" icon="add" tone="primary" onPress={openCreateModal} />
               </View>
-
-              {/* Filter chips — Все / По источнику / Постоянные / Новые /
-              Без номеров. Pinned row height so the chips hug the top
-              instead of stretching+centering in the flex column (#19.1). */}
-              <View style={styles.chipsBar}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                  <FilterChip
-                    active={filter === 'all'}
-                    label="Все"
-                    icon="apps-outline"
-                    onPress={() => {
-                      haptic('select');
-                      setFilter('all');
-                      setSourceFilter(null);
-                    }}
-                    palette={palette}
-                  />
-                  <FilterChip
-                    active={filter === 'source'}
-                    label={filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику'}
-                    icon="pricetag-outline"
-                    onPress={() => {
-                      haptic('select');
-                      setSourceFilterOpen(true);
-                    }}
-                    palette={palette}
-                    dismissable={filter === 'source'}
-                    onDismiss={
-                      filter === 'source'
-                        ? () => {
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 6,
+                }}
+              >
+                <HeaderAction
+                  title="По госномеру"
+                  label="Искать по госномеру"
+                  icon="car-sport-outline"
+                  onPress={toggleMode}
+                />
+                <ScreenHeaderMenu
+                  label="Фильтры клиентов"
+                  icon="options-outline"
+                  title={
+                    filter === 'source'
+                      ? sourceFilter
+                        ? 'Источник: ' + sourceFilter
+                        : 'По источнику'
+                      : filter === 'regular'
+                        ? 'Постоянные'
+                        : filter === 'new'
+                          ? 'Новые'
+                          : filter === 'noplate'
+                            ? 'Без номеров'
+                            : 'Фильтры'
+                  }
+                  items={[
+                    {
+                      id: 'all',
+                      label: 'Все',
+                      selected: filter === 'all',
+                      icon: 'apps-outline',
+                      onSelect: () => {
+                        haptic('select');
+                        setFilter('all');
+                        setSourceFilter(null);
+                      },
+                    },
+                    {
+                      id: 'source',
+                      label: filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику',
+                      selected: filter === 'source',
+                      icon: 'pricetag-outline',
+                      onSelect: () => {
+                        haptic('select');
+                        setSourceFilterOpen(true);
+                      },
+                    },
+                    {
+                      id: 'regular',
+                      label: 'Постоянные',
+                      selected: filter === 'regular',
+                      icon: 'repeat-outline',
+                      onSelect: () => {
+                        haptic('select');
+                        setFilter('regular');
+                        setSourceFilter(null);
+                      },
+                    },
+                    {
+                      id: 'new',
+                      label: 'Новые',
+                      selected: filter === 'new',
+                      icon: 'sparkles-outline',
+                      onSelect: () => {
+                        haptic('select');
+                        setFilter('new');
+                        setSourceFilter(null);
+                      },
+                    },
+                    {
+                      id: 'noplate',
+                      label: 'Без номеров',
+                      selected: filter === 'noplate',
+                      icon: 'help-circle-outline',
+                      onSelect: () => {
+                        haptic('select');
+                        setFilter((f) => (f === 'noplate' ? 'all' : 'noplate'));
+                        setSourceFilter(null);
+                      },
+                    },
+                    filter === 'source' && sourceFilter
+                      ? {
+                          id: 'clear-source',
+                          label: 'Сбросить источник',
+                          icon: 'close-outline',
+                          onSelect: () => {
                             setFilter('all');
                             setSourceFilter(null);
-                          }
-                        : undefined
-                    }
-                  />
-                  <FilterChip
-                    active={filter === 'regular'}
-                    label="Постоянные"
-                    icon="repeat-outline"
-                    onPress={() => {
-                      haptic('select');
-                      setFilter('regular');
-                      setSourceFilter(null);
-                    }}
-                    palette={palette}
-                  />
-                  <FilterChip
-                    active={filter === 'new'}
-                    label="Новые"
-                    icon="sparkles-outline"
-                    onPress={() => {
-                      haptic('select');
-                      setFilter('new');
-                      setSourceFilter(null);
-                    }}
-                    palette={palette}
-                  />
-                  <FilterChip
-                    active={filter === 'noplate'}
-                    label="Без номеров"
-                    icon="help-circle-outline"
-                    onPress={() => {
-                      haptic('select');
-                      setFilter((f) => (f === 'noplate' ? 'all' : 'noplate'));
-                      setSourceFilter(null);
-                    }}
-                    palette={palette}
-                  />
-                </ScrollView>
+                          },
+                        }
+                      : null,
+                  ]}
+                />
               </View>
             </>
           )}

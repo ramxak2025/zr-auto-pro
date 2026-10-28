@@ -2,7 +2,7 @@ import ScreenSectionHeader, {
   useScreenSectionScroll,
   type ScreenSectionScrollController,
 } from '../components/ScreenSectionHeader';
-import { HeaderIsland, HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
+import { HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
@@ -3138,7 +3138,7 @@ const isPlaceholderId = (id: string | undefined | null): boolean =>
   typeof id === 'string' && id.startsWith(SCHEDULE_PLACEHOLDER_PREFIX);
 
 export default function ScheduleScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
 
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
@@ -3241,11 +3241,7 @@ export default function ScheduleScreen() {
     section.reset();
   }, [tab, section.reset]);
   const headerControls = (
-    <HeaderIsland layout="column">
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-        <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-        <View style={{ flex: 1, alignItems: 'flex-end' }}>{trailingMonthStepper}</View>
-      </View>
+    <View style={{ gap: 6 }}>
       <View style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}>
         <View style={[styles.tabBarInner, { backgroundColor: palette.bg.muted }]}>
           {tabConfig.map((t) => {
@@ -3278,7 +3274,7 @@ export default function ScheduleScreen() {
           })}
         </View>
       </View>
-    </HeaderIsland>
+    </View>
   );
 
   return (
@@ -3287,6 +3283,9 @@ export default function ScheduleScreen() {
         {/* Unified iOS header — same component used across screens. */}
         {tab === 'grid' ? (
           <ScreenSectionHeader
+            composition="navigation"
+            leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+            actions={<>{trailingMonthStepper}</>}
             variant="static"
             title="Расписание"
             context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
@@ -3295,6 +3294,8 @@ export default function ScheduleScreen() {
           </ScreenSectionHeader>
         ) : (
           <ScreenSectionHeader
+            leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+            actions={<>{trailingMonthStepper}</>}
             scroll={section}
             title="Расписание"
             context={<PointIndicator variant="chip" style={styles.pointChipRow} />}

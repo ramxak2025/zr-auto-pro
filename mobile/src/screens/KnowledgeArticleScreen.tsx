@@ -92,7 +92,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function KnowledgeArticleScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeArticle'>>();
   const palette = useColors();

@@ -1,3 +1,4 @@
+jest.mock('../../components/ScreenHeaderMenu', () => ({ __esModule: true, default: 'HeaderMenu' }));
 // Screen chrome is inert here; these suites exercise the existing business handlers.
 const mockSectionScroll = {
   scrollY: { value: 0 },

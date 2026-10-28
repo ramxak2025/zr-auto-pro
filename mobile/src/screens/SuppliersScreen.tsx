@@ -264,7 +264,7 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({
 });
 
 export default function SuppliersScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'section' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -553,61 +553,20 @@ export default function SuppliersScreen() {
       context={view === 'suppliers' ? <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} /> : null}
     >
       <HeaderIsland layout="column">
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          <View
-            style={{
-              flex: 1,
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              justifyContent: 'flex-end',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            {view === 'suppliers' ? (
-              /* Suppliers segment — управляющие действия видны только с
-               `suppliers_manage`. Без него экран строго view-only: ни
-               «Возврат брака», ни «+ Новый» не рендерим (мёртвых кнопок
-               не оставляем).
-               1) «Возврат брака» — secondary, opens a supplier picker
-                  sheet that forwards to SupplierDetail with the
-                  auto-open flag.
-               2) «+ Новый» — primary, opens the create-supplier modal. */
-              canManageSuppliers ? (
-                <View style={styles.headerTrailing}>
-                  <TouchableOpacity
-                    onPress={() => setDefectPickerOpen(true)}
-                    style={[
-                      [
-                        styles.headerSecondaryBtn,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      ],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Возврат брака"
-                  >
-                    <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
-                    <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
-                      Возврат брака
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                    onPress={openCreate}
-                    hitSlop={8}
-                    accessibilityLabel="Новый поставщик"
-                  >
-                    <Ionicons name="add" size={18} color={colors.white} />
-                  </TouchableOpacity>
-                </View>
-              ) : undefined
-            ) : canManageSuppliers ? (
-              /* Orders segment — single «+» that opens order creation. The
-               embedded PurchaseOrdersScreen drops its own header, so this
-               is the create entry-point (mirrors the standalone screen). */
+          <View style={{ flex: 1, minWidth: 0 }}>{view === 'suppliers' ? controls : null}</View>
+          {canManageSuppliers ? (
+            view === 'suppliers' ? (
+              <TouchableOpacity
+                style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                onPress={openCreate}
+                hitSlop={8}
+                accessibilityLabel="Новый поставщик"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            ) : (
               <TouchableOpacity
                 style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
                 onPress={() => {
@@ -620,46 +579,70 @@ export default function SuppliersScreen() {
               >
                 <Ionicons name="add" size={18} color={colors.white} />
               </TouchableOpacity>
-            ) : undefined}
-          </View>
+            )
+          ) : null}
         </View>
-        <View style={styles.segmentWrap}>
-          <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
-            {(['suppliers', 'orders'] as SuppliersView[]).map((key) => {
-              const active = view === key;
-              return (
-                <TouchableOpacity
-                  key={key}
-                  style={[
-                    [styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                  onPress={() => {
-                    if (active) return;
-                    haptic('select');
-                    setView(key);
-                  }}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                >
-                  <Ionicons
-                    name={key === 'suppliers' ? 'business-outline' : 'clipboard-outline'}
-                    size={15}
-                    color={active ? palette.text.primary : palette.text.tertiary}
-                  />
-                  <Text
-                    style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
-                    numberOfLines={1}
-                  >
-                    {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+          <View style={{ flex: 1, minWidth: 180 }}>
+            <View style={styles.segmentWrap}>
+              <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
+                {(['suppliers', 'orders'] as SuppliersView[]).map((key) => {
+                  const active = view === key;
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={[
+                        [
+                          styles.segmentItem,
+                          active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }],
+                        ],
+                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                      ]}
+                      onPress={() => {
+                        if (active) return;
+                        haptic('select');
+                        setView(key);
+                      }}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                    >
+                      <Ionicons
+                        name={key === 'suppliers' ? 'business-outline' : 'clipboard-outline'}
+                        size={15}
+                        color={active ? palette.text.primary : palette.text.tertiary}
+                      />
+                      <Text
+                        style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
+                        numberOfLines={1}
+                      >
+                        {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
           </View>
+          {view === 'suppliers' && canManageSuppliers ? (
+            <TouchableOpacity
+              onPress={() => setDefectPickerOpen(true)}
+              style={[
+                [styles.headerSecondaryBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Возврат брака"
+            >
+              <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+              <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
+                Возврат брака
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
-        {controls}
+        {view === 'orders' ? controls : null}
       </HeaderIsland>
     </ScreenSectionHeader>
   );

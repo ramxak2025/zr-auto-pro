@@ -878,8 +878,9 @@ export default function ClientDetailScreen() {
       setHistoryExpanded(true);
     }
   };
-  const retailSection = useScreenSectionScroll();
+  const retailSection = useScreenSectionScroll({ composition: 'navigation' });
   const detailSection = useScreenSectionScroll({
+    composition: 'navigation',
     onScroll: (event) => maybeExpandHistory(event.nativeEvent.contentOffset.y),
   });
   const section = isRetail ? retailSection : detailSection;

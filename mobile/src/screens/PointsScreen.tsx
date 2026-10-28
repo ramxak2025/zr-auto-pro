@@ -90,7 +90,7 @@ import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 export default function PointsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -354,12 +354,7 @@ export default function PointsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="Филиалы"
-        subtitle="Основной сервис и филиалы"
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader scroll={section} title="Филиалы" onBack={() => navigation.goBack()} />
 
       <ScreenSectionScrollView
         onScroll={section.onScroll}

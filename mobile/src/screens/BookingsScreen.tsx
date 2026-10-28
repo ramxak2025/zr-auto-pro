@@ -1,4 +1,4 @@
-import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 import ScreenSectionHeader, {
   useScreenSectionScroll,
@@ -155,7 +155,7 @@ export default function BookingsScreen({
   sectionController?: ScreenSectionScrollController;
   sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
 } = {}) {
-  const ownSection = useScreenSectionScroll();
+  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
   const section = sectionController ?? ownSection;
 
   const navigation = useNavigation<any>();
@@ -311,25 +311,13 @@ export default function BookingsScreen({
       {sectionHeader ? (
         sectionHeader(sectionControls, headerActions)
       ) : (
-        <ScreenSectionHeader scroll={section} title="Записи">
-          <HeaderIsland layout="column">
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-              <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-              <View
-                style={{
-                  flex: 1,
-                  flexDirection: 'row',
-                  flexWrap: 'wrap',
-                  justifyContent: 'flex-end',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                {headerActions}
-              </View>
-            </View>
-            {sectionControls}
-          </HeaderIsland>
+        <ScreenSectionHeader
+          actions={headerActions}
+          leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+          scroll={section}
+          title="Записи"
+        >
+          <View style={{ gap: 6 }}>{sectionControls}</View>
         </ScreenSectionHeader>
       )}
 

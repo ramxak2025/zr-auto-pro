@@ -88,7 +88,7 @@ interface DraftLine {
 const SAVE_BAR_HEIGHT = spacing[3] + 24 + spacing[2.5] + spacing[3.5] * 2 + 16 + spacing[3];
 
 export default function PurchaseOrderCreateScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();

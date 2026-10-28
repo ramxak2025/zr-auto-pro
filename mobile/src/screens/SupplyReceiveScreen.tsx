@@ -105,7 +105,7 @@ function parseOptionalPrice(t: string): number | null {
 }
 
 export default function SupplyReceiveScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();

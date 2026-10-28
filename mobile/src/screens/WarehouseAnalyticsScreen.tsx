@@ -1,4 +1,5 @@
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+
 /**
  * WarehouseAnalyticsScreen — premium financial analytics for warehouse.
  *
@@ -78,49 +79,25 @@ interface MonthPeriodSwitcherProps {
 function MonthPeriodSwitcher({ value, onChange }: MonthPeriodSwitcherProps) {
   const palette = useColors();
   return (
-    <View style={[styles.segWrap, { backgroundColor: palette.bg.muted }]}>
-      {PERIODS.map((p) => {
+    <ScreenHeaderMenu
+      label="Период складской аналитики"
+      icon="calendar-outline"
+      title={PERIODS.find((period) => period.key === value)?.label ?? 'Период'}
+      items={PERIODS.map((p) => {
         const active = value === p.key;
-        return (
-          <Pressable
-            key={p.key}
-            onPress={() => {
-              if (!active) {
-                haptic('select');
-                onChange(p.key);
-              }
-            }}
-            style={[
-              [
-                styles.segItem,
-                active && {
-                  backgroundColor: palette.bg.card,
-                  shadowColor: '#000',
-                  shadowOpacity: palette.mode === 'dark' ? 0.18 : 0.06,
-                  shadowRadius: 4,
-                  shadowOffset: { width: 0, height: 1 },
-                },
-              ],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
-            ]}
-            hitSlop={6}
-          >
-            <Text
-              variant="caption"
-              style={[
-                styles.segItemText,
-                {
-                  color: active ? palette.text.primary : palette.text.secondary,
-                  fontWeight: active ? '700' : '500',
-                },
-              ]}
-            >
-              {p.label}
-            </Text>
-          </Pressable>
-        );
+        return {
+          id: p.key,
+          label: p.label,
+          selected: active,
+          onSelect: () => {
+            if (!active) {
+              haptic('select');
+              onChange(p.key);
+            }
+          },
+        };
       })}
-    </View>
+    />
   );
 }
 
@@ -259,7 +236,7 @@ function UrgencyBadge({ urgency }: { urgency: ReorderItem['urgency'] }) {
 // ────────────────────────────────────────────────────────────────────────
 
 export default function WarehouseAnalyticsScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();

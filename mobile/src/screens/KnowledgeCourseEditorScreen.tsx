@@ -1,3 +1,4 @@
+import { HeaderAction } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeCourseEditorScreen — create / edit a course AND its lessons
  * (manager only).
@@ -41,7 +42,7 @@ type ParamList = { KnowledgeCourseEditor: { id?: string } };
 type Palette = ReturnType<typeof useColors>;
 
 export default function KnowledgeCourseEditorScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseEditor'>>();
   const palette = useColors();
@@ -190,18 +191,14 @@ export default function KnowledgeCourseEditorScreen() {
   }
 
   const saveTrailing = (
-    <Pressable
+    <HeaderAction
+      label="Сохранить"
+      title="Сохранить"
+      tone="primary"
       onPress={onSave}
       disabled={saveMutation.isPending}
-      hitSlop={10}
-      style={[styles.saveBtn, { backgroundColor: palette.accent.primary, opacity: saveMutation.isPending ? 0.6 : 1 }]}
-      accessibilityRole="button"
-      accessibilityLabel="Сохранить"
-    >
-      <Text variant="footnote" color={colors.white} style={{ fontWeight: '700' }}>
-        {saveMutation.isPending ? '…' : 'Готово'}
-      </Text>
-    </Pressable>
+      loading={saveMutation.isPending}
+    />
   );
 
   return (

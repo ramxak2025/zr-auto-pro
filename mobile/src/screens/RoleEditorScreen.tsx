@@ -157,7 +157,7 @@ function ScopeSegment({
 }
 
 export default function RoleEditorScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const roleId: string | undefined = route.params?.roleId;

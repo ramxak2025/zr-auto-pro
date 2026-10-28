@@ -1,3 +1,4 @@
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
 import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 
@@ -112,7 +113,7 @@ const ServiceRow = React.memo(function ServiceRow({ item, onHistory, palette }: 
 });
 
 export default function ServicesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'section' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -565,52 +566,6 @@ export default function ServicesScreen() {
 
   const catalogTools = (
     <>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: spacing[4],
-          marginHorizontal: spacing[4],
-          paddingVertical: spacing[2],
-        }}
-      >
-        {!isOwner && (
-          <TouchableOpacity
-            onPress={() => {
-              setShowAllServices((value) => !value);
-            }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: showAllServices }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
-              <Ionicons
-                name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
-                size={18}
-                color={colors.primary[600]}
-              />
-              <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
-                {showAllServices ? 'Показ по роли' : 'Все услуги'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        )}
-        {canManageServices && (
-          <TouchableOpacity
-            disabled={!visibilityConfigQuery.isSuccess}
-            onPress={() => setFolderListOpen(true)}
-            accessibilityRole="button"
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: spacing[1],
-              opacity: visibilityConfigQuery.isSuccess ? 1 : 0.45,
-            }}
-          >
-            <Ionicons name="shield-checkmark-outline" size={18} color={colors.primary[600]} />
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Видимость</Text>
-          </TouchableOpacity>
-        )}
-      </View>
       {canManageServices && visibilityConfigQuery.isError && (
         <View
           style={{
@@ -625,60 +580,6 @@ export default function ServicesScreen() {
           <TouchableOpacity onPress={() => void visibilityConfigQuery.refetch()} accessibilityRole="button">
             <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
           </TouchableOpacity>
-        </View>
-      )}
-      {canManageServices && (
-        <View
-          style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[4], paddingHorizontal: spacing[4] }}
-        >
-          <TouchableOpacity
-            onPress={() => void exportCatalog()}
-            accessibilityRole="button"
-            accessibilityLabel="Экспортировать каталог в Excel"
-          >
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Экспорт Excel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => void chooseImportFile()}
-            disabled={importBusy}
-            accessibilityRole="button"
-            accessibilityLabel="Импортировать услуги из Excel"
-          >
-            <Text
-              style={{ color: colors.primary[600], fontWeight: fontWeight.semibold, opacity: importBusy ? 0.5 : 1 }}
-            >
-              Импорт Excel
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {canManageServices && !search && (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: spacing[4],
-            paddingVertical: spacing[3],
-          }}
-        >
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={{ minHeight: 44, justifyContent: 'center' }}
-            accessibilityLabel="Новая папка"
-            onPress={() => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() })}
-          >
-            <Text style={{ color: palette.accent.primaryText, fontWeight: '600' }}>Новая папка</Text>
-          </TouchableOpacity>
-          {activePath.length > 0 && (
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={{ minHeight: 44, justifyContent: 'center' }}
-              onPress={() => folderActions(activePath.join('/'))}
-            >
-              <Text style={{ color: palette.accent.primaryText }}>Управление папкой</Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
     </>
@@ -704,29 +605,8 @@ export default function ServicesScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScreenSectionHeader scroll={section} title="Услуги" subtitle={total > 0 ? `Услуг: ${total}` : undefined}>
         <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {canManageServices ? (
-                <TouchableOpacity
-                  style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                  onPress={openCreate}
-                >
-                  <Text style={styles.addBtnText}>+ Новая</Text>
-                </TouchableOpacity>
-              ) : undefined}
-            </View>
-          </View>
-          <View style={styles.searchWrap}>
             <HeaderSearch
               timing={{ debounceMs: 300 }}
               focusOnClear={false}
@@ -736,37 +616,129 @@ export default function ServicesScreen() {
               }}
               placeholder="Поиск во всех папках"
             />
-          </View>
-          {!search && activePath.length > 0 && (
-            <View style={styles.breadcrumb}>
+            {canManageServices ? (
               <TouchableOpacity
-                onPress={() => setActivePath([])}
-                style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                onPress={openCreate}
               >
-                <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-                <Text style={styles.breadcrumbText}>Все</Text>
+                <Text style={styles.addBtnText}>+ Новая</Text>
               </TouchableOpacity>
-              {activePath.map((seg, i) => (
-                <React.Fragment key={i}>
-                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+            ) : undefined}
+          </View>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 6,
+            }}
+          >
+            <View style={{ flex: 1, minWidth: 0 }}>
+              {!search && activePath.length > 0 && (
+                <View style={styles.breadcrumb}>
                   <TouchableOpacity
-                    onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
+                    onPress={() => setActivePath([])}
                     style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
                   >
-                    <Text
-                      style={[
-                        styles.breadcrumbText,
-                        { color: palette.text.secondary },
-                        i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
-                      ]}
-                    >
-                      {seg}
-                    </Text>
+                    <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
+                    <Text style={styles.breadcrumbText}>Все</Text>
                   </TouchableOpacity>
-                </React.Fragment>
-              ))}
+                  {activePath.map((seg, i) => (
+                    <React.Fragment key={i}>
+                      <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+                      <TouchableOpacity
+                        onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
+                        style={[styles.breadcrumbItem, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                      >
+                        <Text
+                          style={[
+                            styles.breadcrumbText,
+                            { color: palette.text.secondary },
+                            i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
+                          ]}
+                        >
+                          {seg}
+                        </Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  ))}
+                </View>
+              )}
             </View>
-          )}
+            {canManageServices ? (
+              <ScreenHeaderMenu
+                label="Действия каталога услуг"
+                items={[
+                  !isOwner && {
+                    id: 'visibility-scope',
+                    label: showAllServices ? 'Показ по роли' : 'Все услуги',
+                    icon: 'eye-outline',
+                    onSelect: () => {
+                      setShowAllServices((value) => !value);
+                    },
+                    selected: showAllServices,
+                  },
+                  canManageServices && {
+                    id: 'visibility',
+                    label: 'Видимость услуг',
+                    icon: 'shield-checkmark-outline',
+                    onSelect: () => setFolderListOpen(true),
+                    disabled: !visibilityConfigQuery.isSuccess,
+                  },
+                  canManageServices && {
+                    id: 'export',
+                    label: 'Экспорт Excel',
+                    icon: 'download-outline',
+                    onSelect: () => void exportCatalog(),
+                  },
+                  canManageServices && {
+                    id: 'import',
+                    label: 'Импорт Excel',
+                    icon: 'cloud-upload-outline',
+                    onSelect: () => void chooseImportFile(),
+                    disabled: importBusy,
+                    loading: importBusy,
+                  },
+                  canManageServices &&
+                    !search && {
+                      id: 'new-folder',
+                      label: 'Новая папка',
+                      icon: 'folder-open-outline',
+                      onSelect: () => setNewFolder({ parentPath: activePath.join('/'), session: captureDataSession() }),
+                    },
+                  canManageServices &&
+                    !search &&
+                    activePath.length > 0 && {
+                      id: 'folder-actions',
+                      label: 'Управление папкой',
+                      icon: 'folder-outline',
+                      onSelect: () => folderActions(activePath.join('/')),
+                    },
+                ]}
+              />
+            ) : !isOwner ? (
+              <TouchableOpacity
+                style={{ minWidth: headerTouchSize, minHeight: headerTouchSize, justifyContent: 'center' }}
+                onPress={() => {
+                  setShowAllServices((value) => !value);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: showAllServices }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1] }}>
+                  <Ionicons
+                    name={showAllServices ? 'eye-off-outline' : 'eye-outline'}
+                    size={18}
+                    color={colors.primary[600]}
+                  />
+                  <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>
+                    {showAllServices ? 'Показ по роли' : 'Все услуги'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </HeaderIsland>
       </ScreenSectionHeader>
 

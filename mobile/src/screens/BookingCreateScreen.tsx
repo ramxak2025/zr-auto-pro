@@ -50,7 +50,7 @@ import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 const SAVE_BAR_HEIGHT = spacing[3] * 2 + spacing[3.5] * 2 + 16;
 
 export default function BookingCreateScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -932,5 +932,5 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3.5],
     borderRadius: borderRadius.xl,
   },
-  saveBtnText: { fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
+  saveBtnText: { flexShrink: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
 });

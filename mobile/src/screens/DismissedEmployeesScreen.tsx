@@ -226,7 +226,7 @@ const DismissedRow = React.memo(function DismissedRow({ user, palette, onRestore
 });
 
 export default function DismissedEmployeesScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();

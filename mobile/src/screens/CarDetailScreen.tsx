@@ -98,7 +98,7 @@ type CarDetailParams = {
 };
 
 export default function CarDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();

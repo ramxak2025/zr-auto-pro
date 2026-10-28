@@ -1,4 +1,5 @@
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
 
 /**
  * EmployeeDetailScreen — focused profile of a single staff member.
@@ -177,7 +178,7 @@ function getInitials(fullName?: string): string {
 // ──────────────────────────────────────────────────────────────────────────
 
 export default function EmployeeDetailScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RouteParams, 'EmployeeDetail'>>();
   const id = route.params?.id;
@@ -237,7 +238,7 @@ export default function EmployeeDetailScreen() {
   });
 
   // ── Menu (share + edit + award) ──────────────────────────────────────
-  const [menuOpen, setMenuOpen] = useState(false);
+
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [awardOpen, setAwardOpen] = useState(false);
@@ -469,21 +470,6 @@ export default function EmployeeDetailScreen() {
   };
 
   // ── Header trailing (⋯) ──────────────────────────────────────────────
-  const trailing = (
-    <Pressable
-      onPress={() => {
-        haptic('tap');
-        setMenuOpen((v) => !v);
-      }}
-      style={[
-        [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-      ]}
-      hitSlop={10}
-    >
-      <Ionicons name="ellipsis-horizontal" size={20} color={palette.text.primary} />
-    </Pressable>
-  );
 
   // ── Quick actions: phone + whatsapp + schedule + salary ──────────────
   const goCall = () => {
@@ -529,83 +515,66 @@ export default function EmployeeDetailScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         scroll={section}
-        title="Сотрудник"
+        title={profile.fullName || userRecord?.fullName || 'Сотрудник'}
         onBack={() => navigation.goBack()}
         trailing={
-          <View style={{ position: 'relative' }}>
-            {trailing}
-            {menuOpen && (
-              <View style={[styles.menu, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}>
-                <MenuItem
-                  icon="share-outline"
-                  label="Поделиться карточкой"
-                  onPress={() => {
-                    setMenuOpen(false);
+          isOwnerLike || canDismiss ? (
+            <ScreenHeaderMenu
+              label="Действия сотрудника"
+              items={[
+                true && {
+                  id: 'share',
+                  label: 'Поделиться карточкой',
+                  icon: 'share-outline',
+                  onSelect: () => {
                     setShareOpen(true);
-                  }}
-                  palette={palette}
-                />
-                {isOwnerLike && (
-                  <>
-                    <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
-                    <MenuItem
-                      icon="create-outline"
-                      label="Редактировать"
-                      onPress={() => {
-                        setMenuOpen(false);
-                        setEditOpen(true);
-                      }}
-                      palette={palette}
-                    />
-                    <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
-                    <MenuItem
-                      icon="ribbon-outline"
-                      label="Выдать значок"
-                      onPress={() => {
-                        setMenuOpen(false);
-                        setAwardOpen(true);
-                      }}
-                      palette={palette}
-                    />
-                    {/* Доступ к филиалам настраивается ЗДЕСЬ (163) — в карточке
-                  человека, а не в разделе «Филиалы»: там состав показывается
-                  только для просмотра. У одноточечного тенанта пункта нет. */}
-                    {multiPoint && (
-                      <>
-                        <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
-                        <MenuItem
-                          icon="business-outline"
-                          label="Филиалы сотрудника"
-                          onPress={() => {
-                            setMenuOpen(false);
-                            setPointsOpen(true);
-                          }}
-                          palette={palette}
-                        />
-                      </>
-                    )}
-                  </>
-                )}
-                {canDismiss && (
-                  <>
-                    <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
-                    {/* Деструктив — стиль CheckDetailScreen: красный пункт +
-                  destructive-confirm Alert перед мутацией. */}
-                    <MenuItem
-                      icon="person-remove-outline"
-                      label="Уволить сотрудника"
-                      destructive
-                      onPress={() => {
-                        setMenuOpen(false);
-                        confirmDismiss();
-                      }}
-                      palette={palette}
-                    />
-                  </>
-                )}
-              </View>
-            )}
-          </View>
+                  },
+                },
+                isOwnerLike && {
+                  id: 'edit',
+                  label: 'Редактировать',
+                  icon: 'create-outline',
+                  onSelect: () => {
+                    setEditOpen(true);
+                  },
+                },
+                isOwnerLike && {
+                  id: 'award',
+                  label: 'Выдать значок',
+                  icon: 'ribbon-outline',
+                  onSelect: () => {
+                    setAwardOpen(true);
+                  },
+                },
+                isOwnerLike &&
+                  multiPoint && {
+                    id: 'points',
+                    label: 'Филиалы сотрудника',
+                    icon: 'business-outline',
+                    onSelect: () => {
+                      setPointsOpen(true);
+                    },
+                  },
+                canDismiss && {
+                  id: 'dismiss',
+                  label: 'Уволить сотрудника',
+                  icon: 'person-remove-outline',
+                  danger: true,
+                  onSelect: () => {
+                    confirmDismiss();
+                  },
+                },
+              ]}
+            />
+          ) : (
+            <HeaderAction
+              label="Поделиться карточкой"
+              icon="share-outline"
+              onPress={() => {
+                setShareOpen(true);
+              }}
+            />
+          )
         }
       />
 
@@ -922,7 +891,7 @@ function DismissedReadOnly({
   purged: boolean;
   canManage: boolean;
 }) {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const dateStr = dismissedAt
     ? new Date(dismissedAt).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })
     : null;

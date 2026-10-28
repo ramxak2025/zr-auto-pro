@@ -1,4 +1,4 @@
-import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
@@ -54,7 +54,7 @@ const TABS: { key: FilterTab; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): список звонков доступен по calls_view (гейт
@@ -193,63 +193,54 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   return (
     <View style={[styles.container, { backgroundColor: palette.bg.canvas }]}>
       {/* Unified iOS header — date stepper + calendar in trailing slot. */}
-      <ScreenSectionHeader scroll={section} title="Звонки" subtitle={dateLabel}>
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
+      <ScreenSectionHeader
+        actions={
+          <View style={styles.dateNav}>
+            <TouchableOpacity
+              onPress={goToPrevDay}
+              style={[
+                [styles.dateBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Предыдущий день"
             >
-              {
-                <View style={styles.dateNav}>
-                  <TouchableOpacity
-                    onPress={goToPrevDay}
-                    style={[
-                      [styles.dateBtn, { backgroundColor: palette.bg.muted }],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Предыдущий день"
-                  >
-                    <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={openDatePicker}
-                    style={[
-                      [styles.dateBtn, { backgroundColor: palette.bg.muted }],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Выбрать дату"
-                  >
-                    <Ionicons name="calendar-outline" size={16} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={goToNextDay}
-                    disabled={isToday}
-                    style={[
-                      [styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Следующий день"
-                  >
-                    <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                </View>
-              }
-            </View>
+              <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={openDatePicker}
+              style={[
+                [styles.dateBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Выбрать дату"
+            >
+              <Ionicons name="calendar-outline" size={16} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={goToNextDay}
+              disabled={isToday}
+              style={[
+                [styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Следующий день"
+            >
+              <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
           </View>
+        }
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
+        scroll={section}
+        title="Звонки"
+        subtitle={dateLabel}
+      >
+        <View style={{ gap: 6 }}>
           <View style={styles.tabs}>
             {TABS.map((tab) => {
               const count =
@@ -295,7 +286,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
               );
             })}
           </View>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
 
       {/* One-line digest — "Сегодня: 12 звонков · 3 пропущенных · 5 → клиенты" */}

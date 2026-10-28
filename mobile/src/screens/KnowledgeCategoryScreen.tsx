@@ -72,7 +72,7 @@ const foldersLabel = (n: number) => `${n} ${plural(n, 'папка', 'папки'
 const articlesLabel = (n: number) => `${n} ${plural(n, 'статья', 'статьи', 'статей')}`;
 
 export default function KnowledgeCategoryScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCategory'>>();
   const palette = useColors();

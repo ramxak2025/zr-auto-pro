@@ -149,7 +149,7 @@ const WinbackRow = React.memo(function WinbackRow({ client, showBorder, palette 
 // ─────────────────────────────────────────────────────────────────────
 
 export default function WinbackScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();

@@ -45,7 +45,7 @@ interface Line {
 }
 /** Direct receipt uses the existing durable financial request, never stock-only updates. */
 export default function DirectSupplyCreateScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'DirectSupplyCreate'>>();
   const { supplierId, supplierName } = route.params;

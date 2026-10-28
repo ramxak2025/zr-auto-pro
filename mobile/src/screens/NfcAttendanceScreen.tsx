@@ -29,7 +29,7 @@ import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 type ScreenState = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error';
 
 export default function NfcAttendanceScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const navigation = useNavigation();
   const tabBarHeight = useTabBarHeight();

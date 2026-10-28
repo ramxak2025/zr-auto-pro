@@ -225,7 +225,7 @@ const RequestCard = React.memo(function RequestCard({
 });
 
 export default function ProfileScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const { user, refreshUser, hasPermission } = useAuth();
   const palette = useColors();

@@ -1,4 +1,4 @@
-import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
 import ScreenSectionHeader, {
   useScreenSectionScroll,
   type ScreenSectionScrollController,
@@ -1670,7 +1670,7 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
 
 // ─── Main Equipment screen ─────────────────────────────────────────────────
 export default function EquipmentScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
 
   const navigation = useNavigation<any>();
   const { user, hasPermission } = useAuth();
@@ -1815,30 +1815,17 @@ export default function EquipmentScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
       <ScreenSectionHeader
+        actions={headerTrailing}
+        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
         scroll={section}
         title="Имущество"
         context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
       >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View
-              style={{
-                flex: 1,
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {headerTrailing}
-            </View>
-          </View>
+        <View style={{ gap: 6 }}>
           <View style={styles.segmentWrap}>
             <SegmentedTabs value={tab} onChange={setTab} />
           </View>
-        </HeaderIsland>
+        </View>
       </ScreenSectionHeader>
       {/* Автосервис (168): подсобка и штат — филиала сессии. Только подпись. */}
 
@@ -1884,7 +1871,7 @@ export default function EquipmentScreen() {
 
 // ─── Employee detail screen (отдельный экран в EquipmentStack) ─────────────
 export function EquipmentEmployeeScreen() {
-  const section = useScreenSectionScroll();
+  const section = useScreenSectionScroll({ composition: 'navigation' });
 
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
