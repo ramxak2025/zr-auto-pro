@@ -1,3 +1,4 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 /**
  * TemplatesScreen — раздел «Шаблоны» (Ещё → Работа).
  *
@@ -44,9 +45,11 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import type { CheckTemplate, CheckTemplateFolder } from '../../../shared/types';
+import { type CheckTemplate, type CheckTemplateFolder } from '../../../shared/types';
 import { serviceLineTotal } from '../../../shared/utils/checkLines';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Помощники домена шаблонов — экспортируются: их переиспользуют
@@ -214,6 +217,7 @@ const pickerStyles = StyleSheet.create({
 type FolderModalState = { mode: 'create'; isShared: boolean } | { mode: 'rename'; folder: CheckTemplateFolder } | null;
 
 export default function TemplatesScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const focused = useIsFocused();
   const queryClient = useQueryClient();
@@ -594,6 +598,7 @@ export default function TemplatesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={currentFolder ? currentFolder.name : 'Шаблоны'}
         subtitle={
           currentFolder
@@ -606,7 +611,10 @@ export default function TemplatesScreen() {
             <TouchableOpacity
               onPress={openCreateMenu}
               hitSlop={10}
-              style={[styles.addBtn, { backgroundColor: palette.bg.muted }]}
+              style={[
+                [styles.addBtn, { backgroundColor: palette.bg.muted }],
+                { minWidth: headerTouchSize, minHeight: headerTouchSize },
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Создать шаблон или папку"
             >
@@ -616,10 +624,15 @@ export default function TemplatesScreen() {
         }
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
         contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         {initialLoading ? (
           <ListSkeleton count={6} />
@@ -716,7 +729,7 @@ export default function TemplatesScreen() {
             )}
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Создание / переименование папки — свой модал с TextInput:
           Alert.prompt есть только на iOS, Android получил бы заглушку. */}

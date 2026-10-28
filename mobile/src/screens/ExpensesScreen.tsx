@@ -51,7 +51,6 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-
 import { Ionicons } from '@expo/vector-icons';
 import { Switch } from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -77,7 +76,9 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { User } from '../../../shared/types';
-import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Local types
@@ -558,6 +559,7 @@ const CategoryTile = React.memo(function CategoryTile({
 // ────────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user, hasPermission } = useAuth();
@@ -1115,14 +1117,20 @@ export default function ExpensesScreen() {
   const trailing = (
     <View style={styles.headerTrailing}>
       <TouchableOpacity
-        style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}
+        accessibilityRole="button"
+        style={[
+          [styles.monthChip, { backgroundColor: palette.bg.muted }],
+          { minWidth: headerTouchSize, minHeight: headerTouchSize },
+        ]}
         onPress={() => setDatePickerMode('customFrom')}
         activeOpacity={0.7}
       >
         <TouchableOpacity
+          accessibilityLabel="Предыдущий месяц"
+          accessibilityRole="button"
           onPress={() => handleMonthShift(-1)}
           hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          style={styles.monthChipArrow}
+          style={[styles.monthChipArrow, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
         >
           <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
         </TouchableOpacity>
@@ -1130,9 +1138,11 @@ export default function ExpensesScreen() {
           {monthLabel}
         </Text>
         <TouchableOpacity
+          accessibilityLabel="Следующий месяц"
+          accessibilityRole="button"
           onPress={() => handleMonthShift(1)}
           hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          style={styles.monthChipArrow}
+          style={[styles.monthChipArrow, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
         >
           <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
         </TouchableOpacity>
@@ -1148,9 +1158,6 @@ export default function ExpensesScreen() {
   const listHeader = (
     <View>
       {/* Freshness badge — узкий ряд под шапкой */}
-      <View style={styles.freshnessRow}>
-        <FreshnessBadge query={expensesQuery} />
-      </View>
 
       {/* Period selector */}
       <View style={styles.periodWrapper}>
@@ -1623,16 +1630,40 @@ export default function ExpensesScreen() {
     </View>
   );
 
+  // A replacement native scroller starts at zero; keep the heading on that same offset.
+  const sectionBody = expensesQuery.isLoading && expenses.length === 0 ? 'loading' : 'list';
+  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
+      <IosScreenHeader
+        context={<FreshnessBadge query={expensesQuery} />}
+        scroll={section}
+        title="Расходы"
+        onBack={() => navigation.goBack()}
+        trailing={trailing}
+      />
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
-        <View style={styles.loadingWrap}>
-          <ListSkeleton count={6} />
-        </View>
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.loadingWrap}>
+            <ListSkeleton count={6} />
+          </View>
+        </ScreenSectionScrollView>
       ) : (
-        <FlashList
+        <ScreenSectionFlashList
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          style={{ flex: 1 }}
+          reserveSafeAreaBottom
           data={filteredExpenses}
           keyExtractor={(i) => i.id}
           renderItem={renderExpense}
@@ -1652,7 +1683,10 @@ export default function ExpensesScreen() {
               action={canCreate ? { label: '+ Новый расход', onPress: openCreateModal } : undefined}
             />
           }
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[16] }}
+          contentContainerStyle={[
+            { ...styles.list, paddingBottom: tabBarHeight + spacing[16] },
+            { paddingTop: section.contentTop },
+          ]}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

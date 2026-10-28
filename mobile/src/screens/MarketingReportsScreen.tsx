@@ -49,8 +49,10 @@ import { TrendLineChart, MiniBars, DonutRatio } from '../components/charts/Marke
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
-import type { MarketingReport, MarketingTrendPoint } from '../../../shared/types';
+import { type MarketingReport, type MarketingTrendPoint } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Формат — единый источник правды по числам/деньгам/процентам.
@@ -559,6 +561,7 @@ function TrendsCard({ trends }: { trends: MarketingReport['trends'] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function MarketingReportsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -624,18 +627,24 @@ export default function MarketingReportsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Маркетинговые отчёты"
         subtitle={formatPeriodLabel(period, range)}
         onBack={() => navigation.goBack()}
         trailing={<FreshnessBadge query={reportQuery} />}
       />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
         style={styles.scroll}
         contentContainerStyle={[
-          styles.scrollContent,
-          // iOS резервирует место через contentInset ниже; на Android — здесь.
-          { paddingBottom: contentContainerPaddingBottom + spacing[6] },
+          [
+            styles.scrollContent,
+            // iOS резервирует место через contentInset ниже; на Android — здесь.
+            { paddingBottom: contentContainerPaddingBottom + spacing[6] },
+          ],
+          { paddingTop: section.contentTop + spacing[4] },
         ]}
         contentInset={{ bottom: contentInset.bottom + spacing[6] }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -1167,7 +1176,7 @@ export default function MarketingReportsScreen() {
             )}
           </View>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       <DateTimePickerModal
         visible={showPicker !== null}

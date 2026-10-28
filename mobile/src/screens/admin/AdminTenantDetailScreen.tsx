@@ -63,6 +63,8 @@ import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 import { KeyboardAwareScroll } from '../../components/KeyboardAware';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -137,6 +139,7 @@ function toPointDraft(p?: TenantPoint): PointDraft {
 }
 
 export default function AdminTenantDetailScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const id: string = route.params?.id;
@@ -560,28 +563,54 @@ export default function AdminTenantDetailScreen() {
     );
   }, [tenant, isManager, beginImpersonation]);
 
+  // A replacement native scroller starts at zero; keep the heading on that same offset.
+  const sectionBody = tenant ? 'form' : 'terminal';
+  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+
   if (!tenant) {
     return (
       <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title={isManager ? 'Автосервис' : 'Тенант'} onBack={() => navigation.goBack()} />
+        <IosScreenHeader
+          scroll={section}
+          title={isManager ? 'Автосервис' : 'Тенант'}
+          onBack={() => navigation.goBack()}
+        />
         {tenantError && !tenantLoading ? (
-          <View style={styles.stateBlock}>
-            <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
-            <Text style={[styles.stateText, { color: palette.text.secondary }]}>
-              {isManager ? 'Не удалось загрузить автосервис' : 'Не удалось загрузить тенанта'}
-            </Text>
-            <Pressable
-              onPress={() => {
-                haptic('tap');
-                refetchTenant();
-              }}
-              style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
-            >
-              <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
-            </Pressable>
-          </View>
+          <ScreenSectionScrollView
+            style={{ flex: 1 }}
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            reserveSafeAreaBottom
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+          >
+            <View style={styles.stateBlock}>
+              <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
+              <Text style={[styles.stateText, { color: palette.text.secondary }]}>
+                {isManager ? 'Не удалось загрузить автосервис' : 'Не удалось загрузить тенанта'}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  haptic('tap');
+                  refetchTenant();
+                }}
+                style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
+              >
+                <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
+              </Pressable>
+            </View>
+          </ScreenSectionScrollView>
         ) : (
-          <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
+          <ScreenSectionScrollView
+            style={{ flex: 1 }}
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            reserveSafeAreaBottom
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+          >
+            <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
+          </ScreenSectionScrollView>
         )}
       </View>
     );
@@ -601,11 +630,19 @@ export default function AdminTenantDetailScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={tenant.name} onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title={tenant.name} onBack={() => navigation.goBack()} />
 
       <KeyboardAwareScroll
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         extraKeyboardBottomOffset={48}
-        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Subscription summary */}

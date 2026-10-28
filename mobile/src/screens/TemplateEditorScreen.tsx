@@ -20,7 +20,7 @@
  * переключателе скрывается. Мастер, открывший общий шаблон, видит режим
  * просмотра: без правок, сохранения и удаления (backend всё равно 403).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Switch, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -36,13 +36,15 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import { iosCard, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import type { CheckTemplate, CheckTemplateFolder, Service, Product } from '../../../shared/types';
+import { type CheckTemplate, type CheckTemplateFolder, type Service, type Product } from '../../../shared/types';
 import { expandServiceQuantities } from '../../../shared/utils/checkLines';
 import { formatTemplateCost, templateProductCost, templateProductsCost } from '../../../shared/utils/templateProducts';
 import { servicePriceFormValue } from '../../../shared/utils/servicePrices';
 import { loadAllPages } from '../../../shared/utils/loadAllPages';
 import { FolderPickerList, isSharedTemplate, formatTemplateMoney } from './TemplatesScreen';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 /** RU-дружественный парсер цены: запятая → точка, мусор → 0. */
 function parsePrice(v: string): number {
@@ -74,6 +76,7 @@ interface EditorProductLine {
 }
 
 export default function TemplateEditorScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -398,32 +401,53 @@ export default function TemplateEditorScreen() {
   if (isEditing && !hydratedRef.current && !templatesError && (templatesLoading || templatesFetching)) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Шаблон" onBack={() => navigation.goBack()} />
-        <View style={styles.centerFill}>
-          <ActivityIndicator color={colors.primary[500]} />
-        </View>
+        <IosScreenHeader scroll={section} title="Шаблон" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.centerFill}>
+            <ActivityIndicator color={colors.primary[500]} />
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
   if (isEditing && templatesError && !hydratedRef.current)
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Шаблон" onBack={() => navigation.goBack()} />
-        <View style={styles.centerFill}>
-          <Text style={{ color: palette.text.primary }}>Не удалось обновить цены шаблона.</Text>
-          <TouchableOpacity onPress={() => void refetchTemplates()} style={{ padding: 16 }}>
-            <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
-          </TouchableOpacity>
-        </View>
+        <IosScreenHeader scroll={section} title="Шаблон" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.centerFill}>
+            <Text style={{ color: palette.text.primary }}>Не удалось обновить цены шаблона.</Text>
+            <TouchableOpacity onPress={() => void refetchTemplates()} style={{ padding: 16 }}>
+              <Text style={{ color: palette.accent.primaryText }}>Повторить</Text>
+            </TouchableOpacity>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   if (isEditing && !template && !templatesLoading) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Шаблон" onBack={() => navigation.goBack()} />
-        <View style={styles.centerFill}>
-          <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>Шаблон не найден</Text>
-        </View>
+        <IosScreenHeader scroll={section} title="Шаблон" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.centerFill}>
+            <Text style={{ color: palette.text.secondary, fontSize: fontSize.sm }}>Шаблон не найден</Text>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -464,6 +488,7 @@ export default function TemplateEditorScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={isEditing ? (viewOnly ? 'Просмотр шаблона' : 'Шаблон') : 'Новый шаблон'}
         subtitle={isSharedTpl ? 'Общий — виден всем сотрудникам' : undefined}
         onBack={() => navigation.goBack()}
@@ -471,8 +496,14 @@ export default function TemplateEditorScreen() {
       {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
           вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
       <KeyboardAwareView style={{ flex: 1 }}>
-        <ScrollView
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }]}
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          contentContainerStyle={[
+            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }],
+            { paddingTop: section.contentTop + spacing[1] },
+          ]}
           keyboardShouldPersistTaps="handled"
         >
           {/* Название */}
@@ -825,7 +856,7 @@ export default function TemplateEditorScreen() {
               )}
             </>
           )}
-        </ScrollView>
+        </ScreenSectionScrollView>
       </KeyboardAwareView>
 
       {/* Выбор папки размещения */}

@@ -1,3 +1,4 @@
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 /**
  * KnowledgeLessonScreen — the lesson reader + quiz.
  *
@@ -33,8 +34,9 @@ import { useColors } from '../contexts/ThemeContext';
 import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
-import type { KnowledgeCourse, KnowledgeLesson, LessonProgress } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type KnowledgeCourse, type KnowledgeLesson, type LessonProgress } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 type ParamList = { KnowledgeLesson: { courseId: string; lessonId: string; title?: string } };
 
@@ -52,6 +54,7 @@ interface QuizError {
 }
 
 export default function KnowledgeLessonScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeLesson'>>();
   const palette = useColors();
@@ -149,8 +152,15 @@ export default function KnowledgeLessonScreen() {
   if (!courseId || !lessonId) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Урок" onBack={() => navigation.goBack()} />
-        <EmptyState icon="warning" title="Урок не найден" />
+        <IosScreenHeader scroll={section} title="Урок" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState icon="warning" title="Урок не найден" />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -166,28 +176,63 @@ export default function KnowledgeLessonScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={route.params?.title ?? lesson?.title ?? 'Урок'} onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        scroll={section}
+        title={route.params?.title ?? lesson?.title ?? 'Урок'}
+        onBack={() => navigation.goBack()}
+      />
 
       {course === undefined && isFetching ? (
-        <LoadingSpinner />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       ) : isError && course === undefined ? (
-        <QueryErrorState
-          title="Не удалось загрузить урок"
-          description="Проверьте соединение и попробуйте снова."
-          onRetry={() => refetch()}
-        />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <QueryErrorState
+            title="Не удалось загрузить урок"
+            description="Проверьте соединение и попробуйте снова."
+            onRetry={() => refetch()}
+          />
+        </ScreenSectionScrollView>
       ) : course === undefined ? (
         // pending без активного запроса (offline-пауза) — спиннер, не пустота.
-        <LoadingSpinner />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       ) : !lesson ? (
-        <EmptyState icon="warning" title="Урок не найден" description="Возможно, он был удалён." />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState icon="warning" title="Урок не найден" description="Возможно, он был удалён." />
+        </ScreenSectionScrollView>
       ) : (
-        <ScrollView
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
           // Reserve room for the floating tab bar AND the sticky CTA, which
           // itself sits a full tabBarHeight above the bar.
           contentContainerStyle={[
-            styles.content,
-            { paddingBottom: tabBarHeight + STICKY_CTA_BAND + tabBarHeight + spacing[4] },
+            [styles.content, { paddingBottom: tabBarHeight + STICKY_CTA_BAND + tabBarHeight + spacing[4] }],
+            { paddingTop: section.contentTop + spacing[1] },
           ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -305,7 +350,7 @@ export default function KnowledgeLessonScreen() {
               ) : null}
             </View>
           ) : null}
-        </ScrollView>
+        </ScreenSectionScrollView>
       )}
 
       {/* Sticky CTA — floats a full tabBarHeight above the bar so the floating

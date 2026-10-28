@@ -1,3 +1,5 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 /**
  * KnowledgeCourseDetailScreen — a single course with its lessons.
  *
@@ -33,12 +35,14 @@ import { knowledgeApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
-import type { KnowledgeCourse, KnowledgeLesson } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type KnowledgeCourse, type KnowledgeLesson } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 type ParamList = { KnowledgeCourseDetail: { id: string; title?: string } };
 
 export default function KnowledgeCourseDetailScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseDetail'>>();
   const palette = useColors();
@@ -81,8 +85,15 @@ export default function KnowledgeCourseDetailScreen() {
   if (!id) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Курс" onBack={() => navigation.goBack()} />
-        <EmptyState icon="warning" title="Курс не найден" />
+        <IosScreenHeader scroll={section} title="Курс" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <EmptyState icon="warning" title="Курс не найден" />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -94,7 +105,10 @@ export default function KnowledgeCourseDetailScreen() {
         navigation.navigate('KnowledgeCourseEditor', { id });
       }}
       hitSlop={10}
-      style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
+      style={[
+        [styles.headerBtn, { backgroundColor: palette.bg.muted }],
+        { minWidth: headerTouchSize, minHeight: headerTouchSize },
+      ]}
       accessibilityRole="button"
       accessibilityLabel="Изменить курс"
     >
@@ -105,22 +119,43 @@ export default function KnowledgeCourseDetailScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={route.params?.title ?? course?.title ?? 'Курс'}
         onBack={() => navigation.goBack()}
         trailing={headerTrailing}
       />
 
       {course === undefined && isFetching ? (
-        <LoadingSpinner />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       ) : isError && course === undefined ? (
-        <QueryErrorState
-          title="Не удалось загрузить курс"
-          description="Проверьте соединение и попробуйте снова."
-          onRetry={() => refetch()}
-        />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <QueryErrorState
+            title="Не удалось загрузить курс"
+            description="Проверьте соединение и попробуйте снова."
+            onRetry={() => refetch()}
+          />
+        </ScreenSectionScrollView>
       ) : course ? (
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[6] }]}
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          contentContainerStyle={[
+            [styles.content, { paddingBottom: tabBarHeight + spacing[6] }],
+            { paddingTop: section.contentTop + spacing[1] },
+          ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -226,10 +261,17 @@ export default function KnowledgeCourseDetailScreen() {
               })}
             </View>
           )}
-        </ScrollView>
+        </ScreenSectionScrollView>
       ) : (
         // pending без активного запроса (offline-пауза) — спиннер, не пустота.
-        <LoadingSpinner />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       )}
     </View>
   );

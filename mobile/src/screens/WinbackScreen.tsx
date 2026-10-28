@@ -40,8 +40,10 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { WinbackClient } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type WinbackClient } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const DAY_PRESETS = [30, 60, 90, 180] as const;
 const DEFAULT_DAYS = 90;
@@ -147,6 +149,7 @@ const WinbackRow = React.memo(function WinbackRow({ client, showBorder, palette 
 // ─────────────────────────────────────────────────────────────────────
 
 export default function WinbackScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -230,16 +233,23 @@ export default function WinbackScreen() {
   if (!canUse) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Возвращение клиентов" onBack={() => navigation.goBack()} />
-        <View style={styles.emptyCard}>
-          <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="lock-closed-outline" size={28} color={palette.text.tertiary} />
+        <IosScreenHeader scroll={section} title="Возвращение клиентов" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.emptyCard}>
+            <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="lock-closed-outline" size={28} color={palette.text.tertiary} />
+            </View>
+            <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Раздел недоступен</Text>
+            <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
+              Возвращение клиентов доступно директору и владельцу автосервиса.
+            </Text>
           </View>
-          <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Раздел недоступен</Text>
-          <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
-            Возвращение клиентов доступно директору и владельцу автосервиса.
-          </Text>
-        </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -249,11 +259,17 @@ export default function WinbackScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Возвращение клиентов" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Возвращение клиентов" onBack={() => navigation.goBack()} />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
@@ -463,7 +479,7 @@ export default function WinbackScreen() {
             </View>
           )
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

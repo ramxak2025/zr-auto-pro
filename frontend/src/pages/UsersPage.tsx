@@ -512,16 +512,19 @@ export default function UsersPage() {
             </Button>
           </>
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <SearchInput value={q} onChange={setQuery} placeholder="Имя или телефон…" className="w-full sm:w-72" />
+              {q && (
+                <span className="text-sm text-ink-3">
+                  Найдено: <span className="tabular-nums text-ink">{visibleUsers.length}</span>
+                </span>
+              )}
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <SearchInput value={q} onChange={setQuery} placeholder="Имя или телефон…" className="w-full sm:w-72" />
-        {q && (
-          <span className="text-sm text-ink-3">
-            Найдено: <span className="tabular-nums text-ink">{visibleUsers.length}</span>
-          </span>
-        )}
-      </Toolbar>
 
       <DataTable
         rows={visibleUsers}

@@ -8,6 +8,7 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { KeyboardAwareScroll } from '../../components/KeyboardAware';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
 export function AdminPage({
   title,
   subtitle,
@@ -28,17 +29,27 @@ export function AdminPage({
   const palette = useColors(),
     navigation = useNavigation();
   const { contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
+  const section = useScreenSectionScroll({ hasControls: Boolean(back || trailing) });
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={title}
         subtitle={subtitle}
         onBack={back ? () => navigation.goBack() : undefined}
         trailing={trailing}
       />
       <KeyboardAwareScroll
+        style={styles.root}
+        reserveSafeAreaBottom
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
         extraKeyboardBottomOffset={16}
-        contentContainerStyle={[styles.content, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: section.contentTop + 16, paddingBottom: contentContainerPaddingBottom },
+        ]}
         refreshControl={
           onRefresh ? (
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />

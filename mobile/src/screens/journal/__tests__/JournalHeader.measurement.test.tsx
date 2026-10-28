@@ -49,6 +49,7 @@ jest.mock('../../../platform/Typography', () => ({
 import React from 'react';
 import type { JournalScrollController } from '../JournalHeader';
 import JournalHeader, { useJournalHeaderScroll } from '../JournalHeader';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../../../components/ScreenSectionHeader';
 type Element = React.ReactElement<
   Record<string, unknown> & { children?: React.ReactNode; onLayout?: (event: unknown) => void }
 >;
@@ -64,14 +65,20 @@ function style(value: unknown): Record<string, unknown> {
       ? (value as Record<string, unknown>)
       : {};
 }
+const renderJournal = (props: React.ComponentProps<typeof JournalHeader>) => {
+  const adapter = JournalHeader(props);
+  expect(adapter.type).toBe(ScreenSectionHeader);
+  return ScreenSectionHeader(adapter.props);
+};
 const render = (offset: number) =>
-  JournalHeader({
+  renderJournal({
     scroll: {
       scrollY: { value: offset },
       titleHeight: { value: 64 },
       onContentTop: jest.fn(),
     } as unknown as JournalScrollController,
     context: 'Обновлено только что',
+    children: <React.Fragment>Функциональная панель</React.Fragment>,
   });
 beforeEach(() => {
   mockFontScale = 1;
@@ -147,17 +154,48 @@ it.each([
     .mockImplementationOnce(() => [scenario.rowHeight, jest.fn()])
     .mockImplementationOnce(() => [scenario.controlsHeight, jest.fn()]);
   const onContentTop = jest.fn();
-  const tree = JournalHeader({
+  const tree = renderJournal({
     scroll: {
       scrollY: { value: 0 },
       titleHeight: { value: 64 },
       onContentTop,
     } as unknown as JournalScrollController,
     context: 'Обновлено только что',
+    children: <React.Fragment>Функциональная панель</React.Fragment>,
     hideHeading: scenario.hideHeading,
   });
   (React.useLayoutEffect as jest.Mock).mock.calls[0][0]();
   expect(onContentTop).toHaveBeenCalledWith(scenario.contentTop);
   const controls = style(nodes(tree).find((node) => node.props.testID === 'journal-floating-controls')!.props.style);
   expect(Number(controls.top) + scenario.controlsHeight).toBe(scenario.contentTop);
+});
+
+it('omits the controls surface and its reserve when a section has no actions', () => {
+  const scroll = useScreenSectionScroll({ hasControls: false });
+  expect(scroll.contentTop).toBe(126);
+  const onContentTop = jest.fn();
+  const tree = ScreenSectionHeader({ title: 'Отчёт', scroll: { ...scroll, onContentTop } });
+  expect(nodes(tree).some((node) => node.props.testID === 'screen-section-floating-controls')).toBe(false);
+  (React.useLayoutEffect as jest.Mock).mock.calls[0][0]();
+  expect(onContentTop).toHaveBeenCalledWith(126);
+});
+
+it('preserves the original native scroll observer and event identity without resetting on focus', () => {
+  const observe = jest.fn();
+  const scroll = useScreenSectionScroll({ onScroll: observe });
+  const event = { nativeEvent: { contentOffset: { x: 0, y: 147 } } } as Parameters<typeof scroll.onNativeScroll>[0];
+  expect(scroll.onScroll).toBe(scroll.onNativeScroll);
+  scroll.onNativeScroll(event);
+  expect(scroll.scrollY.value).toBe(147);
+  expect(observe).toHaveBeenCalledTimes(1);
+  expect(observe.mock.calls[0][0]).toBe(event);
+  scroll.onNativeScroll({ ...event, nativeEvent: { ...event.nativeEvent, contentOffset: { x: 0, y: -12 } } });
+  expect(scroll.scrollY.value).toBe(0);
+  expect(observe).toHaveBeenCalledTimes(2);
+});
+
+it('makes the independent-axis canvas exception explicit and keeps it in normal layout flow', () => {
+  const tree = ScreenSectionHeader({ variant: 'static', title: 'Расписание' });
+  expect(style(tree.props.style).position).toBe('relative');
+  expect(nodes(tree).some((node) => node.props.testID === 'screen-section-floating-controls')).toBe(false);
 });

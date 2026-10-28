@@ -2147,7 +2147,7 @@ export default function CheckCreatePage() {
         </div>
 
         {/* ═══════════ Правая колонка: параметры, итог, оплата, пробить ═══════════ */}
-        <div className="min-w-0 space-y-5 xl:sticky xl:top-0 xl:max-h-[calc(100dvh-3rem)] xl:overflow-y-auto xl:pb-1 xl:pr-0.5">
+        <div className="min-w-0 space-y-5 xl:sticky xl:top-[var(--section-header-sticky-height,0px)] xl:max-h-[var(--section-header-available-height)] xl:overflow-y-auto xl:pb-1 xl:pr-0.5">
           {/* ── Дата, время и пробег ── */}
           <Card padding="sm">
             <div className="grid grid-cols-2 gap-3">

@@ -24,7 +24,7 @@
  * INERT until configured: both modules return 422 on use until real credentials
  * are entered AND `enabled` is on — hence the hint under each section.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -49,8 +49,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import type { PaymentProviderName, FiscalSno, FiscalVat, WalletSettings } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type PaymentProviderName, type FiscalSno, type FiscalVat, type WalletSettings } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ── Option catalogues ─────────────────────────────────────────────────
 
@@ -84,6 +86,7 @@ const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Deve
 // ── Screen ─────────────────────────────────────────────────────────────
 
 export default function PaymentIntegrationsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -97,31 +100,44 @@ export default function PaymentIntegrationsScreen() {
   if (!isOwner) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Приём оплат и касса" onBack={() => navigation.goBack()} />
-        <View style={styles.restricted}>
-          <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
-          <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
-            Настройки приёма оплат и онлайн-кассы доступны только владельцу и администратору.
-          </Text>
-        </View>
+        <IosScreenHeader scroll={section} title="Приём оплат и касса" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <View style={styles.restricted}>
+            <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
+              Настройки приёма оплат и онлайн-кассы доступны только владельцу и администратору.
+            </Text>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Приём оплат и касса" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Приём оплат и касса" onBack={() => navigation.goBack()} />
       {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
           вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
       <KeyboardAwareView style={{ flex: 1 }}>
-        <ScrollView
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          contentContainerStyle={[
+            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+            { paddingTop: section.contentTop + spacing[4] },
+          ]}
           keyboardShouldPersistTaps="handled"
         >
           <AcquiringSection index={0} />
           <FiscalSection index={1} />
           <WalletSection index={2} />
-        </ScrollView>
+        </ScreenSectionScrollView>
       </KeyboardAwareView>
     </View>
   );

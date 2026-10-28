@@ -40,9 +40,15 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import type { ProfileChangeRequest, ProfileChangeDiff, ProfileChangeField } from '../../../shared/types';
-import type { UpdateProfileRequest, ChangePasswordRequest, DeleteAccountResponse } from '../../../shared/api/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type ProfileChangeRequest, type ProfileChangeDiff, type ProfileChangeField } from '../../../shared/types';
+import {
+  type UpdateProfileRequest,
+  type ChangePasswordRequest,
+  type DeleteAccountResponse,
+} from '../../../shared/api/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const QK_MINE = ['profile-change-request-mine'] as const;
 const QK_LIST = ['profile-change-requests'] as const;
@@ -219,6 +225,7 @@ const RequestCard = React.memo(function RequestCard({
 });
 
 export default function ProfileScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const { user, refreshUser, hasPermission } = useAuth();
   const palette = useColors();
@@ -468,14 +475,20 @@ export default function ProfileScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Мой профиль" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Мой профиль" onBack={() => navigation.goBack()} />
 
       {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
           вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
       <KeyboardAwareView style={styles.flex}>
-        <ScrollView
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
           style={styles.flex}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }]}
+          contentContainerStyle={[
+            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }],
+            { paddingTop: section.contentTop + spacing[2] },
+          ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -743,7 +756,7 @@ export default function ProfileScreen() {
             <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
             <Text style={styles.deleteAccountText}>Удалить аккаунт</Text>
           </TouchableOpacity>
-        </ScrollView>
+        </ScreenSectionScrollView>
       </KeyboardAwareView>
 
       <DeleteAccountModal

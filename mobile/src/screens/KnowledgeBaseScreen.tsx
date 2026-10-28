@@ -28,8 +28,10 @@ import { useColors } from '../contexts/ThemeContext';
 import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
-import type { KnowledgeArticle, KnowledgeCategory, KnowledgeCourse } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { type KnowledgeArticle, type KnowledgeCategory, type KnowledgeCourse } from '../../../shared/types';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const STALE = 60_000;
 
@@ -47,6 +49,7 @@ const docsLabel = (n: number) =>
   `${n} ${plural(n, 'документ требует', 'документа требуют', 'документов требуют')} «Ознакомлен»`;
 
 export default function KnowledgeBaseScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -133,13 +136,20 @@ export default function KnowledgeBaseScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="База знаний"
         subtitle="Регламенты, учебный центр и статьи"
         onBack={() => navigation.goBack()}
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.content, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[3] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -187,7 +197,7 @@ export default function KnowledgeBaseScreen() {
             onPress={openArticles}
           />
         </View>
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

@@ -1,7 +1,9 @@
-import { ReactNode, useRef, type KeyboardEvent } from 'react';
+import { ReactNode, useContext, useRef, type KeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from './cn';
 import { focusRing } from './tokens';
+import { SectionHeaderContext } from './SectionHeaderContext';
+import { useJournalSelection } from '../pages/journal/useJournalSelection';
 
 export interface TabItem<K extends string = string> {
   key: K;
@@ -42,6 +44,9 @@ export function Tabs<K extends string = string>({
   fullWidth = false,
   className,
 }: TabsProps<K>) {
+  const inHeader = useContext(SectionHeaderContext);
+  const root = useRef<HTMLDivElement>(null);
+  useJournalSelection(root, value);
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const focusAndSelect = (key: K) => {
@@ -67,15 +72,18 @@ export function Tabs<K extends string = string>({
 
   return (
     <div
+      ref={root}
       role="tablist"
       aria-label={ariaLabel}
       className={cn(
         'flex max-w-full items-center overflow-x-auto no-scrollbar',
         isPills ? 'gap-1 rounded-lg bg-surface-3 p-0.5' : 'gap-1 border-b border-line',
         fullWidth && 'w-full',
+        inHeader && 'section-selection',
         className,
       )}
     >
+      {inHeader && <span data-selection-backplate className="section-selection-backplate" aria-hidden="true" />}
       {items.map((item, index) => {
         const active = item.key === value;
         const Icon = item.icon;
@@ -89,6 +97,7 @@ export function Tabs<K extends string = string>({
             role="tab"
             id={`${idPrefix}-tab-${item.key}`}
             aria-selected={active}
+            data-selection-active={inHeader ? active : undefined}
             aria-controls={`${idPrefix}-panel-${item.key}`}
             aria-disabled={item.disabled || undefined}
             tabIndex={active ? 0 : -1}

@@ -42,7 +42,8 @@ import {
   type ReportGroup,
 } from '../../../../shared/reports/catalog';
 import type { ReportCatalogResponse, ReportId } from '../../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
 
 export const REPORT_CATALOG_QUERY_KEY = ['report-catalog'] as const;
 
@@ -118,6 +119,7 @@ function HubRow({ icon, color, title, description, disabled, last, onPress, onPr
 }
 
 export default function ReportsHubScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -187,11 +189,21 @@ export default function ReportsHubScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Отчёты" subtitle="Период, фильтры, экспорт в PDF" onBack={() => navigation.goBack()} />
-      <ScrollView
+      <IosScreenHeader
+        scroll={section}
+        title="Отчёты"
+        subtitle="Период, фильтры, экспорт в PDF"
+        onBack={() => navigation.goBack()}
+      />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         contentContainerStyle={[
-          styles.content,
-          Platform.OS === 'android' ? { paddingBottom: tabBarHeight + spacing[4] } : null,
+          [styles.content, Platform.OS === 'android' ? { paddingBottom: tabBarHeight + spacing[4] } : null],
+          { paddingTop: section.contentTop + spacing[1] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -267,7 +279,7 @@ export default function ReportsHubScreen() {
             </View>
           </View>
         ))}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

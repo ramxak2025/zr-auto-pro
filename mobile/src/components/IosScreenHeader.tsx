@@ -5,6 +5,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
+import ScreenSectionHeader, { type ScreenSectionScrollController } from './ScreenSectionHeader';
+import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 /**
  * IosScreenHeader — shared top-bar treatment for every screen.
@@ -51,6 +53,11 @@ export interface IosScreenHeaderProps {
   /** When true the title is centred (iOS Mail-style). Otherwise left-aligned (Settings-style). */
   centerTitle?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** Explicit opt-in: attach this controller to the main vertical scroller. */
+  scroll?: ScreenSectionScrollController;
+  /** Only for synchronized canvases with no single main vertical scroller. */
+  sectionVariant?: 'static';
+  context?: React.ReactNode;
 }
 
 export default function IosScreenHeader({
@@ -63,12 +70,38 @@ export default function IosScreenHeader({
   bg,
   centerTitle = false,
   style,
+  scroll,
+  sectionVariant,
+  context,
 }: IosScreenHeaderProps) {
   const insets = useSafeAreaInsets();
   const palette = useColors();
   const isAndroid = Platform.OS === 'android';
   const effectiveShowDivider = isAndroid ? true : showDivider;
   const effectiveCenterTitle = isAndroid ? false : centerTitle;
+
+  if (scroll || sectionVariant === 'static') {
+    const controls =
+      leading || onBack || trailing ? (
+        <HeaderIsland
+          style={
+            scroll && sectionVariant !== 'static' && onBack && !leading && !trailing ? styles.backOnlyIsland : undefined
+          }
+        >
+          {leading ?? (onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : null)}
+          {trailing ? <View style={styles.sectionTrailing}>{trailing}</View> : null}
+        </HeaderIsland>
+      ) : null;
+    return sectionVariant === 'static' ? (
+      <ScreenSectionHeader variant="static" title={title} subtitle={subtitle} context={context}>
+        {controls}
+      </ScreenSectionHeader>
+    ) : (
+      <ScreenSectionHeader scroll={scroll!} title={title} subtitle={subtitle} context={context}>
+        {controls}
+      </ScreenSectionHeader>
+    );
+  }
 
   const leadingNode = leading ? (
     leading
@@ -120,6 +153,15 @@ export default function IosScreenHeader({
 }
 
 const styles = StyleSheet.create({
+  backOnlyIsland: { alignSelf: 'flex-start' },
+  sectionTrailing: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 6,
+  },
   wrap: {
     paddingBottom: spacing[2.5],
     paddingHorizontal: spacing[3],

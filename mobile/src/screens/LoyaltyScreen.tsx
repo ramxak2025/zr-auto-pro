@@ -22,8 +22,9 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 function clampPercent(raw: string): number {
   const n = parseInt(raw.replace(/[^0-9]/g, ''), 10);
@@ -32,6 +33,7 @@ function clampPercent(raw: string): number {
 }
 
 export default function LoyaltyScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -81,10 +83,16 @@ export default function LoyaltyScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Лояльность" onBack={() => navigation.goBack()} />
-      <ScrollView
+      <IosScreenHeader scroll={section} title="Лояльность" onBack={() => navigation.goBack()} />
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -187,7 +195,7 @@ export default function LoyaltyScreen() {
             </Text>
           </View>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

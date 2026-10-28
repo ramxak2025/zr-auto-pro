@@ -1,5 +1,6 @@
 // This harness tests screen handlers; native scrolling is checked separately.
 jest.mock('../../components/TabBarScrollable', () => ({ TabBarScrollView: 'ScrollView' }));
+jest.mock('../../components/ScreenSectionScrollable', () => ({ ScreenSectionScrollView: 'ScrollView' }));
 // Exercise the actual JSX button handler without a native renderer or API.
 // Hooks retain this one render, so advancing the clock cannot refresh its closure.
 const mockSetPickedDate = jest.fn();

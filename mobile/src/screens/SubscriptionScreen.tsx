@@ -1,3 +1,4 @@
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React from 'react';
 import {
   View,
@@ -13,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { type NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { subscriptionApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -31,11 +32,13 @@ import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ALL_FEATURES } from '../../../shared/constants/features';
-import type { SubscriptionInfo } from '../../../shared/types';
+import { type SubscriptionInfo } from '../../../shared/types';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 const WHATSAPP_PHONE = '79884444436';
 export default function SubscriptionScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, undefined>>>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -109,16 +112,39 @@ export default function SubscriptionScreen() {
   if (!allowed)
     return (
       <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
-        <Text style={[styles.message, { color: palette.text.secondary }]}>Нет доступа к настройкам компании.</Text>
+        <IosScreenHeader scroll={section} title="Подписка" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <Text style={[styles.message, { color: palette.text.secondary }]}>Нет доступа к настройкам компании.</Text>
+        </ScreenSectionScrollView>
       </View>
     );
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading)
+    return (
+      <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
+        <IosScreenHeader scroll={section} title="Подписка" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
+      </View>
+    );
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Подписка" onBack={() => navigation.goBack()} />
       <KeyboardAwareScroll
-        contentContainerStyle={styles.content}
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[styles.content, { paddingTop: section.contentTop + spacing[4] }]}
         extraKeyboardBottomOffset={48}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent.primary} />

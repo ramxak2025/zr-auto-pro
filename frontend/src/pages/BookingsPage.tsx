@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { createSessionBoundClient } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
-import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, Select } from '../ui';
+import { Button, Card, CardBody, CardHeader, Field, Input, PageHeader, Select, SegmentedControl } from '../ui';
 import type {
   PublicBookingContactLinks,
   PublicBookingResource,
@@ -250,31 +250,26 @@ export default function BookingsPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6 lg:p-9">
-      <PageHeader title="Онлайн-запись" subtitle="Настройте страницу для клиентов и разберите входящие заявки." />
-      {canManage && canReview && (
-        <div role="group" aria-label="Онлайн-запись" className="inline-flex rounded-xl bg-slate-100 p-1">
-          {canManage && (
-            <button
-              type="button"
-              aria-pressed={activeTab === 'settings'}
-              onClick={() => setActiveTab('settings')}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeTab === 'settings' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
-            >
-              Страница
-            </button>
-          )}
-          {canReview && (
-            <button
-              type="button"
-              aria-pressed={activeTab === 'requests'}
-              onClick={() => setActiveTab('requests')}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold ${activeTab === 'requests' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}
-            >
-              Заявки
-            </button>
-          )}
-        </div>
-      )}
+      <PageHeader
+        title="Онлайн-запись"
+        subtitle="Настройте страницу для клиентов и разберите входящие заявки."
+        toolbar={
+          <>
+            {canManage && canReview && (
+              <SegmentedControl
+                aria-label="Онлайн-запись"
+                value={activeTab}
+                onChange={setActiveTab}
+                options={[
+                  { value: 'settings', label: 'Страница' },
+                  { value: 'requests', label: 'Заявки' },
+                ]}
+              />
+            )}
+          </>
+        }
+      />
+
       {canManage && activeTab === 'settings' && (
         <Card>
           <CardHeader

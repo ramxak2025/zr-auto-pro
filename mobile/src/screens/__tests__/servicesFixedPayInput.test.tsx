@@ -1,3 +1,31 @@
+// Screen chrome is inert here; these suites exercise the existing business handlers.
+const mockSectionScroll = {
+  scrollY: { value: 0 },
+  titleHeight: { value: 64 },
+  progress: { value: 0 },
+  contentTop: 0,
+  reset: jest.fn(),
+  onScroll: jest.fn(),
+  onNativeScroll: jest.fn(),
+  onContentTop: jest.fn(),
+};
+jest.mock('../../components/ScreenSectionHeader', () => ({
+  __esModule: true,
+  default: 'Header',
+  useScreenSectionScroll: () => mockSectionScroll,
+}));
+jest.mock('../../components/ScreenSectionScrollable', () => ({
+  ScreenSectionScrollView: 'ScrollView',
+  ScreenSectionFlatList: 'FlatList',
+  ScreenSectionFlashList: 'FlashList',
+}));
+jest.mock('../../components/ScreenHeaderControls', () => ({
+  HeaderAction: 'HeaderAction',
+  HeaderIsland: 'HeaderIsland',
+  HeaderSearch: 'SearchInput',
+  headerTouchSize: 44,
+}));
+
 // Actual ServicesScreen state, input handlers and create/edit payloads.
 // Native hosts and transport are inert fixtures: this harness does not prove hit-testing or keyboard geometry.
 import React from 'react';
@@ -22,6 +50,11 @@ jest.mock('react', () => ({
           typeof next === 'function' ? (next as (mockValue: unknown) => unknown)(mockStates[index]) : next;
       },
     ];
+  },
+  useRef: (initial: unknown) => {
+    const index = mockIndex++;
+    if (!(index in mockStates)) mockStates[index] = { current: initial };
+    return mockStates[index] as { current: unknown };
   },
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),

@@ -1,3 +1,10 @@
+import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import ScreenSectionHeader, {
+  useScreenSectionScroll,
+  type ScreenSectionScrollController,
+} from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+
 /**
  * EquipmentScreen — refined iOS look.
  *
@@ -396,7 +403,10 @@ function SegmentedTabs({ value, onChange }: { value: Tab; onChange: (v: Tab) => 
               onChange(it.k);
             }}
             activeOpacity={0.85}
-            style={[styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]]}
+            style={[
+              [styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
           >
             <Text
               style={[
@@ -495,7 +505,15 @@ function EmployeeCard({ emp, cardWidth, onPress }: { emp: any; cardWidth: number
 }
 
 // ─── Employee detail (inside Equipment, with IssueModal access) ────────────
-function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
+function EmployeeDetail({
+  emp,
+  canEdit,
+  section,
+}: {
+  emp: any;
+  canEdit: boolean;
+  section: ScreenSectionScrollController;
+}) {
   const qc = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
@@ -645,12 +663,18 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
   };
 
   return (
-    <ScrollView
+    <ScreenSectionScrollView
+      contentInsetAdjustmentBehavior="never"
+      scrollEventThrottle={16}
+      onScroll={section.onScroll}
       style={{ flex: 1, backgroundColor: palette.bg.canvas }}
-      contentContainerStyle={{
-        padding: spacing[4],
-        paddingBottom: tabBarHeight + spacing[4],
-      }}
+      contentContainerStyle={[
+        {
+          padding: spacing[4],
+          paddingBottom: tabBarHeight + spacing[4],
+        },
+        { paddingTop: section.contentTop + spacing[4] },
+      ]}
     >
       <View style={[styles.empHeader, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
         <EmployeeAvatar
@@ -713,7 +737,7 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
 
       {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
       <IssueModal visible={showIssue} userId={emp.userId} onClose={() => setShowIssue(false)} qc={qc} />
-    </ScrollView>
+    </ScreenSectionScrollView>
   );
 }
 
@@ -1646,6 +1670,8 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
 
 // ─── Main Equipment screen ─────────────────────────────────────────────────
 export default function EquipmentScreen() {
+  const section = useScreenSectionScroll();
+
   const navigation = useNavigation<any>();
   const { user, hasPermission } = useAuth();
   const tabBarHeight = useTabBarHeight();
@@ -1703,7 +1729,10 @@ export default function EquipmentScreen() {
           setShowTrash(true);
         }}
         hitSlop={10}
-        style={[styles.headerTrailingBtn, { backgroundColor: palette.bg.muted }]}
+        style={[
+          [styles.headerTrailingBtn, { backgroundColor: palette.bg.muted }],
+          { minWidth: headerTouchSize, minHeight: headerTouchSize },
+        ]}
         accessibilityRole="button"
         accessibilityLabel="Корзина"
       >
@@ -1717,9 +1746,15 @@ export default function EquipmentScreen() {
     const total = myEquipment.reduce((s: number, i: any) => s + i.cost, 0);
     return (
       <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-        <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
-        <ScrollView
-          contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}
+        <IosScreenHeader scroll={section} title="Моё имущество" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          onScroll={section.onScroll}
+          contentContainerStyle={[
+            { padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] },
+            { paddingTop: section.contentTop + spacing[4] },
+          ]}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -1769,7 +1804,7 @@ export default function EquipmentScreen() {
               </View>
             );
           })}
-        </ScrollView>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -1779,19 +1814,45 @@ export default function EquipmentScreen() {
   // below + AppNavigator entry) — iOS edge-swipe slides back to the grid.
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-      <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} trailing={headerTrailing} />
+      <ScreenSectionHeader
+        scroll={section}
+        title="Имущество"
+        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+      >
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {headerTrailing}
+            </View>
+          </View>
+          <View style={styles.segmentWrap}>
+            <SegmentedTabs value={tab} onChange={setTab} />
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
       {/* Автосервис (168): подсобка и штат — филиала сессии. Только подпись. */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
-      <View style={styles.segmentWrap}>
-        <SegmentedTabs value={tab} onChange={setTab} />
-      </View>
-
-      <ScrollView
-        contentContainerStyle={{
-          padding: SCREEN_PADDING,
-          paddingBottom: tabBarHeight + spacing[10], // give FAB room to sit above the last row
-        }}
+      <ScreenSectionScrollView
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        onScroll={section.onScroll}
+        contentContainerStyle={[
+          {
+            padding: SCREEN_PADDING,
+            paddingBottom: tabBarHeight + spacing[10], // give FAB room to sit above the last row
+          },
+          { paddingTop: section.contentTop + SCREEN_PADDING },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
@@ -1814,7 +1875,7 @@ export default function EquipmentScreen() {
           </View>
         )}
         {tab === 'storage' && <StorageTab canEdit={canEdit} fabOffsetBottom={fabOffsetBottom} />}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       <TrashDialog visible={showTrash} onClose={() => setShowTrash(false)} />
     </View>
@@ -1823,6 +1884,8 @@ export default function EquipmentScreen() {
 
 // ─── Employee detail screen (отдельный экран в EquipmentStack) ─────────────
 export function EquipmentEmployeeScreen() {
+  const section = useScreenSectionScroll();
+
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { hasPermission, user } = useAuth();
@@ -1842,43 +1905,44 @@ export function EquipmentEmployeeScreen() {
   if (!emp) {
     return (
       <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-        <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+        <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        ></ScreenSectionScrollView>
       </View>
     );
   }
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-      <IosScreenHeader title={emp.fullName || 'Сотрудник'} onBack={() => navigation.goBack()} />
-      <EmployeeDetail emp={emp} canEdit={canEdit} />
+      <IosScreenHeader scroll={section} title={emp.fullName || 'Сотрудник'} onBack={() => navigation.goBack()} />
+      <EmployeeDetail section={section} emp={emp} canEdit={canEdit} />
     </View>
   );
 }
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
+  pointChipRow: { marginHorizontal: 0, marginBottom: 0, alignSelf: 'flex-start' },
   // ── Segmented control ──
-  segmentWrap: {
-    paddingHorizontal: spacing[4],
-    paddingBottom: spacing[3],
-    paddingTop: spacing[1],
-    backgroundColor: 'transparent',
-  },
+  segmentWrap: { paddingHorizontal: 0, paddingBottom: 0, paddingTop: 0, backgroundColor: 'transparent' },
   segmentTrack: {
     flexDirection: 'row',
     backgroundColor: colors.gray[200],
     borderRadius: 10,
     padding: 2,
-    height: 32,
+    minHeight: headerTouchSize + 4,
   },
   segmentBtn: {
     flex: 1,
-    height: 28,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing[2],
+    minHeight: headerTouchSize,
   },
   segmentBtnActive: {
     backgroundColor: colors.white,

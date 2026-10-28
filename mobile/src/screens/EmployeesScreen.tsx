@@ -1,3 +1,7 @@
+import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 /**
  * EmployeesScreen — compact, dense iOS list (owner: «компактно, чтобы было
  * видно всех сотрудников»). The previous 2-column "game-card" grid showed
@@ -34,7 +38,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, RefreshControl, Platform, TouchableOpacity } from 'react-native';
 
-import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import EmployeeAvatar from '../components/EmployeeAvatar';
@@ -44,20 +47,20 @@ import { usersApi, scheduleApi, checksApi, employeesApi } from '../api/services'
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
-import SearchInput from '../components/SearchInput';
+
 import FreshnessBadge from '../components/FreshnessBadge';
 import { Text } from '../platform/Typography';
 import { PressableScale } from '../platform/PressableScale';
 import { haptic } from '../platform/haptics';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import type { SemanticPalette } from '../theme/palette';
+import { type SemanticPalette } from '../theme/palette';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useAllStaff, decideStaffListView } from '../hooks/useUsers';
 import { colors, spacing } from '../theme';
-import type { User, TodayEmployeeStatus, EmployeeRanking } from '../../../shared/types';
+import { type User, type TodayEmployeeStatus, type EmployeeRanking } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const SCREEN_PADDING = spacing[4]; // 16pt
 const AVATAR_SIZE = 44;
@@ -180,6 +183,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
 });
 
 export default function EmployeesScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -413,47 +417,146 @@ export default function EmployeesScreen() {
     [rankingMap, showFinancials, palette, onOpen, onPressInRow],
   );
 
+  // Reset only when React replaces this screen's native root scroller.
+  const sectionRootKind =
+    staffView === 'empty'
+      ? 'empty-wrapper-scroll'
+      : staffView === 'error' || staffView === 'skeleton'
+        ? 'state-scroll'
+        : 'employee-list';
+  const previousSectionRootKind = React.useRef(sectionRootKind);
+  React.useEffect(() => {
+    if (previousSectionRootKind.current !== sectionRootKind) {
+      previousSectionRootKind.current = sectionRootKind;
+      section.reset();
+    }
+  }, [sectionRootKind, section.reset]);
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
+      <ScreenSectionHeader
+        scroll={section}
         title="Сотрудники"
         subtitle={users === undefined ? undefined : `На смене: ${onSmena} из ${sortedUsers.length}`}
-        onBack={() => navigation.goBack()}
-        trailing={
-          canManageDismissed ? (
-            <TouchableOpacity
-              style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
-              onPress={onAddEmployee}
-              accessibilityRole="button"
-              accessibilityLabel="Добавить сотрудника"
+        context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
+      >
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
+              }}
             >
-              <Ionicons name="add" size={18} color={colors.white} />
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
+              {canManageDismissed ? (
+                <TouchableOpacity
+                  style={[
+                    [styles.addBtn, { backgroundColor: palette.accent.primary }],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                  onPress={onAddEmployee}
+                  accessibilityRole="button"
+                  accessibilityLabel="Добавить сотрудника"
+                >
+                  <Ionicons name="add" size={18} color={colors.white} />
+                </TouchableOpacity>
+              ) : undefined}
+            </View>
+          </View>
+          {staffView !== 'error' && staffView !== 'skeleton' && staffView !== 'empty' ? (
+            <>
+              <View style={styles.searchWrap}>
+                <HeaderSearch
+                  timing={{ debounceMs: 300 }}
+                  focusOnClear={false}
+                  value={search}
+                  onChange={setSearch}
+                  placeholder="Имя, роль или телефон"
+                />
+              </View>
+              {presentRoles.length >= 2 ? (
+                <View style={styles.chipsBar}>
+                  <ScrollView
+                    style={{ flexGrow: 0, flexShrink: 0 }}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.chipsRow}
+                  >
+                    <RoleChip
+                      active={roleFilter === 'all'}
+                      label="Все"
+                      icon="apps-outline"
+                      onPress={() => {
+                        haptic('select');
+                        setRoleFilter('all');
+                      }}
+                      palette={palette}
+                    />
+                    {presentRoles.map((r) => (
+                      <RoleChip
+                        key={r}
+                        active={roleFilter === r}
+                        label={roleLabels[r] || r}
+                        icon={(ROLE_META[r] || ROLE_META.master).chipIcon}
+                        onPress={() => {
+                          haptic('select');
+                          setRoleFilter((prev) => (prev === r ? 'all' : r));
+                        }}
+                        palette={palette}
+                      />
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </HeaderIsland>
+      </ScreenSectionHeader>
       {/* FreshnessBadge — HYBRID-perf plan. Driven by the users-all query. */}
-      <View style={styles.freshnessRow}>
-        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
-      </View>
 
       {staffView === 'error' ? (
         // Запрос упал и кэша нет — честный error-state с Retry (глобальный
         // stale-while-revalidate покрывает случай «кэш есть, фон упал»).
-        <QueryErrorState
-          title="Не удалось загрузить сотрудников"
-          description="Проверьте соединение и попробуйте ещё раз."
-          onRetry={() => refetch()}
-        />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <QueryErrorState
+            title="Не удалось загрузить сотрудников"
+            description="Проверьте соединение и попробуйте ещё раз."
+            onRetry={() => refetch()}
+          />
+        </ScreenSectionScrollView>
       ) : staffView === 'skeleton' ? (
-        <ListSkeleton count={9} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <ListSkeleton count={9} />
+        </ScreenSectionScrollView>
       ) : staffView === 'empty' ? (
         <View style={{ flex: 1 }}>
-          <EmptyState
-            icon="people"
-            title="Сотрудников пока нет"
-            description="Пригласите команду через раздел «Пользователи»."
-          />
+          <ScreenSectionScrollView
+            onScroll={section.onScroll}
+            scrollEventThrottle={16}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+          >
+            <EmptyState
+              icon="people"
+              title="Сотрудников пока нет"
+              description="Пригласите команду через раздел «Пользователи»."
+            />
+          </ScreenSectionScrollView>
           {/* Даже при пустом штате «Уволенные» должны оставаться доступными —
               иначе уволив всех, менеджер теряет вход в корзину. */}
           {canManageDismissed && dismissedCount > 0 ? (
@@ -465,42 +568,13 @@ export default function EmployeesScreen() {
       ) : (
         <>
           {/* Поиск — тот же SearchInput, что в Клиентах / Складе. */}
-          <View style={styles.searchWrap}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Имя, роль или телефон" />
-          </View>
 
           {/* Фильтр-чипсы по ролям — только когда в штате ≥ 2 разных ролей. */}
-          {presentRoles.length >= 2 ? (
-            <View style={styles.chipsBar}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                <RoleChip
-                  active={roleFilter === 'all'}
-                  label="Все"
-                  icon="apps-outline"
-                  onPress={() => {
-                    haptic('select');
-                    setRoleFilter('all');
-                  }}
-                  palette={palette}
-                />
-                {presentRoles.map((r) => (
-                  <RoleChip
-                    key={r}
-                    active={roleFilter === r}
-                    label={roleLabels[r] || r}
-                    icon={(ROLE_META[r] || ROLE_META.master).chipIcon}
-                    onPress={() => {
-                      haptic('select');
-                      setRoleFilter((prev) => (prev === r ? 'all' : r));
-                    }}
-                    palette={palette}
-                  />
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
 
-          <FlashList
+          <ScreenSectionFlashList
+            onScroll={section.onScroll}
+            contentInsetAdjustmentBehavior="never"
+            scrollEventThrottle={16}
             data={filteredUsers}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
@@ -518,7 +592,10 @@ export default function EmployeesScreen() {
                 <DismissedFooter count={dismissedCount} palette={palette} onPress={onOpenDismissed} />
               ) : null
             }
-            contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
+            contentContainerStyle={[
+              [styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null],
+              { paddingTop: section.contentTop + spacing[2] },
+            ]}
             contentInset={{ bottom: tabBarHeight }}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             automaticallyAdjustContentInsets={false}
@@ -555,11 +632,14 @@ function RoleChip({
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
       style={[
-        styles.chip,
-        {
-          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
-          borderColor: active ? palette.accent.primary : palette.border.subtle,
-        },
+        [
+          styles.chip,
+          {
+            backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+            borderColor: active ? palette.accent.primary : palette.border.subtle,
+          },
+        ],
+        { minWidth: headerTouchSize, minHeight: headerTouchSize },
       ]}
     >
       <Ionicons name={icon} size={13} color={active ? palette.accent.primary : palette.text.secondary} />
@@ -633,20 +713,11 @@ const styles = StyleSheet.create({
   },
 
   // ── Поиск + фильтр-чипсы (геометрия ClientsScreen) ──
-  searchWrap: { paddingHorizontal: spacing[4] },
+  searchWrap: { paddingHorizontal: 0 },
   // PINNED height — чипсы прижаты к верху, не растягиваются по flex-колонке
   // (тот же фикс, что #19.1 в Клиентах).
-  chipsBar: {
-    height: 44,
-    flexGrow: 0,
-    flexShrink: 0,
-    justifyContent: 'center',
-  },
-  chipsRow: {
-    paddingHorizontal: spacing[4],
-    gap: spacing[2],
-    alignItems: 'center',
-  },
+  chipsBar: { flexGrow: 0, flexShrink: 0, justifyContent: 'center', minHeight: headerTouchSize },
+  chipsRow: { paddingHorizontal: 0, gap: spacing[2], alignItems: 'center' },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -656,6 +727,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     maxWidth: 220,
+    minHeight: headerTouchSize,
   },
   chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
 

@@ -1264,12 +1264,15 @@ function AdminSalaryView() {
             </Button>
           ) : undefined
         }
+        toolbar={
+          <>
+            <Toolbar>
+              <MonthPager from={dateFrom} to={dateTo} todayKey={tenantToday} onChange={setPeriod} />
+              <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
+            </Toolbar>
+          </>
+        }
       />
-
-      <Toolbar>
-        <MonthPager from={dateFrom} to={dateTo} todayKey={tenantToday} onChange={setPeriod} />
-        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
-      </Toolbar>
 
       <QueryState
         isLoading={isLoading}

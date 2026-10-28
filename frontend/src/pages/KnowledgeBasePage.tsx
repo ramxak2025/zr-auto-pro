@@ -273,20 +273,37 @@ export default function KnowledgeBasePage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="База знаний" icon={GraduationCap} subtitle={subtitle} backTo={backTo} actions={actions} />
-
-      {/* Глобальный поиск — по статьям, регламентам, папкам и курсам сразу */}
-      {!backTo && (
-        <Toolbar>
-          <SearchInput
-            value={search}
-            onChange={(v) => patch({ q: v.trim() || null }, { replace: true })}
-            placeholder="Поиск по статьям, регламентам, папкам и курсам…"
-            aria-label="Поиск по базе знаний"
-            className="w-full lg:w-[28rem]"
-          />
-        </Toolbar>
-      )}
+      <PageHeader
+        title="База знаний"
+        icon={GraduationCap}
+        subtitle={subtitle}
+        backTo={backTo}
+        actions={actions}
+        toolbar={
+          <>
+            {!backTo && (
+              <Toolbar>
+                <SearchInput
+                  value={search}
+                  onChange={(v) => patch({ q: v.trim() || null }, { replace: true })}
+                  placeholder="Поиск по статьям, регламентам, папкам и курсам…"
+                  aria-label="Поиск по базе знаний"
+                  className="w-full lg:w-[28rem]"
+                />
+              </Toolbar>
+            )}
+            {!searchActive && !backTo && (
+              <Tabs<Section>
+                items={TAB_ITEMS}
+                value={section}
+                onChange={goToSection}
+                aria-label="Разделы базы знаний"
+                idPrefix="kb"
+              />
+            )}
+          </>
+        }
+      />
 
       {searchActive ? (
         <SearchResultsPanel
@@ -302,16 +319,6 @@ export default function KnowledgeBasePage() {
         />
       ) : (
         <>
-          {!backTo && (
-            <Tabs<Section>
-              items={TAB_ITEMS}
-              value={section}
-              onChange={goToSection}
-              aria-label="Разделы базы знаний"
-              idPrefix="kb"
-            />
-          )}
-
           <TabPanel idPrefix="kb" tabKey="learning" active={section === 'learning'}>
             <LearningCenter
               isManager={isManager}

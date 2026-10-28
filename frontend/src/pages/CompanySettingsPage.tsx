@@ -918,6 +918,19 @@ export default function CompanySettingsPage() {
             ? 'Реквизиты, автомобили, кассовая смена и программа лояльности'
             : 'Кассовая смена и программа лояльности'
         }
+        toolbar={
+          <>
+            {tabs.length > 0 && tab && (
+              <Tabs
+                items={tabs}
+                value={tab}
+                onChange={setTab}
+                aria-label="Разделы настроек"
+                idPrefix="company-settings"
+              />
+            )}
+          </>
+        }
       />
 
       {tabs.length === 0 || !tab ? (
@@ -928,8 +941,6 @@ export default function CompanySettingsPage() {
         </Card>
       ) : (
         <>
-          <Tabs items={tabs} value={tab} onChange={setTab} aria-label="Разделы настроек" idPrefix="company-settings" />
-
           <div className="max-w-3xl">
             <TabPanel idPrefix="company-settings" tabKey="company" active={tab === 'company'}>
               <div className="space-y-5">

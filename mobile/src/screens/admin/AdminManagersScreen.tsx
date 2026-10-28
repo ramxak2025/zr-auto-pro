@@ -24,7 +24,9 @@ import { formatPhone } from '../../../../shared/validation/phone';
 import type { PlatformManager } from '../../../../shared/types';
 import { InitialAvatar, StatusChip, balanceCaption, balanceColor, inactiveStatusInfo, pluralRu } from './adminShared';
 import ManagerFormSheet from './ManagerFormSheet';
-import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
+import { headerTouchSize } from '../../components/ScreenHeaderControls';
 
 /** Активные выше отключённых; внутри — по убыванию долга, затем по имени. */
 function sortManagers(list: PlatformManager[]): PlatformManager[] {
@@ -75,6 +77,7 @@ const ManagerRow = React.memo(function ManagerRow({
 });
 
 export default function AdminManagersScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -116,6 +119,7 @@ export default function AdminManagersScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Команда"
         subtitle={`${managers.length} ${pluralRu(managers.length, 'менеджер', 'менеджера', 'менеджеров')}`}
         onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
@@ -125,7 +129,10 @@ export default function AdminManagersScreen() {
               haptic('tap');
               setCreateOpen(true);
             }}
-            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
+            style={[
+              [styles.headerAdd, { backgroundColor: palette.accent.primary }],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel="Новый менеджер"
@@ -135,12 +142,20 @@ export default function AdminManagersScreen() {
         }
       />
 
-      <FlatList
+      <ScreenSectionFlatList
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         data={managers}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentInset={contentInset}
-        contentContainerStyle={[styles.listContent, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.listContent, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />

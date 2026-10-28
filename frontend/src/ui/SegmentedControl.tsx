@@ -1,7 +1,8 @@
-import { ReactNode, useRef, type KeyboardEvent } from 'react';
+import { ReactNode, useContext, useRef, type KeyboardEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from './cn';
-import { focusRing } from './tokens';
+import { SectionHeaderContext } from './SectionHeaderContext';
+import { useJournalSelection } from '../pages/journal/useJournalSelection';
 
 export interface SegmentedOption<V extends string = string> {
   value: V;
@@ -36,6 +37,9 @@ export function SegmentedControl<V extends string = string>({
   'aria-label': ariaLabel,
   className,
 }: SegmentedControlProps<V>) {
+  const inHeader = useContext(SectionHeaderContext);
+  const root = useRef<HTMLDivElement>(null);
+  useJournalSelection(root, value);
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
@@ -55,14 +59,17 @@ export function SegmentedControl<V extends string = string>({
 
   return (
     <div
+      ref={root}
       role="radiogroup"
       aria-label={ariaLabel}
       className={cn(
         'no-scrollbar inline-flex max-w-full items-center overflow-x-auto rounded-lg bg-surface-3 p-0.5',
         fullWidth && 'flex w-full',
+        inHeader && 'section-selection',
         className,
       )}
     >
+      {inHeader && <span data-selection-backplate className="section-selection-backplate" aria-hidden="true" />}
       {options.map((o) => {
         const checked = o.value === value;
         const Icon = o.icon;
@@ -75,6 +82,7 @@ export function SegmentedControl<V extends string = string>({
             type="button"
             role="radio"
             aria-checked={checked}
+            data-selection-active={inHeader ? checked : undefined}
             aria-label={o.title}
             title={o.title}
             tabIndex={checked ? 0 : -1}

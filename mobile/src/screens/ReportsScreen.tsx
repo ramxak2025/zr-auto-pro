@@ -67,6 +67,8 @@ import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
 import type { FinancialReport, DashboardV2 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -420,6 +422,7 @@ function ActivityRing({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ReportsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
@@ -789,17 +792,27 @@ export default function ReportsScreen() {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader
+          scroll={section}
           title="Финансовые отчёты"
           subtitle="Полный контроль над деньгами"
           onBack={() => navigation.goBack()}
         />
-        <View style={styles.accessDenied}>
-          <Ionicons name="lock-closed" size={40} color={palette.text.tertiary} />
-          <Text style={[styles.adTitle, { color: palette.text.primary }]}>Доступ ограничен</Text>
-          <Text style={[styles.adDesc, { color: palette.text.secondary }]}>
-            У вас нет прав для просмотра финансовых отчётов
-          </Text>
-        </View>
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.accessDenied}>
+            <Ionicons name="lock-closed" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.adTitle, { color: palette.text.primary }]}>Доступ ограничен</Text>
+            <Text style={[styles.adDesc, { color: palette.text.secondary }]}>
+              У вас нет прав для просмотра финансовых отчётов
+            </Text>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -885,14 +898,22 @@ export default function ReportsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Финансовые отчёты"
         subtitle="Полный контроль над деньгами"
         onBack={() => navigation.goBack()}
-        trailing={<FreshnessBadge query={dashboardQuery} />}
+        context={<FreshnessBadge query={dashboardQuery} />}
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -1611,7 +1632,7 @@ export default function ReportsScreen() {
             </>
           )}
         </View>
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* TARGETS MODAL */}
       <TargetsModal

@@ -1,3 +1,4 @@
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -50,6 +51,7 @@ import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
 import { parseReturnQuantity } from '../../../shared/utils/procurementInput';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 function formatMoney(v: number) {
   return (
@@ -63,6 +65,7 @@ function formatDate(d: string) {
 }
 
 export default function SupplierDetailScreen() {
+  const section = useScreenSectionScroll();
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -925,38 +928,54 @@ export default function SupplierDetailScreen() {
 
   if (isLoading)
     return (
-      <View>
-        <ProcurementRecoveryPanel
-          recovery={recovery}
-          onRecovered={(record) => {
-            void invalidateAll();
-            Alert.alert(
-              'Готово',
-              record.target.operation === 'delivery-create'
-                ? 'Поставка восстановлена'
-                : 'Результат возврата восстановлен',
-            );
-          }}
-        />
-        <LoadingSpinner />
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader scroll={section} title="Поставщик" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={(record) => {
+              void invalidateAll();
+              Alert.alert(
+                'Готово',
+                record.target.operation === 'delivery-create'
+                  ? 'Поставка восстановлена'
+                  : 'Результат возврата восстановлен',
+              );
+            }}
+          />
+          <LoadingSpinner />
+        </ScreenSectionScrollView>
       </View>
     );
   if (!supplier)
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <ProcurementRecoveryPanel
-          recovery={recovery}
-          onRecovered={(record) => {
-            void invalidateAll();
-            Alert.alert(
-              'Готово',
-              record.target.operation === 'delivery-create'
-                ? 'Поставка восстановлена'
-                : 'Результат возврата восстановлен',
-            );
-          }}
-        />
-        <Text style={{ padding: 20, textAlign: 'center', color: palette.text.primary }}>Поставщик не найден</Text>
+        <IosScreenHeader scroll={section} title="Поставщик" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+        >
+          <ProcurementRecoveryPanel
+            recovery={recovery}
+            onRecovered={(record) => {
+              void invalidateAll();
+              Alert.alert(
+                'Готово',
+                record.target.operation === 'delivery-create'
+                  ? 'Поставка восстановлена'
+                  : 'Результат возврата восстановлен',
+              );
+            }}
+          />
+          <Text style={{ padding: 20, textAlign: 'center', color: palette.text.primary }}>Поставщик не найден</Text>
+        </ScreenSectionScrollView>
       </View>
     );
 
@@ -967,32 +986,40 @@ export default function SupplierDetailScreen() {
           screen a visually distinct header treatment without having
           to fork IosScreenHeader. Regular contractors keep the plain
           name title. */}
-      <ProcurementRecoveryPanel
-        recovery={recovery}
-        onRecovered={(record) => {
-          void invalidateAll();
-          Alert.alert(
-            'Готово',
-            record.target.operation === 'delivery-create'
-              ? 'Поставка восстановлена'
-              : 'Результат возврата восстановлен',
-          );
-        }}
-      />
+
       <IosScreenHeader
+        scroll={section}
         title={supplier.name}
         subtitle={isUsedPurchaseSupplier ? 'Приём б/у запчастей от клиентов: долг поставщику растёт' : undefined}
         onBack={() => navigation.goBack()}
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: contentContainerPaddingBottom + spacing[8] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: contentContainerPaddingBottom + spacing[8] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         contentInset={contentInset}
         scrollIndicatorInsets={contentInset}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
+        <ProcurementRecoveryPanel
+          recovery={recovery}
+          onRecovered={(record) => {
+            void invalidateAll();
+            Alert.alert(
+              'Готово',
+              record.target.operation === 'delivery-create'
+                ? 'Поставка восстановлена'
+                : 'Результат возврата восстановлен',
+            );
+          }}
+        />
         {/* Stats cards */}
         <View style={styles.statsRow}>
           <AnimatedCard
@@ -1829,7 +1856,7 @@ export default function SupplierDetailScreen() {
             })}
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Order picker — «Новая поставка» начинается с выбора заказа, который
           мы принимаем. Открывается только когда заказов несколько (один —

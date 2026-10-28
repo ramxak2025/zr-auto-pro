@@ -1,3 +1,6 @@
+import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 /**
  * MessagesJournalScreen — «Журнал отправок».
  *
@@ -15,7 +18,7 @@
  * Записи канала telegram помечены «в чат владельца» — бот пишет владельцу,
  * не клиенту.
  */
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { View, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useInfiniteQuery } from '@tanstack/react-query';
@@ -24,11 +27,13 @@ import { useColors } from '../contexts/ThemeContext';
 import { marketingApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import IosScreenHeader from '../components/IosScreenHeader';
+
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { SentMessage, SentMessagesResponse, SentMessageType } from '../../../shared/types';
-import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
+import { type SentMessage, type SentMessagesResponse, type SentMessageType } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { ScreenSectionFlatList } from '../components/ScreenSectionScrollable';
 
 // ─── Метаданные типов сообщений (продуктовые русские имена) ───────────
 const TYPE_META: Record<SentMessageType, { label: string; icon: keyof typeof Ionicons.glyphMap; tint: string }> = {
@@ -150,6 +155,7 @@ function JournalRow({ item }: { item: SentMessage }) {
 
 // ─── Экран ────────────────────────────────────────────────────────────
 export default function MessagesJournalScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -188,48 +194,68 @@ export default function MessagesJournalScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Журнал отправок" onBack={() => navigation.goBack()} />
+      <ScreenSectionHeader scroll={section} title="Журнал отправок">
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          </View>
+          <View style={styles.filterWrap}>
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 0 }}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterRow}
+            >
+              {FILTERS.map((f) => {
+                const active = typeFilter === f.key;
+                return (
+                  <TouchableOpacity
+                    key={f.key ?? 'all'}
+                    onPress={() => {
+                      haptic('select');
+                      setTypeFilter(f.key);
+                    }}
+                    style={[
+                      [
+                        styles.filterChip,
+                        {
+                          backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                          borderColor: active ? palette.accent.primary : palette.border.subtle,
+                        },
+                      ],
+                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        fontWeight: '600',
+                        color: active ? colors.white : palette.text.secondary,
+                      }}
+                    >
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
       {/* Фильтр-чипы по типу */}
-      <View style={styles.filterWrap}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-          {FILTERS.map((f) => {
-            const active = typeFilter === f.key;
-            return (
-              <TouchableOpacity
-                key={f.key ?? 'all'}
-                onPress={() => {
-                  haptic('select');
-                  setTypeFilter(f.key);
-                }}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: active ? palette.accent.primary : palette.bg.muted,
-                    borderColor: active ? palette.accent.primary : palette.border.subtle,
-                  },
-                ]}
-              >
-                <Text
-                  style={{
-                    fontSize: 12,
-                    fontWeight: '600',
-                    color: active ? colors.white : palette.text.secondary,
-                  }}
-                >
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
 
-      <FlatList
+      <ScreenSectionFlatList
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
         data={rows}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <JournalRow item={item} />}
-        contentContainerStyle={[styles.listContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          [styles.listContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
@@ -291,8 +317,8 @@ export default function MessagesJournalScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
 
-  filterWrap: { paddingBottom: spacing[2.5] },
-  filterRow: { paddingHorizontal: spacing[4], gap: spacing[2] },
+  filterWrap: { paddingBottom: 0 },
+  filterRow: { paddingHorizontal: 0, gap: spacing[2] },
   filterChip: {
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2],

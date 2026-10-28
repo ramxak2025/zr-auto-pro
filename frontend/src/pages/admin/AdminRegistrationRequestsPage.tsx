@@ -136,16 +136,23 @@ export default function AdminRegistrationRequestsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Заявки" icon={Inbox} subtitle="Заявки на подключение автосервисов со страницы входа" />
-
-      <Toolbar>
-        <SegmentedControl<StatusFilter>
-          aria-label="Статус заявки"
-          value={filter}
-          onChange={setFilter}
-          options={FILTERS}
-        />
-      </Toolbar>
+      <PageHeader
+        title="Заявки"
+        icon={Inbox}
+        subtitle="Заявки на подключение автосервисов со страницы входа"
+        toolbar={
+          <>
+            <Toolbar>
+              <SegmentedControl<StatusFilter>
+                aria-label="Статус заявки"
+                value={filter}
+                onChange={setFilter}
+                options={FILTERS}
+              />
+            </Toolbar>
+          </>
+        }
+      />
 
       {isLoading ? (
         <div className="space-y-3" aria-busy="true">

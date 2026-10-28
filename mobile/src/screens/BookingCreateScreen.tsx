@@ -16,7 +16,7 @@ import { captureDataSession } from '../contexts/dataSession';
  *
  * Android-safe: никаких iOS-only API; пикер кроссплатформенный.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -40,6 +40,7 @@ import { UserRole, type Client, type Car, type User } from '../../../shared/type
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatBookingDay, formatBookingTime } from './bookings/bookingHelpers';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 // Высота липкой панели «Сохранить»: paddingTop (spacing[3]=12) + paddingBottom
 // (spacing[3]=12) + кнопка (paddingVertical spacing[3.5]=14 ×2 + текст ~16) ≈ 68.
@@ -49,6 +50,7 @@ import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 const SAVE_BAR_HEIGHT = spacing[3] * 2 + spacing[3.5] * 2 + 16;
 
 export default function BookingCreateScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -257,7 +259,7 @@ export default function BookingCreateScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Новая запись" onBack={() => navigation.goBack()} />
+      <IosScreenHeader scroll={section} title="Новая запись" onBack={() => navigation.goBack()} />
 
       {/* Клавиатура (Round 11 D). Раньше здесь был RN-core KeyboardAvoidingView
           (Android — no-op) вокруг обычного ScrollView: поле «Комментарий»
@@ -270,7 +272,13 @@ export default function BookingCreateScreen() {
           (SAVE_BAR_HEIGHT + запас), т.к. панель уже перекрывает низ скролла. */}
       <View style={{ flex: 1 }}>
         <KeyboardAwareScroll
-          contentContainerStyle={[styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }]}
+          onScroll={section.onScroll}
+          contentInsetAdjustmentBehavior="never"
+          scrollEventThrottle={16}
+          contentContainerStyle={[
+            [styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }],
+            { paddingTop: section.contentTop + spacing[1] },
+          ]}
           reserveTabBar={false}
           extraKeyboardBottomOffset={SAVE_BAR_HEIGHT}
         >

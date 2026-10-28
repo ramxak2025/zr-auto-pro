@@ -1,3 +1,4 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 /**
  * WarehouseAnalyticsScreen — premium financial analytics for warehouse.
  *
@@ -25,7 +26,7 @@
  *   • Heavy sections (velocity, top-moving, top-margin) are sliced to
  *     top 10 client-side — backend already filters, this is defensive.
  */
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import { Platform, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -45,15 +46,17 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { borderRadius, colors, fontSize, spacing } from '../theme';
 import { warehouseAnalyticsApi, warehousesApi } from '../api/services';
 import { formatMoney } from '../../../shared/utils/formatters';
-import type {
-  CategoryMargin,
-  ReorderItem,
-  TopProduct,
-  VelocityRow,
-  Warehouse,
-  WarehouseSummary,
+import {
+  type CategoryMargin,
+  type ReorderItem,
+  type TopProduct,
+  type VelocityRow,
+  type Warehouse,
+  type WarehouseSummary,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 // Period switcher chip group
@@ -88,14 +91,17 @@ function MonthPeriodSwitcher({ value, onChange }: MonthPeriodSwitcherProps) {
               }
             }}
             style={[
-              styles.segItem,
-              active && {
-                backgroundColor: palette.bg.card,
-                shadowColor: '#000',
-                shadowOpacity: palette.mode === 'dark' ? 0.18 : 0.06,
-                shadowRadius: 4,
-                shadowOffset: { width: 0, height: 1 },
-              },
+              [
+                styles.segItem,
+                active && {
+                  backgroundColor: palette.bg.card,
+                  shadowColor: '#000',
+                  shadowOpacity: palette.mode === 'dark' ? 0.18 : 0.06,
+                  shadowRadius: 4,
+                  shadowOffset: { width: 0, height: 1 },
+                },
+              ],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
             ]}
             hitSlop={6}
           >
@@ -253,6 +259,7 @@ function UrgencyBadge({ urgency }: { urgency: ReorderItem['urgency'] }) {
 // ────────────────────────────────────────────────────────────────────────
 
 export default function WarehouseAnalyticsScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -381,17 +388,20 @@ export default function WarehouseAnalyticsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
+        scroll={section}
         title="Складская аналитика"
         onBack={() => navigation.goBack()}
         trailing={<MonthPeriodSwitcher value={period} onChange={setPeriod} />}
       />
       {/* Автосервис (169): склад и аналитика — филиала сессии. Только подпись. */}
-      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
         contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] },
+          [styles.scrollContent, { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] }],
+          { paddingTop: section.contentTop + spacing[4] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -465,7 +475,7 @@ export default function WarehouseAnalyticsScreen() {
 
         {/* 11. GMROI */}
         <GmroiCard summary={summary} palette={palette} index={10} />
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }
@@ -1122,7 +1132,7 @@ function GmroiCard({
 // ────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
+  pointChipRow: { marginHorizontal: 0, marginBottom: 0, alignSelf: 'flex-start' },
   safe: { flex: 1 },
   scrollContent: {
     padding: spacing[4],

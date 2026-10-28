@@ -41,6 +41,9 @@ import type {
   Plan,
 } from '../../../../shared/types';
 import { formatDateTime } from './adminShared';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
+import { headerTouchSize } from '../../components/ScreenHeaderControls';
 
 /** Russian plural for «N просмотр / просмотра / просмотров». */
 function pluralViews(n: number): string {
@@ -120,6 +123,7 @@ function extractServerMessage(error: unknown): string {
 }
 
 export default function AdminBroadcastScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();
@@ -376,14 +380,29 @@ export default function AdminBroadcastScreen() {
 
   // Hard gate — this whole cabinet is superadmin-only (the backend also 403s
   // create/list/cancel, but never render the authoring UI to anyone else).
+  // A replacement native scroller starts at zero; keep the heading on that same offset.
+  const sectionBody = isSuperadmin ? 'form' : 'terminal';
+  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+
   if (!isSuperadmin) {
     return (
       <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Рассылка" subtitle="Объявление владельцам" />
-        <View style={styles.gateBlock}>
-          <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
-          <Text style={[styles.gateText, { color: palette.text.secondary }]}>Раздел доступен только суперадмину.</Text>
-        </View>
+        <IosScreenHeader scroll={section} title="Рассылка" subtitle="Объявление владельцам" />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <View style={styles.gateBlock}>
+            <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.gateText, { color: palette.text.secondary }]}>
+              Раздел доступен только суперадмину.
+            </Text>
+          </View>
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -391,16 +410,22 @@ export default function AdminBroadcastScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title="Рассылка"
         onBack={() => navigation.goBack()}
         subtitle="Объявление владельцам"
         trailing={
           <Pressable
+            accessibilityLabel="Предпросмотр рассылки"
+            accessibilityRole="button"
             onPress={() => {
               haptic('tap');
               setPreviewOpen(true);
             }}
-            style={[styles.previewBtn, { backgroundColor: palette.bg.muted }]}
+            style={[
+              [styles.previewBtn, { backgroundColor: palette.bg.muted }],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
             hitSlop={6}
           >
             <Ionicons name="eye-outline" size={20} color={palette.text.primary} />
@@ -409,9 +434,17 @@ export default function AdminBroadcastScreen() {
       />
 
       <KeyboardAwareScroll
+        onScroll={section.onScroll}
+        scrollEventThrottle={16}
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         reserveTabBar={false}
         extraKeyboardBottomOffset={tabBarHeight}
-        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
+        contentContainerStyle={[
+          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Title */}

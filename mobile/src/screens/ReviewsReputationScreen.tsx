@@ -1,3 +1,6 @@
+import { headerTouchSize, HeaderIsland, HeaderAction } from '../components/ScreenHeaderControls';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 /**
  * ReviewsReputationScreen — «Отзывы и репутация».
  *
@@ -39,14 +42,16 @@ import { marketingApi, clientsApi, clientSourcesApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
-import IosScreenHeader from '../components/IosScreenHeader';
+
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
 import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { Client, EmployeeReviewRating, ReviewSettings } from '../../../shared/types';
+import { type Client, type EmployeeReviewRating, type ReviewSettings } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 const MAX_SOURCE_LEN = 100;
 
@@ -895,6 +900,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
 // ─────────────────────────────────────────────────────────────────────
 
 export default function ReviewsReputationScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -926,67 +932,91 @@ export default function ReviewsReputationScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Отзывы и репутация"
-        onBack={() => navigation.goBack()}
-        trailing={
-          <TouchableOpacity
-            onPress={() => {
-              haptic('tap');
-              setRequestOpen(true);
-            }}
-            hitSlop={10}
-            style={[styles.headerAction, { backgroundColor: palette.accent.primarySoft }]}
-            accessibilityRole="button"
-            accessibilityLabel="Запросить отзыв"
-          >
-            <Ionicons name="paper-plane" size={16} color={palette.accent.primary} />
-          </TouchableOpacity>
-        }
-      />
-
-      <View style={[styles.tabBar, { backgroundColor: palette.bg.canvas }]}>
-        {tabs.map((tab) => {
-          const active = activeTab === tab.key;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[
-                styles.tab,
-                { backgroundColor: palette.bg.muted },
-                active && {
-                  backgroundColor: palette.accent.primarySoft,
-                  borderWidth: 1,
-                  borderColor: palette.accent.primary,
-                },
-              ]}
-              onPress={() => {
-                haptic('select');
-                setActiveTab(tab.key);
+      <ScreenSectionHeader scroll={section} title="Отзывы и репутация">
+        <HeaderIsland layout="column">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+            <View
+              style={{
+                flex: 1,
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                gap: 6,
               }}
             >
-              <Ionicons
-                name={active ? tab.iconSolid : tab.iconOutline}
-                size={18}
-                color={active ? palette.accent.primary : palette.text.tertiary}
-              />
-              <Text
-                style={[
-                  styles.tabText,
-                  { color: active ? palette.accent.primary : palette.text.tertiary },
-                  active && { fontWeight: fontWeight.bold },
-                ]}
-              >
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+              {
+                <TouchableOpacity
+                  onPress={() => {
+                    haptic('tap');
+                    setRequestOpen(true);
+                  }}
+                  hitSlop={10}
+                  style={[
+                    [styles.headerAction, { backgroundColor: palette.accent.primarySoft }],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Запросить отзыв"
+                >
+                  <Ionicons name="paper-plane" size={16} color={palette.accent.primary} />
+                </TouchableOpacity>
+              }
+            </View>
+          </View>
+          <View style={[styles.tabBar, { backgroundColor: palette.bg.canvas }]}>
+            {tabs.map((tab) => {
+              const active = activeTab === tab.key;
+              return (
+                <TouchableOpacity
+                  key={tab.key}
+                  style={[
+                    [
+                      styles.tab,
+                      { backgroundColor: palette.bg.muted },
+                      active && {
+                        backgroundColor: palette.accent.primarySoft,
+                        borderWidth: 1,
+                        borderColor: palette.accent.primary,
+                      },
+                    ],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                  onPress={() => {
+                    haptic('select');
+                    setActiveTab(tab.key);
+                  }}
+                >
+                  <Ionicons
+                    name={active ? tab.iconSolid : tab.iconOutline}
+                    size={18}
+                    color={active ? palette.accent.primary : palette.text.tertiary}
+                  />
+                  <Text
+                    style={[
+                      styles.tabText,
+                      { color: active ? palette.accent.primary : palette.text.tertiary },
+                      active && { fontWeight: fontWeight.bold },
+                    ]}
+                  >
+                    {tab.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </HeaderIsland>
+      </ScreenSectionHeader>
 
-      <ScrollView
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[4] },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
@@ -995,7 +1025,7 @@ export default function ReviewsReputationScreen() {
       >
         {activeTab === 'settings' && <SettingsTab onRequestReview={() => setRequestOpen(true)} />}
         {activeTab === 'reviews' && <ReviewsTab />}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       <RequestReviewModal visible={requestOpen} onClose={() => setRequestOpen(false)} />
     </View>
@@ -1016,12 +1046,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   // Tabs
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing[3],
-    paddingBottom: spacing[2],
-    gap: spacing[2],
-  },
+  tabBar: { flexDirection: 'row', paddingHorizontal: 0, paddingBottom: 0, gap: spacing[2], flexWrap: 'wrap' },
   tab: {
     flex: 1,
     flexDirection: 'row',

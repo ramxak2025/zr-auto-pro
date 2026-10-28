@@ -1,3 +1,4 @@
+import { headerTouchSize } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeCategoryScreen — the universal Knowledge Base AREA + FOLDER screen.
  *
@@ -43,13 +44,15 @@ import { knowledgeApi } from '../api/services';
 import { spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import { childCategories, categoryAncestors, rootCategories } from '../utils/knowledgeTree';
-import type {
-  KnowledgeArticle,
-  KnowledgeArticleType,
-  KnowledgeCategory,
-  KnowledgeSearchResults,
+import {
+  type KnowledgeArticle,
+  type KnowledgeArticleType,
+  type KnowledgeCategory,
+  type KnowledgeSearchResults,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type ParamList = {
   KnowledgeCategory: { categoryId?: string; type?: KnowledgeArticleType; name?: string; articlesRoot?: boolean };
@@ -69,6 +72,7 @@ const foldersLabel = (n: number) => `${n} ${plural(n, 'папка', 'папки'
 const articlesLabel = (n: number) => `${n} ${plural(n, 'статья', 'статьи', 'статей')}`;
 
 export default function KnowledgeCategoryScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCategory'>>();
   const palette = useColors();
@@ -301,7 +305,10 @@ export default function KnowledgeCategoryScreen() {
     <Pressable
       onPress={openNewArticle}
       hitSlop={10}
-      style={[styles.headerBtn, { backgroundColor: palette.accent.primarySoft }]}
+      style={[
+        [styles.headerBtn, { backgroundColor: palette.accent.primarySoft }],
+        { minWidth: headerTouchSize, minHeight: headerTouchSize },
+      ]}
       accessibilityRole="button"
       accessibilityLabel={isRegulationArea ? 'Новый регламент' : 'Новая статья'}
     >
@@ -314,10 +321,16 @@ export default function KnowledgeCategoryScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={title} onBack={() => navigation.goBack()} trailing={headerTrailing} />
+      <IosScreenHeader scroll={section} title={title} onBack={() => navigation.goBack()} trailing={headerTrailing} />
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
+      <ScreenSectionScrollView
+        onScroll={section.onScroll}
+        contentInsetAdjustmentBehavior="never"
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          [styles.content, { paddingBottom: tabBarHeight + spacing[4] }],
+          { paddingTop: section.contentTop + spacing[2] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -506,7 +519,7 @@ export default function KnowledgeCategoryScreen() {
             ) : null}
           </>
         )}
-      </ScrollView>
+      </ScreenSectionScrollView>
 
       {/* Manager: create folder / subfolder */}
       {canCreateFolder ? (

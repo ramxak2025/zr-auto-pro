@@ -84,17 +84,24 @@ export default function MarketingPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Маркетинг" icon={Megaphone} subtitle="Отзывы, рассылки, интеграции и лояльность" />
-
-      <Tabs
-        aria-label="Разделы маркетинга"
-        idPrefix="marketing"
-        items={TABS}
-        value={activeTab}
-        onChange={(t) => {
-          setActiveTab(t);
-          if (t !== 'settings') setSettingsFocus(null);
-        }}
+      <PageHeader
+        title="Маркетинг"
+        icon={Megaphone}
+        subtitle="Отзывы, рассылки, интеграции и лояльность"
+        toolbar={
+          <>
+            <Tabs
+              aria-label="Разделы маркетинга"
+              idPrefix="marketing"
+              items={TABS}
+              value={activeTab}
+              onChange={(t) => {
+                setActiveTab(t);
+                if (t !== 'settings') setSettingsFocus(null);
+              }}
+            />
+          </>
+        }
       />
 
       <TabPanel idPrefix="marketing" tabKey="reports" active={activeTab === 'reports'}>

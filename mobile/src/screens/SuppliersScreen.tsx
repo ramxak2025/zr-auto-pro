@@ -1,3 +1,7 @@
+import { headerTouchSize, HeaderIsland, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
+import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -13,14 +17,14 @@ import {
 
 import { Swipeable } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
-import IosScreenHeader from '../components/IosScreenHeader';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import SearchInput from '../components/SearchInput';
+
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
@@ -31,9 +35,9 @@ import PurchaseOrdersScreen from './PurchaseOrdersScreen';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Supplier } from '../../../shared/types';
+import { type Supplier } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // Top-level segment: the «Поставщики» section now hosts BOTH the supplier
 // list and «Заказы поставщикам» (purchase orders) under one segmented control,
@@ -260,6 +264,7 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({
 });
 
 export default function SuppliersScreen() {
+  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -539,14 +544,29 @@ export default function SuppliersScreen() {
     </View>
   ) : null;
 
-  return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Поставщики"
-        onBack={() => navigation.goBack()}
-        trailing={
-          view === 'suppliers' ? (
-            /* Suppliers segment — управляющие действия видны только с
+  // The two segments own different native scrollers.
+
+  const renderSectionHeader = (controls: React.ReactNode) => (
+    <ScreenSectionHeader
+      scroll={section}
+      title="Поставщики"
+      context={view === 'suppliers' ? <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} /> : null}
+    >
+      <HeaderIsland layout="column">
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
+          <View
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            {view === 'suppliers' ? (
+              /* Suppliers segment — управляющие действия видны только с
                `suppliers_manage`. Без него экран строго view-only: ни
                «Возврат брака», ни «+ Новый» не рендерим (мёртвых кнопок
                не оставляем).
@@ -554,123 +574,174 @@ export default function SuppliersScreen() {
                   sheet that forwards to SupplierDetail with the
                   auto-open flag.
                2) «+ Новый» — primary, opens the create-supplier modal. */
-            canManageSuppliers ? (
-              <View style={styles.headerTrailing}>
-                <TouchableOpacity
-                  onPress={() => setDefectPickerOpen(true)}
-                  style={[
-                    styles.headerSecondaryBtn,
-                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                  ]}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Возврат брака"
-                >
-                  <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
-                  <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
-                    Возврат брака
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.addBtn}
-                  onPress={openCreate}
-                  hitSlop={8}
-                  accessibilityLabel="Новый поставщик"
-                >
-                  <Ionicons name="add" size={18} color={colors.white} />
-                </TouchableOpacity>
-              </View>
-            ) : undefined
-          ) : canManageSuppliers ? (
-            /* Orders segment — single «+» that opens order creation. The
+              canManageSuppliers ? (
+                <View style={styles.headerTrailing}>
+                  <TouchableOpacity
+                    onPress={() => setDefectPickerOpen(true)}
+                    style={[
+                      [
+                        styles.headerSecondaryBtn,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ],
+                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                    ]}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Возврат брака"
+                  >
+                    <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+                    <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
+                      Возврат брака
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                    onPress={openCreate}
+                    hitSlop={8}
+                    accessibilityLabel="Новый поставщик"
+                  >
+                    <Ionicons name="add" size={18} color={colors.white} />
+                  </TouchableOpacity>
+                </View>
+              ) : undefined
+            ) : canManageSuppliers ? (
+              /* Orders segment — single «+» that opens order creation. The
                embedded PurchaseOrdersScreen drops its own header, so this
                is the create entry-point (mirrors the standalone screen). */
-            <TouchableOpacity
-              style={styles.addBtn}
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate('PurchaseOrderCreate');
-              }}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Новый заказ поставщику"
-            >
-              <Ionicons name="add" size={18} color={colors.white} />
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
+              <TouchableOpacity
+                style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                onPress={() => {
+                  haptic('tap');
+                  navigation.navigate('PurchaseOrderCreate');
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Новый заказ поставщику"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            ) : undefined}
+          </View>
+        </View>
+        <View style={styles.segmentWrap}>
+          <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
+            {(['suppliers', 'orders'] as SuppliersView[]).map((key) => {
+              const active = view === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    [styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]],
+                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
+                  ]}
+                  onPress={() => {
+                    if (active) return;
+                    haptic('select');
+                    setView(key);
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Ionicons
+                    name={key === 'suppliers' ? 'business-outline' : 'clipboard-outline'}
+                    size={15}
+                    color={active ? palette.text.primary : palette.text.tertiary}
+                  />
+                  <Text
+                    style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
+                    numberOfLines={1}
+                  >
+                    {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+        {controls}
+      </HeaderIsland>
+    </ScreenSectionHeader>
+  );
+
+  // Reset only when React replaces this screen's native root scroller.
+  const sectionRootKind =
+    view === 'orders'
+      ? 'embedded-orders'
+      : suppliers === undefined || (!suppliers.length && !isLoading)
+        ? 'state-scroll'
+        : 'supplier-list';
+  const previousSectionRootKind = React.useRef(sectionRootKind);
+  React.useEffect(() => {
+    if (previousSectionRootKind.current !== sectionRootKind) {
+      previousSectionRootKind.current = sectionRootKind;
+      section.reset();
+    }
+  }, [sectionRootKind, section.reset]);
+
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      {view === 'suppliers'
+        ? renderSectionHeader(
+            <View style={styles.searchWrap}>
+              <HeaderSearch
+                timing={{ debounceMs: 300 }}
+                focusOnClear={false}
+                value={search}
+                onChange={setSearch}
+                placeholder="Поиск поставщика..."
+              />
+            </View>,
+          )
+        : null}
 
       {/* Segmented control — «Поставщики | Заказы». Compact iOS-style track
           with a sliding active pill; switches the section body below. */}
-      <View style={styles.segmentWrap}>
-        <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
-          {(['suppliers', 'orders'] as SuppliersView[]).map((key) => {
-            const active = view === key;
-            return (
-              <TouchableOpacity
-                key={key}
-                style={[styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]]}
-                onPress={() => {
-                  if (active) return;
-                  haptic('select');
-                  setView(key);
-                }}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-              >
-                <Ionicons
-                  name={key === 'suppliers' ? 'business-outline' : 'clipboard-outline'}
-                  size={15}
-                  color={active ? palette.text.primary : palette.text.tertiary}
-                />
-                <Text
-                  style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
-                  numberOfLines={1}
-                >
-                  {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
 
       {view === 'orders' ? (
         // «Заказы поставщикам» rendered inline (embedded). Same navigator
         // context (MoreStack), so PurchaseOrderCreate / Detail still resolve.
         <View style={{ flex: 1 }}>
-          <PurchaseOrdersScreen embedded />
+          <PurchaseOrdersScreen sectionController={section} sectionHeader={renderSectionHeader} embedded />
         </View>
       ) : (
         <>
           {/* FreshnessBadge — HYBRID-perf plan. Tiny pulsing label that
               reassures the owner this list rendered from cache and is being
               revalidated, not "stuck". */}
-          <View style={styles.freshnessRow}>
-            <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
-          </View>
-
-          <View style={styles.searchWrap}>
-            <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
-          </View>
 
           {suppliers === undefined ? (
             // Cold-start guard — show skeleton, never EmptyState while
             // data is genuinely unknown. Once any response (even cached)
             // lands, EmptyState becomes legitimate again.
-            <ListSkeleton count={6} />
+            <ScreenSectionScrollView
+              onScroll={section.onScroll}
+              scrollEventThrottle={16}
+              contentInsetAdjustmentBehavior="never"
+              contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+            >
+              <ListSkeleton count={6} />
+            </ScreenSectionScrollView>
           ) : !suppliers.length && !isLoading ? (
-            <EmptyState
-              title="Нет поставщиков"
-              description={canManageSuppliers ? 'Добавьте первого поставщика' : 'Список поставщиков пуст'}
-              // «Добавить» — только с правом управления. View-only роль
-              // видит пустое состояние без мутирующего действия.
-              action={canManageSuppliers ? { label: 'Добавить', onPress: openCreate } : undefined}
-            />
+            <ScreenSectionScrollView
+              onScroll={section.onScroll}
+              scrollEventThrottle={16}
+              contentInsetAdjustmentBehavior="never"
+              contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
+            >
+              <EmptyState
+                title="Нет поставщиков"
+                description={canManageSuppliers ? 'Добавьте первого поставщика' : 'Список поставщиков пуст'}
+                // «Добавить» — только с правом управления. View-only роль
+                // видит пустое состояние без мутирующего действия.
+                action={canManageSuppliers ? { label: 'Добавить', onPress: openCreate } : undefined}
+              />
+            </ScreenSectionScrollView>
           ) : (
-            <FlashList
+            <ScreenSectionFlashList
+              onScroll={section.onScroll}
+              contentInsetAdjustmentBehavior="never"
+              scrollEventThrottle={16}
               data={regularSuppliers}
               keyExtractor={(i) => i.id}
               renderItem={renderSupplier}
@@ -686,7 +757,7 @@ export default function SuppliersScreen() {
                   </View>
                 ) : null
               }
-              contentContainerStyle={styles.list}
+              contentContainerStyle={[styles.list, { paddingTop: section.contentTop }]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               refreshControl={
@@ -877,11 +948,7 @@ const styles = StyleSheet.create({
   // it's the screen's primary mutation and the icon alone is
   // unambiguous in iOS UX (this is exactly the pattern Mail / Notes
   // use for "compose").
-  headerTrailing: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
+  headerTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
   headerSecondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -907,7 +974,7 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   // Segmented control «Поставщики | Заказы» — compact iOS track.
-  segmentWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[2] },
+  segmentWrap: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
   segment: {
     flexDirection: 'row',
     borderRadius: borderRadius.lg,
@@ -930,7 +997,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   segmentText: { fontSize: 14, fontWeight: '600', letterSpacing: -0.2 },
-  searchWrap: { paddingHorizontal: spacing[4] },
+  searchWrap: { paddingHorizontal: 0 },
   // FreshnessBadge slot — sits below the header, right-aligned.
   freshnessRow: {
     paddingHorizontal: spacing[4],

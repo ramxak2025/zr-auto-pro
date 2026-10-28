@@ -1,4 +1,6 @@
-import { formatMoney as formatPreciseMoney } from '../../../shared/utils/formatters';
+import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { formatMoney as formatPreciseMoney, formatDayKey } from '../../../shared/utils/formatters';
 import { accrualBreakdown } from '../../../shared/utils/accrualBreakdown';
 import { AttentionCard, TodayEarningsCard } from './dashboard/TodayWidgets';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -26,7 +28,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import CachedImage from '../components/CachedImage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle, RadialGradient } from 'react-native-svg';
@@ -53,27 +55,28 @@ import EmployeeAvatar from '../components/EmployeeAvatar';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useThemeMode, useColors } from '../contexts/ThemeContext';
-import type { SemanticPalette } from '../theme/palette';
+import { type SemanticPalette } from '../theme/palette';
 import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import FreshnessBadge from '../components/FreshnessBadge';
 import PointIndicator from '../components/PointIndicator';
 import QueryErrorState from '../components/QueryErrorState';
-import type {
-  SalarySummary,
-  TodayEmployeeStatus,
-  Shift,
-  ScheduleEntry,
-  User,
-  RecentReview,
-  WarehouseSummary,
-  ReorderItem,
-  Product,
-  InstallmentWidget,
-  CashShiftReport,
+import {
+  type SalarySummary,
+  type TodayEmployeeStatus,
+  type Shift,
+  type ScheduleEntry,
+  type User,
+  type RecentReview,
+  type WarehouseSummary,
+  type ReorderItem,
+  type Product,
+  type InstallmentWidget,
+  type CashShiftReport,
+  UserRole,
 } from '../../../shared/types';
-import { UserRole } from '../../../shared/types';
+
 import { usePreference, prefKey } from '../hooks/usePreference';
 import { usePosSettings } from '../hooks/usePosSettings';
 import {
@@ -92,7 +95,7 @@ import {
   emptyBreakdown,
   recordedAttendanceBucket,
 } from '../../../shared/utils/attendance';
-import { formatDayKey } from '../../../shared/utils/formatters';
+
 import { invalidateAttendanceQueries } from '../../../shared/utils/attendanceQueries';
 import { useAttendanceRefresh } from '../hooks/useAttendanceRefresh';
 import { updateWidgetData } from '../utils/widgetBridge';
@@ -4678,13 +4681,14 @@ function CashierShiftCard() {
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
+  const section = useScreenSectionScroll({ hasControls: false });
+
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
   const { user, refreshUser } = useAuth();
   const { palette } = useThemeMode();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
-  const insetsTop = useSafeAreaInsets().top;
   const isMaster = user?.role === UserRole.MASTER;
   const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
   const [refreshing, setRefreshing] = useState(false);
@@ -4762,20 +4766,25 @@ export default function DashboardScreen() {
 
   return (
     /* Edge-to-edge wrapper — gray-50 canvas flows under the glass tab bar.
-       No SafeAreaView frame; insetsTop is applied inline to scroll content. */
+       The measured section header reserve lives inside scroll content. */
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScrollView
+      <ScreenSectionHeader scroll={section} title="Главная" />
+      <ScreenSectionScrollView
+        contentInsetAdjustmentBehavior="never"
+        onScroll={section.onScroll}
         style={styles.scroll}
         contentContainerStyle={[
-          styles.scrollContent,
-          {
-            paddingTop: insetsTop + spacing[2],
-            // iOS reserves bottom space via contentInset (lifts scroll
-            // indicator with content). Android ignores contentInset, so
-            // we add explicit padding so the last block doesn't sit
-            // under the M3 NavigationBar.
-            paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
-          },
+          [
+            styles.scrollContent,
+            {
+              // iOS reserves bottom space via contentInset (lifts scroll
+              // indicator with content). Android ignores contentInset, so
+              // we add explicit padding so the last block doesn't sit
+              // under the M3 NavigationBar.
+              paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
+            },
+          ],
+          { paddingTop: section.contentTop + spacing[2] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -4791,10 +4800,7 @@ export default function DashboardScreen() {
         // only the visible viewport composites per frame. Net: scroll
         // fps stabilises to display refresh on a 6.7" iPhone.
         removeClippedSubviews
-        // 16 ms throttle = 60fps event budget. Default `0` fires onScroll
-        // on every JS-tick which is wasteful for a screen that doesn't
-        // currently subscribe to scroll position — but RN still benefits
-        // from throttled native dispatch (less bridge work).
+        // The same native offset drives the section title.
         scrollEventThrottle={16}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
@@ -4841,7 +4847,7 @@ export default function DashboardScreen() {
         ) : isOwner || user?.role === UserRole.ADMIN ? (
           <AdminDashboard name={displayName} />
         ) : null}
-      </ScrollView>
+      </ScreenSectionScrollView>
     </View>
   );
 }

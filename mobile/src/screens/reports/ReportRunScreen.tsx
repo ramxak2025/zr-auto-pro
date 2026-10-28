@@ -31,7 +31,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import { useQuery } from '@tanstack/react-query';
 import { type FlashListRef, type ListRenderItem } from '@shopify/flash-list';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeOutDown, useAnimatedStyle } from 'react-native-reanimated';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import EmptyState from '../../components/EmptyState';
 import QueryErrorState from '../../components/QueryErrorState';
@@ -50,13 +50,13 @@ import { useTabBarHeight } from '../../hooks/useTabBarHeight';
 import { borderRadius, colors, spacing } from '../../theme';
 import { extractApiErrorMessage } from '../../utils/apiError';
 import {
-  describeReportFilters,
   formatReportDate,
   formatReportDateTime,
   mapReportHref,
   nextSortState,
   sortRows,
   type SortState,
+  describeReportFilters,
 } from '../../utils/reportFormat';
 import { shareReportPdf } from '../../utils/reportPdf';
 import { getReportDefinition, isReportId, type ReportDefinition } from '../../../../shared/reports/catalog';
@@ -87,7 +87,10 @@ import {
   type DateRange,
   type PeriodKey,
 } from './reportPeriod';
-import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../../components/TabBarScrollable';
+import { TabBarScrollView as ScrollView } from '../../components/TabBarScrollable';
+import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
+import { ScreenSectionFlashList, ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
+import { headerTouchSize } from '../../components/ScreenHeaderControls';
 
 export interface ReportRunParams {
   reportId: ReportId;
@@ -310,6 +313,15 @@ export default function ReportRunScreen() {
       setPinnedTotals(show);
     }
   }, [totalsIndex, stickyIndex, tabBarHeight]);
+  const section = useScreenSectionScroll({ onScroll: updatePinned });
+  // FlashList 2.0.2 pins its overlay at top: 0. Offset only that render target
+  // below the measured functional island; keep normal cells and sticky indices unchanged.
+  // Padding expands the overlay's native hit bounds; a transform would move sort
+  // buttons outside ViewHolder's bounds. Sticky targets never report cell size.
+  const { contentTop: sectionContentTop, titleHeight: sectionTitleHeight } = section;
+  const stickyHeaderOffset = useAnimatedStyle(() => ({
+    paddingTop: Math.max(0, sectionContentTop - sectionTitleHeight.value),
+  }));
 
   useEffect(() => {
     // Новый результат: пересчитать после раскладки (getLayout знает позиции
@@ -386,7 +398,7 @@ export default function ReportRunScreen() {
 
   // ── Рендер элементов ───────────────────────────────────────────────────
   const renderItem: ListRenderItem<RunItem> = useCallback(
-    ({ item }) => {
+    ({ item, target }) => {
       if (!result || !models) return null;
       switch (item.type) {
         case 'kpis':
@@ -397,9 +409,15 @@ export default function ReportRunScreen() {
           );
         case 'table-header':
           return (
-            <View style={styles.gutter}>
+            <Animated.View
+              // Keep the sticky overlay and its row in the native stacking hierarchy.
+              // Layout-only flattening can hide the duplicate beneath the scrolling cells.
+              collapsable={target === 'StickyHeader' ? false : undefined}
+              collapsableChildren={target === 'StickyHeader' ? false : undefined}
+              style={[styles.gutter, target === 'StickyHeader' && stickyHeaderOffset]}
+            >
               <ReportHeaderRow model={models.main} palette={palette} sort={sort} onSort={handleSort} />
-            </View>
+            </Animated.View>
           );
         case 'row': {
           const linked = !!mapReportHref(item.row._href);
@@ -559,6 +577,7 @@ export default function ReportRunScreen() {
       surface,
       def,
       sortedRows.length,
+      stickyHeaderOffset,
     ],
   );
 
@@ -843,12 +862,21 @@ export default function ReportRunScreen() {
   if (!def) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader title="Отчёт" onBack={() => navigation.goBack()} />
-        <EmptyState
-          icon="chart-bar"
-          title="Отчёт не найден"
-          description="Такого отчёта нет в каталоге. Обновите приложение."
-        />
+        <IosScreenHeader scroll={section} title="Отчёт" onBack={() => navigation.goBack()} />
+        <ScreenSectionScrollView
+          style={{ flex: 1 }}
+          onScroll={section.onScroll}
+          scrollEventThrottle={16}
+          contentInsetAdjustmentBehavior="never"
+          reserveSafeAreaBottom
+          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
+        >
+          <EmptyState
+            icon="chart-bar"
+            title="Отчёт не найден"
+            description="Такого отчёта нет в каталоге. Обновите приложение."
+          />
+        </ScreenSectionScrollView>
       </View>
     );
   }
@@ -859,12 +887,17 @@ export default function ReportRunScreen() {
     // него GestureDetector не распознаёт жесты (в dev — Render Error).
     <GestureHandlerRootView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
+        scroll={section}
         title={def.title}
         subtitle={subtitle}
         onBack={() => navigation.goBack()}
         trailing={
           <TouchableOpacity
-            style={[styles.headerBtn, { backgroundColor: palette.bg.muted }, (!result || exporting) && styles.disabled]}
+            accessibilityState={{ disabled: Boolean(!result || exporting) }}
+            style={[
+              [styles.headerBtn, { backgroundColor: palette.bg.muted }, (!result || exporting) && styles.disabled],
+              { minWidth: headerTouchSize, minHeight: headerTouchSize },
+            ]}
             onPress={handleExport}
             disabled={!result || exporting}
             accessibilityRole="button"
@@ -875,7 +908,10 @@ export default function ReportRunScreen() {
         }
       />
 
-      <FlashList
+      <ScreenSectionFlashList
+        contentInsetAdjustmentBehavior="never"
+        style={{ flex: 1 }}
+        reserveSafeAreaBottom
         ref={listRef}
         data={items}
         renderItem={renderItem}
@@ -885,14 +921,17 @@ export default function ReportRunScreen() {
         stickyHeaderIndices={stickyHeaderIndices}
         ListHeaderComponent={controls}
         ListEmptyComponent={listEmpty}
-        contentContainerStyle={{
-          paddingTop: spacing[1],
-          paddingBottom: Platform.OS === 'android' ? tabBarHeight + spacing[6] : spacing[6],
-        }}
+        contentContainerStyle={[
+          {
+            paddingTop: spacing[1],
+            paddingBottom: Platform.OS === 'android' ? tabBarHeight + spacing[6] : spacing[6],
+          },
+          { paddingTop: section.contentTop + spacing[1] },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
-        onScroll={updatePinned}
+        onScroll={section.onScroll}
         scrollEventThrottle={32}
         onLoad={updatePinned}
         onRefresh={() => reportQuery.refetch()}
