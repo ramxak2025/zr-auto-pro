@@ -1,14 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../../platform/Typography';
 import { useColors } from '../../contexts/ThemeContext';
 import type { FreshnessQueryLike } from '../../components/FreshnessBadge';
 import JournalContext from '../journal/JournalContext';
+import WarehouseCreateMenu from './WarehouseCreateMenu';
 import { JournalPressable, useJournalReducedMotion } from '../journal/JournalMotion';
-import { JournalSearchInput } from '../journal/JournalHeader';
+import JournalHeader, { JournalSearchInput, type JournalScrollController } from '../journal/JournalHeader';
 
 type Selection = {
   count: number;
@@ -20,6 +20,7 @@ type Selection = {
 
 /** Local presentation only: permission and warehouse decisions stay in ProductsScreen. */
 export default function WarehouseHeader({
+  scroll,
   warehouseName,
   countLabel,
   queries,
@@ -29,8 +30,10 @@ export default function WarehouseHeader({
   onScan,
   onOperations,
   onAdd,
+  onCreateFolder,
   selection,
 }: {
+  scroll: JournalScrollController;
   warehouseName: string;
   countLabel?: string;
   queries: FreshnessQueryLike[];
@@ -40,10 +43,10 @@ export default function WarehouseHeader({
   onScan: () => void;
   onOperations?: () => void;
   onAdd?: () => void;
+  onCreateFolder?: () => void;
   selection?: Selection;
 }) {
   const p = useColors();
-  const insets = useSafeAreaInsets();
   const { width, fontScale } = useWindowDimensions();
   const wideLabel = width < 360 || fontScale > 1.3;
   // Explicit full-scale metrics invalidate native intrinsic text measurement on
@@ -70,10 +73,15 @@ export default function WarehouseHeader({
   const revealStyle = useAnimatedStyle(() => ({ height: searchHeight * reveal.value, opacity: reveal.value }));
   const fieldStyle = useAnimatedStyle(() => ({ transform: [{ translateY: reduced ? 0 : -8 * (1 - reveal.value) }] }));
   return (
-    <View style={[s.header, { paddingTop: insets.top, backgroundColor: p.bg.canvas }]}>
-      {selection ? (
+    <JournalHeader
+      scroll={scroll}
+      title="Склад"
+      context={<JournalContext queries={queries} />}
+      hideHeading={Boolean(selection)}
+    >
+      {selection && (
         <>
-          <View style={s.selection}>
+          <View style={[s.selection, { backgroundColor: p.bg.canvas }]}>
             <JournalPressable
               style={s.selectionAction}
               onPress={selection.onCancel}
@@ -111,26 +119,12 @@ export default function WarehouseHeader({
               </Text>
             </JournalPressable>
           </View>
-          <View style={s.selectionStatus}>
+          <View style={[s.selectionStatus, { backgroundColor: p.bg.canvas }]}>
             <JournalContext queries={queries} />
           </View>
         </>
-      ) : (
-        <View style={s.titleRow}>
-          <Text
-            variant="display"
-            accessibilityRole="header"
-            color={p.text.primary}
-            style={[s.title, font.display]}
-            allowFontScaling={false}
-          >
-            Склад
-          </Text>
-          <View style={s.status}>
-            <JournalContext queries={queries} />
-          </View>
-        </View>
       )}
+
       <View
         style={[
           s.dock,
@@ -211,15 +205,8 @@ export default function WarehouseHeader({
                 <Ionicons name="swap-horizontal-outline" size={20} color={p.text.primary} />
               </JournalPressable>
             )}
-            {!selection && onAdd && (
-              <JournalPressable
-                style={[s.action, { backgroundColor: p.accent.primary }]}
-                onPress={onAdd}
-                accessibilityRole="button"
-                accessibilityLabel="Добавить товар"
-              >
-                <Ionicons name="add" size={20} color={p.text.inverse} />
-              </JournalPressable>
+            {!selection && (onAdd || onCreateFolder) && (
+              <WarehouseCreateMenu onAdd={onAdd} onCreateFolder={onCreateFolder} />
             )}
           </View>
         </View>
@@ -247,7 +234,7 @@ export default function WarehouseHeader({
           </Animated.View>
         </Animated.View>
       </View>
-    </View>
+    </JournalHeader>
   );
 }
 const ignoreFocus = (_focused: boolean) => undefined;

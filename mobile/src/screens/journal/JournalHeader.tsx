@@ -1,157 +1,135 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Keyboard, Platform, Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import Animated, {
-  interpolate,
   runOnJS,
   useAnimatedReaction,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
-  type SharedValue,
+  useDerivedValue,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../../platform/Typography';
 import { journalHeaderGeometry, journalHeaderProgress } from './headerScroll';
-import { JournalPressable, useJournalReducedMotion } from './JournalMotion';
+import { JournalPressable } from './JournalMotion';
 
 export { useJournalReducedMotion } from './JournalMotion';
 
-/** The scroll worklet never rerenders the list. Its top spacer is constant while scrolling. */
+/** Raw scroll follows the list; focusing search never changes header geometry. */
 export function useJournalHeaderScroll() {
   const { fontScale } = useWindowDimensions();
-  const initialGeometry = journalHeaderGeometry(fontScale, Math.ceil(40 * fontScale), touch);
-  const progress = useSharedValue(0);
-  const focused = useSharedValue(false);
+  const initialGeometry = journalHeaderGeometry(fontScale, Math.ceil(40 * fontScale));
+  const scrollY = useSharedValue(0);
+  const titleHeight = useSharedValue(initialGeometry.expandedHeight);
+  const progress = useDerivedValue(() => journalHeaderProgress(scrollY.value, titleHeight.value));
   const [contentTop, setContentTop] = useState(
-    initialGeometry.expandedHeight - initialGeometry.compactHeight + Math.max(touch + 12, 22 * fontScale + 24) + 4,
+    initialGeometry.expandedHeight + Math.max(touch + 12, 22 * fontScale + 24) + 4,
   );
   const onScroll = useAnimatedScrollHandler((event) => {
-    if (!focused.value) progress.value = journalHeaderProgress(event.contentOffset.y);
+    scrollY.value = Math.max(0, event.contentOffset.y);
   });
-  const onSearchFocus = useCallback(
-    (value: boolean) => {
-      focused.value = value;
-    },
-    [focused],
-  );
-  const expand = useCallback(() => {
-    progress.value = 0;
-  }, [progress]);
+  const reset = useCallback(() => {
+    scrollY.value = 0;
+  }, [scrollY]);
   const onContentTop = useCallback((height: number) => {
     setContentTop((current) => (current === height ? current : height));
   }, []);
-  return { progress, onScroll, onSearchFocus, expand, contentTop, onContentTop };
+  return { scrollY, titleHeight, progress, onScroll, reset, contentTop, onContentTop };
 }
+export type JournalScrollController = ReturnType<typeof useJournalHeaderScroll>;
 
-/**
- * Only the compact title reserves layout space. The floating controls overlap the
- * list viewport, so iOS material samples actual moving rows beneath them.
- */
+/** Title moves with content; only the existing control island pins at safeTop. */
 export default function JournalHeader({
-  progress,
+  scroll,
+  title = 'Журнал',
   context,
+  hideHeading = false,
   children,
-  onContentTop,
 }: {
-  progress: SharedValue<number>;
+  scroll: JournalScrollController;
+  title?: string;
   context: React.ReactNode;
+  hideHeading?: boolean;
   children?: React.ReactNode;
-  onContentTop: (height: number) => void;
 }) {
   const p = useColors();
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
-  const reduced = useJournalReducedMotion();
   const [titleRowHeight, setTitleRowHeight] = useState(Math.ceil(40 * fontScale));
   const [controlsHeight, setControlsHeight] = useState(Math.max(touch + 12, 22 * fontScale + 24) + 4);
-  const [compact, setCompact] = useState(false);
-  const { compactHeight, expandedHeight, titleTop } = journalHeaderGeometry(fontScale, titleRowHeight, touch);
+  const [titleHidden, setTitleHidden] = useState(hideHeading);
+  const geometry = journalHeaderGeometry(fontScale, titleRowHeight);
+  const expandedHeight = hideHeading ? 0 : geometry.expandedHeight;
+  const { scrollY, titleHeight, onContentTop } = scroll;
+  useLayoutEffect(() => {
+    titleHeight.value = expandedHeight;
+    onContentTop(expandedHeight + controlsHeight);
+  }, [titleHeight, onContentTop, expandedHeight, controlsHeight]);
   useAnimatedReaction(
-    () => progress.value >= 0.75,
+    () => hideHeading || scrollY.value >= expandedHeight,
     (value, previous) => {
-      if (value !== previous) runOnJS(setCompact)(value);
+      if (value !== previous) runOnJS(setTitleHidden)(value);
     },
-    [progress],
+    [hideHeading, expandedHeight],
   );
-  useEffect(() => {
-    onContentTop(expandedHeight - compactHeight + controlsHeight);
-  }, [compactHeight, controlsHeight, expandedHeight, onContentTop]);
-  const stage = useAnimatedStyle(() => ({
-    height: interpolate(progress.value, [0, 1], [expandedHeight, compactHeight]),
-  }));
-  const title = useAnimatedStyle(() => ({
-    fontSize: interpolate(progress.value, [0, 1], [34 * fontScale, 17 * fontScale]),
-    lineHeight: interpolate(progress.value, [0, 1], [40 * fontScale, 22 * fontScale]),
-    top: -3 * progress.value,
-  }));
-  const contextMotion = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0, 0.65, 1], [1, 0, 0]),
-    transform: [{ translateY: reduced ? 0 : -20 * progress.value }],
-  }));
-  const controls = useAnimatedStyle(() => ({
-    transform: [{ translateY: -progress.value * (expandedHeight - compactHeight) }],
-  }));
+  const movement = useAnimatedStyle(() => ({ transform: [{ translateY: -Math.min(scrollY.value, expandedHeight) }] }));
   return (
     <>
-      <View testID="journal-header-reservation" style={{ height: insets.top + compactHeight }} />
+      <View testID="journal-header-reservation" style={{ height: insets.top }} />
       <View
         testID="journal-header"
         style={[s.header, { height: insets.top + expandedHeight + controlsHeight }]}
         pointerEvents="box-none"
       >
         <View style={[s.safe, { height: insets.top, backgroundColor: p.bg.canvas }]} />
-        <Animated.View
-          testID="journal-title-stage"
-          style={[s.stage, { top: insets.top, backgroundColor: p.bg.canvas }, stage]}
+        <View
+          testID="journal-title-clip"
+          pointerEvents="box-none"
+          accessibilityElementsHidden={titleHidden}
+          importantForAccessibility={titleHidden ? 'no-hide-descendants' : 'auto'}
+          style={[s.titleClip, { top: insets.top, height: expandedHeight }]}
         >
-          <View
-            style={[s.titleRow, { top: titleTop }]}
-            onLayout={(event) => {
-              const measuredHeight = event.nativeEvent.layout.height;
-              setTitleRowHeight((previous) => (previous === measuredHeight ? previous : measuredHeight));
-            }}
+          <Animated.View
+            testID="journal-title-stage"
+            style={[s.stage, { height: expandedHeight, backgroundColor: p.bg.canvas }, movement]}
           >
-            <View style={[s.titleSlot, { minHeight: Math.ceil(40 * fontScale) }]}>
-              {/* Both copies receive the full user scale as explicit metrics.
-                  This invalidates native measurement after a live size change;
-                  automatic scaling would apply the multiplier a second time.
-                  Only the visible copy animates, leaving list layout stable. */}
+            <View
+              style={[s.titleRow, { paddingTop: geometry.titleTop }]}
+              onLayout={(event) => {
+                const measuredHeight = event.nativeEvent.layout.height - geometry.titleTop;
+                setTitleRowHeight((previous) => (previous === measuredHeight ? previous : measuredHeight));
+              }}
+            >
               <Text
                 variant="display"
-                testID="journal-title-measure"
-                allowFontScaling={false}
-                accessible={false}
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                style={[s.titleMeasure, { fontSize: 34 * fontScale, lineHeight: 40 * fontScale }]}
-              >
-                Журнал
-              </Text>
-              <Animated.Text
                 accessibilityRole="header"
                 allowFontScaling={false}
-                style={[textVariantStyles.display, s.title, { color: p.text.primary }, title]}
+                style={[
+                  s.titleSlot,
+                  {
+                    color: p.text.primary,
+                    fontSize: 34 * fontScale,
+                    lineHeight: 40 * fontScale,
+                    minHeight: Math.ceil(40 * fontScale),
+                  },
+                ]}
               >
-                Журнал
-              </Animated.Text>
+                {title}
+              </Text>
+              <View style={s.statusSlot}>{context}</View>
             </View>
-            <Animated.View
-              pointerEvents="none"
-              accessibilityElementsHidden={compact}
-              importantForAccessibility={compact ? 'no-hide-descendants' : 'auto'}
-              style={[s.statusSlot, contextMotion]}
-            >
-              {context}
-            </Animated.View>
-          </View>
-        </Animated.View>
+          </Animated.View>
+        </View>
         <Animated.View
           testID="journal-floating-controls"
           pointerEvents="box-none"
-          onLayout={(event) => setControlsHeight(event.nativeEvent.layout.height)}
-          style={[s.controls, { top: insets.top + expandedHeight }, controls]}
+          onLayout={(event) => {
+            const measuredHeight = event.nativeEvent.layout.height;
+            setControlsHeight((previous) => (previous === measuredHeight ? previous : measuredHeight));
+          }}
+          style={[s.controls, { top: insets.top + expandedHeight }, movement]}
         >
           {children}
         </Animated.View>
@@ -276,11 +254,10 @@ const touch = Platform.OS === 'android' ? 48 : 44;
 const s = StyleSheet.create({
   header: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, overflow: 'visible' },
   safe: { position: 'absolute', left: 0, right: 0, top: 0 },
-  stage: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+  titleClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+  stage: { position: 'absolute', left: 0, right: 0 },
   titleRow: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
+    paddingHorizontal: 20,
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
@@ -288,8 +265,6 @@ const s = StyleSheet.create({
     rowGap: 4,
   },
   titleSlot: { maxWidth: '100%' },
-  titleMeasure: { opacity: 0 },
-  title: { position: 'absolute', left: 0, right: 0 },
   statusSlot: { flexGrow: 1, maxWidth: '100%', alignItems: 'flex-end' },
   controls: { position: 'absolute', left: 0, right: 0, paddingHorizontal: 16, paddingBottom: 4 },
   searchRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },

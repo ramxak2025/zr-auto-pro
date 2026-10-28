@@ -149,6 +149,18 @@ for (const name of [
   jest.doMock(`../../components/${name}`, () => ({ __esModule: true, default: name }));
 }
 jest.doMock('../warehouse/WarehouseHeader', () => ({ __esModule: true, default: 'WarehouseHeader' }));
+jest.doMock('../warehouse/WarehouseScroll', () => ({
+  WarehouseList: 'FlashList',
+  useWarehouseScroll: () => ({
+    scrollY: { value: 0 },
+    titleHeight: { value: 64 },
+    progress: { value: 0 },
+    contentTop: 124,
+    reset: jest.fn(),
+    onScroll: jest.fn(),
+    onContentTop: jest.fn(),
+  }),
+}));
 jest.doMock('../../components/CompactScreenHeader', () => ({
   __esModule: true,
   default: 'CompactScreenHeader',
@@ -194,6 +206,13 @@ const nodes = (node: React.ReactNode): Element[] =>
                         onPress: (node as Element).props.onAdd,
                       })
                     : null,
+                  (node as Element).props.onCreateFolder
+                    ? React.createElement('TouchableOpacity', {
+                        key: 'warehouse-folder',
+                        accessibilityLabel: 'Создать папку',
+                        onPress: (node as Element).props.onCreateFolder,
+                      })
+                    : null,
                   React.createElement('SearchInput', {
                     key: 'warehouse-search',
                     value: (node as Element).props.search,
@@ -213,7 +232,8 @@ const render = (screen = ProductsScreen) => {
     result = (result.type as (props: unknown) => React.ReactElement)(result.props);
   return result;
 };
-const action = (tree: React.ReactNode) => nodes(tree).find((node) => node.props.accessibilityLabel === 'Новая папка');
+const action = (tree: React.ReactNode) =>
+  nodes(tree).find((node) => ['Создать папку', 'Новая папка'].includes(String(node.props.accessibilityLabel)));
 const open = (screen = ProductsScreen) => {
   const tree = render(screen);
   (action(tree)!.props.onPress as () => void)();

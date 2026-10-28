@@ -11,7 +11,6 @@ import {
   PackageMinus,
   ClipboardCheck,
   ChevronRight,
-  FolderPlus,
   Warehouse,
   Download,
   Upload,
@@ -88,12 +87,6 @@ function serverMessage(err: any, fallback: string): string {
   if (typeof msg === 'string' && msg) return msg;
   return fallback;
 }
-
-const FOLDER_BUTTON_CLS = cn(
-  'flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-line-strong bg-transparent px-3.5 py-2.5 text-left',
-  'transition-[border-color,background-color] duration-150 hover:border-accent hover:bg-accent-soft/40',
-  focusRing,
-);
 
 // ---------------------------------------------------------------------------
 // Страница
@@ -1188,15 +1181,6 @@ function ProductsPageContents() {
     </div>
   );
 
-  const newFolderButton = canManageWarehouse && (
-    <button type="button" onClick={() => setShowFolderModal(true)} className={FOLDER_BUTTON_CLS}>
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
-        <FolderPlus className="h-[18px] w-[18px]" aria-hidden="true" />
-      </span>
-      <span className="text-sm font-medium text-ink-2">Новая папка</span>
-    </button>
-  );
-
   return (
     <div className="space-y-5">
       <WarehouseHeader
@@ -1213,6 +1197,9 @@ function ProductsPageContents() {
         onCellChange={setCellFilter}
         onOpenCells={() => setCellsOpen(true)}
         onCreate={canManageWarehouse ? openCreate : undefined}
+        onCreateFolder={
+          canManageWarehouse && (showingRoot || showingFolderContents) ? () => setShowFolderModal(true) : undefined
+        }
         actions={headerActions}
         selection={
           selectionAvailable && selectMode
@@ -1420,12 +1407,8 @@ function ProductsPageContents() {
                   />
                 ))}
               </Reorder.Group>
-              {newFolderButton}
             </div>
           )}
-
-          {/* New folder button when no subfolders exist */}
-          {(showingRoot || showingFolderContents) && subfolders.length === 0 && newFolderButton}
 
           {/* ── Товары ── */}
           {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (

@@ -61,7 +61,7 @@ export default function JournalHeader({
   const count = Number(hasPeriod) + Number(Boolean(applied.masterId));
   useJournalSelection(scope, view);
 
-  // Sticky geometry reclaims 80px naturally. Only paint is scrubbed: no list
+  // The measured heading scrolls naturally; only the command island stays pinned. No list
   // reflow, key changes or React updates on each scroll frame.
   useLayoutEffect(() => {
     const node = root.current;
@@ -71,16 +71,18 @@ export default function JournalHeader({
     let frame = 0;
     media.add(
       { reduced: '(prefers-reduced-motion: reduce)', regular: '(prefers-reduced-motion: no-preference)' },
-      (context) => {
-        const reduced = Boolean(context.conditions?.reduced);
+      () => {
+        const heading = node.querySelector<HTMLElement>('.journal-heading');
+        let titleHeight = 0;
+        const measure = () => {
+          titleHeight = heading?.getBoundingClientRect().height ?? 80;
+          const stickyInset = Number.parseFloat(getComputedStyle(scroll).paddingTop) || 0;
+          node.style.setProperty('--journal-title-height', `${titleHeight}px`);
+          node.style.setProperty('--journal-sticky-inset', `${stickyInset}px`);
+        };
+        measure();
         const timeline = gsap
           .timeline({ paused: true })
-          .to(node.querySelector('.journal-title'), { y: reduced ? 0 : -24, opacity: 0, duration: 1, ease: 'none' }, 0)
-          .to(
-            node.querySelector('.journal-subtitle'),
-            { y: reduced ? 0 : -10, opacity: 0, duration: 0.65, ease: 'none' },
-            0,
-          )
           .to(node, { '--journal-material': 1, '--journal-dock-elevation': 0, duration: 1, ease: 'none' }, 0);
         // The parent remains in normal flow even after browser scroll restoration.
         const naturalTop = () => {
@@ -103,7 +105,7 @@ export default function JournalHeader({
         };
         const update = () => {
           frame = 0;
-          const progress = Math.max(0, Math.min(1, (scroll.scrollTop - naturalTop()) / 80));
+          const progress = Math.max(0, Math.min(1, (scroll.scrollTop - naturalTop()) / Math.max(1, titleHeight)));
           timeline.progress(progress);
           node.dataset.journalCompact = String(progress >= 0.99);
           node.dataset.journalProgress = progress.toFixed(3);
@@ -112,14 +114,22 @@ export default function JournalHeader({
         const schedule = () => {
           if (!frame) frame = requestAnimationFrame(update);
         };
+        const measureAndSchedule = () => {
+          measure();
+          schedule();
+        };
+        const resize = new ResizeObserver(measureAndSchedule);
+        if (heading) resize.observe(heading);
+        resize.observe(scroll);
         scroll.addEventListener('scroll', schedule, { passive: true });
-        window.addEventListener('resize', schedule);
+        window.addEventListener('resize', measureAndSchedule);
         update();
         return () => {
+          resize.disconnect();
           cancelAnimationFrame(frame);
           frame = 0;
           scroll.removeEventListener('scroll', schedule);
-          window.removeEventListener('resize', schedule);
+          window.removeEventListener('resize', measureAndSchedule);
         };
       },
       root,

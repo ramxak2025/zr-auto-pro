@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Check,
   CheckSquare,
+  FolderPlus,
+  PackagePlus,
   ChevronDown,
   ChevronRight,
   MapPin,
@@ -25,7 +27,7 @@ import '../../pages/journal/journal.css';
 import './warehouse-header.css';
 
 type Option = { value: string; label: string };
-type Panel = 'actions' | 'warehouses' | 'cells';
+type Panel = 'actions' | 'warehouses' | 'cells' | 'create';
 
 function Choices({
   options,
@@ -76,6 +78,7 @@ export default function WarehouseHeader({
   onCellChange,
   onOpenCells,
   onCreate,
+  onCreateFolder,
   actions,
   selection,
 }: {
@@ -92,6 +95,7 @@ export default function WarehouseHeader({
   onCellChange: (value: string) => void;
   onOpenCells: () => void;
   onCreate?: () => void;
+  onCreateFolder?: () => void;
   actions: MenuEntry[];
   selection?: {
     count: number;
@@ -105,6 +109,7 @@ export default function WarehouseHeader({
   const warehouseTrigger = useRef<HTMLButtonElement>(null);
   const cellsTrigger = useRef<HTMLButtonElement>(null);
   const moreTrigger = useRef<HTMLButtonElement>(null);
+  const createTrigger = useRef<HTMLButtonElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const pendingAction = useRef<(() => void) | null>(null);
   const [expanded, setExpanded] = useState(Boolean(search));
@@ -163,16 +168,18 @@ export default function WarehouseHeader({
     let frame = 0;
     media.add(
       { reduced: '(prefers-reduced-motion: reduce)', regular: '(prefers-reduced-motion: no-preference)' },
-      (context) => {
-        const reduced = Boolean(context.conditions?.reduced);
+      () => {
+        const heading = node.querySelector<HTMLElement>('.journal-heading');
+        let titleHeight = 0;
+        const measure = () => {
+          titleHeight = heading?.getBoundingClientRect().height ?? 80;
+          const stickyInset = Number.parseFloat(getComputedStyle(scroll).paddingTop) || 0;
+          node.style.setProperty('--journal-title-height', `${titleHeight}px`);
+          node.style.setProperty('--journal-sticky-inset', `${stickyInset}px`);
+        };
+        measure();
         const timeline = gsap
           .timeline({ paused: true })
-          .to(node.querySelector('.journal-title'), { y: reduced ? 0 : -24, opacity: 0, duration: 1, ease: 'none' }, 0)
-          .to(
-            node.querySelector('.journal-subtitle'),
-            { y: reduced ? 0 : -10, opacity: 0, duration: 0.65, ease: 'none' },
-            0,
-          )
           .to(node, { '--journal-material': 1, '--journal-dock-elevation': 0, duration: 1, ease: 'none' }, 0);
         const update = () => {
           frame = 0;
@@ -180,7 +187,7 @@ export default function WarehouseHeader({
             (node.parentElement?.getBoundingClientRect().top ?? 0) -
             scroll.getBoundingClientRect().top +
             scroll.scrollTop;
-          const progress = Math.max(0, Math.min(1, (scroll.scrollTop - naturalTop) / 80));
+          const progress = Math.max(0, Math.min(1, (scroll.scrollTop - naturalTop) / Math.max(1, titleHeight)));
           timeline.progress(progress);
           node.dataset.warehouseProgress = progress.toFixed(3);
           node.dataset.warehouseCompact = String(progress >= 0.99);
@@ -189,14 +196,22 @@ export default function WarehouseHeader({
         const schedule = () => {
           if (!frame) frame = requestAnimationFrame(update);
         };
+        const measureAndSchedule = () => {
+          measure();
+          schedule();
+        };
+        const resize = new ResizeObserver(measureAndSchedule);
+        if (heading) resize.observe(heading);
+        resize.observe(scroll);
         scroll.addEventListener('scroll', schedule, { passive: true });
-        window.addEventListener('resize', schedule);
+        window.addEventListener('resize', measureAndSchedule);
         update();
         return () => {
+          resize.disconnect();
           cancelAnimationFrame(frame);
           frame = 0;
           scroll.removeEventListener('scroll', schedule);
-          window.removeEventListener('resize', schedule);
+          window.removeEventListener('resize', measureAndSchedule);
         };
       },
       root,
@@ -240,7 +255,7 @@ export default function WarehouseHeader({
         <div className="journal-tools-dock warehouse-tools journal-dock">
           <WarehouseSearch
             value={search}
-            geometryKey={`${warehouseId}|${warehouseName}|${hasCells}|${Boolean(onCreate)}|${showMore}`}
+            geometryKey={`${warehouseId}|${warehouseName}|${hasCells}|${Boolean(onCreate || onCreateFolder)}|${showMore}`}
             onChange={onSearchChange}
             onExpandedChange={setExpanded}
             placeholder={hasCells ? 'Название или ячейка' : 'Название товара'}
@@ -272,12 +287,15 @@ export default function WarehouseHeader({
               />
             </div>
           )}
-          {onCreate && (
+          {(onCreate || onCreateFolder) && (
             <div data-warehouse-tool className="journal-more-control">
               <IconButton
-                label="Добавить товар"
+                ref={createTrigger}
+                label="Добавить на склад"
                 icon={Plus}
-                onClick={onCreate}
+                aria-haspopup="dialog"
+                aria-expanded={popup.open && popup.panel === 'create'}
+                onClick={() => open('create', createTrigger)}
                 className="journal-action warehouse-add"
               />
             </div>
@@ -319,11 +337,42 @@ export default function WarehouseHeader({
             />
           )}
           <h2 id={`${id}-title`}>
-            {popup.panel === 'actions' ? 'Действия' : popup.panel === 'warehouses' ? 'Выбрать склад' : 'Ячейка'}
+            {popup.panel === 'create'
+              ? 'Добавить'
+              : popup.panel === 'actions'
+                ? 'Действия'
+                : popup.panel === 'warehouses'
+                  ? 'Выбрать склад'
+                  : 'Ячейка'}
           </h2>
           <IconButton label="Закрыть меню склада" icon={X} className="warehouse-popup-action" onClick={close} />
         </div>
         <div ref={body} className="warehouse-popup-body">
+          {popup.panel === 'create' && (
+            <>
+              {onCreateFolder && (
+                <button
+                  type="button"
+                  className={cn('warehouse-menu-action', focusRing)}
+                  onClick={() => perform(onCreateFolder)}
+                >
+                  <FolderPlus size={19} aria-hidden="true" />
+                  <span>Создать папку</span>
+                </button>
+              )}
+              {onCreate && (
+                <button
+                  type="button"
+                  className={cn('warehouse-menu-action', focusRing)}
+                  onClick={() => perform(onCreate)}
+                >
+                  <PackagePlus size={19} aria-hidden="true" />
+                  <span>Добавить товар</span>
+                </button>
+              )}
+            </>
+          )}
+
           {popup.panel === 'warehouses' && (
             <Choices
               options={warehouses}

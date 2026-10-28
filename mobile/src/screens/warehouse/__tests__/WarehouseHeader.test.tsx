@@ -46,9 +46,15 @@ jest.mock('../../journal/JournalMotion', () => ({
   JournalPressable: 'Pressable',
   useJournalReducedMotion: () => false,
 }));
-jest.mock('../../journal/JournalHeader', () => ({ JournalSearchInput: 'SearchInput' }));
+jest.mock('../../journal/JournalHeader', () => ({
+  __esModule: true,
+  default: 'JournalHeader',
+  JournalSearchInput: 'SearchInput',
+}));
+jest.mock('../WarehouseCreateMenu', () => ({ __esModule: true, default: 'CreateMenu' }));
 import React from 'react';
 import WarehouseHeader from '../WarehouseHeader';
+import type { JournalScrollController } from '../../journal/JournalHeader';
 type Element = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;
 const nodes = (node: React.ReactNode): Element[] =>
   React.isValidElement(node)
@@ -65,6 +71,7 @@ beforeEach(() => {
   mockStates.length = 0;
   mockDimensions = { width: 402, fontScale: 1 };
   props = {
+    scroll: { contentTop: 124 } as JournalScrollController,
     warehouseName: 'Основной склад — длинное физическое название',
     countLabel: '60 товаров',
     queries: [
@@ -92,14 +99,17 @@ it('keeps the same search field and all permitted commands reachable while searc
   expect(activeField.type).toBe(field.type);
   expect(activeField.key).toBe(field.key);
   expect(activeField.props.value).toBe('масло');
-  for (const label of ['Сканировать штрих-код', 'Складские операции', 'Добавить товар']) press(tree, label);
+  for (const label of ['Сканировать штрих-код', 'Складские операции']) press(tree, label);
+  (nodes(tree).find((node) => node.type === 'CreateMenu')!.props.onAdd as () => void)();
   press(tree, `Сменить склад. Текущий склад: ${props.warehouseName}. 60 товаров`);
   expect(props.onScan).toHaveBeenCalledTimes(1);
   expect(props.onOperations).toHaveBeenCalledTimes(1);
   expect(props.onAdd).toHaveBeenCalledTimes(1);
   expect(props.onWarehousePress).toHaveBeenCalledTimes(1);
   expect(props.onSearchChange).not.toHaveBeenCalled();
-  expect(nodes(tree).find((node) => node.type === 'Freshness')!.props.queries).toBe(props.queries);
+  expect((nodes(tree).find((node) => node.type === 'JournalHeader')!.props.context as Element).props.queries).toBe(
+    props.queries,
+  );
 });
 it('omits forbidden callbacks and preserves selection actions without replacing the search field', () => {
   props = { ...props, onOperations: undefined, onAdd: undefined };
@@ -139,12 +149,12 @@ it('updates full-scale font and selector constraints in both directions without 
   ]) {
     mockDimensions = dimensions;
     const tree = render();
-    const title = nodes(tree).find((node) => node.props.accessibilityRole === 'header')!;
-    expect(title.props.children).toBe('Склад');
-    expect(flatten(title.props.style).fontSize).toBe(34 * dimensions.fontScale);
-    expect(flatten(title.props.style).lineHeight).toBe(40 * dimensions.fontScale);
-    expect(title.props.allowFontScaling).toBe(false);
-    expect(title.props.maxFontSizeMultiplier).toBeUndefined();
+    expect(nodes(tree).find((node) => node.type === 'JournalHeader')!.props.title).toBe('Склад');
+    const label = nodes(tree).find((node) => node.props.children === props.warehouseName)!;
+    expect(flatten(label.props.style).fontSize).toBe(15 * dimensions.fontScale);
+    expect(flatten(label.props.style).lineHeight).toBe(22 * dimensions.fontScale);
+    expect(label.props.allowFontScaling).toBe(false);
+    expect(label.props.maxFontSizeMultiplier).toBeUndefined();
     const selector = nodes(tree).find((node) => String(node.props.accessibilityLabel).startsWith('Сменить склад.'))!;
     const wide = dimensions.width < 360 || dimensions.fontScale > 1.3;
     expect(flatten(selector.props.style).width).toBe(wide ? '100%' : 'auto');
@@ -155,4 +165,20 @@ it('updates full-scale font and selector constraints in both directions without 
   }
   expect(new Set(fieldKeys).size).toBe(1);
   expect(props.onSearchChange).not.toHaveBeenCalled();
+});
+
+it('retains the add menu for a folder-only warehouse and pins selection controls', () => {
+  props = { ...props, onAdd: undefined, onCreateFolder: jest.fn() };
+  let tree = render();
+  const menu = nodes(tree).find((node) => node.type === 'CreateMenu')!;
+  expect(menu.props.onAdd).toBeUndefined();
+  expect(menu.props.onCreateFolder).toBe(props.onCreateFolder);
+  props = {
+    ...props,
+    selection: { count: 1, allSelected: false, canSelectAll: true, onCancel: jest.fn(), onToggleAll: jest.fn() },
+  };
+  tree = render();
+  expect(nodes(tree).find((node) => node.type === 'JournalHeader')!.props.hideHeading).toBe(true);
+  expect(nodes(tree).some((node) => node.props.accessibilityLabel === 'Отменить выбор товаров')).toBe(true);
+  expect(nodes(tree).some((node) => node.type === 'CreateMenu')).toBe(false);
 });
