@@ -2,18 +2,20 @@
 // Native hosts and transport are inert fixtures: this harness does not prove hit-testing or keyboard geometry.
 import React from 'react';
 import type { Service } from '../../../../shared/types';
-import type { ServiceImportPreview } from '../../../../shared/api/types';
 const mockStates: unknown[] = [],
   mockEffects: { deps?: unknown[] }[] = [],
   mockPending: (() => void)[] = [];
 let mockIndex = 0;
 const mockCreate = jest.fn(),
   mockUpdate = jest.fn(),
-  mockAlert = jest.fn(),
-  mockPickDocument = jest.fn(),
-  mockReadImportFile = jest.fn(),
-  mockPreviewImport = jest.fn();
+  mockAlert = jest.fn();
 const mockServices: Service[] = [];
+const mockRefs: { current: unknown }[] = [];
+const mockResetScroll = jest.fn();
+const mockScroll = { contentTop: 124, reset: mockResetScroll, onScroll: jest.fn() };
+const mockQueryKeys: unknown[][] = [];
+let mockPermission = true;
+let mockRole = 'director';
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
   useState: (initial: unknown) => {
@@ -27,6 +29,10 @@ jest.mock('react', () => ({
       },
     ];
   },
+  useRef: (initial: unknown) => {
+    const index = mockIndex++;
+    return mockRefs[index] ?? (mockRefs[index] = { current: initial });
+  },
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useEffect: (effect: () => void, deps?: unknown[]) => {
@@ -39,6 +45,7 @@ jest.mock('react', () => ({
   },
 }));
 jest.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
   View: 'View',
   Text: 'Text',
   TouchableOpacity: 'TouchableOpacity',
@@ -51,21 +58,14 @@ jest.mock('react-native', () => ({
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ goBack: jest.fn() }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
-jest.mock('expo-document-picker', () => ({ getDocumentAsync: (...args: unknown[]) => mockPickDocument(...args) }));
-jest.mock('expo-file-system/legacy', () => ({
-  readAsStringAsync: (...args: unknown[]) => mockReadImportFile(...args),
-}));
-jest.mock('expo-sharing', () => ({}));
-jest.mock('expo-crypto', () => ({ randomUUID: () => 'import-request-id' }));
 jest.mock('../../api/services', () => ({
   servicesApi: {
     create: (...args: unknown[]) => mockCreate(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
-    previewImport: (...args: unknown[]) => mockPreviewImport(...args),
   },
 }));
 jest.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ hasPermission: () => true, user: { role: 'director' } }),
+  useAuth: () => ({ hasPermission: () => mockPermission, user: { role: mockRole } }),
 }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({
@@ -80,23 +80,27 @@ jest.mock('../../hooks/useTabBarHeight', () => ({ useTabBarHeight: () => 80 }));
 jest.mock('../../platform/haptics', () => ({ haptic: jest.fn() }));
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: jest.fn() }),
-  useQuery: ({ queryKey, enabled }: { queryKey: unknown[]; enabled?: boolean }) => ({
-    data:
-      enabled === false
-        ? undefined
-        : queryKey[0] === 'service-executions'
-          ? { data: [], total: 0 }
-          : queryKey[0] === 'services'
-            ? mockServices
-            : queryKey[0] === 'service-visibility-config'
-              ? { rules: [], roles: [], categoryPaths: [] }
-              : [],
-    isLoading: false,
-    isFetching: false,
-    isError: false,
-    isSuccess: enabled !== false,
-    refetch: jest.fn(),
-  }),
+  useQuery: ({ queryKey, enabled }: { queryKey: unknown[]; enabled?: boolean }) => {
+    mockQueryKeys.push(queryKey);
+    return {
+      data:
+        enabled === false
+          ? undefined
+          : queryKey[0] === 'service-executions'
+            ? { data: [], total: 0 }
+            : queryKey[0] === 'services'
+              ? mockServices
+              : queryKey[0] === 'service-visibility-config'
+                ? { rules: [], roles: [], categoryPaths: [] }
+                : [],
+      dataUpdatedAt: 1,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: enabled !== false,
+      refetch: jest.fn(),
+    };
+  },
   useMutation: (options: { mutationFn: (input: unknown) => Promise<unknown>; onSuccess?: () => void }) => ({
     isPending: false,
     mutate: (input: unknown) => {
@@ -119,6 +123,8 @@ jest.doMock('../../components/TabBarScrollable', () => ({
   TabBarScrollView: 'ScrollView',
   TabBarFlashList: 'FlashList',
 }));
+jest.doMock('../services/ServicesHeader', () => ({ __esModule: true, default: 'ServicesHeader' }));
+jest.doMock('../services/ServicesScroll', () => ({ ServicesList: 'FlashList', useServicesScroll: () => mockScroll }));
 const ServicesScreen = jest.requireActual<{ default: () => React.ReactElement }>('../ServicesScreen').default;
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
@@ -129,6 +135,8 @@ const nodes = (node: React.ReactNode): Element[] =>
           node as Element,
           ...React.Children.toArray((node as Element).props.children).flatMap(nodes),
           ...nodes((node as Element).props.trailing as React.ReactNode),
+          ...nodes((node as Element).props.ListHeaderComponent as React.ReactNode),
+          ...nodes((node as Element).props.ListEmptyComponent as React.ReactNode),
         ]
       : [];
 const text = (node: React.ReactNode): string =>
@@ -168,7 +176,7 @@ function enter(label: string, raw: string) {
   return input(label);
 }
 function create() {
-  press(button(render(), '+ Новая'));
+  (header(render()).props.onAdd as () => void)();
   enter('Замена масла...', 'Работа');
   enter('0', '1000');
 }
@@ -191,6 +199,10 @@ async function save() {
 }
 beforeEach(() => {
   mockStates.length = 0;
+  mockRefs.length = 0;
+  mockQueryKeys.length = 0;
+  mockPermission = true;
+  mockRole = 'director';
   mockEffects.length = 0;
   mockPending.length = 0;
   mockServices.length = 0;
@@ -198,9 +210,6 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockCreate.mockImplementation(async (payload: object) => ({ data: { ...payload, id: 'created', createdAt: '' } }));
   mockUpdate.mockImplementation(async (id: string, payload: object) => ({ data: { ...payload, id } }));
-  mockPickDocument.mockReset();
-  mockPreviewImport.mockReset();
-  mockReadImportFile.mockResolvedValue(Buffer.from('name,priceType,price\nOil change,fixed,1000\n').toString('base64'));
 });
 it('actual create flow accepts sequential fixed digits, editing, comma fractions and clearing without losing the controlled string', async () => {
   create();
@@ -290,114 +299,50 @@ it.each<[string, string, number | null]>([
   });
 });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-const header = (tree: React.ReactNode) => nodes(tree).find((node) => node.type === 'IosScreenHeader')!;
-const importStatus = (tree: React.ReactNode) =>
-  nodes(tree).find((node) => node.props.accessibilityRole === 'progressbar');
-
-function expectImportPending(tree: React.ReactNode) {
-  const status = importStatus(tree);
-  expect(status).toBeDefined();
-  expect(status!.props.accessibilityState).toMatchObject({ busy: true });
-  expect(status!.props.accessibilityLiveRegion).toBe('polite');
-  expect(status!.props.accessibilityLabel).toBe('Подготовка импорта…');
-  expect(text(status)).toBe('Подготовка импорта…');
-  expect(nodes(status).some((node) => node.type === 'ActivityIndicator')).toBe(true);
-  // Import progress remains visible outside the restored screen header.
-  expect(nodes(header(tree))).not.toContain(status);
-  expect(button(tree, '+ Новая').props.disabled).not.toBe(true);
-  expect(button(tree, 'Импорт Excel').props.disabled).toBe(true);
-  for (const label of ['Видимость', 'Экспорт Excel', 'Новая папка']) {
-    expect(button(tree, label).props.disabled).not.toBe(true);
-  }
-}
-
-it('keeps import progress visible outside the header while choosing a document and awaiting its preview', async () => {
-  const picked = deferred<import('expo-document-picker').DocumentPickerResult>();
-  const preview = deferred<{ data: ServiceImportPreview }>();
-  mockPickDocument.mockReturnValueOnce(picked.promise);
-  mockPreviewImport.mockReturnValueOnce(preview.promise);
-  expect(importStatus(render())).toBeUndefined();
-  press(button(render(), 'Импорт Excel'));
-  expectImportPending(render());
-
-  picked.resolve({
-    canceled: false,
-    assets: [{ name: 'services.csv', uri: 'file:///services.csv', size: 64, lastModified: 0 }],
-  });
-  await picked.promise;
-  await Promise.resolve();
-  expect(mockPreviewImport).toHaveBeenCalledWith([
-    { sourceRow: 2, name: 'Oil change', priceType: 'fixed', defaultPrice: 1000 },
-  ]);
-  expectImportPending(render());
-
-  preview.resolve({
-    data: {
-      previewId: 'preview-id',
-      rows: [{ sourceRow: 2, name: 'Oil change', action: 'create' }],
-      errors: [],
-      summary: { totalRows: 1, create: 1, update: 0, errors: 0 },
-    },
-  });
-  await preview.promise;
-  const completed = render();
-  expect(importStatus(completed)).toBeUndefined();
-  expect(button(completed, 'Импорт Excel').props.disabled).toBe(false);
-  expect(
-    nodes(completed).find((node) => node.type === 'Modal' && node.props.title === 'Просмотр импорта')!.props.visible,
-  ).toBe(true);
-  expect(mockAlert).not.toHaveBeenCalled();
+const header = (tree: React.ReactNode) => nodes(tree).find((node) => node.type === 'ServicesHeader')!;
+it('has no mobile import/export controls or preview dialog and retains permission gates', () => {
+  const tree = render();
+  expect(text(tree)).not.toMatch(/импорт|экспорт|Excel|CSV/i);
+  expect(nodes(tree).some((node) => node.props.title === 'Просмотр импорта')).toBe(false);
+  expect(header(tree).props.onAdd).toEqual(expect.any(Function));
+  expect(header(tree).props.onCreateFolder).toEqual(expect.any(Function));
+  expect(header(tree).props.onVisibility).toEqual(expect.any(Function));
+  mockPermission = false;
+  mockRole = 'master';
+  const limited = header(render());
+  expect(limited.props.onAdd).toBeUndefined();
+  expect(limited.props.onCreateFolder).toBeUndefined();
+  expect(limited.props.onVisibility).toBeUndefined();
+  expect(mockQueryKeys).toContainEqual(['services', { preferredOnly: true }]);
+  expect(limited.props.folderName).toBe('Услуги по роли');
+  (limited.props.onToggleShowAll as () => void)();
+  expect(header(render()).props.folderName).toBe('Все услуги');
+  expect(mockQueryKeys).toContainEqual(['services', { preferredOnly: false }]);
 });
 
-it.each(['cancel', 'picker-error', 'preview-error'] as const)(
-  'clears visible import progress after %s and permits another attempt',
-  async (outcome) => {
-    const picked = deferred<import('expo-document-picker').DocumentPickerResult>();
-    const preview = deferred<{ data: ServiceImportPreview }>();
-    mockPickDocument.mockReturnValueOnce(picked.promise);
-    mockPreviewImport.mockReturnValueOnce(preview.promise);
-    press(button(render(), 'Импорт Excel'));
-    expectImportPending(render());
-    if (outcome === 'cancel') picked.resolve({ canceled: true, assets: null });
-    else if (outcome === 'picker-error') picked.reject(new Error('Не удалось открыть файл'));
-    else {
-      picked.resolve({
-        canceled: false,
-        assets: [{ name: 'services.csv', uri: 'file:///services.csv', size: 64, lastModified: 0 }],
-      });
-      await picked.promise;
-      await Promise.resolve();
-      expect(mockPreviewImport).toHaveBeenCalledTimes(1);
-      expectImportPending(render());
-      preview.reject(new Error('Не удалось подготовить импорт'));
-    }
-    await Promise.resolve();
-    const settled = render();
-    expect(importStatus(settled)).toBeUndefined();
-    expect(button(settled, 'Импорт Excel').props.disabled).toBe(false);
-    expect(
-      nodes(settled).find((node) => node.type === 'Modal' && node.props.title === 'Просмотр импорта')!.props.visible,
-    ).toBe(false);
-    if (outcome === 'cancel') expect(mockAlert).not.toHaveBeenCalled();
-    else expect(mockAlert).toHaveBeenCalledWith('Импорт не выполнен', expect.any(String));
-
-    const retry = deferred<import('expo-document-picker').DocumentPickerResult>();
-    mockPickDocument.mockReturnValueOnce(retry.promise);
-    press(button(settled, 'Импорт Excel'));
-    expect(mockPickDocument).toHaveBeenCalledTimes(2);
-    expectImportPending(render());
-    retry.resolve({ canceled: true, assets: null });
-    await retry.promise;
-    expect(importStatus(render())).toBeUndefined();
-  },
-);
+it('searches the full catalogue, clears back to the same folder and resets the actual list only for scope changes', () => {
+  const oil = { id: 'oil', name: 'Замена масла', category: 'Масла', defaultPrice: 1000 } as Service;
+  const other = { id: 'other', name: 'Другая работа', category: 'Ремонт', defaultPrice: 2000 } as Service;
+  mockServices.push(oil, other);
+  let tree = render();
+  const folder = nodes(tree).find((node) => node.type === 'TouchableOpacity' && text(node).startsWith('Масла'))!;
+  press(folder);
+  tree = render();
+  expect(header(tree).props.folderPath).toBe('Масла');
+  const list = nodes(tree).find((node) => node.type === 'FlashList')!;
+  const scrollToOffset = jest.fn();
+  (list.props.ref as { current: unknown }).current = { scrollToOffset };
+  mockResetScroll.mockClear();
+  (header(tree).props.onSearchChange as (value: string) => void)('Другая');
+  tree = render();
+  expect(nodes(tree).find((node) => node.type === 'FlashList')!.props.data).toEqual([other]);
+  expect(scrollToOffset).toHaveBeenLastCalledWith({ offset: 0, animated: false });
+  expect(mockResetScroll).toHaveBeenCalledTimes(1);
+  render();
+  expect(scrollToOffset).toHaveBeenCalledTimes(1);
+  (header(tree).props.onSearchChange as (value: string) => void)('');
+  tree = render();
+  expect(header(tree).props.folderPath).toBe('Масла');
+  expect(nodes(tree).find((node) => node.type === 'FlashList')!.props.data).toEqual([oil]);
+  expect(scrollToOffset).toHaveBeenCalledTimes(2);
+});
