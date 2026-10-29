@@ -1,16 +1,12 @@
-import ScreenSectionHeader, {
-  useScreenSectionScroll,
-  type ScreenSectionScrollController,
-} from '../components/ScreenSectionHeader';
-import { HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import { captureDataSession } from '../contexts/dataSession';
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
+  Animated as RNAnimated,
   View,
   Text,
   TouchableOpacity,
   Pressable,
+  TextInput,
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
@@ -29,7 +25,7 @@ import Reanimated, {
   useSharedValue,
   scrollTo,
 } from 'react-native-reanimated';
-
+import AsyncStorage from '@react-native-async-storage/async-storage';
 // SafeAreaView no longer used — IosScreenHeader handles top inset
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -44,7 +40,7 @@ import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
-
+import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
 import AnimatedCard from '../components/AnimatedCard';
 import QueryErrorState from '../components/QueryErrorState';
@@ -55,14 +51,13 @@ import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { usePointUsers, USERS_POINT_QUERY_KEY } from '../hooks/useUsers';
+import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User, WorkMode } from '../../../shared/types';
 import {
-  type TodayEmployeeStatus,
-  type ScheduleEntry,
-  type ScheduleSettings,
-  type User,
-  type WorkMode,
-} from '../../../shared/types';
-import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+  calculateAttendanceStats,
+  attendanceScore,
+  emptyBreakdown,
+  recordedAttendanceBucket,
+} from '../../../shared/utils/attendance';
 import { decideScheduleView } from './scheduleViewState';
 import ShiftAttendanceHistory from './ShiftAttendanceHistory';
 import { attendanceCalendarDate } from './shiftAttendanceHelpers';
@@ -1684,7 +1679,7 @@ function GridTab() {
 }
 
 // ============== TODAY TAB ==============
-function TodayTab({ section }: { section: ScreenSectionScrollController }) {
+function TodayTab() {
   const queryClient = useQueryClient();
   const navigation = useNavigation<any>();
   const palette = useColors();
@@ -1792,14 +1787,8 @@ function TodayTab({ section }: { section: ScreenSectionScrollController }) {
   };
 
   return (
-    <ScreenSectionScrollView
-      onScroll={section.onScroll}
-      scrollEventThrottle={16}
-      contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={[
-        [styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }],
-        { paddingTop: section.contentTop + spacing[4] },
-      ]}
+    <ScrollView
+      contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       showsVerticalScrollIndicator={false}
     >
@@ -1884,23 +1873,23 @@ function TodayTab({ section }: { section: ScreenSectionScrollController }) {
           )}
         </>
       )}
-    </ScreenSectionScrollView>
+    </ScrollView>
   );
 }
 
 // ============== SHIFTS TAB ==============
-function ShiftsTab({ section }: { section: ScreenSectionScrollController }) {
+function ShiftsTab() {
   const { hasPermission } = useAuth();
   const { currentMonth, setCurrentMonth } = useScheduleMonth();
   const safeMonth = currentMonth instanceof Date && !Number.isNaN(currentMonth.getTime()) ? currentMonth : new Date();
   return hasPermission('schedule_manage') ? (
-    <ShiftAttendanceHistory section={section} currentMonth={safeMonth} onMonthChange={setCurrentMonth} />
+    <ShiftAttendanceHistory currentMonth={safeMonth} onMonthChange={setCurrentMonth} />
   ) : (
-    <PersonalShiftsStatsTab section={section} />
+    <PersonalShiftsStatsTab />
   );
 }
 
-function PersonalShiftsStatsTab({ section }: { section: ScreenSectionScrollController }) {
+function PersonalShiftsStatsTab() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
   const dark = palette.mode === 'dark';
@@ -1973,15 +1962,7 @@ function PersonalShiftsStatsTab({ section }: { section: ScreenSectionScrollContr
   const totalLate = (s.totalLateMinor || 0) + (s.totalLateMajor || 0);
 
   return (
-    <ScreenSectionScrollView
-      onScroll={section.onScroll}
-      scrollEventThrottle={16}
-      contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={[
-        [styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }],
-        { paddingTop: section.contentTop + spacing[4] },
-      ]}
-    >
+    <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {isLoading ? (
         <LoadingSpinner />
       ) : (
@@ -2087,12 +2068,12 @@ function PersonalShiftsStatsTab({ section }: { section: ScreenSectionScrollContr
           )}
         </>
       )}
-    </ScreenSectionScrollView>
+    </ScrollView>
   );
 }
 
 // ============== RATING TAB ==============
-function RatingTab({ section }: { section: ScreenSectionScrollController }) {
+function RatingTab() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
   const dark = palette.mode === 'dark';
@@ -2167,14 +2148,8 @@ function RatingTab({ section }: { section: ScreenSectionScrollController }) {
   })();
 
   return (
-    <ScreenSectionScrollView
-      onScroll={section.onScroll}
-      scrollEventThrottle={16}
-      contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={[
-        { padding: spacing[4], gap: spacing[3], paddingBottom: tabBarHeight + spacing[4] },
-        { paddingTop: section.contentTop + spacing[4] },
-      ]}
+    <ScrollView
+      contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: tabBarHeight + spacing[4] }}
     >
       <View
         style={{
@@ -2431,7 +2406,7 @@ function RatingTab({ section }: { section: ScreenSectionScrollController }) {
           </View>
         );
       })}
-    </ScreenSectionScrollView>
+    </ScrollView>
   );
 }
 
@@ -2490,7 +2465,7 @@ const SHIFT_STATUS_OPTIONS: {
   },
 ];
 
-function SettingsTab({ section }: { section: ScreenSectionScrollController }) {
+function SettingsTab() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const palette = useColors();
@@ -2631,15 +2606,7 @@ function SettingsTab({ section }: { section: ScreenSectionScrollController }) {
     Array.from(shiftKeys).some((k) => !currentList.includes(k));
 
   return (
-    <ScreenSectionScrollView
-      onScroll={section.onScroll}
-      scrollEventThrottle={16}
-      contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={[
-        [styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }],
-        { paddingTop: section.contentTop + spacing[4] },
-      ]}
-    >
+    <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {/* Segmented sub-tabs */}
       <View style={[styles.subTabs, { backgroundColor: palette.bg.muted }]}>
         <TouchableOpacity
@@ -3120,7 +3087,7 @@ function SettingsTab({ section }: { section: ScreenSectionScrollController }) {
           </TouchableOpacity>
         </View>
       </Modal>
-    </ScreenSectionScrollView>
+    </ScrollView>
   );
 }
 
@@ -3138,8 +3105,6 @@ const isPlaceholderId = (id: string | undefined | null): boolean =>
   typeof id === 'string' && id.startsWith(SCHEDULE_PLACEHOLDER_PREFIX);
 
 export default function ScheduleScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
-
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
@@ -3207,12 +3172,6 @@ export default function ScheduleScreen() {
         <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
       <TouchableOpacity
-        style={{
-          minWidth: headerTouchSize,
-          minHeight: headerTouchSize,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
         onPress={() => {
           haptic('tap');
           setCurrentMonth(attendanceCalendarDate(formatDayKey(new Date(), tenantTz)));
@@ -3236,73 +3195,11 @@ export default function ScheduleScreen() {
     </View>
   ) : undefined;
 
-  // Each tab switch unmounts the active tab's native viewport.
-  React.useEffect(() => {
-    section.reset();
-  }, [tab, section.reset]);
-  const headerControls = (
-    <View style={{ gap: 6 }}>
-      <View style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}>
-        <View style={[styles.tabBarInner, { backgroundColor: palette.bg.muted }]}>
-          {tabConfig.map((t) => {
-            const isActive = tab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                style={[styles.tabItem, isActive && styles.tabItemActive]}
-                onPress={() => setTab(t.key)}
-                activeOpacity={0.7}
-              >
-                {isActive ? (
-                  <LinearGradient
-                    colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-                    style={styles.tabItemGradient}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                  >
-                    <Ionicons name={t.activeIcon} size={16} color={colors.white} />
-                    <Text style={styles.tabItemTextActive}>{t.label}</Text>
-                  </LinearGradient>
-                ) : (
-                  <View style={styles.tabItemInner}>
-                    <Ionicons name={t.icon} size={16} color={palette.text.tertiary} />
-                    <Text style={[styles.tabItemText, { color: palette.text.secondary }]}>{t.label}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-    </View>
-  );
-
   return (
     <ScheduleMonthCtx.Provider value={monthCtxValue}>
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         {/* Unified iOS header — same component used across screens. */}
-        {tab === 'grid' ? (
-          <ScreenSectionHeader
-            composition="navigation"
-            leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-            actions={<>{trailingMonthStepper}</>}
-            variant="static"
-            title="Расписание"
-            context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-          >
-            {headerControls}
-          </ScreenSectionHeader>
-        ) : (
-          <ScreenSectionHeader
-            leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-            actions={<>{trailingMonthStepper}</>}
-            scroll={section}
-            title="Расписание"
-            context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-          >
-            {headerControls}
-          </ScreenSectionHeader>
-        )}
+        <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
         {/* Автосервис расписания (161/163): у смен есть филиал, и график/
             «Смены» показывают автосервис ЭТОЙ СЕССИИ. Значит человек обязан
@@ -3310,8 +3207,51 @@ export default function ScheduleScreen() {
             хотя тот работает в другом автосервисе. Индикатор только
             показывает: филиал выбран при входе. Отдельной строкой, а не в
             trailing: там уже стоит переключатель месяца. */}
+        <PointIndicator variant="chip" style={styles.pointChipRow} />
 
         {/* Tab bar */}
+        <View
+          style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}
+        >
+          <View style={[styles.tabBarInner, { backgroundColor: palette.bg.muted }]}>
+            {tabConfig.map((t) => {
+              const isActive = tab === t.key;
+              return (
+                <TouchableOpacity
+                  key={t.key}
+                  style={[styles.tabItem, isActive && styles.tabItemActive]}
+                  onPress={() => setTab(t.key)}
+                  activeOpacity={0.7}
+                >
+                  {isActive ? (
+                    <LinearGradient
+                      colors={[colors.primary[500], colors.primary[700]] as [string, string]}
+                      style={styles.tabItemGradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                    >
+                      <Ionicons name={t.activeIcon} size={16} color={colors.white} />
+                      <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>
+                        {t.label}
+                      </Text>
+                    </LinearGradient>
+                  ) : (
+                    <View style={styles.tabItemInner}>
+                      <Ionicons name={t.icon} size={16} color={palette.text.tertiary} />
+                      <Text
+                        style={[styles.tabItemText, { color: palette.text.secondary }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                      >
+                        {t.label}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
         {tab === 'grid' && (
           <Reanimated.View entering={FadeIn.duration(200)} key="grid" style={{ flex: 1 }}>
@@ -3320,22 +3260,22 @@ export default function ScheduleScreen() {
         )}
         {tab === 'today' && (
           <Reanimated.View entering={FadeIn.duration(200)} key="today" style={{ flex: 1 }}>
-            <TodayTab section={section} />
+            <TodayTab />
           </Reanimated.View>
         )}
         {tab === 'shifts' && (
           <Reanimated.View entering={FadeIn.duration(200)} key="shifts" style={{ flex: 1 }}>
-            <ShiftsTab section={section} />
+            <ShiftsTab />
           </Reanimated.View>
         )}
         {tab === 'rating' && (
           <Reanimated.View entering={FadeIn.duration(200)} key="rating" style={{ flex: 1 }}>
-            <RatingTab section={section} />
+            <RatingTab />
           </Reanimated.View>
         )}
         {tab === 'settings' && (
           <Reanimated.View entering={FadeIn.duration(200)} key="settings" style={{ flex: 1 }}>
-            <SettingsTab section={section} />
+            <SettingsTab />
           </Reanimated.View>
         )}
       </View>
@@ -3385,13 +3325,13 @@ const styles = StyleSheet.create({
   },
 
   // ── Tab Bar ──
-  pointChipRow: { marginHorizontal: 0, marginBottom: 0, alignSelf: 'flex-start' },
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   tabBar: {
-    backgroundColor: 'transparent',
-    paddingHorizontal: 0,
-    paddingTop: 0,
-    paddingBottom: 0,
-    borderBottomWidth: 0,
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing[3],
+    paddingTop: spacing[2],
+    paddingBottom: spacing[2.5],
+    borderBottomWidth: 1,
     borderBottomColor: colors.gray[100],
   },
   tabBarInner: {
@@ -3405,8 +3345,7 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    minWidth: headerTouchSize,
-    minHeight: headerTouchSize,
+    minWidth: 0,
   },
   tabItemActive: {
     shadowColor: colors.primary[700],
@@ -3423,7 +3362,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1.5],
     paddingHorizontal: 2,
     borderRadius: borderRadius.lg,
-    minHeight: headerTouchSize,
   },
   tabItemInner: {
     flexDirection: 'column',
@@ -3432,7 +3370,6 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingVertical: spacing[1.5],
     paddingHorizontal: 2,
-    minHeight: headerTouchSize,
   },
   tabItemText: {
     fontSize: 10,
@@ -3506,7 +3443,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 2,
   },
-  headerMonthBtn: { width: headerTouchSize, height: headerTouchSize, alignItems: 'center', justifyContent: 'center' },
+  headerMonthBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerMonthText: {
     fontSize: 14,
     fontWeight: '600',

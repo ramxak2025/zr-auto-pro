@@ -23,7 +23,7 @@ import {
   Switch,
 } from 'react-native';
 import { Text as AppText } from '../platform/Typography';
-import { compactTouchSize } from '../components/CompactScreenHeader';
+import CompactScreenHeader, { compactTouchSize } from '../components/CompactScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
@@ -44,9 +44,9 @@ import {
   checkPhotosApi,
   subscriptionApi,
   warrantyApi,
-  voiceApi,
   bookingsApi,
   loyaltyApi,
+  voiceApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -129,10 +129,6 @@ import PointIndicator from '../components/PointIndicator';
 import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -429,7 +425,6 @@ const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
 const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
 export default function CheckCreateScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const { user: catalogActor } = useAuth();
   const catalogOwner = catalogActor?.role === 'director' || catalogActor?.role === 'superadmin';
   const navigation = useNavigation<any>();
@@ -3106,92 +3101,64 @@ export default function CheckCreateScreen() {
   // пустую/устаревшую (persisted-снапшот с диска) форму и сохранение
   // затёрло бы реальный чек. Шеврон назад остаётся — с мёртвой сети можно
   // уйти; при ошибке загрузки эффект выше уже алертит и делает goBack.
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = editId && !editCheckFresh ? 'loading' : 'form';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   if (editId && !editCheckFresh) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <ScreenSectionHeader
-          scroll={section}
+        <CompactScreenHeader
           title="Редактирование чека"
-          context={
-            <View style={{ gap: 4, alignItems: 'flex-end' }}>
-              <PointIndicator variant="chip" style={styles.pointContext} />
-            </View>
-          }
-          leading={
-            isStackScreen ? (
-              <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            ) : undefined
-          }
+          onBack={isStackScreen ? () => navigation.goBack() : undefined}
+          context={<PointIndicator variant="chip" style={styles.pointContext} />}
         />
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator size="large" color={colors.primary[500]} />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary[500]} />
+        </View>
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        scroll={section}
+      <CompactScreenHeader
         title={editId ? 'Редактирование чека' : 'Касса'}
-        context={
-          <View style={{ gap: 4, alignItems: 'flex-end' }}>
-            {<PointIndicator variant="chip" style={styles.pointContext} />}
-            {!editId && canEditCheckDate && manualDate ? (
-              <View style={styles.manualDateSummary}>
-                <Text style={{ fontSize: 13, color: palette.text.secondary, flexShrink: 1 }}>
-                  {dateStr} · {timeStr}
-                </Text>
-              </View>
-            ) : undefined}
-          </View>
-        }
-        leading={
-          isStackScreen ? (
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          ) : undefined
-        }
+        onBack={isStackScreen ? () => navigation.goBack() : undefined}
+        context={<PointIndicator variant="chip" style={styles.pointContext} />}
         actions={
           !editId && canEditCheckDate ? (
-            <ScreenHeaderMenu
-              label="Дата заказ-наряда"
-              icon="calendar-outline"
-              title={manualDate ? dateStr : undefined}
-              items={[
-                {
-                  id: 'date',
-                  label: 'Выбрать дату заказ-наряда',
-                  icon: 'calendar-outline',
-                  onSelect: () => openCheckPicker('date'),
-                },
-                {
-                  id: 'time',
-                  label: 'Выбрать время заказ-наряда',
-                  icon: 'time-outline',
-                  onSelect: () => openCheckPicker('time'),
-                },
-                manualDate && {
-                  id: 'now',
-                  label: 'Использовать время создания чека',
-                  icon: 'refresh-outline',
-                  onSelect: () => setManualDate(null),
-                },
-              ]}
-            />
+            <>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать дату заказ-наряда"
+                onPress={() => openCheckPicker('date')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="calendar-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Выбрать время заказ-наряда"
+                onPress={() => openCheckPicker('time')}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="time-outline" size={21} color={palette.accent.primary} />
+              </TouchableOpacity>
+            </>
+          ) : undefined
+        }
+        status={
+          !editId && canEditCheckDate && manualDate ? (
+            <View style={styles.manualDateSummary}>
+              <Text style={{ fontSize: 13, color: palette.text.secondary, flexShrink: 1 }}>
+                {dateStr} · {timeStr}
+              </Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="Использовать время создания чека"
+                onPress={() => setManualDate(null)}
+                style={styles.dateHeaderAction}
+              >
+                <Ionicons name="close-circle" size={18} color={palette.text.secondary} />
+              </TouchableOpacity>
+            </View>
           ) : undefined
         }
       />
@@ -3203,15 +3170,8 @@ export default function CheckCreateScreen() {
           (openedFromTab); в edit-режиме (push поверх бара) — reserveTabBar
           false, свой paddingBottom не нужен. */}
       <KeyboardAwareScroll
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, openedFromTab && { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, openedFromTab && { paddingBottom: tabBarHeight + spacing[4] }]}
         reserveTabBar={openedFromTab}
       >
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}

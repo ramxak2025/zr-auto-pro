@@ -32,11 +32,6 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { User } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import { HeaderAction } from '../components/ScreenHeaderControls';
 
 // ── Android LayoutAnimation enable ──────────────────────────────────────
 // Required for collapsible day cards to animate height changes on Android.
@@ -357,8 +352,6 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 
 // ── Screen ─────────────────────────────────────────────────────────────
 export default function CashFlowScreen() {
-  const section = useScreenSectionScroll();
-  const deniedSection = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
@@ -761,69 +754,30 @@ export default function CashFlowScreen() {
   // диапазон вынесен отдельной кнопкой ниже, чтобы не загромождать
   // переключатель пятым редко используемым состоянием.
   const periodSwitcher = (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-      {period !== 'custom' && (
-        <HeaderAction
-          label="Предыдущий период"
-          icon="chevron-back"
-          disabled={isAtOldestPeriod}
-          onPress={() => handleShift(-1)}
-        />
-      )}
-      <ScreenHeaderMenu
-        label="Период движения денег"
-        icon="calendar-outline"
-        title={periodRangeLabel(period, anchor, customFrom, customTo)}
-        items={[
-          ...HEADER_PERIODS.map((p) => ({
-            id: p,
-            label: PERIOD_LABELS[p],
-            selected: period === p,
-            onSelect: () => handlePickPeriod(p),
-          })),
-          {
-            id: 'custom',
-            label: period === 'custom' ? 'Изменить диапазон' : 'Произвольный диапазон',
-            selected: period === 'custom',
-            icon: 'calendar-outline',
-            onSelect: handleOpenCustomRange,
-          },
-          { type: 'separator', id: 'range-line' },
-          {
-            id: 'current-range',
-            label: period === 'custom' ? 'Изменить даты диапазона' : 'К текущему периоду',
-            disabled: period !== 'custom' && isAtCurrentPeriod,
-            onSelect: period === 'custom' ? () => setDatePickerMode('customFrom') : resetAnchor,
-          },
-        ]}
-      />
-      {period !== 'custom' && (
-        <HeaderAction
-          label="Следующий период"
-          icon="chevron-forward"
-          disabled={isAtCurrentPeriod}
-          onPress={() => handleShift(1)}
-        />
-      )}
-      {canFilterByEmployee && (
-        <ScreenHeaderMenu
-          label="Сотрудники в движении денег"
-          icon="people-outline"
-          title={mode === 'employee' && employeeName ? employeeName : 'Все сотрудники'}
-          items={[
-            { id: 'all', label: 'Все сотрудники', selected: mode === 'all', onSelect: () => handlePickMode('all') },
-            {
-              id: 'employee',
-              label: 'Выбрать сотрудника',
-              selected: mode === 'employee',
-              onSelect: () => handlePickMode('employee'),
-            },
-            mode === 'employee' && employeeId
-              ? { id: 'clear', label: 'Сбросить выбор сотрудника', onSelect: handleClearEmployee }
-              : false,
-          ]}
-        />
-      )}
+    <View style={[styles.periodSeg, { backgroundColor: palette.bg.muted }]}>
+      {HEADER_PERIODS.map((p) => {
+        const active = period === p;
+        return (
+          <TouchableOpacity
+            key={p}
+            style={[styles.periodSegBtn, active && [styles.periodSegBtnActive, { backgroundColor: palette.bg.card }]]}
+            onPress={() => handlePickPeriod(p)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Период: ${PERIOD_LABELS[p]}`}
+          >
+            <Text
+              style={[
+                styles.periodSegText,
+                { color: palette.text.secondary },
+                active && [styles.periodSegTextActive, { color: palette.text.primary }],
+              ]}
+            >
+              {PERIOD_LABELS[p]}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 
@@ -833,45 +787,26 @@ export default function CashFlowScreen() {
   if (!canViewCashFlow) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={deniedSection} title="Движение денег" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={deniedSection.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: deniedSection.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.noAccessWrap}>
-            <EmptyState
-              title="Нет доступа"
-              description="Движение денег доступно владельцу, администратору и сотрудникам, которым выдали это право."
-              icon="lock"
-            />
-          </View>
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
+        <View style={styles.noAccessWrap}>
+          <EmptyState
+            title="Нет доступа"
+            description="Движение денег доступно владельцу, администратору и сотрудникам, которым выдали это право."
+            icon="lock"
+          />
+        </View>
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="Движение денег"
-        onBack={() => navigation.goBack()}
-        trailing={periodSwitcher}
-      />
+      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} trailing={periodSwitcher} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
+      <ScrollView
         contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
+          styles.scrollContent,
+          { paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -885,13 +820,172 @@ export default function CashFlowScreen() {
             не нужно держать в голове два разных способа листать. Для
             'custom' стрелки скрываются (там диапазон редактируется через
             календарь, листать стрелками неоднозначно). */}
+        <View style={styles.rangeRow}>
+          {period === 'custom' ? (
+            <View style={styles.rangeArrowSpacer} />
+          ) : (
+            <TouchableOpacity
+              style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => handleShift(-1)}
+              disabled={isAtOldestPeriod}
+              activeOpacity={0.7}
+              accessibilityLabel="Предыдущий период"
+              accessibilityState={{ disabled: isAtOldestPeriod }}
+            >
+              <Ionicons
+                name="chevron-back"
+                size={18}
+                color={palette.text.primary}
+                style={isAtOldestPeriod && styles.rangeArrowDisabled}
+              />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.rangeChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={
+              period === 'custom' ? () => setDatePickerMode('customFrom') : isAtCurrentPeriod ? undefined : resetAnchor
+            }
+            disabled={period !== 'custom' && isAtCurrentPeriod}
+            activeOpacity={period === 'custom' || !isAtCurrentPeriod ? 0.7 : 1}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: period !== 'custom' && isAtCurrentPeriod }}
+            accessibilityLabel={
+              period === 'custom'
+                ? 'Изменить произвольный диапазон'
+                : isAtCurrentPeriod
+                  ? `Выбран текущий период: ${periodRangeLabel(period, anchor, customFrom, customTo)}`
+                  : `Выбран ${periodRangeLabel(period, anchor, customFrom, customTo)}. Нажмите, чтобы вернуться к текущему`
+            }
+          >
+            <Text style={[styles.rangeChipText, { color: palette.text.primary }]} numberOfLines={1}>
+              {periodRangeLabel(period, anchor, customFrom, customTo)}
+            </Text>
+            {/* Подсказка «к текущему» (паттерн пейджера R15) — только когда
+                улистали в прошлое: тап по чипу мгновенно возвращает. */}
+            {period !== 'custom' && !isAtCurrentPeriod ? (
+              <Text style={[styles.rangeChipHint, { color: palette.text.tertiary }]}>к текущему</Text>
+            ) : null}
+          </TouchableOpacity>
+          {period === 'custom' ? (
+            <View style={styles.rangeArrowSpacer} />
+          ) : (
+            <TouchableOpacity
+              style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => handleShift(1)}
+              disabled={isAtCurrentPeriod}
+              activeOpacity={0.7}
+              accessibilityLabel="Следующий период"
+              accessibilityState={{ disabled: isAtCurrentPeriod }}
+            >
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={palette.text.primary}
+                style={isAtCurrentPeriod && styles.rangeArrowDisabled}
+              />
+            </TouchableOpacity>
+          )}
+        </View>
 
         {/* ── Произвольный диапазон ────────────────────────────────────
             Один низкоприоритетный текстовый action под строкой периода:
             спрятан в чип, чтобы не загромождать переключатель в шапке.
             Для уже активного 'custom' предлагает редактировать диапазон. */}
+        <TouchableOpacity
+          style={[
+            styles.customRangeBtn,
+            {
+              backgroundColor: period === 'custom' ? palette.bg.card : 'transparent',
+              borderColor: palette.border.subtle,
+            },
+          ]}
+          onPress={handleOpenCustomRange}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="calendar-outline"
+            size={14}
+            color={period === 'custom' ? colors.primary[600] : palette.text.tertiary}
+          />
+          <Text
+            style={[
+              styles.customRangeBtnText,
+              { color: period === 'custom' ? colors.primary[600] : palette.text.tertiary },
+            ]}
+          >
+            {period === 'custom' ? 'Изменить диапазон' : 'Произвольный диапазон'}
+          </Text>
+        </TouchableOpacity>
 
         {/* ── Mode tabs: all employees / by employee ─────────────────── */}
+        {canFilterByEmployee && (
+          <View style={[styles.modeSeg, { backgroundColor: palette.bg.muted }]}>
+            <TouchableOpacity
+              style={[
+                styles.modeSegBtn,
+                mode === 'all' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }],
+              ]}
+              onPress={() => handlePickMode('all')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="people-outline"
+                size={14}
+                color={mode === 'all' ? palette.text.primary : palette.text.secondary}
+              />
+              <Text
+                style={[
+                  styles.modeSegText,
+                  { color: palette.text.secondary },
+                  mode === 'all' && [styles.modeSegTextActive, { color: palette.text.primary }],
+                ]}
+                numberOfLines={1}
+              >
+                Все сотрудники
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeSegBtn,
+                mode === 'employee' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }],
+              ]}
+              onPress={() => handlePickMode('employee')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="person-outline"
+                size={14}
+                color={mode === 'employee' ? palette.text.primary : palette.text.secondary}
+              />
+              <Text
+                style={[
+                  styles.modeSegText,
+                  { color: palette.text.secondary },
+                  mode === 'employee' && [styles.modeSegTextActive, { color: palette.text.primary }],
+                ]}
+                numberOfLines={1}
+              >
+                {mode === 'employee' && employeeName ? employeeName : 'По сотруднику'}
+              </Text>
+              {/* Кнопка-сброс × появляется только когда сотрудник реально
+                  выбран — иначе чип «По сотруднику» работает как кнопка
+                  «открыть пикер». hitSlop увеличен, чтобы можно было
+                  попасть пальцем рядом с надписью. */}
+              {mode === 'employee' && employeeId ? (
+                <TouchableOpacity
+                  onPress={handleClearEmployee}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Сбросить выбор сотрудника"
+                  style={[styles.clearXBadge, { backgroundColor: palette.bg.muted }]}
+                >
+                  {/* `close` → lucide `X` (stroke-only) avoids the filled-circle
+                      glyph artifact; our own ring gives the badge shape. */}
+                  <Ionicons name="close" size={11} color={palette.text.secondary} />
+                </TouchableOpacity>
+              ) : null}
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* ── Body ───────────────────────────────────────────────────── */}
         {isCashflowError && cashflow === undefined ? (
@@ -1342,7 +1436,7 @@ export default function CashFlowScreen() {
             </Text>
           </>
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       {/* Employee picker modal */}
       <Modal

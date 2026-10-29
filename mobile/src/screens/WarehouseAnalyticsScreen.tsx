@@ -1,5 +1,3 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-
 /**
  * WarehouseAnalyticsScreen — premium financial analytics for warehouse.
  *
@@ -27,7 +25,7 @@ import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
  *   • Heavy sections (velocity, top-moving, top-margin) are sliced to
  *     top 10 client-side — backend already filters, this is defensive.
  */
-import { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { Platform, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -47,17 +45,15 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { borderRadius, colors, fontSize, spacing } from '../theme';
 import { warehouseAnalyticsApi, warehousesApi } from '../api/services';
 import { formatMoney } from '../../../shared/utils/formatters';
-import {
-  type CategoryMargin,
-  type ReorderItem,
-  type TopProduct,
-  type VelocityRow,
-  type Warehouse,
-  type WarehouseSummary,
+import type {
+  CategoryMargin,
+  ReorderItem,
+  TopProduct,
+  VelocityRow,
+  Warehouse,
+  WarehouseSummary,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 // Period switcher chip group
@@ -79,25 +75,46 @@ interface MonthPeriodSwitcherProps {
 function MonthPeriodSwitcher({ value, onChange }: MonthPeriodSwitcherProps) {
   const palette = useColors();
   return (
-    <ScreenHeaderMenu
-      label="Период складской аналитики"
-      icon="calendar-outline"
-      title={PERIODS.find((period) => period.key === value)?.label ?? 'Период'}
-      items={PERIODS.map((p) => {
+    <View style={[styles.segWrap, { backgroundColor: palette.bg.muted }]}>
+      {PERIODS.map((p) => {
         const active = value === p.key;
-        return {
-          id: p.key,
-          label: p.label,
-          selected: active,
-          onSelect: () => {
-            if (!active) {
-              haptic('select');
-              onChange(p.key);
-            }
-          },
-        };
+        return (
+          <Pressable
+            key={p.key}
+            onPress={() => {
+              if (!active) {
+                haptic('select');
+                onChange(p.key);
+              }
+            }}
+            style={[
+              styles.segItem,
+              active && {
+                backgroundColor: palette.bg.card,
+                shadowColor: '#000',
+                shadowOpacity: palette.mode === 'dark' ? 0.18 : 0.06,
+                shadowRadius: 4,
+                shadowOffset: { width: 0, height: 1 },
+              },
+            ]}
+            hitSlop={6}
+          >
+            <Text
+              variant="caption"
+              style={[
+                styles.segItemText,
+                {
+                  color: active ? palette.text.primary : palette.text.secondary,
+                  fontWeight: active ? '700' : '500',
+                },
+              ]}
+            >
+              {p.label}
+            </Text>
+          </Pressable>
+        );
       })}
-    />
+    </View>
   );
 }
 
@@ -236,7 +253,6 @@ function UrgencyBadge({ urgency }: { urgency: ReorderItem['urgency'] }) {
 // ────────────────────────────────────────────────────────────────────────
 
 export default function WarehouseAnalyticsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -365,20 +381,17 @@ export default function WarehouseAnalyticsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-        scroll={section}
         title="Складская аналитика"
         onBack={() => navigation.goBack()}
         trailing={<MonthPeriodSwitcher value={period} onChange={setPeriod} />}
       />
       {/* Автосервис (169): склад и аналитика — филиала сессии. Только подпись. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
+      <ScrollView
         contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] }],
-          { paddingTop: section.contentTop + spacing[4] },
+          styles.scrollContent,
+          { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -452,7 +465,7 @@ export default function WarehouseAnalyticsScreen() {
 
         {/* 11. GMROI */}
         <GmroiCard summary={summary} palette={palette} index={10} />
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }
@@ -1109,7 +1122,7 @@ function GmroiCard({
 // ────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  pointChipRow: { marginHorizontal: 0, marginBottom: 0, alignSelf: 'flex-start' },
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   safe: { flex: 1 },
   scrollContent: {
     padding: spacing[4],

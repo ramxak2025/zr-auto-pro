@@ -1,7 +1,3 @@
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
-
 /**
  * TrashScreen — mobile counterpart to the web TrashModal.
  * Lists soft-deleted products with two actions: Restore / Delete forever.
@@ -16,12 +12,14 @@ import { useNavigation } from '@react-navigation/native';
 import { productsApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
-
+import SearchInput from '../components/SearchInput';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { type Product } from '../../../shared/types';
+import type { Product } from '../../../shared/types';
 import { apiErrorMessage } from '@shared/utils/apiError';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const formatMoney = (v: number): string =>
   Math.round(v)
@@ -37,7 +35,6 @@ interface TrashScreenProps {
 }
 
 export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -151,69 +148,28 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
     </View>
   );
 
-  // Reset only when React replaces this screen's native root scroller.
-  const sectionRootKind = isLoading || !items || items.length === 0 ? 'state-scroll' : 'trash-list';
-  const previousSectionRootKind = React.useRef(sectionRootKind);
-  React.useEffect(() => {
-    if (previousSectionRootKind.current !== sectionRootKind) {
-      previousSectionRootKind.current = sectionRootKind;
-      section.reset();
-    }
-  }, [sectionRootKind, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        leading={
-          <HeaderAction label="Назад" icon="chevron-back" onPress={() => (onClose ? onClose() : navigation.goBack())} />
-        }
-        scroll={section}
-        title="Корзина склада"
-      >
-        <View style={{ gap: 6 }}>
-          <View style={styles.searchWrap}>
-            <HeaderSearch
-              timing={{ debounceMs: 300 }}
-              focusOnClear={false}
-              value={search}
-              onChange={setSearch}
-              placeholder="Поиск..."
-            />
-          </View>
-        </View>
-      </ScreenSectionHeader>
+      <IosScreenHeader title="Корзина склада" onBack={() => (onClose ? onClose() : navigation.goBack())} />
+
+      <View style={styles.searchWrap}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Поиск..." />
+      </View>
 
       {isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : !items || items.length === 0 ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState
-            title="Корзина пуста"
-            description="Удалённые товары сохраняются здесь и могут быть восстановлены."
-          />
-        </ScreenSectionScrollView>
+        <EmptyState
+          title="Корзина пуста"
+          description="Удалённые товары сохраняются здесь и могут быть восстановлены."
+        />
       ) : (
         <>
-          <ScreenSectionFlashList
-            onScroll={section.onScroll}
-            contentInsetAdjustmentBehavior="never"
-            scrollEventThrottle={16}
+          <FlashList
             data={filtered}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
-            contentContainerStyle={[styles.list, { paddingTop: section.contentTop + spacing[3] }]}
+            contentContainerStyle={styles.list}
             contentInset={{ bottom: tabBarHeight }}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             refreshControl={
@@ -264,7 +220,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
-  searchWrap: { paddingHorizontal: 0, paddingTop: 0 },
+  searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[3] },
   list: { paddingHorizontal: spacing[4], paddingTop: spacing[3], paddingBottom: spacing[4] },
   row: {
     flexDirection: 'row',

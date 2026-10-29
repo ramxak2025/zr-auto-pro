@@ -1,5 +1,3 @@
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-
 /**
  * SupplyReceiveScreen — приёмка поставки ПО ЗАКАЗУ поставщику.
  *
@@ -31,7 +29,7 @@ import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
  *
  * Android-safe: KeyboardAwareScroll + степперы + TextInput, без iOS-only API.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -50,7 +48,7 @@ import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { type PurchaseOrder, type PurchaseReceiptContext } from '../../../shared/types';
+import type { PurchaseOrder } from '../../../shared/types';
 import {
   formatMoney,
   formatPoDate,
@@ -63,11 +61,10 @@ import {
 } from './purchaseOrders/purchaseOrderHelpers';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { roundQty } from '../utils/units';
-
+import type { PurchaseReceiptContext } from '../../../shared/types';
 import { useProcurementRecovery } from '../hooks/useProcurementRecovery';
 import { sumReceiptLineCents } from '../../../shared/utils/procurementInput';
 import { ProcurementRecoveryPanel } from '../components/ProcurementRecoveryPanel';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 type PayMode = 'debt' | 'paid';
 
@@ -105,7 +102,6 @@ function parseOptionalPrice(t: string): number | null {
 }
 
 export default function SupplyReceiveScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -408,73 +404,6 @@ export default function SupplyReceiveScreen() {
   if (!po) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ProcurementRecoveryPanel
-            recovery={recovery}
-            onRecovered={() => {
-              for (const key of [
-                'purchase-order',
-                'purchase-orders',
-                'supplier',
-                'supplier-deliveries',
-                'suppliers',
-                'products',
-                'stock-movements',
-              ])
-                void queryClient.invalidateQueries({ queryKey: [key] });
-              Alert.alert('Готово', 'Результат приёмки восстановлен');
-            }}
-          />
-          {isError ? (
-            <QueryErrorState
-              title="Не удалось загрузить заказ"
-              description="Проверьте подключение к интернету и попробуйте ещё раз"
-              onRetry={() => refetch()}
-            />
-          ) : (
-            <ListSkeleton count={5} />
-          )}
-        </ScreenSectionScrollView>
-        <IosScreenHeader scroll={section} title="Приёмка поставки" onBack={() => navigation.goBack()} />
-      </View>
-    );
-  }
-
-  const totalOutstanding = items.reduce((s, it) => s + outstandingQty(it.quantity, it.receivedQuantity), 0);
-
-  return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title={po.supplierName || 'Приёмка'}
-        subtitle="Приёмка поставки по заказу"
-        onBack={() => navigation.goBack()}
-      />
-
-      {/* Клавиатура (миграция на keyboard-controller). Раньше — обычный
-          ScrollView с automaticallyAdjustKeyboardInsets (ТОЛЬКО iOS); на
-          Android поле цены пряталось под клавиатурой. Теперь общий
-          KeyboardAwareScroll: авто-скролл к активному полю одинаково
-          iOS+Android. reserveTabBar={false} — paddingBottom уже включает
-          tabBarHeight сам (contentContainerStyle ниже); extraKeyboardBottomOffset
-          поднимает фокус над нижним баром приёмки (BOTTOM_BAR_HEIGHT), как в
-          PurchaseOrderCreateScreen. */}
-      <KeyboardAwareScroll
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: tabBarHeight + spacing[10] }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
-        reserveTabBar={false}
-        extraKeyboardBottomOffset={BOTTOM_BAR_HEIGHT}
-      >
         <ProcurementRecoveryPanel
           recovery={recovery}
           onRecovered={() => {
@@ -491,6 +420,59 @@ export default function SupplyReceiveScreen() {
             Alert.alert('Готово', 'Результат приёмки восстановлен');
           }}
         />
+        <IosScreenHeader title="Приёмка поставки" onBack={() => navigation.goBack()} />
+        {isError ? (
+          <QueryErrorState
+            title="Не удалось загрузить заказ"
+            description="Проверьте подключение к интернету и попробуйте ещё раз"
+            onRetry={() => refetch()}
+          />
+        ) : (
+          <ListSkeleton count={5} />
+        )}
+      </View>
+    );
+  }
+
+  const totalOutstanding = items.reduce((s, it) => s + outstandingQty(it.quantity, it.receivedQuantity), 0);
+
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <ProcurementRecoveryPanel
+        recovery={recovery}
+        onRecovered={() => {
+          for (const key of [
+            'purchase-order',
+            'purchase-orders',
+            'supplier',
+            'supplier-deliveries',
+            'suppliers',
+            'products',
+            'stock-movements',
+          ])
+            void queryClient.invalidateQueries({ queryKey: [key] });
+          Alert.alert('Готово', 'Результат приёмки восстановлен');
+        }}
+      />
+      <IosScreenHeader
+        title={po.supplierName || 'Приёмка'}
+        subtitle="Приёмка поставки по заказу"
+        onBack={() => navigation.goBack()}
+      />
+
+      {/* Клавиатура (миграция на keyboard-controller). Раньше — обычный
+          ScrollView с automaticallyAdjustKeyboardInsets (ТОЛЬКО iOS); на
+          Android поле цены пряталось под клавиатурой. Теперь общий
+          KeyboardAwareScroll: авто-скролл к активному полю одинаково
+          iOS+Android. reserveTabBar={false} — paddingBottom уже включает
+          tabBarHeight сам (contentContainerStyle ниже); extraKeyboardBottomOffset
+          поднимает фокус над нижним баром приёмки (BOTTOM_BAR_HEIGHT), как в
+          PurchaseOrderCreateScreen. */}
+      <KeyboardAwareScroll
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[10] }]}
+        reserveTabBar={false}
+        extraKeyboardBottomOffset={BOTTOM_BAR_HEIGHT}
+      >
         {/* ── Подсказка ── */}
         <View style={[styles.hintCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Ionicons name="cube-outline" size={16} color={colors.primary[600]} />

@@ -49,9 +49,7 @@ import {
 import ManagerFormSheet from './ManagerFormSheet';
 import SettlementSheet from './SettlementSheet';
 import TransferManagerSheet from './TransferManagerSheet';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { ScreenSectionFlatList, ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
-import { HeaderAction } from '../../components/ScreenHeaderControls';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 type DetailRow =
   | { kind: 'label'; key: string; title: string }
@@ -126,7 +124,6 @@ function InfoRow({
 }
 
 export default function AdminManagerDetailScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const id: string = route.params?.id;
@@ -242,44 +239,29 @@ export default function AdminManagerDetailScreen() {
     [palette, surface.cardCompact, openTenant, openTransfer, onDeleteSettlement],
   );
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = manager ? 'ledger' : 'terminal';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   if (!manager) {
     return (
       <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Менеджер" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.stateBlock}>
-            {isError && !isLoading ? (
-              <>
-                <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
-                <Text style={[styles.stateText, { color: palette.text.secondary }]}>
-                  Не удалось загрузить менеджера
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    haptic('tap');
-                    void refetchManager();
-                  }}
-                  hitSlop={8}
-                >
-                  <Text style={[styles.retryText, { color: palette.accent.primary }]}>Повторить</Text>
-                </Pressable>
-              </>
-            ) : (
-              <ActivityIndicator color={palette.accent.primary} />
-            )}
-          </View>
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Менеджер" onBack={() => navigation.goBack()} />
+        <View style={styles.stateBlock}>
+          {isError && !isLoading ? (
+            <>
+              <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
+              <Text style={[styles.stateText, { color: palette.text.secondary }]}>Не удалось загрузить менеджера</Text>
+              <Pressable
+                onPress={() => {
+                  haptic('tap');
+                  void refetchManager();
+                }}
+                hitSlop={8}
+              >
+                <Text style={[styles.retryText, { color: palette.accent.primary }]}>Повторить</Text>
+              </Pressable>
+            </>
+          ) : (
+            <ActivityIndicator color={palette.accent.primary} />
+          )}
+        </View>
       </View>
     );
   }
@@ -414,40 +396,33 @@ export default function AdminManagerDetailScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title={manager.fullName}
         subtitle="Менеджер платформы"
         onBack={() => navigation.goBack()}
         trailing={
-          <HeaderAction
-            label="Редактировать менеджера"
-            title="Редактировать"
-            icon="create-outline"
-            tone="primary"
+          <Pressable
             onPress={() => {
               haptic('tap');
               setEditOpen(true);
             }}
-          />
+            style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Редактировать менеджера"
+          >
+            <Ionicons name="create-outline" size={20} color={palette.text.primary} />
+          </Pressable>
         }
       />
 
-      <ScreenSectionFlatList
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
+      <FlatList
         data={rows}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         ListHeaderComponent={header}
         ListFooterComponent={footer}
         contentInset={contentInset}
-        contentContainerStyle={[
-          [styles.listContent, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />

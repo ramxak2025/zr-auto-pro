@@ -12,14 +12,12 @@ import { useIosSurface } from '../../platform/iosSurface';
 import { spacing } from '../../theme';
 import { formatDateTime, useAdminMode } from './adminShared';
 import { actionIcon, actionLabel } from './auditActions';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 const PAGE_SIZE = 50;
 
 /** Mounted only after an explicit entry from the selected car-service card. */
 export default function AdminTenantAuditScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation();
   const { id, name } = useRoute<any>().params as { id: string; name: string };
   const mode = useAdminMode();
@@ -49,20 +47,12 @@ export default function AdminTenantAuditScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Журнал действий" subtitle={name} onBack={() => navigation.goBack()} />
-      <ScreenSectionFlatList
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
+      <IosScreenHeader title="Журнал действий" subtitle={name} onBack={() => navigation.goBack()} />
+      <FlatList
         data={denied ? [] : rows}
         keyExtractor={(entry) => entry.id}
         contentInset={contentInset}
-        contentContainerStyle={[
-          [styles.list, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop },
-        ]}
+        contentContainerStyle={[styles.list, { paddingBottom: contentContainerPaddingBottom }]}
         refreshing={journal.isRefetching && !journal.isFetchingNextPage}
         onRefresh={() => {
           void journal.refetch();

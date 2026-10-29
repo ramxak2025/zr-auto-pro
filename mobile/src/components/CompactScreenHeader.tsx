@@ -4,11 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../platform/Typography';
-import ScreenSectionHeader, {
-  type ScreenHeaderComposition,
-  type ScreenSectionScrollController,
-} from './ScreenSectionHeader';
-import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 export const compactTouchSize = Platform.OS === 'android' ? 48 : 44;
 
@@ -21,10 +16,6 @@ interface HeaderProps {
   actions?: React.ReactNode;
   context?: React.ReactNode;
   status?: React.ReactNode;
-  scroll?: ScreenSectionScrollController;
-  sectionVariant?: 'static';
-  composition?: ScreenHeaderComposition;
-  children?: React.ReactNode;
 }
 
 /** Local toolbar for warehouse, journal and check creation. Owns the top inset. */
@@ -37,48 +28,19 @@ export default function CompactScreenHeader({
   actions,
   context,
   status,
-  scroll,
-  sectionVariant,
-  composition = 'section',
-  children,
 }: HeaderProps) {
   const p = useColors();
   const insets = useSafeAreaInsets();
-  if (scroll || sectionVariant === 'static') {
-    const resolvedComposition = sectionVariant === 'static' ? composition : (scroll?.composition ?? 'section');
-    const navigation = resolvedComposition === 'navigation';
-    const identityProps = {
-      title,
-      subtitle,
-      context: status,
-      onTitlePress,
-      titleLabel,
-      leading: navigation && onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : undefined,
-      actions: navigation ? actions : undefined,
-    };
-    const hasControls = Boolean((!navigation && (onBack || actions)) || context || children);
-    const controls = hasControls ? (
-      <HeaderIsland>
-        {!navigation && onBack && <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} />}
-        {context}
-        {!navigation && actions && <View style={s.actions}>{actions}</View>}
-        {children}
-      </HeaderIsland>
-    ) : null;
-    return sectionVariant === 'static' ? (
-      <ScreenSectionHeader {...identityProps} variant="static" composition={composition}>
-        {controls}
-      </ScreenSectionHeader>
-    ) : (
-      <ScreenSectionHeader {...identityProps} scroll={scroll!}>
-        {controls}
-      </ScreenSectionHeader>
-    );
-  }
   const heading = (
     <>
       <View style={s.titleRow}>
-        <Text variant="title2" color={p.text.primary} accessibilityRole="header" style={s.title} numberOfLines={2}>
+        <Text
+          variant="title2"
+          color={p.text.primary}
+          accessibilityRole="header"
+          style={[s.title, Platform.OS === 'android' && s.androidTitle]}
+          numberOfLines={2}
+        >
           {title}
         </Text>
         {onTitlePress && <Ionicons name="chevron-down" size={16} color={p.text.secondary} />}
@@ -188,6 +150,7 @@ export function CompactSearchInput({
 }
 
 const s = StyleSheet.create({
+  androidTitle: { fontSize: 18, lineHeight: 24 },
   header: { paddingHorizontal: 16, paddingBottom: 8 },
   toolbar: { minHeight: Platform.OS === 'android' ? 56 : 48, flexDirection: 'row', alignItems: 'center', gap: 8 },
   heading: { flex: 1, minWidth: 0, minHeight: compactTouchSize, justifyContent: 'center', paddingVertical: 4 },

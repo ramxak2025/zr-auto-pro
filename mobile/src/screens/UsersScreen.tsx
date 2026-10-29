@@ -1,6 +1,3 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import { headerTouchSize } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
@@ -36,11 +33,10 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useUsers, decideStaffListView } from '../hooks/useUsers';
 import { usePointAccess } from '../hooks/usePoints';
 import { haptic } from '../platform/haptics';
-import { type User, type Product, UserRole } from '../../../shared/types';
-
+import type { User, Product } from '../../../shared/types';
+import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'purple',
@@ -226,7 +222,6 @@ interface CommissionItem {
 }
 
 export default function UsersScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const { hasPermission, user: currentUser, refreshUser } = useAuth();
   const queryClient = useQueryClient();
@@ -470,15 +465,8 @@ export default function UsersScreen() {
   if (!hasPermission('user_management')) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Пользователи" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Пользователи" onBack={() => navigation.goBack()} />
+        <EmptyState title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
       </View>
     );
   }
@@ -565,20 +553,7 @@ export default function UsersScreen() {
 
   const isDirectorOrSuperadmin = currentUser?.role === 'director' || currentUser?.role === 'superadmin';
 
-  if (isLoading)
-    return (
-      <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-        <IosScreenHeader scroll={section} title="Пользователи" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
-      </View>
-    );
+  if (isLoading) return <LoadingSpinner />;
 
   const getRoleBadge = (role: string) => {
     const key = roleBadgeMap[role] || 'gray';
@@ -624,85 +599,49 @@ export default function UsersScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title="Пользователи"
         subtitle={users.length ? `Всего: ${users.length}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
-          <>
-            {canManageRoles && canManageDirections ? (
-              <ScreenHeaderMenu
-                label="Управление командой"
-                items={[
-                  {
-                    id: 'roles',
-                    label: 'Роли',
-                    icon: 'shield-checkmark-outline',
-                    onSelect: () => {
-                      haptic('tap');
-                      navigation.navigate('Roles');
-                    },
-                  },
-                  {
-                    id: 'directions',
-                    label: 'Направления сотрудников',
-                    icon: 'git-branch-outline',
-                    onSelect: () => {
-                      haptic('tap');
-                      setDirectionsModalOpen(true);
-                    },
-                  },
-                ]}
-              />
-            ) : canManageRoles ? (
+          <View style={styles.headerActions}>
+            {/* Роли (ROLE-ONLY) — управление ролями-базами прав. Виден только
+                owner-class (director/admin/superadmin) — тот же серверный гейт,
+                что у GET /roles. */}
+            {canManageRoles && (
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
                   navigation.navigate('Roles');
                 }}
-                style={[
-                  [styles.rolesBtn, { backgroundColor: palette.bg.muted }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
+                style={[styles.rolesBtn, { backgroundColor: palette.bg.muted }]}
                 accessibilityRole="button"
                 accessibilityLabel="Роли"
               >
                 <Ionicons name="key-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
-            ) : canManageDirections ? (
+            )}
+            {canManageDirections && (
               <TouchableOpacity
                 onPress={() => {
                   haptic('tap');
                   setDirectionsModalOpen(true);
                 }}
-                style={[
-                  [styles.rolesBtn, { backgroundColor: palette.bg.muted }],
-                  { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                ]}
+                style={[styles.rolesBtn, { backgroundColor: palette.bg.muted }]}
                 accessibilityRole="button"
                 accessibilityLabel="Направления сотрудников"
               >
                 <Ionicons name="git-network-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity
-              onPress={openCreate}
-              style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-            >
+            )}
+            <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
               <Ionicons name="add" size={20} color={colors.white} />
             </TouchableOpacity>
-          </>
+          </View>
         }
       />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -748,7 +687,7 @@ export default function UsersScreen() {
           // 'skeleton' — placeholder/stale без подтверждения: спиннер, НЕ «пусто».
           <LoadingSpinner />
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       <Modal
         visible={directionsModalOpen}

@@ -1,4 +1,4 @@
-import { formatMoney as formatFinancialMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatMoney as formatFinancialMoney } from '../../../shared/utils/formatters';
 import { displayedProfit } from '../../../shared/utils/checkProfit';
 /**
  * CarDetailScreen — dedicated drill-down for ONE car of a client.
@@ -40,12 +40,11 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useVinEnabled } from '../hooks/useVinEnabled';
 import { carVin } from '../utils/vinUi';
 import { haptic } from '../platform/haptics';
-import { type Check } from '../../../shared/types';
+import type { Check } from '../../../shared/types';
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number): string {
   return (
@@ -98,7 +97,6 @@ type CarDetailParams = {
 };
 
 export default function CarDetailScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -197,22 +195,11 @@ export default function CarDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title={title}
-        subtitle={plate || undefined}
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader title={title} subtitle={plate || undefined} onBack={() => navigation.goBack()} centerTitle />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
+      <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
@@ -331,7 +318,7 @@ export default function CarDetailScreen() {
             </View>
           ))
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

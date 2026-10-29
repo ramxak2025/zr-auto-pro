@@ -1,5 +1,3 @@
-import { headerTouchSize } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 /**
  * KnowledgeArticleScreen — the article reader.
  *
@@ -46,9 +44,8 @@ import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatDateShort } from '../../../shared/utils/formatters';
-import { type KnowledgeArticle, type KnowledgeAcksResponse, type ArticleFeedbackResult } from '../../../shared/types';
+import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
 
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
 
@@ -92,7 +89,6 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function KnowledgeArticleScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeArticle'>>();
   const palette = useColors();
@@ -229,15 +225,8 @@ export default function KnowledgeArticleScreen() {
   if (!id) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Статья" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState icon="warning" title="Статья не найдена" />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Статья" onBack={() => navigation.goBack()} />
+        <EmptyState icon="warning" title="Статья не найдена" />
       </View>
     );
   }
@@ -249,10 +238,7 @@ export default function KnowledgeArticleScreen() {
         navigation.navigate('KnowledgeEditor', { id });
       }}
       hitSlop={10}
-      style={[
-        [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-      ]}
+      style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
       accessibilityRole="button"
       accessibilityLabel="Изменить"
     >
@@ -265,50 +251,29 @@ export default function KnowledgeArticleScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title={route.params?.title ?? article?.title ?? 'Статья'}
         onBack={() => navigation.goBack()}
         trailing={headerTrailing}
       />
 
       {article === undefined && isFetching ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <LoadingSpinner />
       ) : isError && article === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Не удалось загрузить статью"
-            description="Проверьте соединение и попробуйте снова."
-            onRetry={() => refetch()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Не удалось загрузить статью"
+          description="Проверьте соединение и попробуйте снова."
+          onRetry={() => refetch()}
+        />
       ) : article ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
+        <ScrollView
           contentContainerStyle={[
-            [
-              styles.content,
-              // Reserve room for the floating tab bar, plus — when the ack CTA is
-              // shown — exactly the action-bar band (which floats just above the
-              // tab bar). No double tab-bar inset, so no oversized dead zone.
-              {
-                paddingBottom: tabBarHeight + (showStickyAck ? ACK_BAR_GAP + ACK_BAR_HEIGHT : 0) + spacing[6],
-              },
-            ],
-            { paddingTop: section.contentTop + spacing[1] },
+            styles.content,
+            // Reserve room for the floating tab bar, plus — when the ack CTA is
+            // shown — exactly the action-bar band (which floats just above the
+            // tab bar). No double tab-bar inset, so no oversized dead zone.
+            {
+              paddingBottom: tabBarHeight + (showStickyAck ? ACK_BAR_GAP + ACK_BAR_HEIGHT : 0) + spacing[6],
+            },
           ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -636,17 +601,10 @@ export default function KnowledgeArticleScreen() {
               <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
             </Pressable>
           ) : null}
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : (
         // pending без активного запроса (offline-пауза) — спиннер, не пустота.
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <LoadingSpinner />
       )}
 
       {/* Sticky «Ознакомлен» CTA — the brand-primary pill floats DIRECTLY above

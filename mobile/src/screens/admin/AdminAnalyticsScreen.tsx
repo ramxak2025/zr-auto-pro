@@ -32,7 +32,6 @@ export default function AdminAnalyticsScreen() {
   };
   return (
     <AdminPage
-      composition="section"
       title="Аналитика"
       subtitle="Подписки платформы"
       onRefresh={refresh}

@@ -1,11 +1,8 @@
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 import React, { useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
 import EmployeeAvatar from '../components/EmployeeAvatar';
 import { Ionicons } from '@expo/vector-icons';
-
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,7 +10,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
 import { bookingsHubMenuEntry, canShowBookingsHubEntry } from './bookings/bookingHubTabs';
-import { type Booking, type UserPermissions, type SubscriptionInfo } from '../../../shared/types';
+import type { Booking } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
@@ -21,6 +18,8 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { usePointAccess } from '../hooks/usePoints';
 import { pendingChecksLogoutNotice, pendingOfflineCheckCount } from '../utils/offlineCheckQueue';
 import AccountPickerSheet from './AccountPickerSheet';
+import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -500,14 +499,13 @@ const MenuRow = React.memo(function MenuRow({
 });
 
 export default function MoreScreen() {
-  const section = useScreenSectionScroll({ composition: 'section', hasControls: false });
-
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<{ MoreHome: { accountPickerRequest?: number } }, 'MoreHome'>>();
   const { user, logout, hasPermission, savedAccounts } = useAuth();
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
+  const insets = useSafeAreaInsets();
   const [accountsOpen, setAccountsOpen] = React.useState(false);
   const accountPickerRequest = route.params?.accountPickerRequest;
   useEffect(() => {
@@ -638,21 +636,14 @@ export default function MoreScreen() {
   }, [cardFade, cardTranslate]);
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Ещё" />
-      <ScreenSectionScrollView
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        onScroll={section.onScroll}
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas, paddingTop: insets.top + spacing[2] }]}>
+      <ScrollView
         contentContainerStyle={[
-          [
-            styles.scrollContent,
-            {
-              // Android: contentInset is ignored; reserve bar space here.
-              paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4],
-            },
-          ],
-          { paddingTop: section.contentTop + spacing[1] },
+          styles.scrollContent,
+          {
+            // Android: contentInset is ignored; reserve bar space here.
+            paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4],
+          },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -708,13 +699,19 @@ export default function MoreScreen() {
               <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
             </TouchableOpacity>
             {/* Notifications — every user picks their own categories. */}
-            <HeaderAction
-              label="Настройки уведомлений"
-              icon="notifications-outline"
+            <TouchableOpacity
+              style={[styles.bellBtn, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
               onPress={() => navigation.navigate('NotificationSettings')}
-            />
+              activeOpacity={0.6}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Настройки уведомлений"
+            >
+              <Ionicons name="notifications-outline" size={20} color={palette.text.secondary} />
+            </TouchableOpacity>
           </View>
         </Animated.View>
+
         <TouchableOpacity
           style={[styles.accountPickerButton, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           onPress={() => setAccountsOpen(true)}
@@ -824,7 +821,7 @@ export default function MoreScreen() {
 
         {/* «Удалить аккаунт» moved to «Мой профиль» (the destructive action lives
             at the bottom of the profile screen, reached via the header above). */}
-      </ScreenSectionScrollView>
+      </ScrollView>
       <AccountPickerSheet visible={accountsOpen} onClose={() => setAccountsOpen(false)} />
     </View>
   );

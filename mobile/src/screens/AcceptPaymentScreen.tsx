@@ -26,6 +26,7 @@ import { captureDataSession } from '../contexts/dataSession';
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,8 +47,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { CHECK_MONEY_DEPENDENT_KEYS } from './CheckDetailScreen';
 import type { Check, PaymentMethod } from '../../../shared/types';
 import { serviceLineTotal } from '../../../shared/utils/checkLines';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 function formatMoney(v: number) {
   return (
@@ -80,7 +80,6 @@ const INSTALLMENT_METHOD: (typeof METHODS)[number] = {
 };
 
 export default function AcceptPaymentScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -210,84 +209,44 @@ export default function AcceptPaymentScreen() {
   const canAccept = hasPermission('accept_payment');
 
   // ── Пограничные состояния ────────────────────────────────────────────
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = check && check.isDeferred && canAccept ? 'payment' : 'terminal';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   let body: React.ReactNode = null;
   if (!check && isLoading) {
     body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <View style={styles.centerFill}>
-          <LoadingSpinner />
-        </View>
-      </ScreenSectionScrollView>
+      <View style={styles.centerFill}>
+        <LoadingSpinner />
+      </View>
     );
   } else if (!check && isError) {
     body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <View style={styles.centerFill}>
-          <EmptyState
-            icon="receipt"
-            title="Не удалось загрузить заказ"
-            description="Проверьте соединение."
-            action={{ label: 'Повторить', onPress: () => refetch() }}
-          />
-        </View>
-      </ScreenSectionScrollView>
+      <View style={styles.centerFill}>
+        <EmptyState
+          icon="receipt"
+          title="Не удалось загрузить заказ"
+          description="Проверьте соединение."
+          action={{ label: 'Повторить', onPress: () => refetch() }}
+        />
+      </View>
     );
   } else if (check && !check.isDeferred) {
     body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <View style={styles.centerFill}>
-          <EmptyState
-            icon="check"
-            title="Заказ уже оплачен"
-            description={`Заказ-наряд #${check.number} закрыт на ${formatMoney(check.totalRevenue)}.`}
-            action={{ label: 'Открыть заказ', onPress: () => navigation.replace('CheckDetail', { id }) }}
-          />
-        </View>
-      </ScreenSectionScrollView>
+      <View style={styles.centerFill}>
+        <EmptyState
+          icon="check"
+          title="Заказ уже оплачен"
+          description={`Заказ-наряд #${check.number} закрыт на ${formatMoney(check.totalRevenue)}.`}
+          action={{ label: 'Открыть заказ', onPress: () => navigation.replace('CheckDetail', { id }) }}
+        />
+      </View>
     );
   } else if (check && !canAccept) {
     body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <View style={styles.centerFill}>
-          <EmptyState
-            icon="lock"
-            title="Нет права приёма оплаты"
-            description="Оплату принимает кассир — роль с правом «Приём оплаты»."
-          />
-        </View>
-      </ScreenSectionScrollView>
+      <View style={styles.centerFill}>
+        <EmptyState
+          icon="lock"
+          title="Нет права приёма оплаты"
+          description="Оплату принимает кассир — роль с правом «Приём оплаты»."
+        />
+      </View>
     );
   } else if (check) {
     const assignees = check.assignees ?? [];
@@ -296,13 +255,9 @@ export default function AcceptPaymentScreen() {
       // ручным keyboardVerticalOffset=8; KeyboardAwareView сам берёт offset
       // из insets.bottom и работает одинаково на iOS и Android.
       <KeyboardAwareView style={{ flex: 1 }}>
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
+        <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[styles.scrollContent, { paddingTop: section.contentTop + spacing[4] }]}
+          contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -641,7 +596,7 @@ export default function AcceptPaymentScreen() {
               )}
             </LinearGradient>
           </TouchableOpacity>
-        </ScreenSectionScrollView>
+        </ScrollView>
 
         {/* Дата следующего платежа по рассрочке (паттерн CheckCreateScreen). */}
         <DateTimePickerModal
@@ -659,15 +614,14 @@ export default function AcceptPaymentScreen() {
   }
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
       <IosScreenHeader
-        scroll={section}
         title={check ? `Заказ-наряд #${check.number}` : 'Приём оплаты'}
         subtitle="Приём оплаты"
         onBack={() => navigation.goBack()}
       />
       {body}
-    </View>
+    </SafeAreaView>
   );
 }
 

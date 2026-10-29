@@ -51,6 +51,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { Switch } from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -76,10 +77,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { User } from '../../../shared/types';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderAction } from '../components/ScreenHeaderControls';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Local types
@@ -560,7 +558,6 @@ const CategoryTile = React.memo(function CategoryTile({
 // ────────────────────────────────────────────────────────────────────────
 
 export default function ExpensesScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user, hasPermission } = useAuth();
@@ -1116,103 +1113,30 @@ export default function ExpensesScreen() {
   const selectedEmployeeName = employees.find((e) => e.id === filterEmployeeId)?.fullName;
 
   const trailing = (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-      <HeaderAction label="Предыдущий месяц" icon="chevron-back" onPress={() => handleMonthShift(-1)} />
-      <ScreenHeaderMenu
-        label="Период расходов"
-        icon="calendar-outline"
-        title={
-          period === 'month'
-            ? monthLabel
-            : dateRange.from === dateRange.to
-              ? dateRange.from.split('-').reverse().join('.')
-              : [dateRange.from, dateRange.to].map((value) => value.split('-').reverse().join('.')).join(' — ')
-        }
-        items={[
-          ...(
-            [
-              { key: 'day', label: 'День' },
-              { key: 'week', label: 'Неделя' },
-              { key: 'month', label: 'Месяц' },
-              { key: 'custom', label: 'Произвольный' },
-            ] as const
-          ).map((p) => ({
-            id: p.key,
-            label: p.label,
-            selected: period === p.key,
-            onSelect: () => handlePeriodChange(p.key),
-          })),
-          { type: 'separator', id: 'date-line' },
-          {
-            id: 'date',
-            label: 'Выбрать дату',
-            icon: 'calendar-outline',
-            onSelect: () => setDatePickerMode('customFrom'),
-          },
-        ]}
-      />
-      <HeaderAction label="Следующий месяц" icon="chevron-forward" onPress={() => handleMonthShift(1)} />
-      {!(expensesQuery.isLoading && expenses.length === 0) && (
-        <ScreenHeaderMenu
-          label="Фильтры расходов"
-          icon="filter-outline"
-          title={
-            [filterCategory, selectedEmployeeName, pendingOnly ? 'Ожидают одобрения' : null]
-              .filter(Boolean)
-              .join(' · ') || 'Фильтры'
-          }
-          items={[
-            ...(categoryBreakdown.length > 0 || filterCategory
-              ? [
-                  { type: 'label' as const, id: 'category-label', label: 'Категория' },
-                  {
-                    id: 'all-categories',
-                    label: 'Все категории',
-                    selected: !filterCategory,
-                    onSelect: () => handleCategoryFilter(null),
-                  },
-                  ...categoryBreakdown.map((cat) => ({
-                    id: 'category-' + cat.name,
-                    label: cat.name,
-                    selected: filterCategory === cat.name,
-                    onSelect: () => handleCategoryFilter(cat.name),
-                  })),
-                ]
-              : []),
-            isOwnerRole && { type: 'separator', id: 'owner-line' },
-            isOwnerRole && {
-              id: 'employee',
-              label: selectedEmployeeName || 'По сотруднику',
-              icon: 'person-outline',
-              selected: !!filterEmployeeId,
-              onSelect: () => setEmployeePickerOpen(true),
-            },
-            isOwnerRole &&
-              !!filterEmployeeId && {
-                id: 'clear-employee',
-                label: 'Все сотрудники',
-                onSelect: () => setFilterEmployeeId(''),
-              },
-            isOwnerRole && {
-              id: 'pending',
-              label: 'Ожидают одобрения',
-              icon: 'time-outline',
-              selected: pendingOnly,
-              onSelect: () => {
-                haptic('select');
-                setPendingOnly((v) => !v);
-              },
-            },
-            isOwnerRole && { type: 'separator', id: 'settings-line' },
-            isOwnerRole && {
-              id: 'categories',
-              label: 'Категории расходов',
-              icon: 'pricetag-outline',
-              onSelect: () => setCatModalOpen(true),
-            },
-          ]}
-        />
-      )}
+    <View style={styles.headerTrailing}>
+      <TouchableOpacity
+        style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}
+        onPress={() => setDatePickerMode('customFrom')}
+        activeOpacity={0.7}
+      >
+        <TouchableOpacity
+          onPress={() => handleMonthShift(-1)}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          style={styles.monthChipArrow}
+        >
+          <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
+        </TouchableOpacity>
+        <Text style={[styles.monthChipText, { color: palette.text.primary }]} numberOfLines={1}>
+          {monthLabel}
+        </Text>
+        <TouchableOpacity
+          onPress={() => handleMonthShift(1)}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          style={styles.monthChipArrow}
+        >
+          <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
+        </TouchableOpacity>
+      </TouchableOpacity>
     </View>
   );
 
@@ -1224,8 +1148,52 @@ export default function ExpensesScreen() {
   const listHeader = (
     <View>
       {/* Freshness badge — узкий ряд под шапкой */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={expensesQuery} />
+      </View>
 
       {/* Period selector */}
+      <View style={styles.periodWrapper}>
+        <View style={[styles.periodContainer, { backgroundColor: palette.bg.muted }]}>
+          {(
+            [
+              { key: 'day', label: 'День' },
+              { key: 'week', label: 'Неделя' },
+              { key: 'month', label: 'Месяц' },
+              { key: 'custom', label: 'Произв.' },
+            ] as const
+          ).map((p) => (
+            <TouchableOpacity
+              key={p.key}
+              style={[
+                styles.periodChip,
+                period === p.key && [styles.periodChipActive, { backgroundColor: palette.bg.card }],
+              ]}
+              onPress={() => handlePeriodChange(p.key)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.periodText,
+                  { color: palette.text.secondary },
+                  period === p.key && [styles.periodTextActive, { color: palette.text.primary }],
+                ]}
+              >
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {isOwnerRole && (
+          <TouchableOpacity
+            style={[styles.catBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={() => setCatModalOpen(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="pricetag-outline" size={16} color={colors.primary[600]} />
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* Custom range editor */}
       {period === 'custom' && (
@@ -1534,6 +1502,90 @@ export default function ExpensesScreen() {
       </View>
 
       {/* Owner-only employee filter + pending toggle */}
+      {isOwnerRole && (
+        <View style={styles.filterChipsRow}>
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              {
+                backgroundColor: filterEmployeeId
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.primary[700], 'dark')
+                    : colors.primary[50]
+                  : palette.bg.muted,
+                borderColor: filterEmployeeId ? colors.primary[300] : palette.border.subtle,
+              },
+            ]}
+            onPress={() => setEmployeePickerOpen(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="person-outline"
+              size={13}
+              color={filterEmployeeId ? colors.primary[700] : palette.text.secondary}
+            />
+            <Text
+              style={[
+                styles.filterChipText,
+                {
+                  color: filterEmployeeId ? colors.primary[700] : palette.text.secondary,
+                  fontWeight: filterEmployeeId ? fontWeight.semibold : fontWeight.medium,
+                },
+              ]}
+              numberOfLines={1}
+            >
+              {selectedEmployeeName ? selectedEmployeeName : 'По сотруднику'}
+            </Text>
+            {filterEmployeeId && (
+              <TouchableOpacity
+                onPress={() => setFilterEmployeeId('')}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                style={[
+                  styles.clearXBadge,
+                  {
+                    backgroundColor:
+                      palette.mode === 'dark' ? softTint(colors.primary[700], 'dark') : colors.primary[100],
+                  },
+                ]}
+              >
+                {/* `close` → lucide `X` (stroke-only) — avoids the filled-circle artifact */}
+                <Ionicons name="close" size={10} color={colors.primary[700]} />
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              {
+                backgroundColor: pendingOnly
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.amber[600], 'dark')
+                    : colors.amber[50]
+                  : palette.bg.muted,
+                borderColor: pendingOnly ? colors.amber[600] : palette.border.subtle,
+              },
+            ]}
+            onPress={() => {
+              haptic('select');
+              setPendingOnly((v) => !v);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="time-outline" size={13} color={pendingOnly ? colors.amber[600] : palette.text.secondary} />
+            <Text
+              style={[
+                styles.filterChipText,
+                {
+                  color: pendingOnly ? colors.amber[600] : palette.text.secondary,
+                  fontWeight: pendingOnly ? fontWeight.semibold : fontWeight.medium,
+                },
+              ]}
+            >
+              Ожидают одобрения
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Active filter banner — клик по плитке/доли подсвечивает её
           здесь и даёт быстрый "сбросить" */}
@@ -1571,40 +1623,16 @@ export default function ExpensesScreen() {
     </View>
   );
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = expensesQuery.isLoading && expenses.length === 0 ? 'loading' : 'list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        context={<FreshnessBadge query={expensesQuery} />}
-        scroll={section}
-        title="Расходы"
-        onBack={() => navigation.goBack()}
-        trailing={trailing}
-      />
+      <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.loadingWrap}>
-            <ListSkeleton count={6} />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.loadingWrap}>
+          <ListSkeleton count={6} />
+        </View>
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
+        <FlashList
           data={filteredExpenses}
           keyExtractor={(i) => i.id}
           renderItem={renderExpense}
@@ -1624,10 +1652,7 @@ export default function ExpensesScreen() {
               action={canCreate ? { label: '+ Новый расход', onPress: openCreateModal } : undefined}
             />
           }
-          contentContainerStyle={[
-            { ...styles.list, paddingBottom: tabBarHeight + spacing[16] },
-            { paddingTop: section.contentTop },
-          ]}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[16] }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

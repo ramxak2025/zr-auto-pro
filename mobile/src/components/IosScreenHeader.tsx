@@ -5,11 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
-import ScreenSectionHeader, {
-  type ScreenHeaderComposition,
-  type ScreenSectionScrollController,
-} from './ScreenSectionHeader';
-import { HeaderAction, HeaderIsland } from './ScreenHeaderControls';
 
 /**
  * IosScreenHeader — shared top-bar treatment for every screen.
@@ -56,13 +51,6 @@ export interface IosScreenHeaderProps {
   /** When true the title is centred (iOS Mail-style). Otherwise left-aligned (Settings-style). */
   centerTitle?: boolean;
   style?: StyleProp<ViewStyle>;
-  /** Explicit opt-in: attach this controller to the main vertical scroller. */
-  scroll?: ScreenSectionScrollController;
-  /** Only for synchronized canvases with no single main vertical scroller. */
-  sectionVariant?: 'static';
-  /** Static composition only; a scrolling header inherits it from its controller. */
-  composition?: ScreenHeaderComposition;
-  context?: React.ReactNode;
 }
 
 export default function IosScreenHeader({
@@ -75,10 +63,6 @@ export default function IosScreenHeader({
   bg,
   centerTitle = false,
   style,
-  scroll,
-  sectionVariant,
-  composition = 'section',
-  context,
 }: IosScreenHeaderProps) {
   const insets = useSafeAreaInsets();
   const palette = useColors();
@@ -86,52 +70,13 @@ export default function IosScreenHeader({
   const effectiveShowDivider = isAndroid ? true : showDivider;
   const effectiveCenterTitle = isAndroid ? false : centerTitle;
 
-  if (scroll || sectionVariant === 'static') {
-    const resolvedComposition = sectionVariant === 'static' ? composition : (scroll?.composition ?? 'section');
-    const back = leading ?? (onBack ? <HeaderAction label="Назад" icon="chevron-back" onPress={onBack} /> : null);
-    if (resolvedComposition === 'navigation') {
-      const identityProps = { title, subtitle, context, leading: back, actions: trailing };
-      return sectionVariant === 'static' ? (
-        <ScreenSectionHeader {...identityProps} variant="static" composition="navigation" />
-      ) : (
-        <ScreenSectionHeader {...identityProps} scroll={scroll!} />
-      );
-    }
-    const controls =
-      leading || onBack || trailing ? (
-        <HeaderIsland
-          style={
-            scroll && sectionVariant !== 'static' && onBack && !leading && !trailing ? styles.backOnlyIsland : undefined
-          }
-        >
-          {back}
-          {trailing ? <View style={styles.sectionTrailing}>{trailing}</View> : null}
-        </HeaderIsland>
-      ) : null;
-    return sectionVariant === 'static' ? (
-      <ScreenSectionHeader
-        variant="static"
-        composition={composition}
-        title={title}
-        subtitle={subtitle}
-        context={context}
-      >
-        {controls}
-      </ScreenSectionHeader>
-    ) : (
-      <ScreenSectionHeader scroll={scroll!} title={title} subtitle={subtitle} context={context}>
-        {controls}
-      </ScreenSectionHeader>
-    );
-  }
-
   const leadingNode = leading ? (
     leading
   ) : onBack ? (
     <Pressable
       onPress={onBack}
       hitSlop={10}
-      style={[styles.iconBtn, { backgroundColor: palette.bg.muted }]}
+      style={[styles.iconBtn, isAndroid && styles.androidIconBtn, { backgroundColor: palette.bg.muted }]}
       accessibilityRole="button"
       accessibilityLabel="Назад"
     >
@@ -159,7 +104,11 @@ export default function IosScreenHeader({
       <View style={[styles.row, effectiveCenterTitle && styles.rowCenter]}>
         {leadingNode}
         <View style={[styles.center, effectiveCenterTitle && styles.centerCentered]}>
-          <Text variant="bodyEmph" numberOfLines={1} style={[styles.title, { color: palette.text.primary }]}>
+          <Text
+            variant="bodyEmph"
+            numberOfLines={isAndroid ? 2 : 1}
+            style={[styles.title, isAndroid && styles.androidTitle, { color: palette.text.primary }]}
+          >
             {title}
           </Text>
           {subtitle ? (
@@ -175,15 +124,6 @@ export default function IosScreenHeader({
 }
 
 const styles = StyleSheet.create({
-  backOnlyIsland: { alignSelf: 'flex-start' },
-  sectionTrailing: {
-    flex: 1,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: 6,
-  },
   wrap: {
     paddingBottom: spacing[2.5],
     paddingHorizontal: spacing[3],
@@ -207,6 +147,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -0.4,
   },
+  androidTitle: { fontSize: 16, lineHeight: 22 },
   subtitle: {
     fontSize: 12,
     marginTop: 1,
@@ -218,6 +159,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  androidIconBtn: { width: 48, height: 48, borderRadius: 24 },
   iconBtnPlaceholder: {
     width: 36,
     height: 36,

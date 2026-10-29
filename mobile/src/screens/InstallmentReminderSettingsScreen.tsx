@@ -35,12 +35,10 @@ import { installmentsApi } from '../api/services';
 import { DEFAULT_REMINDER_TEMPLATE } from '../components/installments/installmentUi';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentReminderSettings } from '../../../shared/types';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type Mode = InstallmentReminderSettings['mode'];
 
@@ -53,7 +51,6 @@ const MODES: { key: Mode; label: string; icon: keyof typeof Ionicons.glyphMap }[
 const QK = ['installments', 'reminder-settings'] as const;
 
 export default function InstallmentReminderSettingsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -121,71 +118,19 @@ export default function InstallmentReminderSettingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        trailing={
-          mode === 'auto' && !(isLoading && !data) && !(isError && !data) ? (
-            <ScreenHeaderMenu
-              label="Напоминания: отправка"
-              loading={sendMutation.isPending}
-              items={[
-                {
-                  id: 'send',
-                  label: 'Отправить напоминания сейчас',
-                  icon: 'paper-plane-outline',
-                  disabled: sendMutation.isPending,
-                  loading: sendMutation.isPending,
-                  onSelect: () => {
-                    haptic('tap');
-                    sendMutation.mutate();
-                  },
-                },
-              ]}
-            />
-          ) : undefined
-        }
-        scroll={section}
-        title="Напоминания о платежах"
-        onBack={() => navigation.goBack()}
-        centerTitle
-      />
+      <IosScreenHeader title="Напоминания о платежах" onBack={() => navigation.goBack()} centerTitle />
 
       {isLoading && !data ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.center}>
-            <ActivityIndicator color={palette.accent.primary} />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.center}>
+          <ActivityIndicator color={palette.accent.primary} />
+        </View>
       ) : isError && !data ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.center}>
-            <Text style={{ color: palette.text.tertiary }}>Не удалось загрузить настройки</Text>
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.center}>
+          <Text style={{ color: palette.text.tertiary }}>Не удалось загрузить настройки</Text>
+        </View>
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
-          contentContainerStyle={[
-            [styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }],
-            { paddingTop: section.contentTop + spacing[3] },
-          ]}
+        <ScrollView
+          contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -354,7 +299,38 @@ export default function InstallmentReminderSettingsScreen() {
           </TouchableOpacity>
 
           {/* Manual «send now» — only meaningful when auto rules exist. */}
-        </ScreenSectionScrollView>
+          {mode === 'auto' ? (
+            <TouchableOpacity
+              style={[styles.sendNowBtn, { backgroundColor: softTint(colors.green[600], palette.mode) }]}
+              onPress={() => {
+                haptic('tap');
+                sendMutation.mutate();
+              }}
+              disabled={sendMutation.isPending}
+              activeOpacity={0.85}
+            >
+              {sendMutation.isPending ? (
+                <ActivityIndicator size="small" color={colors.green[600]} />
+              ) : (
+                <>
+                  <Ionicons
+                    name="paper-plane-outline"
+                    size={17}
+                    color={palette.mode === 'dark' ? colors.green[300] : colors.green[700]}
+                  />
+                  <Text
+                    style={[
+                      styles.sendNowText,
+                      { color: palette.mode === 'dark' ? colors.green[300] : colors.green[700] },
+                    ]}
+                  >
+                    Отправить напоминания сейчас
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : null}
+        </ScrollView>
       )}
     </View>
   );

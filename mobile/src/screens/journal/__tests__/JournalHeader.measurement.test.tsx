@@ -48,6 +48,7 @@ jest.mock('../../../platform/Typography', () => ({
   textVariantStyles: { title2: { fontSize: 22, lineHeight: 28 }, title3: { fontSize: 17, lineHeight: 22 } },
 }));
 import React from 'react';
+import { Platform } from 'react-native';
 import type { JournalScrollController } from '../JournalHeader';
 import JournalHeader, { useJournalHeaderScroll } from '../JournalHeader';
 import ScreenSectionHeader, { useScreenSectionScroll } from '../../../components/ScreenSectionHeader';
@@ -82,6 +83,7 @@ const render = (offset: number) =>
     children: <React.Fragment>Функциональная панель</React.Fragment>,
   });
 beforeEach(() => {
+  Platform.OS = 'ios';
   mockFontScale = 1;
   mockSafeTop = 62;
   mockDeferredUpdates.length = 0;
@@ -96,19 +98,24 @@ it('captures the measured title/status row before the pooled native layout event
   expect(mockDeferredUpdates).toHaveLength(1);
   expect(mockDeferredUpdates[0](0)).toBe(24);
 });
-it.each([1, 1.353, 2, 3])(
-  'moves the full-size title with content and pins only controls at fontScale %s',
-  (fontScale) => {
+it.each(
+  (['ios', 'android'] as const).flatMap((platform) => [1, 1.353, 2, 3].map((fontScale) => ({ platform, fontScale }))),
+)(
+  'moves the full-size title with content and pins only controls on $platform at fontScale $fontScale',
+  ({ platform, fontScale }) => {
+    Platform.OS = platform;
     mockFontScale = fontScale;
     for (const offset of [0, 20, 64, 200, 0]) {
       const tree = render(offset);
       const title = nodes(tree).filter((node) => node.props.accessibilityRole === 'header');
       expect(title).toHaveLength(1);
-      expect(style(title[0].props.style).fontSize).toBe(22 * fontScale);
+      expect(style(title[0].props.style).fontSize).toBe((platform === 'android' ? 18 : 22) * fontScale);
+      expect(style(title[0].props.style).lineHeight).toBe((platform === 'android' ? 24 : 28) * fontScale);
       expect(title[0].props.allowFontScaling).toBe(false);
       expect(title[0].props.variant).toBe('title2');
       expect(style(title[0].props.style).fontWeight).toBe('600');
       const stage = style(nodes(tree).find((node) => node.props.testID === 'journal-title-stage')!.props.style);
+      expect(stage.height).toBe(24 + Math.ceil((platform === 'android' ? 24 : 28) * fontScale));
       const controls = style(
         nodes(tree).find((node) => node.props.testID === 'journal-floating-controls')!.props.style,
       );

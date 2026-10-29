@@ -4,8 +4,8 @@ export function screenSectionProgress(offset: number, titleHeight: number) {
   return Math.min(1, Math.max(0, offset) / Math.max(1, titleHeight));
 }
 
-export function screenSectionGeometry(fontScale: number, titleRowHeight: number) {
+export function screenSectionGeometry(fontScale: number, titleRowHeight: number, titleLineHeight = 28) {
   const titleTop = 14;
-  const expandedHeight = titleTop + Math.max(titleRowHeight, Math.ceil(28 * fontScale)) + 10;
+  const expandedHeight = titleTop + Math.max(titleRowHeight, Math.ceil(titleLineHeight * fontScale)) + 10;
   return { compactHeight: 0, expandedHeight, titleTop };
 }

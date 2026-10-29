@@ -38,10 +38,8 @@ import { BottomSheet } from '../components/BottomSheet';
 import EmptyState from '../components/EmptyState';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { type ReviewPlatformLink, type ReviewSettings } from '../../../shared/types';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Constants
@@ -723,7 +721,6 @@ function InstallmentReminderSection() {
 // ─────────────────────────────────────────────────────────────────────
 
 export default function MarketingSettingsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -736,35 +733,22 @@ export default function MarketingSettingsScreen() {
   if (!isOwner) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Настройки" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState
-            icon="lock"
-            title="Доступ ограничен"
-            description="Настройки маркетинга доступны сотрудникам с правом «Доступ к маркетингу»."
-          />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Настройки" onBack={() => navigation.goBack()} />
+        <EmptyState
+          icon="lock"
+          title="Доступ ограничен"
+          description="Настройки маркетинга доступны сотрудникам с правом «Доступ к маркетингу»."
+        />
       </View>
     );
   }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Настройки маркетинга" onBack={() => navigation.goBack()} />
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
+      <IosScreenHeader title="Настройки маркетинга" onBack={() => navigation.goBack()} />
+      <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -778,7 +762,7 @@ export default function MarketingSettingsScreen() {
           <VisitReminderSection />
           <InstallmentReminderSection />
         </View>
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

@@ -11,10 +11,12 @@
  * downstream are role-gated AND enforced server-side.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, RefreshControl } from 'react-native';
+import { View, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRoute, type RouteProp, useNavigation } from '@react-navigation/native';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -27,15 +29,11 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { InstallmentPlan } from '../../../shared/types';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderAction, HeaderIsland } from '../components/ScreenHeaderControls';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type Filter = 'open' | 'closed' | 'overdue';
 
 export default function InstallmentsScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -131,98 +129,96 @@ export default function InstallmentsScreen() {
       </View>
     ) : null;
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = sorted === undefined || sorted.length === 0 ? 'terminal' : 'list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
+  const segmented = (
+    <View style={styles.segmentedWrap}>
+      <View style={[styles.segmentedControl, { backgroundColor: palette.bg.muted }]}>
+        {(
+          [
+            { key: 'open', label: 'Открытые', icon: 'time-outline' },
+            { key: 'closed', label: 'Закрытые', icon: 'checkmark-done-outline' },
+            { key: 'overdue', label: 'Просроченные', icon: 'alert-circle-outline' },
+          ] as const
+        ).map((seg) => {
+          const active = filter === seg.key;
+          return (
+            <TouchableOpacity
+              key={seg.key}
+              style={[styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]]}
+              onPress={() => {
+                haptic('tap');
+                setFilter(seg.key);
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name={seg.icon} size={15} color={active ? colors.primary[700] : palette.text.secondary} />
+              <Text
+                style={[
+                  styles.segmentBtnText,
+                  { color: active ? colors.primary[700] : palette.text.secondary },
+                  active && styles.segmentBtnTextActive,
+                ]}
+              >
+                {seg.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Рассрочка">
-        <HeaderIsland>
-          <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-          <ScreenHeaderMenu
-            label="Статус рассрочки"
-            icon="filter-outline"
-            title={filter === 'open' ? 'Открытые' : filter === 'closed' ? 'Закрытые' : 'Просроченные'}
-            items={(
-              [
-                { key: 'open', label: 'Открытые' },
-                { key: 'closed', label: 'Закрытые' },
-                { key: 'overdue', label: 'Просроченные' },
-              ] as const
-            ).map((seg) => ({
-              id: seg.key,
-              label: seg.label,
-              selected: filter === seg.key,
-              onSelect: () => {
-                haptic('tap');
-                setFilter(seg.key);
-              },
-            }))}
-          />
-          {isOwnerClass && (
-            <HeaderAction
-              label="Напоминания о платежах"
-              icon="notifications-outline"
+      <IosScreenHeader
+        title="Рассрочка"
+        onBack={() => navigation.goBack()}
+        centerTitle
+        trailing={
+          isOwnerClass ? (
+            <TouchableOpacity
               onPress={() => {
                 haptic('tap');
                 navigation.navigate('InstallmentReminderSettings');
               }}
-            />
-          )}
-        </HeaderIsland>
-      </ScreenSectionHeader>
+              style={[styles.gearBtn, { backgroundColor: palette.bg.muted }]}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityLabel="Напоминания о платежах"
+            >
+              <Ionicons name="notifications-outline" size={19} color={palette.text.secondary} />
+            </TouchableOpacity>
+          ) : undefined
+        }
+      />
+
+      {segmented}
 
       {sorted === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : sorted.length === 0 ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <EmptyState
-            icon={filter === 'closed' ? 'check' : 'card'}
-            title={
-              filter === 'overdue'
-                ? 'Просроченных рассрочек нет'
-                : filter === 'open'
-                  ? 'Открытых рассрочек нет'
-                  : 'Закрытых рассрочек нет'
-            }
-            description={
-              filter === 'overdue'
-                ? 'Платежей с прошедшей датой нет.'
-                : filter === 'open'
-                  ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
-                  : 'Здесь появятся полностью погашенные рассрочки.'
-            }
-          />
-        </ScreenSectionScrollView>
+        <EmptyState
+          icon={filter === 'closed' ? 'check' : 'card'}
+          title={
+            filter === 'overdue'
+              ? 'Просроченных рассрочек нет'
+              : filter === 'open'
+                ? 'Открытых рассрочек нет'
+                : 'Закрытых рассрочек нет'
+          }
+          description={
+            filter === 'overdue'
+              ? 'Платежей с прошедшей датой нет.'
+              : filter === 'open'
+                ? 'Оформите рассрочку при создании заказ-наряда — выберите способ оплаты «Рассрочка».'
+                : 'Здесь появятся полностью погашенные рассрочки.'
+          }
+        />
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
+        <FlashList
           data={sorted}
           keyExtractor={(i) => i.id}
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
-          contentContainerStyle={[styles.list, { paddingTop: section.contentTop + spacing[1] }]}
+          contentContainerStyle={styles.list}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           refreshControl={
@@ -241,7 +237,7 @@ const styles = StyleSheet.create({
   gearBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
 
   // Segmented control
-  segmentedWrap: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
+  segmentedWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[2] },
   segmentedControl: { flexDirection: 'row', borderRadius: borderRadius.lg, padding: 3 },
   segmentBtn: {
     flex: 1,

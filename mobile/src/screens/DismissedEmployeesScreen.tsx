@@ -1,4 +1,3 @@
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
 /**
  * DismissedEmployeesScreen — «Уволенные», the recycle-bin for employees.
  *
@@ -44,14 +43,13 @@ import { PressableScale } from '../platform/PressableScale';
 import { haptic } from '../platform/haptics';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { type SemanticPalette } from '../theme/palette';
+import type { SemanticPalette } from '../theme/palette';
 import { usersApi } from '../api/services';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, spacing } from '../theme';
-import { type User } from '../../../shared/types';
+import type { User } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 const AVATAR_SIZE = 44;
 const RESTORE_WINDOW_DAYS = 365; // restorable within a year of dismissal
@@ -226,7 +224,6 @@ const DismissedRow = React.memo(function DismissedRow({ user, palette, onRestore
 });
 
 export default function DismissedEmployeesScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -355,32 +352,15 @@ export default function DismissedEmployeesScreen() {
   );
 
   // Gate — non-managers can't open the recycle bin.
-  // Reset only when React replaces this screen's native root scroller.
-  const sectionRootKind = canManage && list.length > 0 ? 'dismissed-list' : 'state-scroll';
-  const previousSectionRootKind = React.useRef(sectionRootKind);
-  React.useEffect(() => {
-    if (previousSectionRootKind.current !== sectionRootKind) {
-      previousSectionRootKind.current = sectionRootKind;
-      section.reset();
-    }
-  }, [sectionRootKind, section.reset]);
-
   if (!canManage) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Уволенные" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState
-            icon="lock"
-            title="Нет доступа"
-            description="Раздел «Уволенные» доступен только владельцу и администраторам."
-          />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Уволенные" onBack={() => navigation.goBack()} />
+        <EmptyState
+          icon="lock"
+          title="Нет доступа"
+          description="Раздел «Уволенные» доступен только владельцу и администраторам."
+        />
       </View>
     );
   }
@@ -388,7 +368,6 @@ export default function DismissedEmployeesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title="Уволенные"
         subtitle={items === undefined ? undefined : `Всего: ${list.length}`}
         onBack={() => navigation.goBack()}
@@ -396,53 +375,26 @@ export default function DismissedEmployeesScreen() {
 
       {items === undefined && isError ? (
         // Запрос упал и кэша нет — error-state с Retry (как в Сотрудниках).
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Не удалось загрузить «Уволенных»"
-            description="Проверьте соединение и попробуйте ещё раз."
-            onRetry={() => refetch()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Не удалось загрузить «Уволенных»"
+          description="Проверьте соединение и попробуйте ещё раз."
+          onRetry={() => refetch()}
+        />
       ) : isLoading && items === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : list.length === 0 ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState
-            icon="people"
-            title="Нет уволенных сотрудников"
-            description="Здесь появятся сотрудники, которых вы уволили. В течение года их можно восстановить."
-          />
-        </ScreenSectionScrollView>
+        <EmptyState
+          icon="people"
+          title="Нет уволенных сотрудников"
+          description="Здесь появятся сотрудники, которых вы уволили. В течение года их можно восстановить."
+        />
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
+        <FlashList
           data={list}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ItemSeparatorComponent={Spacer}
-          contentContainerStyle={[
-            [styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null],
-            { paddingTop: section.contentTop + spacing[3] },
-          ]}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}

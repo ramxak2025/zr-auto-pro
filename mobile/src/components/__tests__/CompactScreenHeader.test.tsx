@@ -45,25 +45,26 @@ jest.mock('react-native', () => ({
 }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 59, bottom: 34 }) }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-jest.mock('../ScreenSectionHeader', () => ({ __esModule: true, default: 'ScreenSectionHeader' }));
 jest.mock('../../platform/Typography', () => ({ Text: 'Text', textVariantStyles: { body: {} } }));
 jest.mock('../../contexts/ThemeContext', () => ({
   useColors: () => ({
     bg: { canvas: '#fff', muted: '#eee' },
+    border: { subtle: '#ddd' },
     text: { primary: '#111', secondary: '#555' },
     accent: { primary: '#2563eb' },
   }),
 }));
 import React from 'react';
+import { Platform } from 'react-native';
 import CompactScreenHeader, { CompactSearchInput } from '../CompactScreenHeader';
 import IosScreenHeader from '../IosScreenHeader';
-import type { ScreenSectionScrollController } from '../ScreenSectionHeader';
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
   React.isValidElement(node)
     ? [node as Element, ...React.Children.toArray((node as Element).props.children).flatMap(nodes)]
     : [];
 beforeEach(() => {
+  Platform.OS = 'ios';
   mockStates.length = 0;
   mockRefs.length = 0;
   mockIndex = 0;
@@ -72,6 +73,32 @@ beforeEach(() => {
   jest.useFakeTimers();
 });
 afterEach(() => jest.useRealTimers());
+it.each(['ios', 'android'] as const)(
+  'keeps legacy header layout with platform-sized, scalable titles on %s',
+  (platform) => {
+    Platform.OS = platform;
+    const style = (value: unknown): Record<string, unknown> =>
+      Array.isArray(value)
+        ? Object.assign({}, ...value.map(style))
+        : value && typeof value === 'object'
+          ? (value as Record<string, unknown>)
+          : {};
+    const title = 'Настройки публичной записи клиентов';
+    const compact = nodes(CompactScreenHeader({ title })).find((node) => node.props.accessibilityRole === 'header')!;
+    expect(compact.props.numberOfLines).toBe(2);
+    expect(compact.props.allowFontScaling).not.toBe(false);
+    if (platform === 'android') expect(style(compact.props.style)).toMatchObject({ fontSize: 18, lineHeight: 24 });
+    else expect(style(compact.props.style).fontSize).toBeUndefined();
+    const ios = IosScreenHeader({ title, onBack: jest.fn() });
+    const heading = nodes(ios).find((node) => node.type === 'Text' && node.props.children === title)!;
+    expect(style(heading.props.style).fontSize).toBe(platform === 'android' ? 16 : 17);
+    expect(heading.props.numberOfLines).toBe(platform === 'android' ? 2 : 1);
+    expect(heading.props.allowFontScaling).not.toBe(false);
+    const back = nodes(ios).find((node) => node.props.accessibilityLabel === 'Назад')!;
+    expect(style(back.props.style).width).toBe(platform === 'android' ? 48 : 36);
+    expect(style(back.props.style).height).toBe(platform === 'android' ? 48 : 36);
+  },
+);
 it('warehouse title and back are distinct accessible actions even with a long name', () => {
   const back = jest.fn();
   const warehouse = jest.fn();
@@ -131,38 +158,4 @@ it('external clear cancels a pending query instead of restoring the typed text',
   jest.advanceTimersByTime(300);
   expect(change).not.toHaveBeenCalled();
   expect(nodes(render()).find((node) => node.type === 'TextInput')!.props.value).toBe('');
-});
-
-it('navigation wrappers pass the exact identity, back and save slots without a second title action', () => {
-  const scroll = { composition: 'navigation' } as ScreenSectionScrollController;
-  const back = jest.fn();
-  const select = jest.fn();
-  const save = <React.Fragment>Сохранить</React.Fragment>;
-  const functionalContext = <React.Fragment>Выбор точки</React.Fragment>;
-  const status = <React.Fragment>Черновик</React.Fragment>;
-  const compact = CompactScreenHeader({
-    title: 'Касса',
-    scroll,
-    onBack: back,
-    onTitlePress: select,
-    actions: save,
-    context: functionalContext,
-    status,
-  });
-  expect(compact.props.onTitlePress).toBe(select);
-  expect(compact.props.actions).toBe(save);
-  expect(compact.props.context).toBe(status);
-  expect(compact.props.leading.props.onPress).toBe(back);
-  expect(compact.props.children.props.children).toContain(functionalContext);
-  expect(nodes(compact.props.children).filter((node) => node.props.onPress === select)).toHaveLength(0);
-  const leading = <React.Fragment>Исходная leading-команда</React.Fragment>;
-  const ios = IosScreenHeader({ title: 'Детали', scroll, leading, onBack: back, trailing: save, context: status });
-  expect(ios.props.leading).toBe(leading);
-  expect(ios.props.actions).toBe(save);
-  expect(ios.props.context).toBe(status);
-  expect(ios.props.children).toBeUndefined();
-  const canvas = IosScreenHeader({ title: 'Доска', sectionVariant: 'static', composition: 'navigation', onBack: back });
-  expect(canvas.props.variant).toBe('static');
-  expect(canvas.props.composition).toBe('navigation');
-  expect(canvas.props.scroll).toBeUndefined();
 });

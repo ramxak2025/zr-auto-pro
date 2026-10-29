@@ -1,12 +1,4 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import ScreenSectionHeader, {
-  type ScreenSectionScrollController,
-  useScreenSectionScroll,
-} from '../components/ScreenSectionHeader';
-
-import { useRoute, type RouteProp, useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useRoute, type RouteProp } from '@react-navigation/native';
 /**
  * PurchaseOrdersScreen — «Заказы поставщикам».
  *
@@ -27,18 +19,19 @@ import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Platform, Pre
 
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-
+import { buildShadow } from '../platform/iosSurface';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { type PurchaseOrder, type PurchaseOrderStatus, type Supplier } from '../../../shared/types';
+import type { PurchaseOrder, PurchaseOrderStatus, Supplier } from '../../../shared/types';
 import {
   PO_STATUS_META,
   PO_STATUS_ORDER,
@@ -47,6 +40,7 @@ import {
   formatPoDate,
   type PoStatusMeta,
 } from './purchaseOrders/purchaseOrderHelpers';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type StatusFilter = 'all' | PurchaseOrderStatus;
 
@@ -127,17 +121,7 @@ const PurchaseOrderRow = React.memo(function PurchaseOrderRow({
  * it's the self-contained route still registered in MoreStack (reachable from
  * SuppliersScreen / SupplierDetailScreen).
  */
-export default function PurchaseOrdersScreen({
-  embedded = false,
-  sectionController,
-  sectionHeader,
-}: {
-  embedded?: boolean;
-  sectionController?: ScreenSectionScrollController;
-  sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
-} = {}) {
-  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
-  const section = sectionController ?? ownSection;
+export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -248,73 +232,16 @@ export default function PurchaseOrdersScreen({
 
   const list = orders ?? [];
 
-  const sectionControls = (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-      <ScreenHeaderMenu
-        label="Статус заказа поставщику"
-        title={statusFilter === 'all' ? 'Все статусы' : PO_STATUS_META[statusFilter].label}
-        icon="options-outline"
-        items={(['all', ...PO_STATUS_ORDER] as StatusFilter[]).map((s) => ({
-          id: s,
-          label: s === 'all' ? 'Все' : PO_STATUS_META[s].label,
-          selected: statusFilter === s,
-          onSelect: () => {
-            if (s === statusFilter) return;
-            haptic('select');
-            setStatusFilter(s);
-          },
-        }))}
-      />
-      <ScreenHeaderMenu
-        label="Поставщик заказов"
-        title={selectedSupplierName || 'Все поставщики'}
-        icon="business-outline"
-        items={[
-          {
-            id: 'all-suppliers',
-            label: 'Все поставщики',
-            selected: !supplierId,
-            onSelect: () => {
-              haptic('select');
-              setSupplierId(null);
-              setShowSupplierDropdown(false);
-            },
-          },
-          ...suppliers.map((s) => ({
-            id: s.id,
-            label: s.name,
-            selected: supplierId === s.id,
-            onSelect: () => {
-              haptic('select');
-              setSupplierId(s.id);
-              setShowSupplierDropdown(false);
-            },
-          })),
-        ]}
-      />
-    </View>
-  );
-
-  // Reset only when React replaces this screen's native root scroller.
-  const sectionRootKind = orders === undefined || (list.length === 0 && !isLoading) ? 'state-scroll' : 'order-list';
-  const previousSectionRootKind = React.useRef(sectionRootKind);
-  React.useEffect(() => {
-    if (previousSectionRootKind.current !== sectionRootKind) {
-      previousSectionRootKind.current = sectionRootKind;
-      section.reset();
-    }
-  }, [sectionRootKind, section.reset]);
-
   return (
     <View style={[styles.safe, embedded ? null : { backgroundColor: palette.bg.canvas }]}>
-      {sectionHeader ? (
-        sectionHeader(sectionControls)
-      ) : (
-        <ScreenSectionHeader
-          actions={
+      {embedded ? null : (
+        <IosScreenHeader
+          title="Заказы поставщикам"
+          onBack={() => navigation.goBack()}
+          trailing={
             canWrite ? (
               <TouchableOpacity
-                style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+                style={styles.addBtn}
                 onPress={openCreate}
                 hitSlop={8}
                 accessibilityRole="button"
@@ -324,25 +251,124 @@ export default function PurchaseOrdersScreen({
               </TouchableOpacity>
             ) : undefined
           }
-          leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-          scroll={section}
-          title="Заказы поставщикам"
-        >
-          <View style={{ gap: 6 }}>{sectionControls}</View>
-        </ScreenSectionHeader>
+        />
       )}
 
       {/* ── Status filter chips ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipsScroll}
+        contentContainerStyle={[styles.chipsRow, embedded && styles.chipsRowEmbedded]}
+        keyboardShouldPersistTaps="handled"
+      >
+        {(['all', ...PO_STATUS_ORDER] as StatusFilter[]).map((s) => {
+          const active = statusFilter === s;
+          const label = s === 'all' ? 'Все' : PO_STATUS_META[s].label;
+          return (
+            <TouchableOpacity
+              key={s}
+              onPress={() => {
+                if (s === statusFilter) return;
+                haptic('select');
+                setStatusFilter(s);
+              }}
+              activeOpacity={0.7}
+              style={[
+                styles.chip,
+                active
+                  ? { backgroundColor: colors.primary[600], borderColor: colors.primary[600] }
+                  : { backgroundColor: 'transparent', borderColor: palette.border.strong },
+              ]}
+            >
+              <Text style={[styles.chipText, { color: active ? colors.white : palette.text.secondary }]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       {/* ── Supplier filter ── */}
+      <View style={styles.supplierFilterWrap}>
+        <TouchableOpacity
+          style={[styles.supplierFilterBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          onPress={() => {
+            haptic('tap');
+            setShowSupplierDropdown((v) => !v);
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="business-outline" size={15} color={palette.text.secondary} />
+          <Text style={[styles.supplierFilterText, { color: palette.text.primary }]} numberOfLines={1}>
+            {selectedSupplierName || 'Все поставщики'}
+          </Text>
+          {supplierId ? (
+            <TouchableOpacity
+              hitSlop={8}
+              onPress={() => {
+                haptic('tap');
+                setSupplierId(null);
+                setShowSupplierDropdown(false);
+              }}
+            >
+              <Ionicons name="close-circle" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          ) : (
+            <Ionicons
+              name={showSupplierDropdown ? 'chevron-up' : 'chevron-down'}
+              size={15}
+              color={palette.text.tertiary}
+            />
+          )}
+        </TouchableOpacity>
+
+        {showSupplierDropdown ? (
+          <View
+            style={[
+              styles.dropdown,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              buildShadow(palette, 'elevated'),
+            ]}
+          >
+            <ScrollView style={styles.dropdownScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+              <TouchableOpacity
+                style={[styles.dropdownRow, { borderBottomColor: palette.border.subtle }]}
+                onPress={() => {
+                  haptic('select');
+                  setSupplierId(null);
+                  setShowSupplierDropdown(false);
+                }}
+              >
+                <Text style={[styles.dropdownText, { color: palette.text.primary }]}>Все поставщики</Text>
+                {!supplierId ? <Ionicons name="checkmark" size={18} color={colors.primary[600]} /> : null}
+              </TouchableOpacity>
+              {suppliers.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  style={[styles.dropdownRow, { borderBottomColor: palette.border.subtle }]}
+                  onPress={() => {
+                    haptic('select');
+                    setSupplierId(s.id);
+                    setShowSupplierDropdown(false);
+                  }}
+                >
+                  <Text style={[styles.dropdownText, { color: palette.text.primary }]} numberOfLines={1}>
+                    {s.name}
+                  </Text>
+                  {supplierId === s.id ? <Ionicons name="checkmark" size={18} color={colors.primary[600]} /> : null}
+                </TouchableOpacity>
+              ))}
+              {suppliers.length === 0 ? (
+                <Text style={[styles.dropdownEmpty, { color: palette.text.tertiary }]}>Нет поставщиков</Text>
+              ) : null}
+            </ScrollView>
+          </View>
+        ) : null}
+      </View>
 
       {/* ── Body ── */}
       {isError && orders === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
-          contentContainerStyle={[styles.centerWrap, { paddingTop: section.contentTop }]}
+        <ScrollView
+          contentContainerStyle={styles.centerWrap}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -352,22 +378,12 @@ export default function PurchaseOrdersScreen({
             description="Проверьте подключение к интернету и попробуйте ещё раз"
             onRetry={() => refetch()}
           />
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : orders === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : list.length === 0 && !isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
-          contentContainerStyle={[styles.centerWrap, { paddingTop: section.contentTop }]}
+        <ScrollView
+          contentContainerStyle={styles.centerWrap}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -386,19 +402,13 @@ export default function PurchaseOrdersScreen({
                 : undefined
             }
           />
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
+        <FlashList
           data={list}
           keyExtractor={(i) => i.id}
           renderItem={renderItem}
-          contentContainerStyle={[
-            Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : undefined,
-            { paddingTop: section.contentTop },
-          ]}
+          contentContainerStyle={Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : undefined}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -435,21 +445,27 @@ const styles = StyleSheet.create({
   // transparent with a hairline outline (not heavy grey blocks); the active
   // pill is a solid primary fill. Tight height + 12.5px label keep the row
   // from reading as a stack of buttons.
-  chipsRow: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0, gap: spacing[1.5], alignItems: 'center' },
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[1],
+    paddingBottom: spacing[2],
+    gap: spacing[1.5],
+    alignItems: 'center',
+  },
   // Inside the «Поставщики» section the segmented control already provides the
   // top breathing room, so trim the chip-row's top padding there.
-  chipsRowEmbedded: { paddingTop: 0 },
+  chipsRowEmbedded: { paddingTop: spacing[2] },
   chip: {
     paddingHorizontal: spacing[3],
+    height: 30,
     justifyContent: 'center',
     borderRadius: borderRadius.full,
     borderWidth: StyleSheet.hairlineWidth,
-    minHeight: headerTouchSize,
   },
   chipText: { fontSize: 12.5, fontWeight: '600', letterSpacing: -0.1 },
 
   // Supplier filter — slimmed to match the compact chip rhythm above.
-  supplierFilterWrap: { paddingHorizontal: 0, paddingBottom: 0, zIndex: 10 },
+  supplierFilterWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2], zIndex: 10 },
   supplierFilterBtn: {
     flexDirection: 'row',
     alignItems: 'center',

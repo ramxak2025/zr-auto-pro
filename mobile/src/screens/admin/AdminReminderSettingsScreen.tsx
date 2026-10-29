@@ -93,7 +93,7 @@ function ReminderSettingsContent() {
     }
   };
   return (
-    <AdminPage composition="navigation" title="Настройки напоминаний" back>
+    <AdminPage title="Настройки напоминаний" back>
       <AdminState
         loading={query.isPending}
         error={query.isError}

@@ -35,7 +35,8 @@ export function useScreenSectionScroll({
 } = {}) {
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
-  const geometry = screenSectionGeometry(fontScale, Math.ceil(28 * fontScale));
+  const sectionLineHeight = Platform.OS === 'android' ? 24 : 28;
+  const geometry = screenSectionGeometry(fontScale, Math.ceil(sectionLineHeight * fontScale), sectionLineHeight);
   const navigation = composition === 'navigation';
   const scrollY = useSharedValue(0);
   const titleHeight = useSharedValue(navigation || hideHeading ? 0 : geometry.expandedHeight);
@@ -124,17 +125,19 @@ export default function ScreenSectionHeader({
   const p = useColors();
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
+  const sectionFontSize = Platform.OS === 'android' ? 18 : 22;
+  const sectionLineHeight = Platform.OS === 'android' ? 24 : 28;
   const composition = scroll?.composition ?? staticComposition;
   const navigation = composition === 'navigation';
   const hasControls = React.Children.toArray(children).length > 0;
-  const [titleRowHeight, setTitleRowHeight] = useState(Math.ceil(28 * fontScale));
+  const [titleRowHeight, setTitleRowHeight] = useState(Math.ceil(sectionLineHeight * fontScale));
   const [controlsHeight, setControlsHeight] = useState(
     navigation ? initialNavigationHeight(fontScale) : hasControls ? initialControlsHeight(fontScale) : 0,
   );
   const [titleHidden, setTitleHidden] = useState(hideHeading);
   const staticOffset = useSharedValue(0);
   const scrollY = scroll?.scrollY ?? staticOffset;
-  const geometry = screenSectionGeometry(fontScale, titleRowHeight);
+  const geometry = screenSectionGeometry(fontScale, titleRowHeight, sectionLineHeight);
   const expandedHeight = navigation || hideHeading ? 0 : geometry.expandedHeight;
   const measuredControlsHeight = navigation || hasControls ? controlsHeight : 0;
   const titleHeight = scroll?.titleHeight;
@@ -163,9 +166,9 @@ export default function ScreenSectionHeader({
             s.identityText,
             {
               color: p.text.primary,
-              fontSize: (navigation ? 17 : 22) * fontScale,
-              lineHeight: (navigation ? 22 : 28) * fontScale,
-              minHeight: Math.ceil((navigation ? 22 : 28) * fontScale),
+              fontSize: (navigation ? 17 : sectionFontSize) * fontScale,
+              lineHeight: (navigation ? 22 : sectionLineHeight) * fontScale,
+              minHeight: Math.ceil((navigation ? 22 : sectionLineHeight) * fontScale),
               fontWeight: '600',
             },
           ]}

@@ -34,11 +34,8 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { extractApiErrorMessage } from '../../utils/apiError';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
 import type { Plan, Tenant, FeatureCatalogItem, PlatformSettings } from '../../../../shared/types';
-import { FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER, formatMoney } from './adminShared';
+import { formatMoney, FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER } from './adminShared';
 import { AdminSheet, SheetHint, SheetInput } from './adminSheet';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { HeaderAction } from '../../components/ScreenHeaderControls';
-import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 interface PlanDraft {
   id?: string;
@@ -68,7 +65,6 @@ function toDraft(plan?: Plan): PlanDraft {
 }
 
 export default function AdminPlansScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation();
   const palette = useColors();
   const surface = useIosSurface();
@@ -254,50 +250,27 @@ export default function AdminPlansScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title="Тарифы"
         onBack={() => navigation.goBack()}
         subtitle={`${plans.length} планов`}
         trailing={
-          <>
-            <HeaderAction
-              label="Добавить тариф"
-              title="Добавить"
-              icon="add"
-              tone="primary"
-              onPress={() => {
-                haptic('tap');
-                setEditing(toDraft());
-              }}
-            />
-            <ScreenHeaderMenu
-              label="Настройки тарифов"
-              items={[
-                {
-                  id: 'trial',
-                  label: `Пробный доступ у менеджера: ${managerMaxFreeDays !== undefined ? `${managerMaxFreeDays} дн.` : '—'}`,
-                  icon: 'options-outline',
-                  disabled: settings == null,
-                  onSelect: openTrialLimit,
-                },
-              ]}
-            />
-          </>
+          <Pressable
+            onPress={() => {
+              haptic('tap');
+              setEditing(toDraft());
+            }}
+            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
+            hitSlop={6}
+          >
+            <Ionicons name="add" size={22} color={colors.white} />
+          </Pressable>
         }
       />
 
       <KeyboardAwareScroll
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
         reserveTabBar={false}
         extraKeyboardBottomOffset={tabBarHeight}
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Платформенный лимит бесплатных минут голосового ввода (116) */}
@@ -351,6 +324,28 @@ export default function AdminPlansScreen() {
         </View>
 
         {/* Потолок бесплатных дней у менеджера: пробный период автосервиса и «Бесплатно» в продлении */}
+        <Pressable
+          onPress={openTrialLimit}
+          disabled={settings == null}
+          accessibilityRole="button"
+          style={[styles.card, surface.card]}
+        >
+          <View style={[styles.settingsHead, styles.settingsHeadCenter]}>
+            <View style={[styles.settingsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="hourglass-outline" size={18} color={palette.accent.primaryText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.settingsTitle, { color: palette.text.primary }]}>Пробный доступ у менеджера</Text>
+              <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>
+                Максимум дней бесплатного доступа, который менеджер выдаёт сам.
+              </Text>
+            </View>
+            <Text style={[styles.settingsValue, { color: palette.text.primary }]}>
+              {managerMaxFreeDays !== undefined ? `${managerMaxFreeDays} дн.` : '—'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </View>
+        </Pressable>
 
         {sorted.length === 0 ? (
           <View style={[styles.card, surface.card, styles.emptyBlock]}>

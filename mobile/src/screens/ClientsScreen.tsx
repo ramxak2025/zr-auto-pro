@@ -1,5 +1,4 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,9 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { HeaderAction, HeaderIsland, HeaderSearch } from '../components/ScreenHeaderControls';
-import { ScreenSectionFlatList as FlatList } from '../components/ScreenSectionScrollable';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -24,6 +21,7 @@ import { normalizePlateQuery, looksLikePlateQuery, plateMatches } from '../utils
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
@@ -45,7 +43,8 @@ import PlateModeSwitcher from '../components/PlateModeSwitcher';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { type Client, type Car, type Check, type PaginatedResponse } from '../../../shared/types';
+import type { Client, Car, Check, PaginatedResponse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlatList as FlatList } from '../components/TabBarScrollable';
 
 // Avatar helpers (initials / colour) moved to components/ClientListRow.tsx —
 // they belong to the row, and the row now lives at module scope behind
@@ -119,8 +118,6 @@ export default function ClientsScreen() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const palette = useColors();
-  const plateSection = useScreenSectionScroll({ composition: 'section' });
-  const clientSection = useScreenSectionScroll({ composition: 'section' });
   // Свайп-действия строки клиента — «Изменить» (PATCH → clients_edit) и
   // «Удалить» (DELETE → clients_delete). «Права как в Битрикс24»: матрица
   // авторитетна — admin живёт по эффективным правам из /auth/me,
@@ -135,12 +132,6 @@ export default function ClientsScreen() {
 
   // Mode — see ClientsMode. Default: plate (госномер) search.
   const [mode, setMode] = useState<ClientsMode>('plate');
-  const section = mode === 'plate' ? plateSection : clientSection;
-  useEffect(() => {
-    // The inactive list is unmounted. Its next native instance starts at y=0.
-    if (mode === 'plate') clientSection.reset();
-    else plateSection.reset();
-  }, [mode, plateSection.reset, clientSection.reset]);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ClientFilter>('all');
@@ -894,23 +885,15 @@ export default function ClientsScreen() {
     // group margin (spacing[4]), exactly like the people-list rows, so both
     // search modes line up at the same 16pt gutter. paddingTop adds a little
     // air below the plate input.
-    () => ({ paddingTop: plateSection.contentTop + spacing[2], paddingBottom: tabBarHeight + spacing[4] }),
-    [tabBarHeight, plateSection.contentTop],
+    () => ({ paddingTop: spacing[2], paddingBottom: tabBarHeight + spacing[4] }),
+    [tabBarHeight],
   );
   const clientListContentStyle = useMemo(
     // paddingTop gives the rounded first cell a little air below the search /
     // chips when the retail hero header isn't shown (search / filter active).
-    () => ({
-      ...styles.list,
-      paddingTop: clientSection.contentTop + spacing[2],
-      paddingBottom: tabBarHeight + spacing[4],
-    }),
-    [tabBarHeight, clientSection.contentTop],
+    () => ({ ...styles.list, paddingTop: spacing[2], paddingBottom: tabBarHeight + spacing[4] }),
+    [tabBarHeight],
   );
-
-  useEffect(() => {
-    if (data === undefined) clientSection.reset();
-  }, [data, clientSection.reset]);
 
   // Pick the freshness signal for the active mode so the badge doesn't
   // lie when the user is in plate mode but the underlying clients query
@@ -926,161 +909,56 @@ export default function ClientsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader scroll={section} title="Клиенты" context={<FreshnessBadge query={activeFreshness} />}>
-        <HeaderIsland layout="column">
-          {mode === 'plate' ? (
-            <>
-              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-                <HeaderAction title="По имени" label="Искать клиентов" icon="people-outline" onPress={toggleMode} />
-                <View style={{ flex: 1 }} />
-                <HeaderAction label="Добавить клиента" icon="add" tone="primary" onPress={openCreateModal} />
-              </View>
-              <View style={styles.plateSearchWrap}>
-                <View style={styles.plateLabelRow}>
-                  <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
-                  <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
-                </View>
-                <RussianPlateInput
-                  value={plateSearch}
-                  onChangeText={setPlateSearch}
-                  mode={plateMode}
-                  autoFocus={false}
-                />
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-                <HeaderSearch
-                  timing={{ debounceMs: 300 }}
-                  focusOnClear={false}
-                  value={search}
-                  onChange={(v) => {
-                    // No manual page reset — `search` lives in the infinite-query
-                    // key, so a new query resets paging to page 1 automatically.
-                    setSearch(v);
-                  }}
-                  // 171 — сервер при включённой опции ищет клиента и по VIN его машин.
-                  placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, авто или телефон'}
-                />
-                <HeaderAction label="Добавить клиента" icon="add" tone="primary" onPress={openCreateModal} />
-              </View>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                }}
-              >
-                <HeaderAction
-                  title="По госномеру"
-                  label="Искать по госномеру"
-                  icon="car-sport-outline"
-                  onPress={toggleMode}
-                />
-                <ScreenHeaderMenu
-                  label="Фильтры клиентов"
-                  icon="options-outline"
-                  title={
-                    filter === 'source'
-                      ? sourceFilter
-                        ? 'Источник: ' + sourceFilter
-                        : 'По источнику'
-                      : filter === 'regular'
-                        ? 'Постоянные'
-                        : filter === 'new'
-                          ? 'Новые'
-                          : filter === 'noplate'
-                            ? 'Без номеров'
-                            : 'Фильтры'
-                  }
-                  items={[
-                    {
-                      id: 'all',
-                      label: 'Все',
-                      selected: filter === 'all',
-                      icon: 'apps-outline',
-                      onSelect: () => {
-                        haptic('select');
-                        setFilter('all');
-                        setSourceFilter(null);
-                      },
-                    },
-                    {
-                      id: 'source',
-                      label: filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику',
-                      selected: filter === 'source',
-                      icon: 'pricetag-outline',
-                      onSelect: () => {
-                        haptic('select');
-                        setSourceFilterOpen(true);
-                      },
-                    },
-                    {
-                      id: 'regular',
-                      label: 'Постоянные',
-                      selected: filter === 'regular',
-                      icon: 'repeat-outline',
-                      onSelect: () => {
-                        haptic('select');
-                        setFilter('regular');
-                        setSourceFilter(null);
-                      },
-                    },
-                    {
-                      id: 'new',
-                      label: 'Новые',
-                      selected: filter === 'new',
-                      icon: 'sparkles-outline',
-                      onSelect: () => {
-                        haptic('select');
-                        setFilter('new');
-                        setSourceFilter(null);
-                      },
-                    },
-                    {
-                      id: 'noplate',
-                      label: 'Без номеров',
-                      selected: filter === 'noplate',
-                      icon: 'help-circle-outline',
-                      onSelect: () => {
-                        haptic('select');
-                        setFilter((f) => (f === 'noplate' ? 'all' : 'noplate'));
-                        setSourceFilter(null);
-                      },
-                    },
-                    filter === 'source' && sourceFilter
-                      ? {
-                          id: 'clear-source',
-                          label: 'Сбросить источник',
-                          icon: 'close-outline',
-                          onSelect: () => {
-                            setFilter('all');
-                            setSourceFilter(null);
-                          },
-                        }
-                      : null,
-                  ]}
-                />
-              </View>
-            </>
-          )}
-        </HeaderIsland>
-      </ScreenSectionHeader>
+      <IosScreenHeader
+        title="Клиенты"
+        onBack={() => navigation.goBack()}
+        trailing={
+          // trailing = [mode icon][+]. The mode icon flips plate-search ⇄
+          // client-search (#19.3). Plate mode → show a "people" icon (tap to
+          // search clients); client mode → show a "car" icon (tap to search
+          // by госномер). The glyph names the DESTINATION mode.
+          <View style={styles.trailingRow}>
+            <TouchableOpacity
+              style={[styles.modeBtn, { backgroundColor: palette.bg.muted }]}
+              onPress={toggleMode}
+              accessibilityRole="button"
+              accessibilityLabel={mode === 'plate' ? 'Искать клиентов' : 'Искать по госномеру'}
+            >
+              <Ionicons
+                name={mode === 'plate' ? 'people-outline' : 'car-sport-outline'}
+                size={19}
+                color={palette.text.primary}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
+              onPress={openCreateModal}
+              accessibilityRole="button"
+              accessibilityLabel="Добавить клиента"
+            >
+              <Ionicons name="add" size={18} color={colors.white} />
+            </TouchableOpacity>
+          </View>
+        }
+      />
+
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={activeFreshness} />
+      </View>
 
       {mode === 'plate' ? (
         // ── ПОИСК ПО ГОСНОМЕРУ (default) ────────────────────────────────
         // Касса-style plate input. Result cards anchor on the госномер.
         <>
+          <View style={styles.plateSearchWrap}>
+            <View style={styles.plateLabelRow}>
+              <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
+              <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+            </View>
+            <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} mode={plateMode} autoFocus={false} />
+          </View>
+
           <FlatList
-            onScroll={plateSection.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
             data={plateResults}
             keyExtractor={plateKeyExtractor}
             renderItem={renderPlateResult}
@@ -1131,6 +1009,90 @@ export default function ClientsScreen() {
       ) : (
         // ── ПОИСК КЛИЕНТОВ (имя / авто / телефон) + фильтры ─────────────
         <>
+          <View style={styles.searchWrap}>
+            <SearchInput
+              value={search}
+              onChange={(v) => {
+                // No manual page reset — `search` lives in the infinite-query
+                // key, so a new query resets paging to page 1 automatically.
+                setSearch(v);
+              }}
+              // 171 — сервер при включённой опции ищет клиента и по VIN его машин.
+              placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, авто или телефон'}
+            />
+          </View>
+
+          {/* Filter chips — Все / По источнику / Постоянные / Новые /
+              Без номеров. Pinned row height so the chips hug the top
+              instead of stretching+centering in the flex column (#19.1). */}
+          <View style={styles.chipsBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+              <FilterChip
+                active={filter === 'all'}
+                label="Все"
+                icon="apps-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('all');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'source'}
+                label={filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику'}
+                icon="pricetag-outline"
+                onPress={() => {
+                  haptic('select');
+                  setSourceFilterOpen(true);
+                }}
+                palette={palette}
+                dismissable={filter === 'source'}
+                onDismiss={
+                  filter === 'source'
+                    ? () => {
+                        setFilter('all');
+                        setSourceFilter(null);
+                      }
+                    : undefined
+                }
+              />
+              <FilterChip
+                active={filter === 'regular'}
+                label="Постоянные"
+                icon="repeat-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('regular');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'new'}
+                label="Новые"
+                icon="sparkles-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('new');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'noplate'}
+                label="Без номеров"
+                icon="help-circle-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter((f) => (f === 'noplate' ? 'all' : 'noplate'));
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+            </ScrollView>
+          </View>
+
           {data === undefined && isError ? (
             // Cold start with no cached pages AND the fetch failed (e.g. a
             // deploy 502 window): show a recoverable error with a real retry
@@ -1138,23 +1100,15 @@ export default function ClientsScreen() {
             // global placeholderData keeps the list visible and this branch
             // never triggers (stale-while-revalidate). backendRecovery also
             // refetches this query automatically once /health returns.
-            <View style={{ flex: 1, paddingTop: clientSection.contentTop }}>
-              <QueryErrorState
-                title="Не удалось загрузить клиентов"
-                description="Проверьте соединение и попробуйте ещё раз."
-                onRetry={() => refetch()}
-              />
-            </View>
+            <QueryErrorState
+              title="Не удалось загрузить клиентов"
+              description="Проверьте соединение и попробуйте ещё раз."
+              onRetry={() => refetch()}
+            />
           ) : data === undefined ? (
-            <View style={{ flex: 1, paddingTop: clientSection.contentTop }}>
-              <ListSkeleton count={8} />
-            </View>
+            <ListSkeleton count={8} />
           ) : (
             <FlatList
-              onScroll={clientSection.onScroll}
-              scrollEventThrottle={16}
-              contentInsetAdjustmentBehavior="never"
-              reserveSafeAreaBottom
               data={displayClients}
               keyExtractor={clientKeyExtractor}
               renderItem={renderClient}
@@ -1488,8 +1442,6 @@ function FilterChip({ active, label, icon, onPress, palette, dismissable, onDism
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  headerActionSpacer: { flex: 1 },
   // Header trailing slot: [mode icon][+]. Mode icon flips plate ⇄ client.
   trailingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   modeBtn: {
@@ -1507,7 +1459,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  searchWrap: { paddingHorizontal: 6 },
+  searchWrap: { paddingHorizontal: spacing[4] },
   freshnessRow: {
     paddingHorizontal: spacing[4],
     alignItems: 'flex-end',
@@ -1516,8 +1468,8 @@ const styles = StyleSheet.create({
   // Plate-search header (Касса-style). The label row hosts the RU/INT
   // switcher to the right of the section label.
   plateSearchWrap: {
-    paddingHorizontal: 6,
-    paddingBottom: 6,
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
   },
   plateLabelRow: {
     flexDirection: 'row',
@@ -1536,7 +1488,7 @@ const styles = StyleSheet.create({
   // same bug fixed on the Schedule legend). flexGrow/flexShrink 0 + a
   // fixed height keep the layout compact.
   chipsBar: {
-    minHeight: 44,
+    height: 44,
     flexGrow: 0,
     flexShrink: 0,
     justifyContent: 'center',

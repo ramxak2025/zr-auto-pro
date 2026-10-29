@@ -1,4 +1,3 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 /**
  * MarketingReportsScreen — «Маркетинговые отчёты».
  *
@@ -50,10 +49,8 @@ import { TrendLineChart, MiniBars, DonutRatio } from '../components/charts/Marke
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
-import { type MarketingReport, type MarketingTrendPoint } from '../../../shared/types';
+import type { MarketingReport, MarketingTrendPoint } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Формат — единый источник правды по числам/деньгам/процентам.
@@ -562,7 +559,6 @@ function TrendsCard({ trends }: { trends: MarketingReport['trends'] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function MarketingReportsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -628,36 +624,18 @@ export default function MarketingReportsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        trailing={
-          <ScreenHeaderMenu
-            label="Период маркетингового отчёта"
-            icon="calendar-outline"
-            title={formatPeriodLabel(period, range)}
-            items={PERIODS.map((p) => ({
-              id: p.key,
-              label: p.label,
-              selected: period === p.key,
-              onSelect: () => handlePeriodChange(p.key),
-            }))}
-          />
-        }
-        scroll={section}
         title="Маркетинговые отчёты"
+        subtitle={formatPeriodLabel(period, range)}
         onBack={() => navigation.goBack()}
-        context={<FreshnessBadge query={reportQuery} />}
+        trailing={<FreshnessBadge query={reportQuery} />}
       />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
+      <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
-          [
-            styles.scrollContent,
-            // iOS резервирует место через contentInset ниже; на Android — здесь.
-            { paddingBottom: contentContainerPaddingBottom + spacing[6] },
-          ],
-          { paddingTop: section.contentTop + spacing[4] },
+          styles.scrollContent,
+          // iOS резервирует место через contentInset ниже; на Android — здесь.
+          { paddingBottom: contentContainerPaddingBottom + spacing[6] },
         ]}
         contentInset={{ bottom: contentInset.bottom + spacing[6] }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -669,6 +647,24 @@ export default function MarketingReportsScreen() {
       >
         {/* ── ПЕРИОД ─────────────────────────────────────────────────────── */}
         <View style={styles.periodWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
+            {PERIODS.map((p) => {
+              const active = period === p.key;
+              return (
+                <TouchableOpacity
+                  key={p.key}
+                  style={[styles.periodChip, { backgroundColor: active ? palette.accent.primary : palette.bg.muted }]}
+                  onPress={() => handlePeriodChange(p.key)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.periodText, { color: active ? colors.white : palette.text.secondary }]}>
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
           {period === 'custom' && (
             <View style={styles.customRow}>
               <TouchableOpacity
@@ -1171,7 +1167,7 @@ export default function MarketingReportsScreen() {
             )}
           </View>
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       <DateTimePickerModal
         visible={showPicker !== null}

@@ -28,7 +28,7 @@
  * (рассылки, лояльность, интеграции, настройки) stays owner-class
  * (director / admin / superadmin) — the same access the old menu rows had.
  */
-
+import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -41,10 +41,8 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { type UserPermissions } from '../../../shared/types';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { UserPermissions } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 interface Direction {
   key: string;
@@ -164,7 +162,6 @@ const GROUPS: Group[] = [
 ];
 
 export default function MarketingScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -177,17 +174,11 @@ export default function MarketingScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Маркетинг" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Маркетинг" onBack={() => navigation.goBack()} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
+      <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         showsVerticalScrollIndicator={false}
       >
         <Text style={[styles.intro, { color: palette.text.secondary }]}>
@@ -232,7 +223,7 @@ export default function MarketingScreen() {
             </View>
           </View>
         ))}
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

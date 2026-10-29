@@ -17,16 +17,14 @@ import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { spacing } from '../../theme';
+import { colors, spacing } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { formatPhone } from '../../../../shared/validation/phone';
 import type { PlatformManager } from '../../../../shared/types';
 import { InitialAvatar, StatusChip, balanceCaption, balanceColor, inactiveStatusInfo, pluralRu } from './adminShared';
 import ManagerFormSheet from './ManagerFormSheet';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
-import { HeaderAction } from '../../components/ScreenHeaderControls';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 /** Активные выше отключённых; внутри — по убыванию долга, затем по имени. */
 function sortManagers(list: PlatformManager[]): PlatformManager[] {
@@ -77,7 +75,6 @@ const ManagerRow = React.memo(function ManagerRow({
 });
 
 export default function AdminManagersScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -119,38 +116,31 @@ export default function AdminManagersScreen() {
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title="Команда"
         subtitle={`${managers.length} ${pluralRu(managers.length, 'менеджер', 'менеджера', 'менеджеров')}`}
         onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
         trailing={
-          <HeaderAction
-            label="Новый менеджер"
-            title="Добавить"
-            icon="add"
-            tone="primary"
+          <Pressable
             onPress={() => {
               haptic('tap');
               setCreateOpen(true);
             }}
-          />
+            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Новый менеджер"
+          >
+            <Ionicons name="add" size={22} color={colors.white} />
+          </Pressable>
         }
       />
 
-      <ScreenSectionFlatList
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
+      <FlatList
         data={managers}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         contentInset={contentInset}
-        contentContainerStyle={[
-          [styles.listContent, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
