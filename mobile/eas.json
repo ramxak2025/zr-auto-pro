@@ -35,12 +35,29 @@
       "ios": {
         "buildConfiguration": "Release"
       }
+    },
+    "owner-home-internal": {
+      "distribution": "store",
+      "channel": "owner-home-internal",
+      "autoIncrement": true,
+      "ios": {
+        "buildConfiguration": "Release",
+        "env": {
+          "AUTEXA_OWNER_HOME_INTERNAL": "ios-v1"
+        }
+      }
     }
   },
   "submit": {
     "production": {
       "ios": {
         "ascAppId": "6776855208"
+      }
+    },
+    "owner-home-internal": {
+      "ios": {
+        "ascAppId": "6776855208",
+        "groups": ["Team (Expo)"]
       }
     }
   }

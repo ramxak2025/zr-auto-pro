@@ -76,6 +76,8 @@ jobs:
           OCT27_FINANCE_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           AUTEXA_CHECK_PROFIT_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
           OCT27_TEST_APP_PASSWORD: oct8_app_fixture_only
+          OCT29_OWNER_HOME_TEST_DB: postgresql://oct8_fixture:oct8_fixture_only@127.0.0.1:55438/autexa_oct8_test
+          OCT29_OWNER_HOME_APP_PASSWORD: oct8_app_fixture_only
           RUN_BACKGROUND_JOBS: "false"
           SENTRY_DSN: ""
         run: >-
@@ -104,6 +106,7 @@ jobs:
           test/auth-refresh-recovery.test.cjs
           test/vehicle-day-finance-live.test.cjs
           test/check-derived-profit-live.test.cjs
+          test/owner-home-live.test.cjs
 
   frontend:
     name: Frontend (typecheck + lint + build)
@@ -140,6 +143,8 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci --legacy-peer-deps
+      - name: Internal owner-home build isolation
+        run: node --test tests/owner-home-internal-config.test.cjs
       - run: npm run typecheck
       - run: npm run lint
       - name: Tests

@@ -3,6 +3,8 @@ import { ReportsController } from './reports.controller';
 import { ReportsService } from './reports.service';
 import { CallsModule } from '../calls/calls.module';
 import { ReportBuilderModule } from './builder/report-builder.module';
+import { OwnerHomeController } from './owner-home/owner-home.controller';
+import { OwnerHomeService } from './owner-home/owner-home.service';
 
 @Module({
   // CallsModule (exports CallsService) is imported so the consolidated
@@ -15,7 +17,7 @@ import { ReportBuilderModule } from './builder/report-builder.module';
   // не трогали reports.service.ts. Регистрируется здесь, а не в app.module,
   // потому что логически это часть раздела «Отчёты».
   imports: [CallsModule, ReportBuilderModule],
-  controllers: [ReportsController],
-  providers: [ReportsService],
+  controllers: [ReportsController, OwnerHomeController],
+  providers: [ReportsService, OwnerHomeService],
 })
 export class ReportsModule {}

@@ -6303,3 +6303,4 @@ export interface DashboardAttention {
   pointId: string | null;
   buckets: { id: AttentionBucketId; count: number | null; error?: true }[];
 }
+export type * from './ownerHome';

@@ -1,6 +1,9 @@
 import { formatMoney as formatPreciseMoney } from '../../../shared/utils/formatters';
 import { accrualBreakdown } from '../../../shared/utils/accrualBreakdown';
 import { AttentionCard, TodayEarningsCard } from './dashboard/TodayWidgets';
+import Constants from 'expo-constants';
+import OwnerHomeScreen from './dashboard/ownerHome/OwnerHomeScreen';
+import { ownerHomeEnabled } from './dashboard/ownerHome/ownerHomeState';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
@@ -4678,6 +4681,15 @@ function CashierShiftCard() {
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
+  const { user } = useAuth();
+  return ownerHomeEnabled(Constants.expoConfig?.extra?.ownerHomePilot, user?.role) ? (
+    <OwnerHomeScreen />
+  ) : (
+    <LegacyDashboardScreen />
+  );
+}
+
+function LegacyDashboardScreen() {
   useAttendanceRefresh();
   const navigation = useNavigation<any>();
   const { user, refreshUser } = useAuth();

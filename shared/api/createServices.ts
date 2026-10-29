@@ -1,5 +1,14 @@
 import type { TodayEarnings, DashboardAttention } from '../types';
 import type {
+  OwnerHomeProfit,
+  OwnerHomeVisits,
+  OwnerHomeVisitsQuery,
+  OwnerHomeClientQuery,
+  OwnerHomeClientPage,
+  OwnerHomePageQuery,
+  OwnerHomeRapidReturnPage,
+} from '../types/ownerHome';
+import type {
   AttendanceNfcTag,
   CreatedAttendanceNfcTag,
   AttendanceNfcStatus,
@@ -1591,6 +1600,13 @@ export function createReportsApi(api: HttpClient) {
     /** Owner dashboard v2 — net profit, cash position, margin, deferred sum, etc. */
     dashboardV2: (params?: { period?: 'today' | 'week' | 'month' | 'year' }) =>
       api.get<DashboardV2>('/reports/dashboard-v2', { params }),
+    ownerHomeProfit: (params?: { asOf?: string }) => api.get<OwnerHomeProfit>('/reports/owner-home/profit', { params }),
+    ownerHomeVisits: (params: OwnerHomeVisitsQuery) =>
+      api.get<OwnerHomeVisits>('/reports/owner-home/visits', { params }),
+    ownerHomeClients: (params: OwnerHomeClientQuery) =>
+      api.get<OwnerHomeClientPage>('/reports/owner-home/clients', { params }),
+    ownerHomeRapidReturns: (params: OwnerHomePageQuery) =>
+      api.get<OwnerHomeRapidReturnPage>('/reports/owner-home/rapid-returns', { params }),
     clientsNewVsReturning: (params: { from: string; to: string }) =>
       api.get<ClientsNewVsReturning>('/reports/clients-new-vs-returning', { params }),
     alerts: () => api.get<OwnerAlert[]>('/reports/alerts'),
