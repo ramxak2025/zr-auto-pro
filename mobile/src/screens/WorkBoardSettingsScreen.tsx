@@ -23,8 +23,17 @@ import { captureDataSession } from '../contexts/dataSession';
  * Switch, TextInput, общий Modal).
  */
 import React, { useMemo, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Switch,
+  Alert,
+  ActivityIndicator,
+  Platform,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -196,17 +205,17 @@ export default function WorkBoardSettingsScreen() {
   // Защита: вход гейтится шестерёнкой, но на всякий случай — read-only заглушка.
   if (!canConfigure) {
     return (
-      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Настройка колонок" onBack={() => navigation.goBack()} />
         <View style={styles.centerFill}>
           <Text style={[styles.guardText, { color: palette.text.secondary }]}>Недостаточно прав</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Настройка колонок"
         subtitle="Доска заказ-нарядов"
@@ -437,16 +446,24 @@ export default function WorkBoardSettingsScreen() {
           ) : null}
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
+
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   centerFill: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   guardText: { fontSize: fontSize.base, fontWeight: fontWeight.medium },
 
-  addBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  addBtn: {
+    width: headerTouchSize,
+    height: headerTouchSize,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: spacing[4], paddingTop: spacing[2], gap: spacing[2.5] },

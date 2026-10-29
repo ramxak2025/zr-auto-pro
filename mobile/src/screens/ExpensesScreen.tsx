@@ -4,7 +4,7 @@ import { captureDataSession } from '../contexts/dataSession';
  * категориям и сотрудникам.
  *
  * Архитектура экрана (сверху вниз):
- *   1. IosScreenHeader + переключатель месяца (chip "‹ Май 2026 ›")
+ *   1. IosScreenHeader + отдельная компактная строка периода
  *      и FreshnessBadge — пользователь всегда видит, какая дата на экране
  *      и насколько свежие данные (HYBRID-cache паттерн).
  *   2. Период: День / Неделя / Месяц / Произвольный. "Произвольный"
@@ -1112,31 +1112,49 @@ export default function ExpensesScreen() {
   // ── Render ───────────────────────────────────────────────────────────
   const selectedEmployeeName = employees.find((e) => e.id === filterEmployeeId)?.fullName;
 
-  const trailing = (
-    <View style={styles.headerTrailing}>
-      <TouchableOpacity
-        style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}
-        onPress={() => setDatePickerMode('customFrom')}
-        activeOpacity={0.7}
-      >
+  const periodLabel =
+    period === 'month'
+      ? monthLabel
+      : dateRange.from === dateRange.to
+        ? dateRange.from.split('-').reverse().join('.')
+        : [dateRange.from, dateRange.to].map((value) => value.split('-').reverse().join('.')).join(' — ');
+  const periodNavigation = (
+    <View style={styles.periodNavigation}>
+      {period === 'month' && (
         <TouchableOpacity
           onPress={() => handleMonthShift(-1)}
-          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          style={styles.monthChipArrow}
+          style={styles.monthArrow}
+          accessibilityRole="button"
+          accessibilityLabel="Предыдущий месяц"
         >
-          <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
+          <Ionicons name="chevron-back" size={20} color={palette.accent.primary} />
         </TouchableOpacity>
-        <Text style={[styles.monthChipText, { color: palette.text.primary }]} numberOfLines={1}>
-          {monthLabel}
-        </Text>
+      )}
+      <TouchableOpacity
+        style={styles.periodIdentity}
+        onPress={() => setDatePickerMode('customFrom')}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={`Выбрать дату периода. ${periodLabel}`}
+      >
+        <View style={styles.periodTitleRow}>
+          <Ionicons name="calendar-outline" size={17} color={palette.accent.primary} />
+          <Text style={[styles.periodTitle, { color: palette.text.primary }]} numberOfLines={2}>
+            {periodLabel}
+          </Text>
+        </View>
+        <FreshnessBadge query={expensesQuery} style={styles.periodFreshness} />
+      </TouchableOpacity>
+      {period === 'month' && (
         <TouchableOpacity
           onPress={() => handleMonthShift(1)}
-          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          style={styles.monthChipArrow}
+          style={styles.monthArrow}
+          accessibilityRole="button"
+          accessibilityLabel="Следующий месяц"
         >
-          <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
+          <Ionicons name="chevron-forward" size={20} color={palette.accent.primary} />
         </TouchableOpacity>
-      </TouchableOpacity>
+      )}
     </View>
   );
 
@@ -1147,11 +1165,6 @@ export default function ExpensesScreen() {
   // function here remounts the custom-range TextInputs and drops native focus.
   const listHeader = (
     <View>
-      {/* Freshness badge — узкий ряд под шапкой */}
-      <View style={styles.freshnessRow}>
-        <FreshnessBadge query={expensesQuery} />
-      </View>
-
       {/* Period selector */}
       <View style={styles.periodWrapper}>
         <View style={[styles.periodContainer, { backgroundColor: palette.bg.muted }]}>
@@ -1171,6 +1184,9 @@ export default function ExpensesScreen() {
               ]}
               onPress={() => handlePeriodChange(p.key)}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={p.key === 'custom' ? 'Произвольный период' : p.label}
+              accessibilityState={{ selected: period === p.key }}
             >
               <Text
                 style={[
@@ -1189,6 +1205,8 @@ export default function ExpensesScreen() {
             style={[styles.catBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             onPress={() => setCatModalOpen(true)}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Категории расходов"
           >
             <Ionicons name="pricetag-outline" size={16} color={colors.primary[600]} />
           </TouchableOpacity>
@@ -1625,7 +1643,8 @@ export default function ExpensesScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
+      <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} style={styles.screenHeader} />
+      {periodNavigation}
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
         <View style={styles.loadingWrap}>
@@ -2134,34 +2153,36 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingTop: spacing[3],
   },
-  // Header trailing — month chip
-  headerTrailing: {
+  screenHeader: { paddingBottom: 0 },
+  periodNavigation: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  monthChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[1.5],
-    borderRadius: borderRadius.full,
-  },
-  monthChipText: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
-    minWidth: 90,
-    textAlign: 'center',
-  },
-  monthChipArrow: {
-    padding: 2,
-  },
-  freshnessRow: {
     paddingHorizontal: spacing[4],
-    minHeight: 18,
-    alignItems: 'flex-end',
     marginBottom: spacing[1],
   },
+  monthArrow: {
+    width: Platform.OS === 'android' ? 48 : 44,
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodIdentity: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    paddingVertical: spacing[1],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], maxWidth: '100%' },
+  periodTitle: {
+    flexShrink: 1,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+    fontWeight: fontWeight.semibold,
+    textAlign: 'center',
+  },
+  periodFreshness: { alignSelf: 'center', paddingVertical: 0, maxWidth: '100%' },
 
   // Period selector
   periodWrapper: {
@@ -2175,10 +2196,10 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     borderRadius: borderRadius.full,
-    padding: 3,
   },
   periodChip: {
     flex: 1,
+    minHeight: Platform.OS === 'android' ? 48 : 44,
     paddingVertical: spacing[2],
     borderRadius: borderRadius.full,
     alignItems: 'center',
@@ -2199,8 +2220,8 @@ const styles = StyleSheet.create({
     // colour applied inline (palette.text.primary)
   },
   catBtn: {
-    width: 38,
-    height: 38,
+    width: Platform.OS === 'android' ? 48 : 44,
+    height: Platform.OS === 'android' ? 48 : 44,
     borderRadius: borderRadius.full,
     borderWidth: 1,
     alignItems: 'center',

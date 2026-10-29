@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Switch,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -1458,6 +1459,8 @@ export default function UsersScreen() {
   );
 }
 
+const headerTouchSize = Platform.OS === 'android' ? 48 : 44;
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   // 150 — ссылка «Ставка по месяцам» под полями процентов.
@@ -1475,15 +1478,15 @@ const styles = StyleSheet.create({
   rateByMonthLinkHint: { flex: 1, fontSize: 11, textAlign: 'right' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   rolesBtn: {
-    width: 36,
-    height: 36,
+    width: headerTouchSize,
+    height: headerTouchSize,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
   },
   addBtn: {
-    width: 36,
-    height: 36,
+    width: headerTouchSize,
+    height: headerTouchSize,
     borderRadius: borderRadius.xl,
     backgroundColor: colors.primary[600],
     alignItems: 'center',

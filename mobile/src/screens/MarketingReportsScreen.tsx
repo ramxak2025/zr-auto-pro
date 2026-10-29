@@ -627,7 +627,6 @@ export default function MarketingReportsScreen() {
         title="Маркетинговые отчёты"
         subtitle={formatPeriodLabel(period, range)}
         onBack={() => navigation.goBack()}
-        trailing={<FreshnessBadge query={reportQuery} />}
       />
 
       <ScrollView
@@ -645,6 +644,7 @@ export default function MarketingReportsScreen() {
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
       >
+        <FreshnessBadge query={reportQuery} style={styles.headerStatus} />
         {/* ── ПЕРИОД ─────────────────────────────────────────────────────── */}
         <View style={styles.periodWrap}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
@@ -1267,6 +1267,7 @@ function softTintOr(mode: 'light' | 'dark', accent: string, light: string): stri
 }
 
 const styles = StyleSheet.create({
+  headerStatus: { alignSelf: 'flex-start', maxWidth: '100%' },
   safe: { flex: 1 },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[4] },
