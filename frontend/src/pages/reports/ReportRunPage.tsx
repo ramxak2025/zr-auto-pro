@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Download, FileQuestion, FileSpreadsheet, FileText, RefreshCw } from 'lucide-react';
+import { BarChart3, FileQuestion, FileSpreadsheet, FileText, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { reportBuilderApi } from '../../api/services';
@@ -21,18 +21,15 @@ import ReportTable, { ReportSectionCard } from '../../components/reports/ReportT
 import { ReportCaption, ReportMethod } from '../../components/reports/ReportMethod';
 import { REPORT_ICONS } from '../../components/reports/reportIcons';
 import { pluralRows } from '../../components/reports/reportFormat';
-import { patchParams, periodLabel, periodMonth, readList, readPeriod } from '../../components/reports/periodParams';
+import { patchParams, readList, readPeriod } from '../../components/reports/periodParams';
 import { exportReportToExcel, exportReportToPdf } from '../../utils/reportExport';
 import { Button, buttonClasses } from '../../ui/Button';
-import { IconButton } from '../../ui/IconButton';
-import { DropdownMenu } from '../../ui/DropdownMenu';
 import { Toolbar } from '../../ui/Toolbar';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { Card, CardHeader } from '../../ui/Card';
 import { Badge } from '../../ui/Badge';
 import { SkeletonText } from '../../ui/Skeleton';
 import { cn } from '../../ui/cn';
-import './report-header.css';
 
 type ExportKind = 'excel' | 'pdf';
 
@@ -144,7 +141,7 @@ export default function ReportRunPage() {
   if (!def) {
     return (
       <div className="space-y-5">
-        <PageHeader composition="navigation" title="Отчёт не найден" backTo="/reports" />
+        <PageHeader title="Отчёт не найден" icon={BarChart3} backTo="/reports" />
         <Card>
           <EmptyState
             icon={FileQuestion}
@@ -175,98 +172,69 @@ export default function ReportRunPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        composition="navigation"
-        className="report-header"
         title={def.title}
+        icon={Icon}
+        subtitle={def.description}
         backTo="/reports"
         actions={
-          <DropdownMenu
-            responsive
-            width={288}
-            aria-label="Выгрузить"
-            trigger={
-              <IconButton
-                label="Выгрузить"
-                icon={Download}
-                variant="secondary"
-                loading={exporting !== null}
-                className="report-export"
-              />
-            }
-            items={[
-              {
-                key: 'excel',
-                label: 'Excel',
-                icon: FileSpreadsheet,
-                onSelect: () => runExport('excel'),
-                loading: exporting === 'excel',
-                disabled: !data || exporting !== null,
-              },
-              {
-                key: 'pdf',
-                label: 'PDF',
-                icon: FileText,
-                onSelect: () => runExport('pdf'),
-                loading: exporting === 'pdf',
-                disabled: !data || exporting !== null,
-              },
-            ]}
-          />
-        }
-        toolbar={
-          <div className="report-command-controls">
-            <MonthPager
-              flexible
-              className="report-month-pager"
-              from={period.from}
-              to={period.to}
-              todayKey={today}
-              onChange={(from, to) => update({ from, to })}
-            />
+          <>
             <Button
-              icon={RefreshCw}
-              onClick={() => report.refetch()}
-              loading={report.isFetching && !report.isPlaceholderData}
-              disabled={periodInvalid}
-              className="min-h-9 min-w-0 max-w-full !h-auto !whitespace-normal"
+              variant="secondary"
+              icon={FileSpreadsheet}
+              onClick={() => runExport('excel')}
+              loading={exporting === 'excel'}
+              disabled={!data || exporting !== null}
             >
-              Сформировать
+              Excel
             </Button>
-            {!periodMonth(period) && (
-              <p className="report-current-range" aria-label="Выбранный период">
-                {periodLabel(period)}
-              </p>
-            )}
-          </div>
+            <Button
+              variant="secondary"
+              icon={FileText}
+              onClick={() => runExport('pdf')}
+              loading={exporting === 'pdf'}
+              disabled={!data || exporting !== null}
+            >
+              PDF
+            </Button>
+          </>
         }
       />
 
-      <section className="report-parameters !mt-2" aria-label="Параметры отчёта">
-        <p className="report-description">{def.description}</p>
-        <Toolbar>
-          <DatePeriodPicker dateFrom={period.from} dateTo={period.to} onChange={(from, to) => update({ from, to })} />
-          {def.entityFilter && !filterHidden && (
-            <EntityFilter
-              label={def.entityFilter.label}
-              options={filterQuery.data?.options}
-              selected={ids}
-              onChange={(list) => update({ ids: list.join(',') })}
-              isLoading={filterQuery.isLoading}
-              isError={filterQuery.isError}
-              isFetching={filterQuery.isFetching}
-              onRetry={() => filterQuery.refetch()}
-            />
-          )}
-          {groupBy && (
-            <SegmentedControl
-              aria-label="Группировка"
-              options={groupByOptions.map((o) => ({ value: o.value, label: o.label }))}
-              value={groupBy}
-              onChange={(v) => update({ groupBy: v })}
-            />
-          )}
-        </Toolbar>
-      </section>
+      <Toolbar
+        end={
+          <Button
+            icon={RefreshCw}
+            onClick={() => report.refetch()}
+            loading={report.isFetching && !report.isPlaceholderData}
+            disabled={periodInvalid}
+          >
+            Сформировать
+          </Button>
+        }
+      >
+        <MonthPager from={period.from} to={period.to} todayKey={today} onChange={(from, to) => update({ from, to })} />
+        <DatePeriodPicker dateFrom={period.from} dateTo={period.to} onChange={(from, to) => update({ from, to })} />
+        {def.entityFilter && !filterHidden && (
+          <EntityFilter
+            label={def.entityFilter.label}
+            options={filterQuery.data?.options}
+            selected={ids}
+            onChange={(list) => update({ ids: list.join(',') })}
+            isLoading={filterQuery.isLoading}
+            isError={filterQuery.isError}
+            isFetching={filterQuery.isFetching}
+            onRetry={() => filterQuery.refetch()}
+          />
+        )}
+        {groupBy && (
+          <SegmentedControl
+            aria-label="Группировка"
+            options={groupByOptions.map((o) => ({ value: o.value, label: o.label }))}
+            value={groupBy}
+            onChange={(v) => update({ groupBy: v })}
+          />
+        )}
+      </Toolbar>
 
       {def.entityFilter && filterQuery.isError && !filterQuery.data && (
         <ErrorRow

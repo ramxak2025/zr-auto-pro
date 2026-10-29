@@ -22,7 +22,6 @@ import toast from 'react-hot-toast';
 
 import { productsApi, rolesApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import { PaginatedResponse, Product, User, UserRole } from '../types';
 import type { Role } from '../types';
 import {
@@ -493,58 +492,36 @@ export default function UsersPage() {
     <div className="space-y-5">
       <PageHeader
         title="Пользователи"
+        icon={Shield}
         subtitle={isLoading ? 'Доступ и роли сотрудников' : `${users.length} активных · доступ задаётся ролью`}
         actions={
           <>
-            <Button
-              variant="secondary"
-              icon={KeyRound}
-              onClick={() => setRolesOpen(true)}
-              className="hidden md:inline-flex"
-            >
+            {canManageDirections && (
+              <Button variant="secondary" onClick={() => manageDirectionPrompt()}>
+                Направления
+              </Button>
+            )}
+            <Button variant="secondary" icon={KeyRound} onClick={() => setRolesOpen(true)}>
               Роли
+            </Button>
+            <Button variant="secondary" icon={Archive} onClick={() => setDismissedOpen(true)}>
+              Уволенные
             </Button>
             <Button icon={Plus} onClick={openCreate}>
               Новый сотрудник
             </Button>
-            <HeaderActionMenu
-              label="Управление"
-              items={[
-                {
-                  key: 'roles',
-                  label: 'Роли',
-                  icon: KeyRound,
-                  onSelect: () => setRolesOpen(true),
-                  selectTiming: 'after-close',
-                  narrowOnly: true,
-                },
-                {
-                  key: 'dismissed',
-                  label: 'Уволенные',
-                  icon: Archive,
-                  onSelect: () => setDismissedOpen(true),
-                  selectTiming: 'after-close',
-                },
-                ...(canManageDirections
-                  ? [{ key: 'directions', label: 'Направления', onSelect: () => manageDirectionPrompt() }]
-                  : []),
-              ]}
-            />
-          </>
-        }
-        toolbar={
-          <>
-            <Toolbar>
-              <SearchInput value={q} onChange={setQuery} placeholder="Имя или телефон…" className="w-full sm:w-72" />
-              {q && (
-                <span className="text-sm text-ink-3">
-                  Найдено: <span className="tabular-nums text-ink">{visibleUsers.length}</span>
-                </span>
-              )}
-            </Toolbar>
           </>
         }
       />
+
+      <Toolbar>
+        <SearchInput value={q} onChange={setQuery} placeholder="Имя или телефон…" className="w-full sm:w-72" />
+        {q && (
+          <span className="text-sm text-ink-3">
+            Найдено: <span className="tabular-nums text-ink">{visibleUsers.length}</span>
+          </span>
+        )}
+      </Toolbar>
 
       <DataTable
         rows={visibleUsers}

@@ -13,10 +13,9 @@ import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
 import PageHeader from '../components/PageHeader';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import PhoneInput from '../components/PhoneInput';
 import { Badge } from '../ui/Badge';
-import { Button } from '../ui/Button';
+import { Button, buttonClasses } from '../ui/Button';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
 import { Field } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
@@ -441,48 +440,40 @@ export default function ClientsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Клиенты"
+        icon={Users}
         subtitle={data ? `${total.toLocaleString('ru-RU')} в базе` : undefined}
         actions={
           <>
+            {canImport && (
+              <Link
+                to="/clients/import"
+                className={cn(buttonClasses({ variant: 'secondary' }), 'hidden md:inline-flex')}
+                title="Импорт клиентов и авто из Excel/CSV (на компьютере)"
+              >
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Импорт
+              </Link>
+            )}
+            {canExport && (
+              <Button variant="secondary" icon={Download} onClick={exportCsv} loading={exporting}>
+                Экспорт CSV
+              </Button>
+            )}
             <Button icon={Plus} onClick={openCreateModal}>
               Новый клиент
             </Button>
-            <HeaderActionMenu
-              label="Данные"
-              items={[
-                ...(canImport
-                  ? [
-                      {
-                        key: 'import',
-                        label: 'Импорт клиентов и авто',
-                        icon: Upload,
-                        to: '/clients/import',
-                        desktopOnly: true,
-                      },
-                    ]
-                  : []),
-                ...(canExport
-                  ? [{ key: 'export', label: 'Экспорт CSV', icon: Download, onSelect: exportCsv, loading: exporting }]
-                  : []),
-              ]}
-            />
-          </>
-        }
-        toolbar={
-          <>
-            <Toolbar>
-              <div className="w-full sm:w-80">
-                <SearchInput
-                  value={search}
-                  onChange={(val) => updateParams({ q: val, page: 1 })}
-                  placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
-                  className="w-full"
-                />
-              </div>
-            </Toolbar>
           </>
         }
       />
+
+      <Toolbar>
+        <SearchInput
+          value={search}
+          onChange={(val) => updateParams({ q: val, page: 1 })}
+          placeholder={vinEnabled ? 'Имя, телефон, госномер или VIN' : 'Имя, телефон или госномер'}
+          className="w-full sm:w-80"
+        />
+      </Toolbar>
 
       {/* Розничный покупатель — точка входа в розничные чеки. Настоящая ссылка:
           Tab/Enter, Cmd+клик, средняя кнопка (аудит 2.5 P0). */}

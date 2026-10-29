@@ -254,6 +254,7 @@ export default function WorkBoardPage() {
     <div className="space-y-5">
       <PageHeader
         title="Доска работ"
+        icon={LayoutGrid}
         subtitle={
           isLoading
             ? 'Активные заказ-наряды по стадиям. Не влияет на оплату.'
@@ -262,13 +263,8 @@ export default function WorkBoardPage() {
         actions={
           <>
             {canConfigure && (
-              <Button
-                variant="secondary"
-                icon={Settings2}
-                onClick={() => setSettingsOpen(true)}
-                aria-label="Настроить колонки"
-              >
-                Колонки
+              <Button variant="secondary" icon={Settings2} onClick={() => setSettingsOpen(true)}>
+                Настроить колонки
               </Button>
             )}
             <IconButton
@@ -280,40 +276,35 @@ export default function WorkBoardPage() {
             />
           </>
         }
-        toolbar={
-          <>
-            {mastersError ? (
-              <ErrorRow
-                message="Не удалось загрузить список сотрудников"
-                onRetry={() => refetchMasters()}
-                loading={mastersFetching}
-              />
-            ) : mastersList.length > 0 ? (
-              <div
-                role="group"
-                aria-label="Фильтр по исполнителю"
-                className="-mb-1 flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar"
-              >
-                <FilterChip active={!assigneeFilter} onClick={() => setAssigneeFilter('')}>
-                  Все
-                </FilterChip>
-                {mastersList.map((m) => (
-                  <FilterChip
-                    key={m.id}
-                    active={assigneeFilter === m.id}
-                    onClick={() => setAssigneeFilter(assigneeFilter === m.id ? '' : m.id)}
-                  >
-                    {shortName(m.fullName)}
-                  </FilterChip>
-                ))}
-              </div>
-            ) : null}
-          </>
-        }
-        variant="static"
       />
 
       {/* Фильтр по мастеру (Round 14): «Все» + чип на каждого сотрудника */}
+      {mastersError ? (
+        <ErrorRow
+          message="Не удалось загрузить список сотрудников"
+          onRetry={() => refetchMasters()}
+          loading={mastersFetching}
+        />
+      ) : mastersList.length > 0 ? (
+        <div
+          role="group"
+          aria-label="Фильтр по исполнителю"
+          className="-mb-1 flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar"
+        >
+          <FilterChip active={!assigneeFilter} onClick={() => setAssigneeFilter('')}>
+            Все
+          </FilterChip>
+          {mastersList.map((m) => (
+            <FilterChip
+              key={m.id}
+              active={assigneeFilter === m.id}
+              onClick={() => setAssigneeFilter(assigneeFilter === m.id ? '' : m.id)}
+            >
+              {shortName(m.fullName)}
+            </FilterChip>
+          ))}
+        </div>
+      ) : null}
 
       <QueryState
         isLoading={isLoading}

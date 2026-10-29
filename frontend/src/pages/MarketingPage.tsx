@@ -65,7 +65,7 @@ export default function MarketingPage() {
   if (!canAccess) {
     return (
       <div className="space-y-5">
-        <PageHeader variant="static" title="Маркетинг" />
+        <PageHeader title="Маркетинг" icon={Megaphone} />
         <Card>
           <EmptyState icon={Megaphone} title="Нет доступа" description="У вас нет права на раздел «Маркетинг»" />
         </Card>
@@ -84,22 +84,17 @@ export default function MarketingPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Маркетинг"
-        toolbar={
-          <>
-            <Tabs
-              aria-label="Разделы маркетинга"
-              idPrefix="marketing"
-              items={TABS}
-              value={activeTab}
-              onChange={(t) => {
-                setActiveTab(t);
-                if (t !== 'settings') setSettingsFocus(null);
-              }}
-            />
-          </>
-        }
+      <PageHeader title="Маркетинг" icon={Megaphone} subtitle="Отзывы, рассылки, интеграции и лояльность" />
+
+      <Tabs
+        aria-label="Разделы маркетинга"
+        idPrefix="marketing"
+        items={TABS}
+        value={activeTab}
+        onChange={(t) => {
+          setActiveTab(t);
+          if (t !== 'settings') setSettingsFocus(null);
+        }}
       />
 
       <TabPanel idPrefix="marketing" tabKey="reports" active={activeTab === 'reports'}>

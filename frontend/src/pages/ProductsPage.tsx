@@ -1,5 +1,4 @@
 import LowStockView from './LowStockPage';
-import WarehouseHeader from '../components/warehouse/WarehouseHeader';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -10,12 +9,18 @@ import {
   Package,
   PackageMinus,
   ClipboardCheck,
+  AlertTriangle,
+  ChevronDown,
   ChevronRight,
+  FolderPlus,
   Warehouse,
   Download,
   Upload,
+  Recycle,
   Percent,
   ListChecks,
+  CheckSquare,
+  Square,
   Trash2,
   Move,
   Layers,
@@ -36,14 +41,20 @@ import {
   Button,
   Card,
   ConfirmDialog,
+  DropdownMenu,
   EmptyState,
   Field,
   Input,
   Modal,
   Money,
+  PageHeader,
   QueryState,
+  SearchInput,
+  SegmentedControl,
+  Select,
   Skeleton,
   StatCard,
+  Toolbar,
   cn,
   focusRing,
 } from '../ui';
@@ -87,6 +98,18 @@ function serverMessage(err: any, fallback: string): string {
   if (typeof msg === 'string' && msg) return msg;
   return fallback;
 }
+
+const WAREHOUSE_ICON: Record<WarehouseRecord['kind'], typeof Package> = {
+  main: Package,
+  defect: AlertTriangle,
+  used: Recycle,
+};
+
+const FOLDER_BUTTON_CLS = cn(
+  'flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-line-strong bg-transparent px-3.5 py-2.5 text-left',
+  'transition-[border-color,background-color] duration-150 hover:border-accent hover:bg-accent-soft/40',
+  focusRing,
+);
 
 // ---------------------------------------------------------------------------
 // Страница
@@ -1125,48 +1148,9 @@ function ProductsPageContents() {
   ];
 
   const subtitle =
-    productsData && !isPlaceholderData ? countLabel(allProducts.length, ['товар', 'товара', 'товаров']) : undefined;
-  const selectionAvailable =
-    canSelect && (!showingSearch || showingCellFilter) && (allProducts.length > 0 || subfolders.length > 0);
-  const headerActions: MenuEntry[] = [
-    ...(canManageWarehouse
-      ? [
-          { key: 'create', label: 'Добавить товар', icon: Plus, onSelect: openCreate },
-          {
-            key: 'operations',
-            label: 'Операции со складом',
-            icon: ClipboardCheck,
-            onSelect: () => setWarehouseOpsOpen(true),
-          },
-          { type: 'separator' as const, key: 'management-separator' },
-          ...moreMenu,
-        ]
-      : hasCells
-        ? [{ key: 'cells', label: 'Ячейки хранения', icon: MapPin, onSelect: () => setCellsOpen(true) }]
-        : []),
-    ...(selectionAvailable
-      ? [
-          { type: 'separator' as const, key: 'selection-separator' },
-          {
-            key: 'select',
-            label: selectMode ? 'Отменить выбор' : 'Выбрать товары',
-            icon: ListChecks,
-            onSelect: () => (selectMode ? exitSelectMode() : setSelectMode(true)),
-          },
-          ...(!selectMode && canDeleteWarehouse
-            ? [
-                {
-                  key: 'delete-all',
-                  label: 'Удалить весь товар',
-                  icon: Trash2,
-                  danger: true,
-                  onSelect: () => setBulkDeleteMode('all'),
-                },
-              ]
-            : []),
-        ]
-      : []),
-  ];
+    productsData && !isPlaceholderData
+      ? `${countLabel(allProducts.length, ['товар', 'товара', 'товаров'])}${activeWarehouse ? ` · ${activeWarehouse.name}` : ''}`
+      : activeWarehouse?.name;
 
   const listSkeleton = (
     <div className="space-y-2" aria-hidden="true">
@@ -1181,49 +1165,138 @@ function ProductsPageContents() {
     </div>
   );
 
+  const newFolderButton = canManageWarehouse && (
+    <button type="button" onClick={() => setShowFolderModal(true)} className={FOLDER_BUTTON_CLS}>
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-3 text-ink-3">
+        <FolderPlus className="h-[18px] w-[18px]" aria-hidden="true" />
+      </span>
+      <span className="text-sm font-medium text-ink-2">Новая папка</span>
+    </button>
+  );
+
   return (
     <div className="space-y-5">
-      <WarehouseHeader
+      <PageHeader
+        title="Склад"
+        icon={Warehouse}
         subtitle={subtitle}
-        warehouses={(warehouses ?? []).map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))}
-        warehouseId={activeWarehouseId}
-        warehouseName={activeWarehouse?.name ?? 'Склад'}
-        onWarehouseChange={switchWarehouse}
-        search={searchText}
-        onSearchChange={(value) => setParam({ q: value }, { replace: true })}
-        hasCells={hasCells}
-        cell={cellParam}
-        cellOptions={cellFilterOptions}
-        onCellChange={setCellFilter}
-        onOpenCells={() => setCellsOpen(true)}
-        onCreate={canManageWarehouse ? openCreate : undefined}
-        onCreateFolder={
-          canManageWarehouse && (showingRoot || showingFolderContents) ? () => setShowFolderModal(true) : undefined
-        }
-        actions={headerActions}
-        selection={
-          selectionAvailable && selectMode
-            ? {
-                count: selectedProducts.size + selectedFolders.size,
-                allSelected: isAllSelected,
-                canSelectAll: visibleProducts.length > 0 || visibleFolders.length > 0,
-                onToggleAll: toggleSelectAll,
-                onCancel: exitSelectMode,
-              }
-            : undefined
+        actions={
+          canManageWarehouse ? (
+            <>
+              <DropdownMenu
+                aria-label="Ещё действия со складом"
+                trigger={
+                  <Button variant="secondary" iconRight={ChevronDown}>
+                    Ещё
+                  </Button>
+                }
+                items={moreMenu}
+                width={272}
+              />
+              <Button variant="secondary" icon={ClipboardCheck} onClick={() => setWarehouseOpsOpen(true)}>
+                Операции
+              </Button>
+              <Button icon={Plus} onClick={openCreate}>
+                Добавить товар
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.txt"
+                onChange={handleImportFile}
+                className="hidden"
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+            </>
+          ) : undefined
         }
       />
-      {canManageWarehouse && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv,.txt"
-          onChange={handleImportFile}
-          className="hidden"
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-      )}
+
+      <Toolbar>
+        {warehouses && warehouses.length > 1 && (
+          <>
+            {/* На телефоне три длинных названия складов не помещаются в сегмент-контрол — там нативный select. */}
+            <div className="w-full sm:hidden">
+              <Select
+                aria-label="Склад"
+                value={activeWarehouseId}
+                onChange={(e) => switchWarehouse(e.target.value)}
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              />
+            </div>
+            <div className="hidden sm:block">
+              <SegmentedControl<string>
+                aria-label="Склад"
+                value={activeWarehouseId}
+                onChange={switchWarehouse}
+                options={warehouses.map((w) => ({
+                  value: w.id,
+                  label: w.name,
+                  icon: WAREHOUSE_ICON[w.kind] ?? Package,
+                }))}
+              />
+            </div>
+          </>
+        )}
+        <div className="w-full sm:w-72">
+          <SearchInput
+            value={searchText}
+            onChange={(value) => setParam({ q: value }, { replace: true })}
+            placeholder={hasCells ? 'Поиск по названию или ячейке…' : 'Поиск по названию…'}
+            aria-label="Поиск товара"
+          />
+        </div>
+        {/* Адресное хранение: фильтр и шторка появляются, только когда на складе есть ячейки. */}
+        {hasCells && (
+          <>
+            <div className="w-full sm:w-52">
+              <Select
+                aria-label="Ячейка"
+                value={cellParam}
+                onChange={(e) => setCellFilter(e.target.value)}
+                options={cellFilterOptions}
+              />
+            </div>
+            <Button variant="ghost" size="sm" icon={MapPin} title="Ячейки хранения" onClick={() => setCellsOpen(true)}>
+              Ячейки
+            </Button>
+          </>
+        )}
+        {/* Выбор и «удалить весь товар»: warehouse_delete (назначение ячейки — warehouse_manage при ячейках),
+            не при обычном поиске. Не в слоте `end`, а в потоке с ml-auto — на 375 px блок переносится на
+            свою строку, не отжимая поиск. */}
+        {canSelect && (!showingSearch || showingCellFilter) && (allProducts.length > 0 || subfolders.length > 0) && (
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button
+              variant={selectMode ? 'soft' : 'ghost'}
+              size="sm"
+              icon={ListChecks}
+              aria-pressed={selectMode}
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            >
+              {selectMode ? 'Отменить выбор' : 'Выбрать'}
+            </Button>
+            {selectMode && (visibleProducts.length > 0 || visibleFolders.length > 0) && (
+              <Button variant="ghost" size="sm" icon={isAllSelected ? CheckSquare : Square} onClick={toggleSelectAll}>
+                {isAllSelected ? 'Снять всё' : 'Выбрать всё'}
+              </Button>
+            )}
+            {!selectMode && canDeleteWarehouse && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={Trash2}
+                className="text-bad-text hover:bg-bad-soft hover:text-bad-text"
+                onClick={() => setBulkDeleteMode('all')}
+                title="Удалить весь товар с этого склада (в корзину)"
+              >
+                Удалить весь товар
+              </Button>
+            )}
+          </div>
+        )}
+      </Toolbar>
 
       {/* Warehouse stats — warehouse_manage (same key the backend enforces) */}
       {canManageWarehouse &&
@@ -1407,8 +1480,12 @@ function ProductsPageContents() {
                   />
                 ))}
               </Reorder.Group>
+              {newFolderButton}
             </div>
           )}
+
+          {/* New folder button when no subfolders exist */}
+          {(showingRoot || showingFolderContents) && subfolders.length === 0 && newFolderButton}
 
           {/* ── Товары ── */}
           {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (

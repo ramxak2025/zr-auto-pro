@@ -5,6 +5,7 @@ import {
   CalendarClock,
   Check,
   Eye,
+  GraduationCap,
   Paperclip,
   Pencil,
   RefreshCw,
@@ -18,14 +19,13 @@ import { knowledgeApi } from '../../api/services';
 import type { KnowledgeArticle, KnowledgeCategory } from '../../types';
 import { formatDateShort, formatDateTime } from '../../../../shared/utils/formatters';
 import PageHeader from '../PageHeader';
-import HeaderActionMenu from '../HeaderActionMenu';
 import ConfirmDialog from '../ConfirmDialog';
 import QueryState from '../QueryState';
 import MarkdownView from '../MarkdownView';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
-
+import { IconButton } from '../../ui/IconButton';
 import { Skeleton, SkeletonText } from '../../ui/Skeleton';
 import { cn } from '../../ui/cn';
 import { focusRing } from '../../ui/tokens';
@@ -135,39 +135,22 @@ export default function ArticleReader({
 
   const header = (
     <PageHeader
-      composition="navigation"
       title="База знаний"
+      icon={GraduationCap}
       subtitle={subtitle}
       backTo={onBack}
       actions={
         isManager && article ? (
           <>
+            {isRegulation && (
+              <Button variant="secondary" icon={UsersIcon} onClick={() => setAcksOpen(true)}>
+                Кто ознакомился
+              </Button>
+            )}
             <Button variant="secondary" icon={Pencil} onClick={() => onEdit(article)}>
               Изменить
             </Button>
-            <HeaderActionMenu
-              items={[
-                ...(isRegulation
-                  ? [
-                      {
-                        key: 'acks',
-                        label: 'Кто ознакомился',
-                        icon: UsersIcon,
-                        onSelect: () => setAcksOpen(true),
-                        selectTiming: 'after-close' as const,
-                      },
-                    ]
-                  : []),
-                {
-                  key: 'delete',
-                  label: 'Удалить статью',
-                  icon: Trash2,
-                  danger: true,
-                  onSelect: () => setConfirmDelete(true),
-                  selectTiming: 'after-close',
-                },
-              ]}
-            />
+            <IconButton label="Удалить статью" icon={Trash2} variant="danger" onClick={() => setConfirmDelete(true)} />
           </>
         ) : undefined
       }

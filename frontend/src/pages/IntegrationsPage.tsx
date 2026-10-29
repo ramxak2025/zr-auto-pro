@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, CreditCard, Info, Link2, PhoneCall, Receipt, Wallet } from 'lucide-react';
+import { Check, Copy, CreditCard, Info, Link2, PhoneCall, Plug, Receipt, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { fiscalApi, paymentsApi, telephonyApi, walletApi } from '../api/services';
@@ -1060,12 +1060,11 @@ export default function IntegrationsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Интеграции"
-        toolbar={
-          <>
-            <Tabs items={TAB_ITEMS} value={tab} onChange={setTab} aria-label="Интеграции" idPrefix="integrations" />
-          </>
-        }
+        icon={Plug}
+        subtitle="Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet"
       />
+
+      <Tabs items={TAB_ITEMS} value={tab} onChange={setTab} aria-label="Интеграции" idPrefix="integrations" />
 
       <div className="max-w-3xl">
         <Panel active={tab === 'acquiring'} tabKey="acquiring">

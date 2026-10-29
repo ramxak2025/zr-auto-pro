@@ -17,7 +17,6 @@ import {
 import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import {
   Button,
   Checkbox,
@@ -422,34 +421,25 @@ export default function ServicesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Услуги"
+        icon={Wrench}
         subtitle={data ? `${countLabel(total, ['услуга', 'услуги', 'услуг'])} в прайс-листе` : undefined}
         actions={
           canManage ? (
             <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" icon={Download} onClick={() => void exportCatalog()}>
+                Excel
+              </Button>
+              <Button
+                variant="secondary"
+                icon={Upload}
+                onClick={() => importInputRef.current?.click()}
+                loading={importBusy}
+              >
+                Импорт
+              </Button>
               <Button icon={Plus} onClick={openCreate}>
                 Новая услуга
               </Button>
-              <HeaderActionMenu
-                label="Каталог"
-                items={[
-                  { key: 'export', label: 'Excel', icon: Download, onSelect: () => void exportCatalog() },
-                  {
-                    key: 'import',
-                    label: 'Импорт',
-                    icon: Upload,
-                    onSelect: () => importInputRef.current?.click(),
-                    loading: importBusy,
-                  },
-                  {
-                    key: 'visibility',
-                    label: 'Видимость по ролям',
-                    icon: ShieldCheck,
-                    disabled: !visibilityConfigQuery.isSuccess,
-                    onSelect: () => setFolderListOpen(true),
-                    selectTiming: 'after-close',
-                  },
-                ]}
-              />
               <input
                 ref={importInputRef}
                 type="file"
@@ -461,36 +451,43 @@ export default function ServicesPage() {
             </div>
           ) : undefined
         }
-        toolbar={
-          <>
-            <Toolbar>
-              <div className="w-full sm:w-auto">
-                <SearchInput
-                  value={search}
-                  onChange={(value) => {
-                    setParam({ q: value, page: null }, { replace: true });
-                  }}
-                  placeholder="Поиск во всех папках"
-                  className="w-full sm:w-72"
-                />
-              </div>
-              {!isOwner && (
-                <Button
-                  variant="secondary"
-                  icon={showAllServices ? EyeOff : Eye}
-                  onClick={() => {
-                    setShowAllServices((value) => !value);
-                    setParam({ page: null }, { replace: true });
-                  }}
-                  aria-pressed={showAllServices}
-                >
-                  {showAllServices ? 'По роли' : 'Все услуги'}
-                </Button>
-              )}
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar>
+        <div className="w-full sm:w-auto">
+          <SearchInput
+            value={search}
+            onChange={(value) => {
+              setParam({ q: value, page: null }, { replace: true });
+            }}
+            placeholder="Поиск во всех папках"
+            className="w-full sm:w-72"
+          />
+        </div>
+        {canManage && (
+          <Button
+            variant="secondary"
+            icon={ShieldCheck}
+            disabled={!visibilityConfigQuery.isSuccess}
+            onClick={() => setFolderListOpen(true)}
+          >
+            Видимость по ролям
+          </Button>
+        )}
+        {!isOwner && (
+          <Button
+            variant="secondary"
+            icon={showAllServices ? EyeOff : Eye}
+            onClick={() => {
+              setShowAllServices((value) => !value);
+              setParam({ page: null }, { replace: true });
+            }}
+            aria-pressed={showAllServices}
+          >
+            {showAllServices ? 'По роли' : 'Все услуги'}
+          </Button>
+        )}
+      </Toolbar>
 
       {!search && activePath.length > 0 && (
         <nav aria-label="Путь в каталоге" className="flex flex-wrap items-center gap-2 text-sm text-ink-2">

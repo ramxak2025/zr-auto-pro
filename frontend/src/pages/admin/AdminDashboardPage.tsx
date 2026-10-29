@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CreditCard,
   Inbox,
+  LayoutDashboard,
   Megaphone,
   ScrollText,
   TrendingUp,
@@ -97,7 +98,11 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader variant="static" title="Главная" />
+      <PageHeader
+        title="Главная"
+        icon={LayoutDashboard}
+        subtitle="Состояние платформы и платная выручка по подпискам"
+      />
 
       {/* Ожидающие заявки — самое срочное, поэтому первым */}
       {!!pendingCount && (

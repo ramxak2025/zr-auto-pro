@@ -994,38 +994,39 @@ export default function SchedulePage() {
     <div className="space-y-5">
       <PageHeader
         title="Расписание"
+        icon={CalendarDays}
+        subtitle="График смен, посещаемость и режимы работы"
         actions={
           canEdit ? (
-            <Button variant={pendingCount > 0 ? 'secondary' : 'primary'} icon={Plus} onClick={() => openCreate()}>
+            <Button variant="secondary" icon={Plus} onClick={() => openCreate()}>
               Добавить запись
             </Button>
           ) : undefined
         }
-        toolbar={
-          <>
-            <Tabs items={tabItems} value={tab} onChange={setTab} aria-label="Разделы расписания" idPrefix="schedule" />
-            {pendingCount > 0 && (
-              <div
-                role="status"
-                className="w-full flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warn/30 bg-warn-soft px-4 py-2.5 shadow-card"
-              >
-                <p className="flex items-center gap-2 text-sm font-medium text-warn-text">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                  Несохранённых изменений: <span className="tabular-nums">{pendingCount}</span>
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={discardPendingChanges} disabled={applying}>
-                    Отменить
-                  </Button>
-                  <Button size="sm" onClick={applyPendingChanges} loading={applying}>
-                    Применить
-                  </Button>
-                </div>
-              </div>
-            )}
-          </>
-        }
       />
+
+      {/* Несохранённые изменения — липкая полоса поверх любой вкладки */}
+      {pendingCount > 0 && (
+        <div
+          role="status"
+          className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warn/30 bg-warn-soft px-4 py-2.5 shadow-card"
+        >
+          <p className="flex items-center gap-2 text-sm font-medium text-warn-text">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            Несохранённых изменений: <span className="tabular-nums">{pendingCount}</span>
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={discardPendingChanges} disabled={applying}>
+              Отменить
+            </Button>
+            <Button size="sm" onClick={applyPendingChanges} loading={applying}>
+              Применить
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <Tabs items={tabItems} value={tab} onChange={setTab} aria-label="Разделы расписания" idPrefix="schedule" />
 
       {/* График: строки — сотрудники, колонки — дни месяца */}
       <TabPanel idPrefix="schedule" tabKey="schedule" active={tab === 'schedule'}>

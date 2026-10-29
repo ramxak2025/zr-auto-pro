@@ -12,7 +12,6 @@ import { apiErrorMessage } from '../../../shared/utils/apiError';
 import type { Expense } from '../types';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -357,16 +356,13 @@ export default function ExpensesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Расходы"
+        icon={Wallet}
+        subtitle="Учёт расходов по статьям"
         actions={
           canManageCategories || canAddExpense ? (
             <>
               {canManageCategories && (
-                <Button
-                  variant="secondary"
-                  icon={Tag}
-                  onClick={() => setCatModalOpen(true)}
-                  className={canAddExpense ? 'hidden md:inline-flex' : undefined}
-                >
+                <Button variant="secondary" icon={Tag} onClick={() => setCatModalOpen(true)}>
                   Категории
                 </Button>
               )}
@@ -375,32 +371,15 @@ export default function ExpensesPage() {
                   Добавить
                 </Button>
               )}
-              {canManageCategories && canAddExpense && (
-                <HeaderActionMenu
-                  items={[
-                    {
-                      key: 'categories',
-                      label: 'Категории расходов',
-                      icon: Tag,
-                      onSelect: () => setCatModalOpen(true),
-                      selectTiming: 'after-close',
-                      narrowOnly: true,
-                    },
-                  ]}
-                />
-              )}
             </>
           ) : undefined
         }
-        toolbar={
-          <>
-            <Toolbar>
-              <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={setPeriod} />
-              <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar>
+        <MonthPager from={dateFrom} to={dateTo} todayKey={today} onChange={setPeriod} />
+        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={setPeriod} />
+      </Toolbar>
 
       <QueryState
         isLoading={isLoading}

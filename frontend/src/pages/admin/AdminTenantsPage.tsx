@@ -353,71 +353,69 @@ export default function AdminTenantsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Автосервисы"
+        icon={Building2}
         subtitle={`Всего: ${tenants.length}`}
         actions={
           <Button icon={Plus} onClick={openCreate}>
             Новый автосервис
           </Button>
         }
-        toolbar={
-          <>
-            <Toolbar
-              end={
-                isFiltered ? (
-                  <span className="text-sm text-ink-3">
-                    Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
-                  </span>
-                ) : undefined
-              }
-            >
-              <SearchInput
-                value={search}
-                onChange={(v) => patch({ q: v, page: null })}
-                placeholder="Название, телефон, email…"
-                aria-label="Поиск автосервисов"
-                className="w-full sm:w-72"
-              />
-              <SegmentedControl<StatusFilter>
-                aria-label="Статус"
-                value={statusFilter}
-                onChange={(v) => patch({ status: v, page: null })}
-                options={STATUS_FILTERS}
-              />
-              {(plansData ?? []).length > 0 && (
-                <Select
-                  aria-label="Тариф"
-                  value={planFilter}
-                  onChange={(e) => patch({ plan: e.target.value, page: null })}
-                  className="w-full sm:w-44"
-                >
-                  <option value="">Все тарифы</option>
-                  {(plansData ?? []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-              )}
-              {(managers.length > 0 || !!managerFilter) && (
-                <Select
-                  aria-label="Менеджер"
-                  value={managerFilter}
-                  onChange={(e) => patch({ manager: e.target.value, page: null })}
-                  className="w-full sm:w-48"
-                >
-                  <option value="">Все менеджеры</option>
-                  <option value={NO_MANAGER}>Без менеджера</option>
-                  {managers.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.fullName}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar
+        end={
+          isFiltered ? (
+            <span className="text-sm text-ink-3">
+              Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
+            </span>
+          ) : undefined
+        }
+      >
+        <SearchInput
+          value={search}
+          onChange={(v) => patch({ q: v, page: null })}
+          placeholder="Название, телефон, email…"
+          aria-label="Поиск автосервисов"
+          className="w-full sm:w-72"
+        />
+        <SegmentedControl<StatusFilter>
+          aria-label="Статус"
+          value={statusFilter}
+          onChange={(v) => patch({ status: v, page: null })}
+          options={STATUS_FILTERS}
+        />
+        {(plansData ?? []).length > 0 && (
+          <Select
+            aria-label="Тариф"
+            value={planFilter}
+            onChange={(e) => patch({ plan: e.target.value, page: null })}
+            className="w-44"
+          >
+            <option value="">Все тарифы</option>
+            {(plansData ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        )}
+        {(managers.length > 0 || !!managerFilter) && (
+          <Select
+            aria-label="Менеджер"
+            value={managerFilter}
+            onChange={(e) => patch({ manager: e.target.value, page: null })}
+            className="w-48"
+          >
+            <option value="">Все менеджеры</option>
+            <option value={NO_MANAGER}>Без менеджера</option>
+            {managers.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.fullName}
+              </option>
+            ))}
+          </Select>
+        )}
+      </Toolbar>
 
       <DataTable
         caption="Автосервисы платформы"

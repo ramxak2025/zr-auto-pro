@@ -1,6 +1,5 @@
-import { useContext, type HTMLAttributes, type ReactNode } from 'react';
+import { HTMLAttributes, ReactNode } from 'react';
 import { cn } from './cn';
-import { SectionHeaderContext } from './SectionHeaderContext';
 
 export interface ToolbarProps extends HTMLAttributes<HTMLDivElement> {
   /** Правый край: главное действие страницы, экспорт, переключатель вида. */
@@ -15,14 +14,11 @@ export interface ToolbarProps extends HTMLAttributes<HTMLDivElement> {
  * переносится, правый блок уходит на новую строку.
  */
 export function Toolbar({ end, sticky = false, className, children, ...rest }: ToolbarProps) {
-  const inHeader = useContext(SectionHeaderContext);
   return (
     <div
-      data-toolbar=""
       className={cn(
         'flex min-h-[44px] flex-wrap items-center gap-2',
         sticky &&
-          !inHeader &&
           'sticky top-0 z-10 -mx-1 bg-canvas/90 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-canvas/75',
         className,
       )}

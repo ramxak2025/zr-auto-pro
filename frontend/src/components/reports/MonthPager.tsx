@@ -13,8 +13,6 @@ interface MonthPagerProps {
   /** Глубина назад в месяцах (по умолчанию 24). */
   depthMonths?: number;
   className?: string;
-  /** В компактной шапке отчёта: текст переносится, высота определяется содержимым. */
-  flexible?: boolean;
 }
 
 /**
@@ -25,15 +23,7 @@ interface MonthPagerProps {
  * одной высоты (36 px): пейджер — месяцы, пикер — пресеты и произвольный
  * диапазон. Подсветка активна, только когда период — ровно календарный месяц.
  */
-export default function MonthPager({
-  from,
-  to,
-  todayKey,
-  onChange,
-  depthMonths = 24,
-  className,
-  flexible = false,
-}: MonthPagerProps) {
+export default function MonthPager({ from, to, todayKey, onChange, depthMonths = 24, className }: MonthPagerProps) {
   const current = monthOfDay(todayKey);
   const active = periodMonth({ from, to });
   const base = active ?? current;
@@ -53,8 +43,7 @@ export default function MonthPager({
       role="group"
       aria-label="Календарный месяц"
       className={cn(
-        'inline-flex rounded-lg border border-line-strong bg-surface p-0.5 shadow-sm',
-        flexible ? 'min-h-9 min-w-0 max-w-full items-stretch' : 'h-9 items-center',
+        'inline-flex h-9 items-center rounded-lg border border-line-strong bg-surface p-0.5 shadow-sm',
         className,
       )}
     >
@@ -64,7 +53,6 @@ export default function MonthPager({
         size="sm"
         variant="ghost"
         disabled={!canPrev}
-        className={flexible ? '!h-auto min-h-8 min-w-8' : undefined}
         onClick={() => apply(shiftMonth(base, -1))}
       />
       <button
@@ -73,10 +61,7 @@ export default function MonthPager({
         aria-pressed={active !== null}
         title={active ? 'К текущему месяцу' : 'Показать месяц целиком'}
         className={cn(
-          'rounded-md px-2 text-sm font-medium tabular-nums transition-colors duration-150',
-          flexible
-            ? 'min-h-8 min-w-0 flex-1 whitespace-normal break-words py-1'
-            : 'h-full min-w-[7.5rem] whitespace-nowrap',
+          'h-full min-w-[7.5rem] whitespace-nowrap rounded-md px-2 text-sm font-medium tabular-nums transition-colors duration-150',
           focusRing,
           active ? 'text-ink' : 'text-ink-3 hover:text-ink',
         )}
@@ -89,7 +74,6 @@ export default function MonthPager({
         size="sm"
         variant="ghost"
         disabled={!canNext}
-        className={flexible ? '!h-auto min-h-8 min-w-8' : undefined}
         onClick={() => active && apply(shiftMonth(active, 1))}
       />
     </div>
