@@ -1,6 +1,3 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import { HeaderAction, headerTouchSize } from '../components/ScreenHeaderControls';
-
 /**
  * EmployeeDetailScreen — focused profile of a single staff member.
  *
@@ -67,7 +64,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-
+import { Image as ExpoImage } from 'expo-image';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RouteProp, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, employeesApi, equipmentApi, knowledgeApi, scheduleApi, usersApi } from '../api/services';
@@ -84,15 +81,15 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { Text } from '../platform/Typography';
-import {
-  type Check,
-  type CourseProgress,
-  type EmployeeFullProfile,
-  type EmployeeAchievement,
-  type KnowledgeCourse,
-  type RegulationUserSummary,
-  type TodayEmployeeStatus,
-  type User,
+import type {
+  Check,
+  CourseProgress,
+  EmployeeFullProfile,
+  EmployeeAchievement,
+  KnowledgeCourse,
+  RegulationUserSummary,
+  TodayEmployeeStatus,
+  User,
 } from '../../../shared/types';
 import { recordedAttendanceBucket } from '../../../shared/utils/attendance';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -105,8 +102,6 @@ import { UserPointsSheet } from '../components/employee/UserPointsSheet';
 import { usePointAccess } from '../hooks/usePoints';
 import { rankFromLifetime, progressToNextRank, rankLabelUpper } from '../components/employee/rank';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type RouteParams = { EmployeeDetail: { id: string } };
 
@@ -178,7 +173,6 @@ function getInitials(fullName?: string): string {
 // ──────────────────────────────────────────────────────────────────────────
 
 export default function EmployeeDetailScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RouteParams, 'EmployeeDetail'>>();
   const id = route.params?.id;
@@ -238,7 +232,7 @@ export default function EmployeeDetailScreen() {
   });
 
   // ── Menu (share + edit + award) ──────────────────────────────────────
-
+  const [menuOpen, setMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [awardOpen, setAwardOpen] = useState(false);
@@ -292,15 +286,8 @@ export default function EmployeeDetailScreen() {
   if (!id) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+        <LoadingSpinner />
       </View>
     );
   }
@@ -316,19 +303,12 @@ export default function EmployeeDetailScreen() {
     if (isNotFound) {
       return (
         <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-          <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-          >
-            <EmptyState
-              icon="person"
-              title="Сотрудник не найден"
-              description="Возможно учётка удалена или у вас нет к ней доступа."
-            />
-          </ScreenSectionScrollView>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <EmptyState
+            icon="person"
+            title="Сотрудник не найден"
+            description="Возможно учётка удалена или у вас нет к ней доступа."
+          />
         </View>
       );
     }
@@ -337,20 +317,13 @@ export default function EmployeeDetailScreen() {
       // Transient/network error — NOT "не найден". Offer retry.
       return (
         <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-          <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-          >
-            <EmptyState
-              icon="warning"
-              title="Не удалось загрузить"
-              description="Проверьте соединение и попробуйте ещё раз."
-              action={{ label: 'Повторить', onPress: () => refetch() }}
-            />
-          </ScreenSectionScrollView>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <EmptyState
+            icon="warning"
+            title="Не удалось загрузить"
+            description="Проверьте соединение и попробуйте ещё раз."
+            action={{ label: 'Повторить', onPress: () => refetch() }}
+          />
         </View>
       );
     }
@@ -359,19 +332,12 @@ export default function EmployeeDetailScreen() {
     if (isLoading || isPending) {
       return (
         <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-          <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-          >
-            <View style={styles.scroll}>
-              <Skeleton height={150} radius={borderRadius['3xl']} />
-              <Skeleton height={140} radius={borderRadius['2xl']} />
-              <ListSkeleton count={4} />
-            </View>
-          </ScreenSectionScrollView>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <View style={styles.scroll}>
+            <Skeleton height={150} radius={borderRadius['3xl']} />
+            <Skeleton height={140} radius={borderRadius['2xl']} />
+            <ListSkeleton count={4} />
+          </View>
         </View>
       );
     }
@@ -380,19 +346,12 @@ export default function EmployeeDetailScreen() {
     // treat as genuinely not found.
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState
-            icon="person"
-            title="Сотрудник не найден"
-            description="Возможно учётка удалена или у вас нет к ней доступа."
-          />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+        <EmptyState
+          icon="person"
+          title="Сотрудник не найден"
+          description="Возможно учётка удалена или у вас нет к ней доступа."
+        />
       </View>
     );
   }
@@ -470,6 +429,18 @@ export default function EmployeeDetailScreen() {
   };
 
   // ── Header trailing (⋯) ──────────────────────────────────────────────
+  const trailing = (
+    <Pressable
+      onPress={() => {
+        haptic('tap');
+        setMenuOpen((v) => !v);
+      }}
+      style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
+      hitSlop={10}
+    >
+      <Ionicons name="ellipsis-horizontal" size={20} color={palette.text.primary} />
+    </Pressable>
+  );
 
   // ── Quick actions: phone + whatsapp + schedule + salary ──────────────
   const goCall = () => {
@@ -513,78 +484,82 @@ export default function EmployeeDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title={profile.fullName || userRecord?.fullName || 'Сотрудник'}
-        onBack={() => navigation.goBack()}
-        trailing={
-          isOwnerLike || canDismiss ? (
-            <ScreenHeaderMenu
-              label="Действия сотрудника"
-              items={[
-                true && {
-                  id: 'share',
-                  label: 'Поделиться карточкой',
-                  icon: 'share-outline',
-                  onSelect: () => {
-                    setShareOpen(true);
-                  },
-                },
-                isOwnerLike && {
-                  id: 'edit',
-                  label: 'Редактировать',
-                  icon: 'create-outline',
-                  onSelect: () => {
-                    setEditOpen(true);
-                  },
-                },
-                isOwnerLike && {
-                  id: 'award',
-                  label: 'Выдать значок',
-                  icon: 'ribbon-outline',
-                  onSelect: () => {
-                    setAwardOpen(true);
-                  },
-                },
-                isOwnerLike &&
-                  multiPoint && {
-                    id: 'points',
-                    label: 'Филиалы сотрудника',
-                    icon: 'business-outline',
-                    onSelect: () => {
-                      setPointsOpen(true);
-                    },
-                  },
-                canDismiss && {
-                  id: 'dismiss',
-                  label: 'Уволить сотрудника',
-                  icon: 'person-remove-outline',
-                  danger: true,
-                  onSelect: () => {
-                    confirmDismiss();
-                  },
-                },
-              ]}
-            />
-          ) : (
-            <HeaderAction
-              label="Поделиться карточкой"
-              icon="share-outline"
-              onPress={() => {
-                setShareOpen(true);
-              }}
-            />
-          )
-        }
-      />
+      <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} trailing={trailing} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: tabBarHeight + spacing[20] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+      {menuOpen && (
+        <View style={[styles.menu, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}>
+          <MenuItem
+            icon="share-outline"
+            label="Поделиться карточкой"
+            onPress={() => {
+              setMenuOpen(false);
+              setShareOpen(true);
+            }}
+            palette={palette}
+          />
+          {isOwnerLike && (
+            <>
+              <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+              <MenuItem
+                icon="create-outline"
+                label="Редактировать"
+                onPress={() => {
+                  setMenuOpen(false);
+                  setEditOpen(true);
+                }}
+                palette={palette}
+              />
+              <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+              <MenuItem
+                icon="ribbon-outline"
+                label="Выдать значок"
+                onPress={() => {
+                  setMenuOpen(false);
+                  setAwardOpen(true);
+                }}
+                palette={palette}
+              />
+              {/* Доступ к филиалам настраивается ЗДЕСЬ (163) — в карточке
+                  человека, а не в разделе «Филиалы»: там состав показывается
+                  только для просмотра. У одноточечного тенанта пункта нет. */}
+              {multiPoint && (
+                <>
+                  <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+                  <MenuItem
+                    icon="business-outline"
+                    label="Филиалы сотрудника"
+                    onPress={() => {
+                      setMenuOpen(false);
+                      setPointsOpen(true);
+                    }}
+                    palette={palette}
+                  />
+                </>
+              )}
+            </>
+          )}
+          {canDismiss && (
+            <>
+              <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+              {/* Деструктив — стиль CheckDetailScreen: красный пункт +
+                  destructive-confirm Alert перед мутацией. */}
+              <MenuItem
+                icon="person-remove-outline"
+                label="Уволить сотрудника"
+                destructive
+                onPress={() => {
+                  setMenuOpen(false);
+                  confirmDismiss();
+                }}
+                palette={palette}
+              />
+            </>
+          )}
+        </View>
+      )}
+
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[20] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -784,7 +759,7 @@ export default function EmployeeDetailScreen() {
             </View>
           )}
         </Card>
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       {/* ── Quick actions sticky bar (above tab bar) ─────────────────── */}
       <View
@@ -891,21 +866,14 @@ function DismissedReadOnly({
   purged: boolean;
   canManage: boolean;
 }) {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const dateStr = dismissedAt
     ? new Date(dismissedAt).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })
     : null;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Сотрудник" onBack={() => navigation.goBack()} />
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[styles.scroll, { paddingTop: section.contentTop + spacing[4] }]}
-        showsVerticalScrollIndicator={false}
-      >
+      <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.dismissedHeadRow}>
             <EmployeeAvatar
@@ -961,7 +929,7 @@ function DismissedReadOnly({
             </PressableScale>
           ) : null}
         </View>
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }
@@ -2080,7 +2048,7 @@ const styles = StyleSheet.create({
   // ── Menu popover ─────────────────────────────────────────────────────
   menu: {
     position: 'absolute',
-    top: headerTouchSize + 4,
+    top: Platform.OS === 'ios' ? 96 : 76,
     right: spacing[3],
     minWidth: 220,
     borderRadius: borderRadius.xl,

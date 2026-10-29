@@ -1,12 +1,9 @@
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { useScreenSectionScroll, type ScreenSectionScrollController } from '../components/ScreenSectionHeader';
-
-import { useRoute, type RouteProp, useNavigation } from '@react-navigation/native';
+import { useRoute, type RouteProp } from '@react-navigation/native';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Crypto from 'expo-crypto';
-
+import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import QueryErrorState from '../components/QueryErrorState';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,21 +11,11 @@ import { createBookingsApi, createClientsApi } from '../../../shared/api/createS
 import { createSessionBoundClient } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
-import { type StaffPublicBookingRequest } from '../../../shared/types';
+import type { StaffPublicBookingRequest } from '../../../shared/types';
 import { showMutationErrorToast } from '../components/Toast';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
-export default function PublicBookingRequestsScreen({
-  embedded = false,
-  sectionController,
-  sectionHeader,
-}: {
-  embedded?: boolean;
-  sectionController?: ScreenSectionScrollController;
-  sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
-} = {}) {
-  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
-  const section = sectionController ?? ownSection;
-
+export default function PublicBookingRequestsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const route = useRoute<RouteProp<{ Filters: { pendingOnly?: boolean } }, 'Filters'>>();
@@ -89,53 +76,23 @@ export default function PublicBookingRequestsScreen({
 
   return (
     <View style={[embedded ? styles.embedded : styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {sectionHeader ? (
-        sectionHeader(null)
-      ) : (
-        <IosScreenHeader scroll={section} title="Заявки онлайн-записи" onBack={() => navigation.goBack()} />
-      )}
+      {!embedded && <IosScreenHeader title="Заявки онлайн-записи" onBack={() => navigation.goBack()} />}
       {!canReview ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Нет доступа"
-            description="Для обработки заявок нужно право доступа к записям."
-            onRetry={() => navigation.goBack()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Нет доступа"
+          description="Для обработки заявок нужно право доступа к записям."
+          onRetry={() => navigation.goBack()}
+        />
       ) : requestsQuery.isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ActivityIndicator style={styles.loader} color={colors.primary[600]} />
-        </ScreenSectionScrollView>
+        <ActivityIndicator style={styles.loader} color={colors.primary[600]} />
       ) : requestsQuery.isError ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Не удалось загрузить заявки"
-            description="Проверьте подключение и повторите попытку."
-            onRetry={() => void requestsQuery.refetch()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Не удалось загрузить заявки"
+          description="Проверьте подключение и повторите попытку."
+          onRetry={() => void requestsQuery.refetch()}
+        />
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[styles.content, { paddingTop: section.contentTop + spacing[4] }]}
-        >
+        <ScrollView contentContainerStyle={styles.content}>
           <Text style={[styles.hint, { color: palette.text.secondary }]}>
             Неподтверждённые заявки не занимают время сотрудника. Подтвердите запись, когда проверите возможность
             принять клиента.
@@ -214,7 +171,7 @@ export default function PublicBookingRequestsScreen({
           <TouchableOpacity onPress={() => void requestsQuery.refetch()} style={styles.refresh}>
             <Text style={styles.refreshText}>Обновить список</Text>
           </TouchableOpacity>
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
     </View>
   );

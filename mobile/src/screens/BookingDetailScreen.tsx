@@ -18,7 +18,7 @@ import { captureDataSession } from '../contexts/dataSession';
  *
  * Android-safe: пикер кроссплатформенный, никаких iOS-only API.
  */
-import { useCallback, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -34,17 +34,14 @@ import { useColors } from '../contexts/ThemeContext';
 import { bookingsApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Booking } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { statusChip, formatBookingDateTime, masterLabel, isActiveBooking } from './bookings/bookingHelpers';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function BookingDetailScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
@@ -205,33 +202,19 @@ export default function BookingDetailScreen() {
     if (isError) {
       return (
         <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-          <IosScreenHeader scroll={section} title="Запись" onBack={() => navigation.goBack()} />
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-          >
-            <QueryErrorState
-              title="Не удалось загрузить запись"
-              description="Проверьте подключение к интернету и попробуйте ещё раз"
-              onRetry={() => refetch()}
-            />
-          </ScreenSectionScrollView>
+          <IosScreenHeader title="Запись" onBack={() => navigation.goBack()} />
+          <QueryErrorState
+            title="Не удалось загрузить запись"
+            description="Проверьте подключение к интернету и попробуйте ещё раз"
+            onRetry={() => refetch()}
+          />
         </View>
       );
     }
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Запись" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={3} />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Запись" onBack={() => navigation.goBack()} />
+        <ListSkeleton count={3} />
       </View>
     );
   }
@@ -240,19 +223,12 @@ export default function BookingDetailScreen() {
   if (booking === null || !booking) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Запись" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Запись не найдена"
-            description="Возможно, она была удалена"
-            onRetry={() => navigation.goBack()}
-          />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Запись" onBack={() => navigation.goBack()} />
+        <QueryErrorState
+          title="Запись не найдена"
+          description="Возможно, она была удалена"
+          onRetry={() => navigation.goBack()}
+        />
       </View>
     );
   }
@@ -261,16 +237,10 @@ export default function BookingDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Запись" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Запись" onBack={() => navigation.goBack()} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
       >
@@ -472,7 +442,7 @@ export default function BookingDetailScreen() {
             )}
           </View>
         ) : null}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       {/* ── Reschedule: date → time → PATCH ── */}
       <DateTimePickerModal

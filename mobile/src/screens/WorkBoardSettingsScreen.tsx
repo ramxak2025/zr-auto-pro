@@ -24,6 +24,7 @@ import { captureDataSession } from '../contexts/dataSession';
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -40,9 +41,7 @@ import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { WORK_COLUMN_PRESETS, columnVisual } from '../constants/workStatus';
 import type { WorkBoardColumn } from '../../../shared/types';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const COLUMNS_KEY = ['checks', 'board-columns'] as const;
 const BOARD_KEY = ['checks', 'board'] as const;
@@ -50,7 +49,6 @@ const BOARD_KEY = ['checks', 'board'] as const;
 type Editing = { mode: 'new' } | { mode: 'edit'; column: WorkBoardColumn } | null;
 
 export default function WorkBoardSettingsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -198,37 +196,24 @@ export default function WorkBoardSettingsScreen() {
   // Защита: вход гейтится шестерёнкой, но на всякий случай — read-only заглушка.
   if (!canConfigure) {
     return (
-      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Настройка колонок" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <Text style={[styles.guardText, { color: palette.text.secondary }]}>Недостаточно прав</Text>
-          </View>
-        </ScreenSectionScrollView>
-      </View>
+      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+        <IosScreenHeader title="Настройка колонок" onBack={() => navigation.goBack()} />
+        <View style={styles.centerFill}>
+          <Text style={[styles.guardText, { color: palette.text.secondary }]}>Недостаточно прав</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
       <IosScreenHeader
-        scroll={section}
         title="Настройка колонок"
         subtitle="Доска заказ-нарядов"
         onBack={() => navigation.goBack()}
         trailing={
           <TouchableOpacity
-            style={[
-              [styles.addBtn, { backgroundColor: colors.primary[600] }],
-              { minWidth: headerTouchSize, minHeight: headerTouchSize },
-            ]}
+            style={[styles.addBtn, { backgroundColor: colors.primary[600] }]}
             onPress={() => {
               haptic('select');
               openNew();
@@ -243,42 +228,17 @@ export default function WorkBoardSettingsScreen() {
       />
 
       {columns === undefined && isLoading ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <LoadingSpinner />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.centerFill}>
+          <LoadingSpinner />
+        </View>
       ) : isError && columns === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <QueryErrorState description="Не удалось загрузить колонки." onRetry={() => refetch()} />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.centerFill}>
+          <QueryErrorState description="Не удалось загрузить колонки." onRetry={() => refetch()} />
+        </View>
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
+        <ScrollView
           style={styles.scroll}
-          contentContainerStyle={[
-            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }],
-            { paddingTop: section.contentTop + spacing[2] },
-          ]}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
           showsVerticalScrollIndicator={false}
         >
           <Text style={[styles.sectionHint, { color: palette.text.tertiary }]}>
@@ -372,7 +332,7 @@ export default function WorkBoardSettingsScreen() {
               );
             })
           )}
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
 
       {/* Форма «новая / изменить колонку». */}
@@ -477,7 +437,7 @@ export default function WorkBoardSettingsScreen() {
           ) : null}
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

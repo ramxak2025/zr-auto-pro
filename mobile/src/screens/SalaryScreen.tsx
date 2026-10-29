@@ -24,6 +24,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -56,9 +57,7 @@ import {
   buildPayoutSuggestions,
   payoutSheetTitle,
 } from '../components/salary/salaryFormat';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ── Row status ─────────────────────────────────────────────────────────────
 
@@ -303,8 +302,6 @@ function ListSeparator() {
 // ── Main screen ────────────────────────────────────────────────────────────
 
 export default function SalaryScreen() {
-  const pendingSection = useScreenSectionScroll({ composition: 'navigation' });
-
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
@@ -322,22 +319,7 @@ export default function SalaryScreen() {
   // list, no owner actions. Rendered from the SAME component the owner's
   // drill-down uses, so the two views can't drift.
   if (!isOwner) {
-    if (!user)
-      return (
-        <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-          <IosScreenHeader scroll={pendingSection} title="Моя зарплата" onBack={() => navigation.goBack()} />
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={pendingSection.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
-            contentContainerStyle={{ flexGrow: 1, paddingTop: pendingSection.contentTop, paddingBottom: 24 }}
-          >
-            <LoadingSpinner />
-          </ScreenSectionScrollView>
-        </View>
-      );
+    if (!user) return <LoadingSpinner />;
     return (
       <SalaryEmployeeCard
         employeeId={user.id}
@@ -377,7 +359,6 @@ interface OwnerSalaryListProps {
 }
 
 function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canManagePayouts }: OwnerSalaryListProps) {
-  const section = useScreenSectionScroll();
   const [selectedMonth, setSelectedMonth] = useState<Date>(
     () => new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   );
@@ -591,38 +572,13 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
 
   const trailingMonthChip = (
     <View style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}>
-      <TouchableOpacity
-        accessibilityLabel="Предыдущий месяц"
-        accessibilityRole="button"
-        onPress={prevMonth}
-        hitSlop={6}
-        style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-      >
+      <TouchableOpacity onPress={prevMonth} hitSlop={6} style={styles.monthChipBtn}>
         <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityRole="button"
-        style={[
-          {
-            minWidth: headerTouchSize,
-            minHeight: headerTouchSize,
-            alignItems: 'center',
-            justifyContent: 'center',
-          },
-          { flexShrink: 1, maxWidth: '100%' },
-        ]}
-        onPress={resetMonth}
-        activeOpacity={0.7}
-      >
+      <TouchableOpacity onPress={resetMonth} activeOpacity={0.7}>
         <Text style={[styles.monthChipLabel, { color: palette.text.primary }]}>{monthLabelShort(selectedMonth)}</Text>
       </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityLabel="Следующий месяц"
-        accessibilityRole="button"
-        onPress={nextMonth}
-        hitSlop={6}
-        style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-      >
+      <TouchableOpacity onPress={nextMonth} hitSlop={6} style={styles.monthChipBtn}>
         <Ionicons name="chevron-forward" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
     </View>
@@ -709,53 +665,17 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
     </View>
   );
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = salaries === undefined || (salaries.length === 0 && !isLoading) ? 'state' : 'list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        subtitle="Команда"
-        scroll={section}
-        title="Зарплата"
-        onBack={() => navigation.goBack()}
-        trailing={trailingMonthChip}
-      />
+      <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} trailing={trailingMonthChip} />
 
       {isError && salaries === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetch()} />
-        </ScreenSectionScrollView>
+        <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetch()} />
       ) : salaries === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <LoadingSpinner />
       ) : salaries.length === 0 && !isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
-          contentContainerStyle={[
-            [styles.emptyWrap, { paddingBottom: tabBarHeight + spacing[6] }],
-            { paddingTop: section.contentTop + spacing[12] },
-          ]}
+        <ScrollView
+          contentContainerStyle={[styles.emptyWrap, { paddingBottom: tabBarHeight + spacing[6] }]}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
           }
@@ -770,26 +690,18 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
           <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
             Зарплата рассчитывается на основе закрытых чеков
           </Text>
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
+        <FlashList
           data={salaries}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           ListHeaderComponent={summaryHeader}
-          contentContainerStyle={[
-            {
-              paddingHorizontal: spacing[4],
-              paddingTop: spacing[3],
-              paddingBottom: tabBarHeight + spacing[6],
-            },
-            { paddingTop: section.contentTop + spacing[3] },
-          ]}
+          contentContainerStyle={{
+            paddingHorizontal: spacing[4],
+            paddingTop: spacing[3],
+            paddingBottom: tabBarHeight + spacing[6],
+          }}
           ItemSeparatorComponent={ListSeparator}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -953,9 +865,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
 
   monthChip: {
-    flexWrap: 'wrap',
-    flexShrink: 1,
-    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'transparent',
@@ -965,8 +874,6 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
-    flexShrink: 1,
-    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 72,

@@ -31,14 +31,12 @@ import {
   buildLedgerFeed,
   type LedgerFeedItem,
 } from './LedgerFeed';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { ScreenSectionFlatList } from '../../components/ScreenSectionScrollable';
+import { TabBarFlatList as FlatList } from '../../components/TabBarScrollable';
 
 const keyExtractor = (item: LedgerFeedItem) => item.key;
 const renderItem = ({ item }: { item: LedgerFeedItem }) => <LedgerFeedRow item={item} />;
 
 export default function ManagerLedgerScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
@@ -161,28 +159,15 @@ export default function ManagerLedgerScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="Расчёты"
-        subtitle="С владельцем платформы"
-        onBack={() => navigation.goBack()}
-      />
-      <ScreenSectionFlatList
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
+      <IosScreenHeader title="Расчёты" subtitle="С владельцем платформы" onBack={() => navigation.goBack()} />
+      <FlatList
         data={feed}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         ListHeaderComponent={header}
         ListFooterComponent={footer}
         contentInset={contentInset}
-        contentContainerStyle={[
-          [styles.listContent, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />

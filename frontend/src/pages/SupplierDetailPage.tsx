@@ -817,7 +817,7 @@ export default function SupplierDetailPage() {
             }}
           />
         )}
-        <PageHeader composition="navigation" title="Поставщик" backTo="/suppliers" />
+        <PageHeader title="Поставщик" icon={Truck} backTo="/suppliers" />
         {!isLoading && (is404 || (!isError && !supplier)) ? (
           <Card>
             <EmptyState icon={Truck} title="Поставщик не найден" description="Возможно, он был удалён" />
@@ -1072,8 +1072,8 @@ export default function SupplierDetailPage() {
         />
       )}
       <PageHeader
-        composition="navigation"
         title={supplier.name}
+        icon={Truck}
         backTo="/suppliers"
         subtitle={subtitle}
         meta={
@@ -1086,11 +1086,7 @@ export default function SupplierDetailPage() {
         actions={
           canManage ? (
             supplier.isSystem ? (
-              <Button
-                variant={activeTab === 'deliveries' ? 'primary' : 'secondary'}
-                icon={Package}
-                onClick={openUsedPurchaseModal}
-              >
+              <Button icon={Package} onClick={openUsedPurchaseModal}>
                 Покупка б/у товара
               </Button>
             ) : (
@@ -1099,17 +1095,6 @@ export default function SupplierDetailPage() {
               </Button>
             )
           ) : undefined
-        }
-        toolbar={
-          <>
-            <Tabs
-              aria-label="Разделы поставщика"
-              idPrefix="supplier"
-              items={tabs}
-              value={activeTab}
-              onChange={(key) => setParam({ tab: key === 'deliveries' ? null : key })}
-            />
-          </>
         }
       />
 
@@ -1124,6 +1109,14 @@ export default function SupplierDetailPage() {
           hint={supplier.currentDebt > 0 ? 'Погасите через «Новая оплата»' : 'Долга нет'}
         />
       </div>
+
+      <Tabs
+        aria-label="Разделы поставщика"
+        idPrefix="supplier"
+        items={tabs}
+        value={activeTab}
+        onChange={(key) => setParam({ tab: key === 'deliveries' ? null : key })}
+      />
 
       <TabPanel idPrefix="supplier" tabKey="deliveries" active={activeTab === 'deliveries'} className="space-y-4">
         {/* «Новая поставка» скрыта для системного поставщика — приход по нему

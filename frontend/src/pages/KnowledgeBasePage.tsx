@@ -20,7 +20,6 @@ import { knowledgeApi } from '../api/services';
 import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeCategory, KnowledgeCourse } from '../types';
 import { formatDateShort } from '../../../shared/utils/formatters';
 import PageHeader from '../components/PageHeader';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import EmptyState from '../components/EmptyState';
 import QueryState from '../components/QueryState';
 import SearchInput from '../components/SearchInput';
@@ -246,29 +245,12 @@ export default function KnowledgeBasePage() {
     if (isArticleSection) {
       actions = (
         <>
-          <Button
-            variant="secondary"
-            icon={FolderPlus}
-            onClick={() => setFolderManager({ presetParent: folderId })}
-            className="hidden md:inline-flex"
-          >
+          <Button variant="secondary" icon={FolderPlus} onClick={() => setFolderManager({ presetParent: folderId })}>
             Папки
           </Button>
           <Button icon={Plus} onClick={() => setEditorArticle('new')}>
             {section === 'regulations' ? 'Новый регламент' : 'Новая статья'}
           </Button>
-          <HeaderActionMenu
-            items={[
-              {
-                key: 'folders',
-                label: 'Папки',
-                icon: FolderPlus,
-                onSelect: () => setFolderManager({ presetParent: folderId }),
-                selectTiming: 'after-close',
-                narrowOnly: true,
-              },
-            ]}
-          />
         </>
       );
     } else if (section === 'learning' && !courseId) {
@@ -291,37 +273,20 @@ export default function KnowledgeBasePage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        composition={backTo ? 'navigation' : 'section'}
-        title="База знаний"
-        subtitle={backTo ? subtitle : undefined}
-        backTo={backTo}
-        actions={actions}
-        toolbar={
-          <>
-            {!backTo && (
-              <Toolbar>
-                <SearchInput
-                  value={search}
-                  onChange={(v) => patch({ q: v.trim() || null }, { replace: true })}
-                  placeholder="Поиск по статьям, регламентам, папкам и курсам…"
-                  aria-label="Поиск по базе знаний"
-                  className="w-full lg:w-[28rem]"
-                />
-              </Toolbar>
-            )}
-            {!searchActive && !backTo && (
-              <Tabs<Section>
-                items={TAB_ITEMS}
-                value={section}
-                onChange={goToSection}
-                aria-label="Разделы базы знаний"
-                idPrefix="kb"
-              />
-            )}
-          </>
-        }
-      />
+      <PageHeader title="База знаний" icon={GraduationCap} subtitle={subtitle} backTo={backTo} actions={actions} />
+
+      {/* Глобальный поиск — по статьям, регламентам, папкам и курсам сразу */}
+      {!backTo && (
+        <Toolbar>
+          <SearchInput
+            value={search}
+            onChange={(v) => patch({ q: v.trim() || null }, { replace: true })}
+            placeholder="Поиск по статьям, регламентам, папкам и курсам…"
+            aria-label="Поиск по базе знаний"
+            className="w-full lg:w-[28rem]"
+          />
+        </Toolbar>
+      )}
 
       {searchActive ? (
         <SearchResultsPanel
@@ -337,6 +302,16 @@ export default function KnowledgeBasePage() {
         />
       ) : (
         <>
+          {!backTo && (
+            <Tabs<Section>
+              items={TAB_ITEMS}
+              value={section}
+              onChange={goToSection}
+              aria-label="Разделы базы знаний"
+              idPrefix="kb"
+            />
+          )}
+
           <TabPanel idPrefix="kb" tabKey="learning" active={section === 'learning'}>
             <LearningCenter
               isManager={isManager}

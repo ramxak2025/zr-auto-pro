@@ -1,32 +1,3 @@
-jest.mock('../../components/ScreenHeaderMenu', () => ({ __esModule: true, default: 'HeaderMenu' }));
-// Screen chrome is inert here; these suites exercise screen state and the existing business handlers.
-const mockSectionScroll = {
-  scrollY: { value: 0 },
-  titleHeight: { value: 64 },
-  progress: { value: 0 },
-  contentTop: 0,
-  reset: jest.fn(),
-  onScroll: jest.fn(),
-  onNativeScroll: jest.fn(),
-  onContentTop: jest.fn(),
-};
-jest.mock('../../components/ScreenSectionHeader', () => ({
-  __esModule: true,
-  default: 'Header',
-  useScreenSectionScroll: () => mockSectionScroll,
-}));
-jest.mock('../../components/ScreenSectionScrollable', () => ({
-  ScreenSectionScrollView: 'ScrollView',
-  ScreenSectionFlatList: 'FlatList',
-  ScreenSectionFlashList: 'FlashList',
-}));
-jest.mock('../../components/ScreenHeaderControls', () => ({
-  HeaderAction: 'HeaderAction',
-  HeaderIsland: 'HeaderIsland',
-  HeaderSearch: 'SearchInput',
-  headerTouchSize: 44,
-}));
-
 // Actual ServicesScreen state, input handlers and create/edit payloads.
 // Native hosts and transport are inert fixtures: this harness does not prove hit-testing or keyboard geometry.
 import React from 'react';
@@ -55,11 +26,6 @@ jest.mock('react', () => ({
           typeof next === 'function' ? (next as (mockValue: unknown) => unknown)(mockStates[index]) : next;
       },
     ];
-  },
-  useRef: (initial: unknown) => {
-    const index = mockIndex++;
-    if (!(index in mockStates)) mockStates[index] = { current: initial };
-    return mockStates[index] as { current: unknown };
   },
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
@@ -163,44 +129,6 @@ const nodes = (node: React.ReactNode): Element[] =>
           node as Element,
           ...React.Children.toArray((node as Element).props.children).flatMap(nodes),
           ...nodes((node as Element).props.trailing as React.ReactNode),
-          ...nodes((node as Element).props.leading as React.ReactNode),
-          ...nodes((node as Element).props.actions as React.ReactNode),
-          ...nodes(
-            node.type === 'HeaderAction'
-              ? React.createElement(
-                  'TouchableOpacity',
-                  {
-                    accessibilityLabel: (node as Element).props.label,
-                    disabled: Boolean((node as Element).props.disabled || (node as Element).props.loading),
-                    onPress: (node as Element).props.onPress,
-                  },
-                  (node as Element).props.title as React.ReactNode,
-                )
-              : null,
-          ),
-          ...nodes(
-            node.type === 'HeaderMenu'
-              ? ((node as Element).props.items as (false | null | undefined | Record<string, unknown>)[])
-                  .filter(
-                    (entry): entry is Record<string, unknown> =>
-                      Boolean(entry) &&
-                      (entry as Record<string, unknown>).type !== 'label' &&
-                      (entry as Record<string, unknown>).type !== 'separator',
-                  )
-                  .map((entry) =>
-                    React.createElement(
-                      'TouchableOpacity',
-                      {
-                        key: String(entry.id),
-                        accessibilityLabel: entry.label,
-                        disabled: Boolean(entry.disabled || entry.loading),
-                        onPress: entry.onSelect,
-                      },
-                      entry.label as React.ReactNode,
-                    ),
-                  )
-              : null,
-          ),
         ]
       : [];
 const text = (node: React.ReactNode): string =>
@@ -240,11 +168,7 @@ function enter(label: string, raw: string) {
   return input(label);
 }
 function create() {
-  press(
-    nodes(render()).find(
-      (node) => node.type === 'TouchableOpacity' && node.props.accessibilityLabel === 'Добавить услугу',
-    )!,
-  );
+  press(button(render(), '+ Новая'));
   enter('Замена масла...', 'Работа');
   enter('0', '1000');
 }
@@ -376,10 +300,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const header = (tree: React.ReactNode) => nodes(tree).find((node) => node.type === 'HeaderIsland')!;
-const headerMenu = (tree: React.ReactNode) => nodes(header(tree)).find((node) => node.type === 'HeaderMenu')!;
+const header = (tree: React.ReactNode) => nodes(tree).find((node) => node.type === 'IosScreenHeader')!;
 const importStatus = (tree: React.ReactNode) =>
-  nodes(header(tree)).find((node) => node.props.accessibilityRole === 'progressbar');
+  nodes(tree).find((node) => node.props.accessibilityRole === 'progressbar');
 
 function expectImportPending(tree: React.ReactNode) {
   const status = importStatus(tree);
@@ -389,17 +312,16 @@ function expectImportPending(tree: React.ReactNode) {
   expect(status!.props.accessibilityLabel).toBe('Подготовка импорта…');
   expect(text(status)).toBe('Подготовка импорта…');
   expect(nodes(status).some((node) => node.type === 'ActivityIndicator')).toBe(true);
-  // The status is screen content, so the closed HeaderMenu host cannot hide it.
-  expect(nodes(headerMenu(tree))).not.toContain(status);
-  expect(headerMenu(tree).props.loading).not.toBe(true);
-  expect(headerMenu(tree).props.disabled).not.toBe(true);
+  // Import progress remains visible outside the restored screen header.
+  expect(nodes(header(tree))).not.toContain(status);
+  expect(button(tree, '+ Новая').props.disabled).not.toBe(true);
   expect(button(tree, 'Импорт Excel').props.disabled).toBe(true);
-  for (const label of ['Видимость услуг', 'Экспорт Excel', 'Новая папка']) {
-    expect(button(tree, label).props.disabled).toBe(false);
+  for (const label of ['Видимость', 'Экспорт Excel', 'Новая папка']) {
+    expect(button(tree, label).props.disabled).not.toBe(true);
   }
 }
 
-it('keeps import progress visible with the menu closed while choosing a document and awaiting its preview', async () => {
+it('keeps import progress visible outside the header while choosing a document and awaiting its preview', async () => {
   const picked = deferred<import('expo-document-picker').DocumentPickerResult>();
   const preview = deferred<{ data: ServiceImportPreview }>();
   mockPickDocument.mockReturnValueOnce(picked.promise);

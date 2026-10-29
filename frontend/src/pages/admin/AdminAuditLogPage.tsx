@@ -89,28 +89,27 @@ export default function AdminAuditLogPage() {
     <div className="space-y-5">
       <PageHeader
         title="Журнал действий"
-        toolbar={
-          <>
-            {presentActions.length > 1 && (
-              <Toolbar>
-                <Select
-                  aria-label="Действие"
-                  value={actionFilter}
-                  onChange={(e) => setParams(e.target.value ? { action: e.target.value } : {}, { replace: true })}
-                  className="w-full sm:w-64"
-                >
-                  <option value="">Все действия</option>
-                  {presentActions.map((action) => (
-                    <option key={action} value={action}>
-                      {auditActionLabel(action)}
-                    </option>
-                  ))}
-                </Select>
-              </Toolbar>
-            )}
-          </>
-        }
+        icon={ScrollText}
+        subtitle="Операции администраторов платформы — новые сверху"
       />
+
+      {presentActions.length > 1 && (
+        <Toolbar>
+          <Select
+            aria-label="Действие"
+            value={actionFilter}
+            onChange={(e) => setParams(e.target.value ? { action: e.target.value } : {}, { replace: true })}
+            className="w-64"
+          >
+            <option value="">Все действия</option>
+            {presentActions.map((action) => (
+              <option key={action} value={action}>
+                {auditActionLabel(action)}
+              </option>
+            ))}
+          </Select>
+        </Toolbar>
+      )}
 
       <DataTable
         caption="Журнал действий администраторов платформы"

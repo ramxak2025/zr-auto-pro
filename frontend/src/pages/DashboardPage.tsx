@@ -9,7 +9,6 @@ import { getGreeting } from '../../../shared/utils/formatters';
 import type { UserPermissions, UserRole } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 import PageHeader from '../components/PageHeader';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import InstallmentsWidget from '../components/InstallmentsWidget';
 import { buttonClasses } from '../ui/Button';
 import KpiStrip from '../components/dashboard/KpiStrip';
@@ -41,10 +40,13 @@ const quickLinks: QuickLink[] = [
   { label: 'Отчёты', to: '/reports', icon: BarChart3, permission: 'financial_reports' },
 ];
 
-function QuickLinks({ links }: { links: QuickLink[] }) {
+function QuickLinks() {
+  const { hasPermission } = useAuth();
+  const visible = quickLinks.filter((a) => !a.permission || hasPermission(a.permission));
+  if (visible.length === 0) return null;
   return (
     <>
-      {links.map((a) => {
+      {visible.map((a) => {
         const Icon = a.icon;
         return (
           <Link key={a.to} to={a.to} className={buttonClasses({ variant: 'secondary' })}>
@@ -119,12 +121,11 @@ function AdminDashboard() {
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
-  const { user, hasPermission } = useAuth();
+  const { user } = useAuth();
   // Приветствие и дата — по времени АВТОСЕРВИСА (157), а не машины владельца.
   const tenantTz = useTenantTimezone();
   const { today } = useTenantCalendar();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
-  const visibleQuickLinks = isMaster ? [] : quickLinks.filter((a) => !a.permission || hasPermission(a.permission));
   const isOwner =
     user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
   const attendanceMode = user?.tenant?.attendanceMode ?? (user?.tenant?.shiftsEnabled ? 'manual' : 'admin');
@@ -135,31 +136,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader
-          variant="static"
-          className="min-w-0 flex-1"
-          title={displayName ? `${greeting}, ${displayName}` : greeting}
-          subtitle={`${todayLabel.charAt(0).toUpperCase()}${todayLabel.slice(1)} · обзор автосервиса`}
-        />
-        {visibleQuickLinks.length > 0 && (
-          <>
-            <div className="hidden flex-wrap items-center gap-2 md:flex">
-              <QuickLinks links={visibleQuickLinks} />
-            </div>
-            <HeaderActionMenu
-              className="md:hidden"
-              label="Переходы"
-              items={visibleQuickLinks.map((link) => ({
-                key: link.to,
-                label: link.label,
-                to: link.to,
-                icon: link.icon,
-              }))}
-            />
-          </>
-        )}
-      </div>
+      <PageHeader
+        title={displayName ? `${greeting}, ${displayName}` : greeting}
+        subtitle={`${todayLabel.charAt(0).toUpperCase()}${todayLabel.slice(1)} · обзор автосервиса`}
+        actions={!isMaster ? <QuickLinks /> : undefined}
+      />
 
       {/* Смена — сотрудникам; владельцу/директору не показывается */}
       {!isOwner && attendanceMode === 'manual' && <ShiftControl />}

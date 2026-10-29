@@ -1,32 +1,3 @@
-jest.mock('../../components/ScreenHeaderMenu', () => ({ __esModule: true, default: 'HeaderMenu' }));
-// Screen chrome is inert here; these suites exercise the existing business handlers.
-const mockSectionScroll = {
-  scrollY: { value: 0 },
-  titleHeight: { value: 64 },
-  progress: { value: 0 },
-  contentTop: 0,
-  reset: jest.fn(),
-  onScroll: jest.fn(),
-  onNativeScroll: jest.fn(),
-  onContentTop: jest.fn(),
-};
-jest.mock('../../components/ScreenSectionHeader', () => ({
-  __esModule: true,
-  default: 'Header',
-  useScreenSectionScroll: () => mockSectionScroll,
-}));
-jest.mock('../../components/ScreenSectionScrollable', () => ({
-  ScreenSectionScrollView: 'ScrollView',
-  ScreenSectionFlatList: 'FlatList',
-  ScreenSectionFlashList: 'FlashList',
-}));
-jest.mock('../../components/ScreenHeaderControls', () => ({
-  HeaderAction: 'HeaderAction',
-  HeaderIsland: 'HeaderIsland',
-  HeaderSearch: 'SearchInput',
-  headerTouchSize: 44,
-}));
-
 // Render the real screen functions with native surfaces replaced by inert hosts.
 // Network calls and query cache are explicit fixtures; no backend/device claim.
 import React from 'react';
@@ -251,44 +222,6 @@ const nodes = (node: React.ReactNode): Element[] =>
               : null,
           ),
           ...nodes((node as Element).props.ListHeaderComponent as React.ReactNode),
-          ...nodes((node as Element).props.leading as React.ReactNode),
-          ...nodes((node as Element).props.actions as React.ReactNode),
-          ...nodes(
-            node.type === 'HeaderAction'
-              ? React.createElement(
-                  'TouchableOpacity',
-                  {
-                    accessibilityLabel: (node as Element).props.label,
-                    disabled: Boolean((node as Element).props.disabled || (node as Element).props.loading),
-                    onPress: (node as Element).props.onPress,
-                  },
-                  (node as Element).props.title as React.ReactNode,
-                )
-              : null,
-          ),
-          ...nodes(
-            node.type === 'HeaderMenu'
-              ? ((node as Element).props.items as (false | null | undefined | Record<string, unknown>)[])
-                  .filter(
-                    (entry): entry is Record<string, unknown> =>
-                      Boolean(entry) &&
-                      (entry as Record<string, unknown>).type !== 'label' &&
-                      (entry as Record<string, unknown>).type !== 'separator',
-                  )
-                  .map((entry) =>
-                    React.createElement(
-                      'TouchableOpacity',
-                      {
-                        key: String(entry.id),
-                        accessibilityLabel: entry.label,
-                        disabled: Boolean(entry.disabled || entry.loading),
-                        onPress: entry.onSelect,
-                      },
-                      entry.label as React.ReactNode,
-                    ),
-                  )
-              : null,
-          ),
         ]
       : [];
 const render = (screen = ProductsScreen) => {

@@ -1,10 +1,3 @@
-import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import ScreenSectionHeader, {
-  useScreenSectionScroll,
-  type ScreenSectionScrollController,
-} from '../components/ScreenSectionHeader';
-
 /**
  * BookingsScreen — раздел «Записи» (внутренний инструмент персонала).
  *
@@ -26,7 +19,7 @@ import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Platform } fr
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-
+import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
@@ -39,6 +32,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { type Booking } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { statusChip, formatBookingTime, formatBookingDay, masterLabel } from './bookings/bookingHelpers';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 type Scope = 'upcoming' | 'past';
 
@@ -146,18 +140,7 @@ const BookingRow = React.memo(function BookingRow({
   );
 });
 
-export default function BookingsScreen({
-  embedded = false,
-  sectionController,
-  sectionHeader,
-}: {
-  embedded?: boolean;
-  sectionController?: ScreenSectionScrollController;
-  sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
-} = {}) {
-  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
-  const section = sectionController ?? ownSection;
-
+export default function BookingsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -239,10 +222,7 @@ export default function BookingsScreen({
     <View style={styles.headerTrailing}>
       <TouchableOpacity
         onPress={() => navigation.navigate('BookingSettings')}
-        style={[
-          [styles.headerIconBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }],
-          { minWidth: headerTouchSize, minHeight: headerTouchSize },
-        ]}
+        style={[styles.headerIconBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
         hitSlop={8}
         accessibilityRole="button"
         accessibilityLabel="Настройки записей"
@@ -250,7 +230,7 @@ export default function BookingsScreen({
         <Ionicons name="settings-outline" size={17} color={palette.text.secondary} />
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.addBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+        style={styles.addBtn}
         onPress={openCreate}
         hitSlop={8}
         accessibilityRole="button"
@@ -261,75 +241,49 @@ export default function BookingsScreen({
     </View>
   );
 
-  const sectionControls = (
-    <View style={styles.segmentWrap}>
-      <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
-        {(['upcoming', 'past'] as Scope[]).map((s) => {
-          const active = scope === s;
-          return (
-            <TouchableOpacity
-              key={s}
-              style={[
-                [styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              onPress={() => {
-                if (s === scope) return;
-                haptic('select');
-                setScope(s);
-              }}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.segmentText,
-                  { color: active ? palette.text.primary : palette.text.tertiary },
-                  active && styles.segmentTextActive,
-                ]}
-              >
-                {s === 'upcoming' ? 'Предстоящие' : 'Прошедшие'}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    </View>
-  );
-
-  // Reset only when React replaces this screen's native root scroller.
-  const sectionRootKind = bookings === undefined || (list.length === 0 && !isLoading) ? 'state-scroll' : 'booking-list';
-  const previousSectionRootKind = React.useRef(sectionRootKind);
-  React.useEffect(() => {
-    if (previousSectionRootKind.current !== sectionRootKind) {
-      previousSectionRootKind.current = sectionRootKind;
-      section.reset();
-    }
-  }, [sectionRootKind, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {sectionHeader ? (
-        sectionHeader(sectionControls, headerActions)
+      {embedded ? (
+        <View style={styles.embeddedHeaderActions}>{headerActions}</View>
       ) : (
-        <ScreenSectionHeader
-          actions={headerActions}
-          leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-          scroll={section}
-          title="Записи"
-        >
-          <View style={{ gap: 6 }}>{sectionControls}</View>
-        </ScreenSectionHeader>
+        <IosScreenHeader title="Записи" onBack={() => navigation.goBack()} trailing={headerActions} />
       )}
 
       {/* ── Segmented control: Предстоящие / Прошедшие ── */}
+      <View style={styles.segmentWrap}>
+        <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
+          {(['upcoming', 'past'] as Scope[]).map((s) => {
+            const active = scope === s;
+            return (
+              <TouchableOpacity
+                key={s}
+                style={[styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]]}
+                onPress={() => {
+                  if (s === scope) return;
+                  haptic('select');
+                  setScope(s);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.segmentText,
+                    { color: active ? palette.text.primary : palette.text.tertiary },
+                    active && styles.segmentTextActive,
+                  ]}
+                >
+                  {s === 'upcoming' ? 'Предстоящие' : 'Прошедшие'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
 
       {isError && bookings === undefined ? (
         // Pull-to-refresh должен работать и из error-state.
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[styles.errorWrap, { paddingTop: section.contentTop }]}
+        <ScrollView
+          contentContainerStyle={styles.errorWrap}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -339,22 +293,12 @@ export default function BookingsScreen({
             description="Проверьте подключение к интернету и попробуйте ещё раз"
             onRetry={() => refetch()}
           />
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : bookings === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : list.length === 0 && !isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[styles.errorWrap, { paddingTop: section.contentTop }]}
+        <ScrollView
+          contentContainerStyle={styles.errorWrap}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -365,19 +309,13 @@ export default function BookingsScreen({
             description={emptyCopy.desc}
             action={scope === 'upcoming' ? { label: 'Новая запись', onPress: openCreate } : undefined}
           />
-        </ScreenSectionScrollView>
+        </ScrollView>
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
+        <FlashList
           data={list}
           keyExtractor={(i) => i.id}
           renderItem={renderBooking}
-          contentContainerStyle={[
-            [styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null],
-            { paddingTop: section.contentTop },
-          ]}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -413,7 +351,7 @@ const styles = StyleSheet.create({
   },
 
   // Segmented control
-  segmentWrap: { paddingHorizontal: 0, paddingBottom: 0, paddingTop: 0 },
+  segmentWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
   segment: {
     flexDirection: 'row',
     borderRadius: borderRadius.lg,

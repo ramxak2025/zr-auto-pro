@@ -7,7 +7,17 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calendar, ChevronRight, Clock, Pencil, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react';
+import {
+  Calendar,
+  ChevronRight,
+  Clock,
+  Pencil,
+  Receipt,
+  TrendingDown,
+  TrendingUp,
+  UserCircle,
+  Users,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { salaryApi, scheduleApi, usersApi } from '../api/services';
@@ -218,21 +228,26 @@ export default function EmployeesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Сотрудники"
+        icon={UserCircle}
         subtitle={usersLoading ? 'Команда автосервиса' : `${activeUsers.length} активных`}
         actions={
-          hasPermission('motivation_manage') || hasPermission('salary_view') || hasPermission('salary_view_all') ? (
-            <Link to="/motivation" className={buttonClasses({ variant: 'secondary' })}>
-              Мотивация сотрудников
-            </Link>
-          ) : undefined
-        }
-        toolbar={
-          <SegmentedControl
-            aria-label="Период"
-            value={period}
-            onChange={setPeriod}
-            options={PERIOD_OPTIONS.map((p) => ({ value: p.key, label: p.label }))}
-          />
+          <div className="flex max-w-full flex-wrap items-center gap-3">
+            {(hasPermission('motivation_manage') ||
+              hasPermission('salary_view') ||
+              hasPermission('salary_view_all')) && (
+              <Link to="/motivation" className={buttonClasses({ variant: 'secondary' })}>
+                Мотивация сотрудников
+              </Link>
+            )}
+            <div className="max-w-full overflow-x-auto no-scrollbar">
+              <SegmentedControl
+                aria-label="Период"
+                value={period}
+                onChange={setPeriod}
+                options={PERIOD_OPTIONS.map((p) => ({ value: p.key, label: p.label }))}
+              />
+            </div>
+          </div>
         }
       />
 

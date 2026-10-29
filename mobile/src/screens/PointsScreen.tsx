@@ -84,13 +84,10 @@ import {
 import { pendingChecksSwitchNotice, resolvePointSwitchFailure } from './pointSwitch';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { buildPointCardRows, type PointCardRow } from '../../../shared/utils/pointCards';
-import { type TenantPoint, type PointsListResponse, type PointsSummaryResponse } from '../../../shared/types';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { TenantPoint, PointsListResponse, PointsSummaryResponse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function PointsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -354,16 +351,10 @@ export default function PointsScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Филиалы" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Филиалы" subtitle="Основной сервис и филиалы" onBack={() => navigation.goBack()} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: bottomReserve + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[2] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: bottomReserve + spacing[4] }]}
         contentInset={{ bottom: bottomReserve }}
         scrollIndicatorInsets={{ bottom: bottomReserve }}
         showsVerticalScrollIndicator={false}
@@ -403,7 +394,7 @@ export default function PointsScreen() {
             ) : null}
           </>
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

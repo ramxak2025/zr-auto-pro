@@ -63,9 +63,6 @@ import TransferManagerSheet from './TransferManagerSheet';
 import EmployeeAvatar from '../../components/EmployeeAvatar';
 import ResetOwnerPasswordSheet from './ResetOwnerPasswordSheet';
 import { KeyboardAwareScroll } from '../../components/KeyboardAware';
-import { useScreenSectionScroll } from '../../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../../components/ScreenSectionScrollable';
-import ScreenHeaderMenu from '../../components/ScreenHeaderMenu';
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -140,7 +137,6 @@ function toPointDraft(p?: TenantPoint): PointDraft {
 }
 
 export default function AdminTenantDetailScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const id: string = route.params?.id;
@@ -564,54 +560,28 @@ export default function AdminTenantDetailScreen() {
     );
   }, [tenant, isManager, beginImpersonation]);
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = tenant ? 'form' : 'terminal';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   if (!tenant) {
     return (
       <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader
-          scroll={section}
-          title={isManager ? 'Автосервис' : 'Тенант'}
-          onBack={() => navigation.goBack()}
-        />
+        <IosScreenHeader title={isManager ? 'Автосервис' : 'Тенант'} onBack={() => navigation.goBack()} />
         {tenantError && !tenantLoading ? (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            <View style={styles.stateBlock}>
-              <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
-              <Text style={[styles.stateText, { color: palette.text.secondary }]}>
-                {isManager ? 'Не удалось загрузить автосервис' : 'Не удалось загрузить тенанта'}
-              </Text>
-              <Pressable
-                onPress={() => {
-                  haptic('tap');
-                  refetchTenant();
-                }}
-                style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
-              >
-                <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
-              </Pressable>
-            </View>
-          </ScreenSectionScrollView>
+          <View style={styles.stateBlock}>
+            <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.stateText, { color: palette.text.secondary }]}>
+              {isManager ? 'Не удалось загрузить автосервис' : 'Не удалось загрузить тенанта'}
+            </Text>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                refetchTenant();
+              }}
+              style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
+            >
+              <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
+            </Pressable>
+          </View>
         ) : (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
-          </ScreenSectionScrollView>
+          <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
         )}
       </View>
     );
@@ -631,69 +601,11 @@ export default function AdminTenantDetailScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        trailing={
-          <>
-            {
-              <ScreenHeaderMenu
-                label="Автосервис: управление и история"
-                items={[
-                  {
-                    id: 'audit',
-                    label: 'Журнал действий',
-                    icon: 'document-text-outline',
-                    onSelect: () => navigation.navigate('AdminTenantAudit', { id: tenant.id, name: tenant.name }),
-                  },
-                  { type: 'separator', id: 'manage-line' },
-                  {
-                    id: 'suspend',
-                    label: suspended ? 'Возобновить работу' : 'Приостановить',
-                    icon: suspended ? 'play-circle-outline' : 'pause-circle-outline',
-                    danger: !suspended,
-                    loading: busy === 'suspend',
-                    onSelect: suspended ? handleUnsuspend : openSuspend,
-                  },
-                  {
-                    id: 'password',
-                    label: 'Сбросить пароль владельца',
-                    icon: 'lock-closed-outline',
-                    onSelect: () => {
-                      haptic('tap');
-                      setResetPasswordOpen(true);
-                    },
-                  },
-                  {
-                    id: 'impersonate',
-                    label: 'Войти как владелец',
-                    icon: 'enter-outline',
-                    loading: busy === 'impersonate',
-                    disabled: busy === 'impersonate',
-                    onSelect: handleImpersonate,
-                  },
-                ]}
-              />
-            }
-            {(busy === 'impersonate' || busy === 'suspend') && (
-              <ActivityIndicator size="small" color={palette.accent.primary} />
-            )}
-          </>
-        }
-        scroll={section}
-        title={tenant.name}
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader title={tenant.name} onBack={() => navigation.goBack()} />
 
       <KeyboardAwareScroll
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
         extraKeyboardBottomOffset={48}
-        contentContainerStyle={[
-          [styles.scroll, { paddingBottom: contentContainerPaddingBottom }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Subscription summary */}
@@ -809,8 +721,40 @@ export default function AdminTenantDetailScreen() {
             palette={palette}
             surfaceCard={surface.card}
           />
-
+          <ActionButton
+            icon={suspended ? 'play-circle-outline' : 'pause-circle-outline'}
+            label={suspended ? 'Возобновить работу' : 'Приостановить'}
+            onPress={suspended ? handleUnsuspend : openSuspend}
+            loading={busy === 'suspend'}
+            danger={!suspended}
+            palette={palette}
+            surfaceCard={surface.card}
+          />
+          <ActionButton
+            icon="lock-closed-outline"
+            label="Сбросить пароль владельца"
+            onPress={() => {
+              haptic('tap');
+              setResetPasswordOpen(true);
+            }}
+            palette={palette}
+            surfaceCard={surface.card}
+          />
           {/* Impersonation — primary destructive accent. */}
+          <Pressable
+            onPress={handleImpersonate}
+            disabled={busy === 'impersonate'}
+            style={[styles.impersonateBtn, { backgroundColor: palette.accent.primary }]}
+          >
+            {busy === 'impersonate' ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <>
+                <Ionicons name="enter-outline" size={18} color={colors.white} />
+                <Text style={styles.impersonateText}>Войти как владелец</Text>
+              </>
+            )}
+          </Pressable>
         </View>
 
         <TenantNotes key={tenant.id} tenantId={tenant.id} />
@@ -956,6 +900,18 @@ export default function AdminTenantDetailScreen() {
             )}
           </>
         ) : null}
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => navigation.navigate('AdminTenantAudit', { id: tenant.id, name: tenant.name })}
+          style={[styles.card, surface.card, { flexDirection: 'row', alignItems: 'center', gap: spacing[3] }]}
+        >
+          <Ionicons name="document-text-outline" size={22} color={palette.accent.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: palette.text.primary, fontSize: 16, fontWeight: '600' }}>Журнал действий</Text>
+            <Text style={{ color: palette.text.tertiary, marginTop: spacing[1] }}>История этого автосервиса</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+        </Pressable>
       </KeyboardAwareScroll>
 
       {/* Продление — общая шторка суперадмина и менеджера (сумма, срок, доля владельца). */}

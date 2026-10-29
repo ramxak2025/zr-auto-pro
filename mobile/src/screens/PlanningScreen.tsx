@@ -61,9 +61,7 @@ import type {
   User,
 } from '../../../shared/types';
 import { formatMoney, roleLabels } from '../../../shared/utils/formatters';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderAction } from '../components/ScreenHeaderControls';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ── Метаданные категорий постоянных расходов ────────────────────────────────
 
@@ -117,8 +115,6 @@ function initials(name: string): string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function PlanningScreen() {
-  const section = useScreenSectionScroll();
-  const deniedSection = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const shadow = useShadow();
@@ -436,22 +432,13 @@ export default function PlanningScreen() {
   if (!isOwner) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={deniedSection} title="Постоянные расходы" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={deniedSection.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: deniedSection.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.restricted}>
-            <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
-            <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
-              Планирование постоянных расходов и мотивации доступно сотрудникам с правом «Финансовые отчёты».
-            </Text>
-          </View>
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Постоянные расходы" onBack={() => navigation.goBack()} />
+        <View style={styles.restricted}>
+          <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
+          <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
+            Планирование постоянных расходов и мотивации доступно сотрудникам с правом «Финансовые отчёты».
+          </Text>
+        </View>
       </View>
     );
   }
@@ -461,11 +448,6 @@ export default function PlanningScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        trailing={
-          <HeaderAction label="Добавить расход" title="Добавить" icon="add" tone="primary" onPress={openFixedCreate} />
-        }
-        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-        scroll={section}
         title="Постоянные расходы"
         subtitle="Для расчёта чистой прибыли"
         onBack={() => navigation.goBack()}
@@ -474,45 +456,20 @@ export default function PlanningScreen() {
       {/* Автосервис плана (167): постоянка — на каждый филиал своя, и владелец
           обязан видеть, чей план перед ним. Только подпись: филиал выбран
           при входе / в разделе «Филиалы». */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {fixedError && fixedCosts === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchFixed()} />
-        </ScreenSectionScrollView>
+        <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchFixed()} />
       ) : fixedCosts === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <LoadingSpinner />
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
-          contentContainerStyle={[
-            {
-              paddingHorizontal: spacing[4],
-              paddingTop: spacing[3],
-              paddingBottom: tabBarHeight + spacing[6],
-              gap: spacing[4],
-            },
-            { paddingTop: section.contentTop + spacing[3] },
-          ]}
+        <ScrollView
+          contentContainerStyle={{
+            paddingHorizontal: spacing[4],
+            paddingTop: spacing[3],
+            paddingBottom: tabBarHeight + spacing[6],
+            gap: spacing[4],
+          }}
           contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           showsVerticalScrollIndicator={false}
@@ -556,6 +513,14 @@ export default function PlanningScreen() {
               <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>
                 Постоянные расходы
               </Text>
+              <TouchableOpacity
+                style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
+                onPress={openFixedCreate}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="add" size={16} color={colors.white} />
+                <Text style={styles.addBtnText}>Добавить</Text>
+              </TouchableOpacity>
             </View>
 
             {fixedCosts.length === 0 ? (
@@ -748,7 +713,7 @@ export default function PlanningScreen() {
               </View>
             )}
           </View>
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
 
       {/* ── Модалка постоянного расхода ──────────────────────────────────── */}

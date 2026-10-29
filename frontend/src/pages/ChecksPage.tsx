@@ -25,10 +25,15 @@ import { useTenantTimezone } from '../hooks/useTenantTimezone';
 import { zoned } from '../utils/tenantTime';
 import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import JournalHeader, { JournalPanel } from './journal/JournalHeader';
+import PageHeader from '../components/PageHeader';
 import Pagination from '../components/Pagination';
+import DatePeriodPicker from '../components/DatePeriodPicker';
+import SearchInput from '../components/SearchInput';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { Toolbar } from '../ui/Toolbar';
+import { Tabs, TabPanel } from '../ui/Tabs';
+import { Select } from '../ui/Select';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
@@ -673,6 +678,12 @@ export default function ChecksPage() {
     [timeZone, restoreMutation.isPending, restoreMutation.variables],
   );
 
+  const tabItems = [
+    { key: 'checks' as const, label: 'Чеки', icon: BookOpen },
+    { key: 'docs' as const, label: 'Документы склада', icon: Package },
+    ...(canSeeTrash ? [{ key: 'trash' as const, label: 'Корзина', icon: Trash2 }] : []),
+  ];
+
   const subtitle =
     view === 'checks'
       ? isLoading
@@ -692,19 +703,49 @@ export default function ChecksPage() {
           </button>
         </div>
       )}
-      <JournalHeader
-        subtitle={subtitle}
-        view={view}
-        onViewChange={(next) => patchParams({ view: next === 'checks' ? null : next })}
-        canSeeTrash={canSeeTrash}
-        search={search}
-        onSearchChange={(value) => patchParams({ q: value })}
-        applied={{ from: dateFrom, to: dateTo, masterId }}
-        options={masterOptions}
-        onApply={(values) => patchParams(values)}
+      <PageHeader title="Журнал" icon={BookOpen} subtitle={subtitle} />
+
+      <Tabs
+        aria-label="Разделы журнала"
+        idPrefix="journal"
+        items={tabItems}
+        value={view}
+        onChange={(v) => patchParams({ view: v === 'checks' ? null : v })}
       />
 
-      <JournalPanel tabKey="checks" active={view === 'checks'} className="space-y-4">
+      {view !== 'trash' && (
+        <Toolbar>
+          {view === 'checks' && (
+            <SearchInput
+              value={search}
+              onChange={(v) => patchParams({ q: v })}
+              placeholder="Клиент, авто, номер чека…"
+              aria-label="Поиск по журналу"
+              className="w-full sm:w-72"
+            />
+          )}
+          <Select
+            aria-label="Мастер"
+            placeholder="Все мастера"
+            options={masterOptions}
+            value={masterId}
+            onChange={(e) => patchParams({ masterId: e.target.value })}
+            className="w-full sm:w-52"
+          />
+          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => patchParams({ from, to })} />
+          {(search || masterId || hasPeriod) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => patchParams({ q: null, masterId: null, from: null, to: null })}
+            >
+              Сбросить
+            </Button>
+          )}
+        </Toolbar>
+      )}
+
+      <TabPanel idPrefix="journal" tabKey="checks" active={view === 'checks'} className="space-y-4">
         {/* Мобильные карточки (< md): владелец открывает журнал с телефона. */}
         <div className="space-y-3 md:hidden">
           {isLoading ? (
@@ -764,9 +805,9 @@ export default function ChecksPage() {
         </div>
 
         <Pagination page={page} total={total} limit={LIMIT} onChange={(p) => patchParams({ page: String(p) }, false)} />
-      </JournalPanel>
+      </TabPanel>
 
-      <JournalPanel tabKey="docs" active={view === 'docs'}>
+      <TabPanel idPrefix="journal" tabKey="docs" active={view === 'docs'}>
         {!hasPeriod ? (
           <DataTable
             columns={movementColumns}
@@ -796,10 +837,10 @@ export default function ChecksPage() {
             }}
           />
         )}
-      </JournalPanel>
+      </TabPanel>
 
       {canSeeTrash && (
-        <JournalPanel tabKey="trash" active={view === 'trash'}>
+        <TabPanel idPrefix="journal" tabKey="trash" active={view === 'trash'}>
           <DataTable
             caption="Корзина заказ-нарядов"
             columns={trashColumns}
@@ -816,7 +857,7 @@ export default function ChecksPage() {
               description: `Удалённые заказ-наряды хранятся здесь ${TRASH_RETENTION_DAYS} дней, затем удаляются навсегда`,
             }}
           />
-        </JournalPanel>
+        </TabPanel>
       )}
 
       <ConfirmDialog

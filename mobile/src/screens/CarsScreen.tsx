@@ -1,16 +1,12 @@
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
-import { headerTouchSize, HeaderAction, HeaderSearch } from '../components/ScreenHeaderControls';
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
 
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { carsApi } from '../api/services';
-
+import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import FreshnessBadge from '../components/FreshnessBadge';
@@ -22,7 +18,8 @@ import { useVinEnabled } from '../hooks/useVinEnabled';
 import { carVin } from '../utils/vinUi';
 import { normalizePlateQuery, plateMatches, looksLikePlateQuery } from '../utils/plateNormalize';
 import { haptic } from '../platform/haptics';
-import { type Car, type Check } from '../../../shared/types';
+import type { Car, Check } from '../../../shared/types';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 function formatDateShort(d?: string | null): string {
   if (!d) return '—';
@@ -38,7 +35,6 @@ function formatMoney(v: number): string {
 }
 
 export default function CarsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -168,98 +164,58 @@ export default function CarsScreen() {
     [expandedCarId, palette, toggleCar, vinEnabled],
   );
 
-  // Reset only when React replaces this screen's native root scroller.
-  const sectionRootKind =
-    data === undefined || (sortedCars.length === 0 && !isLoading && !search && !noPlateOnly)
-      ? 'state-scroll'
-      : 'car-list';
-  const previousSectionRootKind = React.useRef(sectionRootKind);
-  React.useEffect(() => {
-    if (previousSectionRootKind.current !== sectionRootKind) {
-      previousSectionRootKind.current = sectionRootKind;
-      section.reset();
-    }
-  }, [sectionRootKind, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        actions={
-          <ScreenHeaderMenu
-            label="Фильтр автомобилей"
-            icon="options-outline"
-            title={noPlateOnly ? 'Без номеров' : 'Все авто'}
-            items={[
-              {
-                id: 'all',
-                label: 'Все',
-                selected: !noPlateOnly,
-                onSelect: () => {
-                  haptic('select');
-                  setNoPlateOnly(false);
-                  setPage(1);
-                },
-              },
-              {
-                id: 'no-plate',
-                label: 'Без номеров',
-                selected: noPlateOnly,
-                onSelect: () => {
-                  haptic('select');
-                  setNoPlateOnly((v) => !v);
-                  setPage(1);
-                },
-              },
-            ]}
-          />
-        }
-        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-        scroll={section}
-        title="Авто"
-        context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
-      >
-        <View style={{ gap: 6 }}>
-          <View style={styles.searchWrap}>
-            <HeaderSearch
-              timing={{ debounceMs: 300 }}
-              focusOnClear={false}
-              value={search}
-              onChange={(v) => {
-                setSearch(v);
-                setPage(1);
-              }}
-              placeholder={vinEnabled ? 'Госномер (RU/INT), марка или VIN' : 'Госномер (RU/INT) или марка'}
-            />
-          </View>
-        </View>
-      </ScreenSectionHeader>
+      <IosScreenHeader title="Авто" onBack={() => navigation.goBack()} />
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+      </View>
+
+      <View style={styles.searchWrap}>
+        <SearchInput
+          value={search}
+          onChange={(v) => {
+            setSearch(v);
+            setPage(1);
+          }}
+          placeholder={vinEnabled ? 'Госномер (RU/INT), марка или VIN' : 'Госномер (RU/INT) или марка'}
+        />
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+        <CarFilterChip
+          active={!noPlateOnly}
+          label="Все"
+          icon="apps-outline"
+          onPress={() => {
+            haptic('select');
+            setNoPlateOnly(false);
+            setPage(1);
+          }}
+          palette={palette}
+        />
+        <CarFilterChip
+          active={noPlateOnly}
+          label="Без номеров"
+          icon="help-circle-outline"
+          onPress={() => {
+            haptic('select');
+            setNoPlateOnly((v) => !v);
+            setPage(1);
+          }}
+          palette={palette}
+        />
+      </ScrollView>
 
       {data === undefined ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ListSkeleton count={8} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={8} />
       ) : sortedCars.length === 0 && !isLoading && !search && !noPlateOnly ? (
         // Genuinely-empty unfiltered list — a full-screen EmptyState is fine
         // here (there's nothing to paginate). For search / «без номеров» we
         // keep the list mounted (below) so onEndReached can load deeper pages.
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <EmptyState title="Нет автомобилей" description="Автомобили появятся после добавления к клиентам" />
-        </ScreenSectionScrollView>
+        <EmptyState title="Нет автомобилей" description="Автомобили появятся после добавления к клиентам" />
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
+        <FlashList
           data={sortedCars}
           keyExtractor={(item) => item.id}
           renderItem={renderCar}
@@ -274,10 +230,7 @@ export default function CarsScreen() {
               />
             ) : null
           }
-          contentContainerStyle={[
-            { ...styles.list, paddingBottom: tabBarHeight + spacing[4] },
-            { paddingTop: section.contentTop },
-          ]}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -385,8 +338,13 @@ function CarChecksInline({ carId, palette }: { carId: string; palette: ReturnTyp
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   freshnessRow: { paddingHorizontal: spacing[4], alignItems: 'flex-end', minHeight: 14 },
-  searchWrap: { paddingHorizontal: 0, paddingBottom: 0 },
-  chipsRow: { paddingHorizontal: 0, paddingBottom: 0, gap: spacing[2], alignItems: 'center' },
+  searchWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+    gap: spacing[2],
+    alignItems: 'center',
+  },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -395,7 +353,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    minHeight: headerTouchSize,
   },
   chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },

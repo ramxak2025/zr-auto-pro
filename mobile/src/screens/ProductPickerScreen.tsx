@@ -39,7 +39,8 @@ import { loadProductCatalog } from '../../../shared/api/productCatalog';
  * результаты, не только текущая папка), локальный дебаунс 200 мс.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, RefreshControl, Platform } from 'react-native';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -68,9 +69,7 @@ import {
 import { formatQty, unitLabel } from '../utils/units';
 import { cellCodeMatchesQuery } from '../utils/storageCellsUi';
 import type { Product } from '../../../shared/types';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 /** Окно дребезга: повторный тап по ТОЙ ЖЕ строке в этом окне игнорируется
  *  (случайный двойной тап добавляет один раз). Осознанный повтор — после окна
@@ -287,7 +286,6 @@ type PickerListRow =
   | { type: 'product'; key: string; product: Product };
 
 export default function ProductPickerScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const isFocused = useIsFocused();
@@ -734,244 +732,180 @@ export default function ProductPickerScreen() {
     !showErrorState &&
     listRows.some((item) => item.type === 'product' && item.product.id === procurement.drafts.active);
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = showInitialSkeleton || showErrorState ? 'terminal' : 'products';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   if (!session) return null; // закрываемся в effect выше
   const ScreenContainer = session.purchaseOrder ? KeyboardAvoidingView : View;
 
   return (
     <ScreenContainer
       behavior={session.purchaseOrder ? 'padding' : undefined}
-      style={[styles.container, { backgroundColor: palette.bg.canvas }]}
+      style={[styles.container, { backgroundColor: palette.bg.canvas, paddingTop: insets.top }]}
     >
       {/* ── Шапка: X (корень) / назад-шеврон (глубже) + заголовок + свитчер
              склада (только корень). ────────────────────────────────────── */}
-      <ScreenSectionHeader
-        scroll={section}
-        title={title}
-        leading={
-          isRoot ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              onPress={handleDone}
-              style={[
-                [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              accessibilityLabel="Закрыть пикер товаров"
-            >
-              <Ionicons name="close" size={22} color={palette.text.secondary} />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              accessibilityRole="button"
-              onPress={() => navigation.goBack()}
-              style={[
-                [styles.headerBtn, { backgroundColor: palette.bg.muted }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              accessibilityLabel="Назад на уровень выше"
-            >
-              <Ionicons name="chevron-back" size={22} color={palette.text.secondary} />
-            </TouchableOpacity>
-          )
-        }
-        actions={
-          isRoot && warehouses.length > 0 ? (
-            <TouchableOpacity
-              accessibilityRole="button"
-              onPress={() => setShowWarehouseDropdown((v) => !v)}
-              style={[
-                [
-                  styles.headerWarehouseChip,
-                  { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
-                ],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
-              activeOpacity={0.7}
-              accessibilityLabel="Выбрать склад"
-            >
-              <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]}>
-                {warehouseLabel}
-              </Text>
-              <Ionicons
-                name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
-                size={14}
-                color={palette.accent.primaryText}
-              />
-            </TouchableOpacity>
-          ) : null
-        }
-      >
-        <HeaderIsland layout="column">
-          {isRoot && showWarehouseDropdown ? (
-            <View
-              style={[
-                styles.warehouseDropdown,
-                { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                buildShadow(palette, 'elevated'),
-              ]}
-            >
-              {warehouses.map((w) => {
-                const iconName =
-                  w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
-                const sub =
-                  w.kind === 'defect' ? 'Брак' : w.kind === 'used' ? 'Б/У — подержанные детали' : 'Основной склад';
-                const active = warehouseId === w.id;
-                return (
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    key={w.id}
-                    style={[
-                      [styles.warehouseDropdownRow, { borderBottomColor: palette.border.subtle }],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    onPress={() => {
-                      session.setWarehouseId(w.id);
-                      setShowWarehouseDropdown(false);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name={iconName as never} size={18} color={palette.accent.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.warehouseDropdownName, { color: palette.text.primary }]}>{w.name}</Text>
-                      <Text style={[styles.warehouseDropdownSub, { color: palette.text.secondary }]}>{sub}</Text>
-                    </View>
-                    {active ? (
-                      <Ionicons name="checkmark" size={20} color={palette.accent.primary} />
-                    ) : (
-                      <View style={{ width: 20 }} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ) : null}
-          <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
-            <TextInput
-              value={localSearch}
-              onChangeText={handleSearchChange}
-              style={[styles.searchInput, { color: palette.text.primary }]}
-              placeholder={isRoot ? 'Поиск товара...' : 'Поиск по всему складу...'}
-              placeholderTextColor={palette.text.tertiary}
-              autoCorrect={false}
-              autoCapitalize="none"
-              returnKeyType="search"
+      <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+        {isRoot ? (
+          <TouchableOpacity
+            onPress={handleDone}
+            style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
+            accessibilityLabel="Закрыть пикер товаров"
+          >
+            <Ionicons name="close" size={22} color={palette.text.secondary} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}
+            accessibilityLabel="Назад на уровень выше"
+          >
+            <Ionicons name="chevron-back" size={22} color={palette.text.secondary} />
+          </TouchableOpacity>
+        )}
+        <Text
+          style={[
+            styles.headerTitle,
+            Platform.OS === 'android' && styles.androidHeaderTitle,
+            { color: palette.text.primary },
+          ]}
+          numberOfLines={Platform.OS === 'android' ? 2 : 1}
+        >
+          {title}
+        </Text>
+        {isRoot && warehouses.length > 0 ? (
+          <TouchableOpacity
+            onPress={() => setShowWarehouseDropdown((v) => !v)}
+            style={[
+              styles.headerWarehouseChip,
+              { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
+            ]}
+            activeOpacity={0.7}
+            accessibilityLabel="Выбрать склад"
+          >
+            <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]} numberOfLines={1}>
+              {warehouseLabel}
+            </Text>
+            <Ionicons
+              name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={palette.accent.primaryText}
             />
-            {localSearch ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                style={{
-                  minWidth: headerTouchSize,
-                  minHeight: headerTouchSize,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                onPress={clearSearch}
-                hitSlop={8}
-                accessibilityLabel="Очистить поиск"
-              >
-                <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ) : isRoot ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                style={{
-                  minWidth: headerTouchSize,
-                  minHeight: headerTouchSize,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                onPress={openScanner}
-                hitSlop={8}
-                accessibilityLabel="Сканировать штрих-код"
-              >
-                <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {closeNotice ? (
-            <View style={{ padding: spacing[3] }}>
-              <Text accessibilityRole="alert" style={{ color: palette.text.primary }}>
-                {closeNotice}
-              </Text>
-              <TouchableOpacity
-                style={{
-                  minWidth: headerTouchSize,
-                  minHeight: headerTouchSize,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Отменить изменения позиции"
-                onPress={() => {
-                  const current = getProductPickerSession()?.purchaseOrder;
-                  if (!current) return;
-                  const id = current.drafts.active ?? Object.keys(current.drafts.entries)[0];
-                  if (id) delete current.drafts.entries[id];
-                  current.drafts.active = null;
-                  setCloseNotice('');
-                  notifyProcurementDrafts(current.updateLine);
-                }}
-              >
-                <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>
-                  Отменить изменения позиции
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-        </HeaderIsland>
-      </ScreenSectionHeader>
-      {/* ── Поиск по всему складу + сканер штрих-кода (корень) ───────────── */}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerSpacer} />
+        )}
+      </View>
 
+      {/* Инлайн-дропдаун складов (только корень) — in-flow, как в модалке. */}
+      {isRoot && showWarehouseDropdown ? (
+        <View
+          style={[
+            styles.warehouseDropdown,
+            { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+            buildShadow(palette, 'elevated'),
+          ]}
+        >
+          {warehouses.map((w) => {
+            const iconName =
+              w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
+            const sub =
+              w.kind === 'defect' ? 'Брак' : w.kind === 'used' ? 'Б/У — подержанные детали' : 'Основной склад';
+            const active = warehouseId === w.id;
+            return (
+              <TouchableOpacity
+                key={w.id}
+                style={[styles.warehouseDropdownRow, { borderBottomColor: palette.border.subtle }]}
+                onPress={() => {
+                  session.setWarehouseId(w.id);
+                  setShowWarehouseDropdown(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name={iconName as never} size={18} color={palette.accent.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.warehouseDropdownName, { color: palette.text.primary }]}>{w.name}</Text>
+                  <Text style={[styles.warehouseDropdownSub, { color: palette.text.secondary }]}>{sub}</Text>
+                </View>
+                {active ? (
+                  <Ionicons name="checkmark" size={20} color={palette.accent.primary} />
+                ) : (
+                  <View style={{ width: 20 }} />
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {/* ── Поиск по всему складу + сканер штрих-кода (корень) ───────────── */}
+      <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
+        <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
+        <TextInput
+          value={localSearch}
+          onChangeText={handleSearchChange}
+          style={[styles.searchInput, { color: palette.text.primary }]}
+          placeholder={isRoot ? 'Поиск товара...' : 'Поиск по всему складу...'}
+          placeholderTextColor={palette.text.tertiary}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+        />
+        {localSearch ? (
+          <TouchableOpacity onPress={clearSearch} hitSlop={8} accessibilityLabel="Очистить поиск">
+            <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : isRoot ? (
+          <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
+            <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      {closeNotice ? (
+        <View style={{ padding: spacing[3] }}>
+          <Text accessibilityRole="alert" style={{ color: palette.text.primary }}>
+            {closeNotice}
+          </Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Отменить изменения позиции"
+            onPress={() => {
+              const current = getProductPickerSession()?.purchaseOrder;
+              if (!current) return;
+              const id = current.drafts.active ?? Object.keys(current.drafts.entries)[0];
+              if (id) delete current.drafts.entries[id];
+              current.drafts.active = null;
+              setCloseNotice('');
+              notifyProcurementDrafts(current.updateLine);
+            }}
+          >
+            <Text style={{ color: palette.accent.primaryText, paddingVertical: spacing[2] }}>
+              Отменить изменения позиции
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       {/* ── Тело: скелетон → ошибка (без кеша) → FlashList папки+товары ──── */}
       <View style={styles.body}>
         {showInitialSkeleton ? (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveBottomNavigation={false}
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            <View style={styles.skeletonWrap}>
-              <ListSkeleton count={8} />
-            </View>
-          </ScreenSectionScrollView>
+          <View style={styles.skeletonWrap}>
+            <ListSkeleton count={8} />
+          </View>
         ) : showErrorState ? (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveBottomNavigation={false}
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            <View style={styles.stateWrap}>
-              <QueryErrorState
-                title={'Не удалось загрузить товары'}
-                description={'Проверьте соединение и попробуйте ещё раз'}
-                onRetry={() => refetch()}
-              />
-            </View>
-          </ScreenSectionScrollView>
+          <View style={styles.stateWrap}>
+            <QueryErrorState
+              title={'Не удалось загрузить товары'}
+              description={'Проверьте соединение и попробуйте ещё раз'}
+              onRetry={() => refetch()}
+            />
+          </View>
         ) : (
-          <ScreenSectionFlashList
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            style={{ flex: 1 }}
+          <FlashList
             extraData={sessionVersion}
             data={listRows}
             renderItem={renderItem}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={[styles.listContent, { paddingTop: section.contentTop }]}
+            contentContainerStyle={styles.listContent}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -1093,9 +1027,9 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     letterSpacing: -0.2,
   },
+  androidHeaderTitle: { fontSize: 16, lineHeight: 22 },
   headerSpacer: { width: 36 },
   headerWarehouseChip: {
-    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[1],
@@ -1103,16 +1037,15 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     paddingHorizontal: spacing[3],
     paddingVertical: 6,
-    maxWidth: '100%',
+    maxWidth: 160,
   },
   headerWarehouseChipText: {
-    flexShrink: 1,
     fontSize: 12,
     fontWeight: fontWeight.semibold,
     letterSpacing: -0.1,
   },
   warehouseDropdown: {
-    marginHorizontal: 0,
+    marginHorizontal: spacing[4],
     marginTop: 4,
     marginBottom: spacing[2],
     borderRadius: borderRadius['2xl'],
@@ -1133,12 +1066,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    marginHorizontal: 0,
-    marginVertical: 0,
+    marginHorizontal: spacing[4],
+    marginVertical: spacing[2],
     borderRadius: borderRadius.xl,
     paddingHorizontal: spacing[3],
-    paddingVertical: 0,
-    minHeight: headerTouchSize,
+    paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, paddingVertical: 0 },
   // Папки — зеркало folderRow Склада (иконка-бокс, имя, счётчик, шеврон).

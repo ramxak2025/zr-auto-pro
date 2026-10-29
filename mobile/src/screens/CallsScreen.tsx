@@ -1,10 +1,7 @@
-import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from 'react-native';
 import { setAudioModeAsync } from 'expo-audio';
-
+import IosScreenHeader from '../components/IosScreenHeader';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { useQuery } from '@tanstack/react-query';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,8 +18,7 @@ import { haptic } from '../platform/haptics';
 // (Round 13 #8 — деталка рассрочки показывает звонки той же строкой). Визуал и
 // perf-паттерны (React.memo + playerRef) сохранены один-в-один.
 import { CallRow, type Call } from '../components/calls/CallRow';
-
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,7 +50,6 @@ const TABS: { key: FilterTab; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): список звонков доступен по calls_view (гейт
@@ -193,15 +188,15 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   return (
     <View style={[styles.container, { backgroundColor: palette.bg.canvas }]}>
       {/* Unified iOS header — date stepper + calendar in trailing slot. */}
-      <ScreenSectionHeader
-        actions={
+      <IosScreenHeader
+        title="Звонки"
+        subtitle={dateLabel}
+        onBack={() => navigation.goBack()}
+        trailing={
           <View style={styles.dateNav}>
             <TouchableOpacity
               onPress={goToPrevDay}
-              style={[
-                [styles.dateBtn, { backgroundColor: palette.bg.muted }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               accessibilityRole="button"
               accessibilityLabel="Предыдущий день"
@@ -210,10 +205,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             </TouchableOpacity>
             <TouchableOpacity
               onPress={openDatePicker}
-              style={[
-                [styles.dateBtn, { backgroundColor: palette.bg.muted }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               accessibilityRole="button"
               accessibilityLabel="Выбрать дату"
@@ -223,10 +215,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             <TouchableOpacity
               onPress={goToNextDay}
               disabled={isToday}
-              style={[
-                [styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }],
-                { minWidth: headerTouchSize, minHeight: headerTouchSize },
-              ]}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               accessibilityRole="button"
               accessibilityLabel="Следующий день"
@@ -235,149 +224,131 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             </TouchableOpacity>
           </View>
         }
-        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-        scroll={section}
-        title="Звонки"
-        subtitle={dateLabel}
-      >
-        <View style={{ gap: 6 }}>
-          <View style={styles.tabs}>
-            {TABS.map((tab) => {
-              const count =
-                tab.key === 'all'
-                  ? summary?.total
-                  : tab.key === 'incoming'
-                    ? summary?.incoming
-                    : tab.key === 'outgoing'
-                      ? summary?.outgoing
-                      : summary?.missed;
-              const active = activeTab === tab.key;
-              return (
-                <TouchableOpacity
-                  key={tab.key}
-                  style={[
-                    [
-                      styles.tab,
-                      { backgroundColor: palette.bg.muted },
-                      active &&
-                        (palette.mode === 'dark'
-                          ? {
-                              backgroundColor: palette.accent.primarySoft,
-                              borderWidth: 1,
-                              borderColor: palette.border.strong,
-                            }
-                          : styles.tabActive),
-                    ],
-                    { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                  ]}
-                  onPress={() => setActiveTab(tab.key)}
-                >
-                  <Text
-                    style={[
-                      styles.tabText,
-                      { color: palette.text.tertiary },
-                      active &&
-                        (palette.mode === 'dark' ? { color: palette.accent.primaryText } : styles.tabTextActive),
-                    ]}
-                  >
-                    {tab.label} {count !== undefined ? count : ''}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      </ScreenSectionHeader>
+      />
 
       {/* One-line digest — "Сегодня: 12 звонков · 3 пропущенных · 5 → клиенты" */}
+      {summary && (
+        <Text style={[styles.digest, { color: palette.text.secondary }]} numberOfLines={1}>
+          {dateLabel}: {summary.total ?? 0} звонков
+          {summary.missed > 0 ? ` · ${summary.missed} пропущенных` : ''}
+          {calls.filter((c) => !!c.client).length > 0 ? ` · ${calls.filter((c) => !!c.client).length} → клиенты` : ''}
+        </Text>
+      )}
 
       {/* Summary strip */}
+      <View style={styles.summaryRow}>
+        {summaryItems.map((s) => (
+          <View
+            key={s.label}
+            style={[
+              styles.summaryCard,
+              { backgroundColor: palette.mode === 'dark' ? softTint(s.color, 'dark') : s.bg },
+            ]}
+          >
+            <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
+            <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
+          </View>
+        ))}
+      </View>
 
       {/* Warning */}
+      {summary && summary.notCalledBack > 0 && (
+        <View
+          style={[
+            styles.warning,
+            palette.mode === 'dark' && {
+              backgroundColor: softTint(colors.orange[600], 'dark'),
+              borderColor: palette.border.subtle,
+            },
+          ]}
+        >
+          <Ionicons
+            name="alert-circle"
+            size={16}
+            color={palette.mode === 'dark' ? colors.orange[400] : colors.orange[500]}
+          />
+          <Text style={[styles.warningText, palette.mode === 'dark' && { color: colors.orange[400] }]}>
+            {summary.notCalledBack} без перезвона
+          </Text>
+        </View>
+      )}
 
       {/* Filter tabs */}
+      <View style={styles.tabs}>
+        {TABS.map((tab) => {
+          const count =
+            tab.key === 'all'
+              ? summary?.total
+              : tab.key === 'incoming'
+                ? summary?.incoming
+                : tab.key === 'outgoing'
+                  ? summary?.outgoing
+                  : summary?.missed;
+          const active = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[
+                styles.tab,
+                { backgroundColor: palette.bg.muted },
+                active &&
+                  (palette.mode === 'dark'
+                    ? {
+                        backgroundColor: palette.accent.primarySoft,
+                        borderWidth: 1,
+                        borderColor: palette.border.strong,
+                      }
+                    : styles.tabActive),
+              ]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  { color: palette.text.tertiary },
+                  active && (palette.mode === 'dark' ? { color: palette.accent.primaryText } : styles.tabTextActive),
+                ]}
+              >
+                {tab.label} {count !== undefined ? count : ''}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
       {/* Call list */}
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        style={{ flex: 1 }}
-        contentContainerStyle={[{ paddingBottom: tabBarHeight + spacing[4] }, { paddingTop: section.contentTop }]}
+      <ScrollView
+        style={[styles.list, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        contentContainerStyle={{ paddingBottom: tabBarHeight + spacing[4] }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {summary && (
-          <Text style={[styles.digest, { color: palette.text.secondary }]} numberOfLines={1}>
-            {dateLabel}: {summary.total ?? 0} звонков
-            {summary.missed > 0 ? ` · ${summary.missed} пропущенных` : ''}
-            {calls.filter((c) => !!c.client).length > 0 ? ` · ${calls.filter((c) => !!c.client).length} → клиенты` : ''}
-          </Text>
-        )}
-        <View style={styles.summaryRow}>
-          {summaryItems.map((s) => (
-            <View
-              key={s.label}
-              style={[
-                styles.summaryCard,
-                { backgroundColor: palette.mode === 'dark' ? softTint(s.color, 'dark') : s.bg },
-              ]}
-            >
-              <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
-              <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
-            </View>
-          ))}
-        </View>
-        {summary && summary.notCalledBack > 0 && (
-          <View
-            style={[
-              styles.warning,
-              palette.mode === 'dark' && {
-                backgroundColor: softTint(colors.orange[600], 'dark'),
-                borderColor: palette.border.subtle,
-              },
-            ]}
-          >
-            <Ionicons
-              name="alert-circle"
-              size={16}
-              color={palette.mode === 'dark' ? colors.orange[400] : colors.orange[500]}
-            />
-            <Text style={[styles.warningText, palette.mode === 'dark' && { color: colors.orange[400] }]}>
-              {summary.notCalledBack} без перезвона
+        {isLoading ? (
+          <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />
+        ) : filteredCalls.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="call-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
+              {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
             </Text>
           </View>
+        ) : (
+          filteredCalls.map((call, idx) => (
+            <CallRow
+              key={`${call.id}-${idx}`}
+              call={call}
+              navigation={navigation}
+              playingId={playingId}
+              setPlayingId={setPlayingId}
+              canListen={canListen}
+              palette={palette}
+              timeZone={tenantTz}
+            />
+          ))
         )}
-        <View
-          style={[[styles.list, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }], { flex: 0 }]}
-        >
-          {isLoading ? (
-            <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />
-          ) : filteredCalls.length === 0 ? (
-            <View style={styles.empty}>
-              <Ionicons name="call-outline" size={32} color={palette.text.tertiary} />
-              <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
-                {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
-              </Text>
-            </View>
-          ) : (
-            filteredCalls.map((call, idx) => (
-              <CallRow
-                key={`${call.id}-${idx}`}
-                call={call}
-                navigation={navigation}
-                playingId={playingId}
-                setPlayingId={setPlayingId}
-                canListen={canListen}
-                palette={palette}
-                timeZone={tenantTz}
-              />
-            ))
-          )}
-        </View>
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       <DateTimePickerModal
         visible={datePickerOpen}
@@ -463,16 +434,7 @@ const styles = StyleSheet.create({
   },
   warningText: { fontSize: fontSize.xs, color: colors.orange[600], fontWeight: fontWeight.medium },
 
-  tabs: {
-    flexDirection: 'row',
-    marginHorizontal: spacing[4],
-    marginBottom: spacing[3],
-    gap: spacing[2],
-    paddingHorizontal: 0,
-    paddingTop: 0,
-    paddingBottom: 0,
-    flexWrap: 'wrap',
-  },
+  tabs: { flexDirection: 'row', marginHorizontal: spacing[4], marginBottom: spacing[3], gap: spacing[2] },
   tab: {
     flex: 1,
     paddingVertical: spacing[2],

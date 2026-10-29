@@ -117,6 +117,7 @@ export default function PurchaseOrdersPage() {
     <div className="space-y-5">
       <PageHeader
         title="Заказы поставщикам"
+        icon={ShoppingCart}
         subtitle={data ? countLabel(total, ['заказ', 'заказа', 'заказов']) : undefined}
         actions={
           canWrite ? (
@@ -126,29 +127,26 @@ export default function PurchaseOrdersPage() {
             </Link>
           ) : undefined
         }
-        toolbar={
-          <>
-            <Toolbar>
-              <Tabs
-                variant="pills"
-                aria-label="Статус заказа"
-                idPrefix="po-status"
-                items={STATUS_TABS}
-                value={status || 'all'}
-                onChange={(key) => setParam({ status: key === 'all' ? null : key, page: null })}
-              />
-              <Select
-                aria-label="Поставщик"
-                value={supplierId}
-                onChange={(e) => setParam({ supplier: e.target.value || null, page: null })}
-                placeholder="Все поставщики"
-                options={(suppliers ?? []).map((s) => ({ value: s.id, label: s.name }))}
-                className="w-full sm:w-60"
-              />
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar>
+        <Tabs
+          variant="pills"
+          aria-label="Статус заказа"
+          idPrefix="po-status"
+          items={STATUS_TABS}
+          value={status || 'all'}
+          onChange={(key) => setParam({ status: key === 'all' ? null : key, page: null })}
+        />
+        <Select
+          aria-label="Поставщик"
+          value={supplierId}
+          onChange={(e) => setParam({ supplier: e.target.value || null, page: null })}
+          placeholder="Все поставщики"
+          options={(suppliers ?? []).map((s) => ({ value: s.id, label: s.name }))}
+          className="w-full sm:w-60"
+        />
+      </Toolbar>
 
       <DataTable
         rows={orders}

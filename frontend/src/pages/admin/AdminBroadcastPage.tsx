@@ -259,7 +259,11 @@ export default function AdminBroadcastPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader composition="navigation" variant="static" title="Рассылка" />
+      <PageHeader
+        title="Рассылка"
+        icon={Megaphone}
+        subtitle="Объявления владельцам автосервисов — с сегментами и планированием"
+      />
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:items-start">
         {/* Композер */}

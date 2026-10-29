@@ -21,9 +21,10 @@ import { motivationApi, productsApi, warehouseCategoriesApi, warehousesApi } fro
 import { useColors } from '../../contexts/ThemeContext';
 import { Text, textVariantStyles } from '../../platform/Typography';
 import { borderRadius, colors, spacing } from '../../theme';
+import IosScreenHeader from '../IosScreenHeader';
 import QueryErrorState from '../QueryErrorState';
 import { ListSkeleton } from '../Skeleton';
-import { TabBarScrollView } from '../TabBarScrollable';
+import { TabBarFlashList, TabBarScrollView } from '../TabBarScrollable';
 import {
   buildMotivationChoices,
   coversChoice,
@@ -35,9 +36,6 @@ import {
   toggleMotivationChoice,
   type MotivationChoice,
 } from './selection';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../ScreenSectionHeader';
-import { ScreenSectionFlashList, ScreenSectionScrollView } from '../ScreenSectionScrollable';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../ScreenHeaderControls';
 
 interface Props {
   visible: boolean;
@@ -79,7 +77,6 @@ export function MotivationBulkForm({
   onSaved,
   onCloseBlockedChange,
 }: Omit<Props, 'sessionId' | 'onDismiss'> & { onCloseBlockedChange?: (blocked: boolean) => void }) {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
@@ -94,7 +91,6 @@ export function MotivationBulkForm({
   const [preview, setPreview] = useState<MotivationBulkResult | null>(null);
   const [replacements, setReplacements] = useState<NonNullable<MotivationBulkInput['replaceLegacyPromos']>>([]);
   const [reviewing, setReviewing] = useState(false);
-
   const [pending, setPending] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const locked = pending || uncertain;
@@ -328,151 +324,36 @@ export function MotivationBulkForm({
         </Pressable>
       </View>
     ) : null;
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = reviewing
-    ? 'review'
-    : warehouses.isError || catalog.isError || !catalog.data
-      ? 'catalog-state'
-      : 'catalog-list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   return (
     <KeyboardAvoidingView behavior="padding" style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        scroll={section}
+      <IosScreenHeader
         title={reviewing ? 'Проверка правила' : 'Товары и папки'}
-        leading={
-          <HeaderAction
-            label="Назад"
-            icon="chevron-back"
-            onPress={
-              reviewing
-                ? () => {
-                    if (!busy.current && !uncertain) setReviewing(false);
-                  }
-                : close
-            }
-          />
+        onBack={
+          reviewing
+            ? () => {
+                if (!busy.current && !uncertain) setReviewing(false);
+              }
+            : close
         }
-        actions={
+        trailing={
           <Pressable
-            accessibilityState={{ disabled: Boolean(locked) }}
             accessibilityRole="button"
             accessibilityLabel="Закрыть выбор"
             onPress={close}
             disabled={locked}
-            style={[styles.iconButton, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
+            style={styles.iconButton}
           >
             <Ionicons name="close" size={24} color={palette.text.secondary} />
           </Pressable>
         }
-      >
-        {!reviewing && (
-          <HeaderIsland layout="column">
-            <View style={styles.controls}>
-              {!searchFocused ? (
-                <>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Выбрать склад"
-                    accessibilityState={{ expanded: warehousesOpen }}
-                    onPress={() => setWarehousesOpen((value) => !value)}
-                    style={[
-                      [styles.warehouse, { backgroundColor: palette.bg.card }],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                  >
-                    <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
-                    <Text variant="bodyEmph" color={palette.text.primary} style={styles.grow}>
-                      {activeWarehouse?.name || 'Склад'}
-                    </Text>
-                    <Ionicons
-                      name={warehousesOpen ? 'chevron-up' : 'chevron-down'}
-                      size={18}
-                      color={palette.text.secondary}
-                    />
-                  </Pressable>
-                  {warehousesOpen ? (
-                    <TabBarScrollView horizontal reserveBottomNavigation={false} showsHorizontalScrollIndicator={false}>
-                      {(warehouses.data ?? []).map((warehouse) => (
-                        <Pressable
-                          key={warehouse.id}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: warehouse.id === activeWarehouseId }}
-                          onPress={() => {
-                            setWarehouseId(warehouse.id);
-                            setWarehousesOpen(false);
-                          }}
-                          style={[styles.warehouseOption, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                        >
-                          <Text
-                            color={
-                              warehouse.id === activeWarehouseId ? palette.accent.primaryText : palette.text.secondary
-                            }
-                          >
-                            {warehouse.name}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </TabBarScrollView>
-                  ) : null}
-                </>
-              ) : null}
-              <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="search" size={20} color={palette.text.secondary} />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  onFocus={() => setSearchFocused(true)}
-                  onBlur={() => setSearchFocused(false)}
-                  returnKeyType="done"
-                  submitBehavior="blurAndSubmit"
-                  onSubmitEditing={Keyboard.dismiss}
-                  placeholder="Название, папка, артикул"
-                  accessibilityLabel="Поиск товаров и папок"
-                  placeholderTextColor={palette.text.tertiary}
-                  style={[styles.input, textVariantStyles.body, { color: palette.text.primary }]}
-                  autoCorrect={false}
-                  clearButtonMode="while-editing"
-                />
-              </View>
-              {!searchFocused ? (
-                <View accessibilityRole="tablist" style={[styles.segments, { backgroundColor: palette.bg.muted }]}>
-                  {(['products', 'folders'] as const).map((value) => (
-                    <Pressable
-                      key={value}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: segment === value }}
-                      onPress={() => setSegment(value)}
-                      style={[
-                        [styles.segment, segment === value && { backgroundColor: palette.bg.card }],
-                        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                      ]}
-                    >
-                      <Text
-                        variant="bodyEmph"
-                        color={segment === value ? palette.text.primary : palette.text.secondary}
-                      >
-                        {value === 'products' ? 'Товары' : 'Папки'}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : null}
-            </View>
-          </HeaderIsland>
-        )}
-      </ScreenSectionHeader>
+      />
 
       {reviewing ? (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
+        <TabBarFlashList
           style={styles.grow}
           reserveBottomNavigation={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.review, { paddingTop: section.contentTop + spacing[4] }]}
+          contentContainerStyle={styles.review}
           data={selected}
           keyExtractor={(choice) => motivationTargetKey(choice.target)}
           ListHeaderComponent={
@@ -541,39 +422,100 @@ export function MotivationBulkForm({
         />
       ) : (
         <>
+          <View style={styles.controls}>
+            {!searchFocused ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Выбрать склад"
+                  accessibilityState={{ expanded: warehousesOpen }}
+                  onPress={() => setWarehousesOpen((value) => !value)}
+                  style={[styles.warehouse, { backgroundColor: palette.bg.card }]}
+                >
+                  <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
+                  <Text variant="bodyEmph" color={palette.text.primary} style={styles.grow}>
+                    {activeWarehouse?.name || 'Склад'}
+                  </Text>
+                  <Ionicons
+                    name={warehousesOpen ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={palette.text.secondary}
+                  />
+                </Pressable>
+                {warehousesOpen ? (
+                  <TabBarScrollView horizontal reserveBottomNavigation={false} showsHorizontalScrollIndicator={false}>
+                    {(warehouses.data ?? []).map((warehouse) => (
+                      <Pressable
+                        key={warehouse.id}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: warehouse.id === activeWarehouseId }}
+                        onPress={() => {
+                          setWarehouseId(warehouse.id);
+                          setWarehousesOpen(false);
+                        }}
+                        style={styles.warehouseOption}
+                      >
+                        <Text
+                          color={
+                            warehouse.id === activeWarehouseId ? palette.accent.primaryText : palette.text.secondary
+                          }
+                        >
+                          {warehouse.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </TabBarScrollView>
+                ) : null}
+              </>
+            ) : null}
+            <View style={[styles.search, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="search" size={20} color={palette.text.secondary} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
+                returnKeyType="done"
+                submitBehavior="blurAndSubmit"
+                onSubmitEditing={Keyboard.dismiss}
+                placeholder="Название, папка, артикул"
+                accessibilityLabel="Поиск товаров и папок"
+                placeholderTextColor={palette.text.tertiary}
+                style={[styles.input, textVariantStyles.body, { color: palette.text.primary }]}
+                autoCorrect={false}
+                clearButtonMode="while-editing"
+              />
+            </View>
+            {!searchFocused ? (
+              <View accessibilityRole="tablist" style={[styles.segments, { backgroundColor: palette.bg.muted }]}>
+                {(['products', 'folders'] as const).map((value) => (
+                  <Pressable
+                    key={value}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: segment === value }}
+                    onPress={() => setSegment(value)}
+                    style={[styles.segment, segment === value && { backgroundColor: palette.bg.card }]}
+                  >
+                    <Text variant="bodyEmph" color={segment === value ? palette.text.primary : palette.text.secondary}>
+                      {value === 'products' ? 'Товары' : 'Папки'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
           {warehouses.isError || catalog.isError ? (
-            <ScreenSectionScrollView
-              style={{ flex: 1 }}
-              onScroll={section.onScroll}
-              scrollEventThrottle={16}
-              contentInsetAdjustmentBehavior="never"
-              reserveBottomNavigation={false}
-              contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-            >
-              {retry}
-            </ScreenSectionScrollView>
+            retry
           ) : !catalog.data ? (
-            <ScreenSectionScrollView
-              style={{ flex: 1 }}
-              onScroll={section.onScroll}
-              scrollEventThrottle={16}
-              contentInsetAdjustmentBehavior="never"
-              reserveBottomNavigation={false}
-              contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-            >
-              <ListSkeleton count={5} />
-            </ScreenSectionScrollView>
+            <ListSkeleton count={5} />
           ) : (
-            <ScreenSectionFlashList
-              onScroll={section.onScroll}
-              scrollEventThrottle={16}
-              contentInsetAdjustmentBehavior="never"
+            <TabBarFlashList
               style={styles.grow}
               reserveBottomNavigation={false}
               data={choices}
               keyExtractor={(choice) => motivationTargetKey(choice.target)}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={[styles.list, { paddingTop: section.contentTop }]}
+              contentContainerStyle={styles.list}
               ListEmptyComponent={
                 <View style={styles.empty}>
                   <Text variant="title3" color={palette.text.primary}>
@@ -754,7 +696,7 @@ const styles = StyleSheet.create({
   keyboardDone: { minHeight: 44, minWidth: 64, justifyContent: 'center', alignItems: 'center' },
   grow: { flex: 1, minWidth: 0 },
   iconButton: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
-  controls: { paddingHorizontal: 0, gap: spacing[2], paddingBottom: 0 },
+  controls: { paddingHorizontal: spacing[4], gap: spacing[2], paddingBottom: spacing[3] },
   warehouse: {
     flexDirection: 'row',
     alignItems: 'center',

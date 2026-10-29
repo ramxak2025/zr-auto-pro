@@ -73,3 +73,39 @@ test('native PDF and table contain every actual server deduction once, preserve 
     assert.ok(html.includes('19,45 ₽'));
   }
 });
+
+test('report subtitle identifies rendered result dates while a new date draft remains unapplied', () => {
+  const filename = path.join(__dirname, '../src/screens/reports/ReportRunScreen.tsx');
+  const file = ts.createSourceFile(
+    filename,
+    fs.readFileSync(filename, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let subtitle;
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'subtitle') subtitle = node.initializer;
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  assert.ok(subtitle);
+  const evaluate = new Function(
+    'result',
+    'reportQuery',
+    'periodLabel',
+    'formatPeriodLabel',
+    `return (${subtitle.getText(file)});`,
+  );
+  const result = { period: { from: '2026-09-01', to: '2026-09-30' } };
+  const formatPeriodLabel = (_period, range) => `${range.from}—${range.to}`;
+  for (const isFetching of [false, true]) {
+    const label = evaluate(result, { isFetching }, 'Новый черновой период', formatPeriodLabel);
+    assert.equal(label, `Данные: 2026-09-01—2026-09-30${isFetching ? ' · обновляется…' : ''}`);
+    assert.ok(!label.includes('Новый черновой период'));
+  }
+  assert.equal(
+    evaluate(undefined, { isFetching: false }, 'Новый черновой период', formatPeriodLabel),
+    'Новый черновой период',
+  );
+});

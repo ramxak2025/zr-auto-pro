@@ -16,7 +16,7 @@ import {
 import SubscriptionCompositionFields from '../components/SubscriptionCompositionFields';
 import SubscriptionQuoteBreakdown from '../components/SubscriptionQuoteBreakdown';
 import { useQuery } from '@tanstack/react-query';
-import { Check, ChevronDown, MessageCircle, ShieldCheck, X } from 'lucide-react';
+import { Check, ChevronDown, CreditCard, MessageCircle, ShieldCheck, X } from 'lucide-react';
 import { format, isValid, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { SubscriptionInfo } from '../types';
@@ -113,10 +113,10 @@ export default function TariffPage() {
       )
     : undefined;
   const features = FEATURE_GROUPS.flatMap((group) => group.items);
-  if (!allowed) return <PageHeader variant="static" title="Подписка" subtitle="Нет доступа к настройкам компании." />;
+  if (!allowed) return <PageHeader title="Подписка" subtitle="Нет доступа к настройкам компании." icon={CreditCard} />;
   return (
     <div className="mx-auto max-w-6xl space-y-7 pb-4">
-      <PageHeader variant="static" title="Тариф и подписка" />
+      <PageHeader title="Тариф и подписка" icon={CreditCard} subtitle="Текущие условия и расчёт нового тарифа" />
       <QueryState
         isLoading={isLoading}
         isError={isError}

@@ -34,7 +34,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { authApi, subscriptionApi, uploadsApi } from '../api/services';
 import type { SubscriptionInfo, UserPermissions } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
-import { Card, IconButton, PageHeader, cn } from '../ui';
+import { Card, IconButton, cn } from '../ui';
 import { focusRing } from '../ui/tokens';
 import DeleteAccountSection from '../components/DeleteAccountSection';
 import UserAvatar from '../components/company/UserAvatar';
@@ -277,7 +277,7 @@ export default function MorePage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
-      <PageHeader variant="static" title="Ещё" />
+      <h1 className="page-title">Ещё</h1>
 
       {/* Профиль */}
       <Card padding="md">

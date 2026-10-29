@@ -1,6 +1,3 @@
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { useScreenSectionScroll, type ScreenSectionScrollController } from '../components/ScreenSectionHeader';
-
 import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,13 +22,13 @@ import { createBookingsApi } from '../../../shared/api/createServices';
 import { createSessionBoundClient, getImageUrl, captureAuthSession } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius } from '../theme';
-import {
-  type PublicBookingContactLinks,
-  type PublicBookingPageSettings,
-  type PublicBookingResource,
-  type PublicBookingServiceOption,
+import type {
+  PublicBookingContactLinks,
+  PublicBookingPageSettings,
+  PublicBookingResource,
+  PublicBookingServiceOption,
 } from '../../../shared/types';
-import { type PutPublicBookingSettingsRequest } from '../../../shared/api/types';
+import type { PutPublicBookingSettingsRequest } from '../../../shared/api/types';
 import { showMutationErrorToast } from '../components/Toast';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
@@ -48,18 +45,7 @@ const DEFAULT_HOURS = Object.fromEntries(
   Array.from({ length: 7 }, (_, day) => [String(day), { start: '09:00', end: '18:00' }]),
 );
 
-export default function PublicBookingSettingsScreen({
-  embedded = false,
-  sectionController,
-  sectionHeader,
-}: {
-  embedded?: boolean;
-  sectionController?: ScreenSectionScrollController;
-  sectionHeader?: (controls: React.ReactNode, actions?: React.ReactNode) => React.ReactNode;
-} = {}) {
-  const ownSection = useScreenSectionScroll({ composition: 'navigation' });
-  const section = sectionController ?? ownSection;
-
+export default function PublicBookingSettingsScreen({ embedded = false }: { embedded?: boolean }) {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const queryClient = useQueryClient();
@@ -262,54 +248,23 @@ export default function PublicBookingSettingsScreen({
 
   return (
     <View style={[embedded ? styles.embedded : styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {sectionHeader ? (
-        sectionHeader(null)
-      ) : (
-        <IosScreenHeader scroll={section} title="Страница записи" onBack={() => navigation.goBack()} />
-      )}
+      {!embedded && <IosScreenHeader title="Страница записи" onBack={() => navigation.goBack()} />}
       {!canManage ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Нет доступа"
-            description="Управлять публичной страницей может владелец автосервиса."
-            onRetry={() => navigation.goBack()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Нет доступа"
+          description="Управлять публичной страницей может владелец автосервиса."
+          onRetry={() => navigation.goBack()}
+        />
       ) : settingsQuery.isLoading ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ActivityIndicator style={styles.loader} color={colors.primary[600]} />
-        </ScreenSectionScrollView>
+        <ActivityIndicator style={styles.loader} color={colors.primary[600]} />
       ) : settingsQuery.isError ? (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <QueryErrorState
-            title="Не удалось загрузить настройки"
-            description="Проверьте подключение и повторите попытку."
-            onRetry={() => void settingsQuery.refetch()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          title="Не удалось загрузить настройки"
+          description="Проверьте подключение и повторите попытку."
+          onRetry={() => void settingsQuery.refetch()}
+        />
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[styles.content, { paddingTop: section.contentTop + spacing[4] }]}
-          keyboardShouldPersistTaps="handled"
-        >
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.intro}>
             <Text style={[styles.introTitle, { color: palette.text.primary }]}>Запись к вам</Text>
             <Text style={[styles.note, { color: palette.text.secondary }]}>
@@ -674,7 +629,7 @@ export default function PublicBookingSettingsScreen({
               </TouchableOpacity>
             </>
           )}
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
     </View>
   );

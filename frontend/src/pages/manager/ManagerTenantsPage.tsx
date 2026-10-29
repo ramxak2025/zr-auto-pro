@@ -226,40 +226,38 @@ export default function ManagerTenantsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Мои автосервисы"
+        icon={Building2}
         subtitle={summary ? `Всего: ${summary.tenants.total}` : undefined}
         actions={
           <Button icon={Plus} onClick={openCreate}>
             Новый автосервис
           </Button>
         }
-        toolbar={
-          <>
-            <Toolbar
-              end={
-                isFiltered && !isLoading && !isError ? (
-                  <span className="text-sm text-ink-3">
-                    Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
-                  </span>
-                ) : undefined
-              }
-            >
-              <SearchInput
-                value={search}
-                onChange={(v) => patch({ q: v })}
-                placeholder="Название или телефон…"
-                aria-label="Поиск автосервисов"
-                className="w-full sm:w-72"
-              />
-              <SegmentedControl<StatusFilter>
-                aria-label="Состояние подписки"
-                value={statusFilter}
-                onChange={(v) => patch({ status: v })}
-                options={STATUS_FILTERS}
-              />
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar
+        end={
+          isFiltered && !isLoading && !isError ? (
+            <span className="text-sm text-ink-3">
+              Найдено: <span className="font-semibold tabular-nums text-ink">{filtered.length}</span>
+            </span>
+          ) : undefined
+        }
+      >
+        <SearchInput
+          value={search}
+          onChange={(v) => patch({ q: v })}
+          placeholder="Название или телефон…"
+          aria-label="Поиск автосервисов"
+          className="w-full sm:w-72"
+        />
+        <SegmentedControl<StatusFilter>
+          aria-label="Состояние подписки"
+          value={statusFilter}
+          onChange={(v) => patch({ status: v })}
+          options={STATUS_FILTERS}
+        />
+      </Toolbar>
 
       <TenantsTable
         rows={filtered}

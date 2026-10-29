@@ -104,7 +104,7 @@ export default function NotificationSettingsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader variant="static" title="Уведомления" subtitle="Какие push-уведомления приходят на ваши устройства" />
+      <PageHeader title="Уведомления" icon={Bell} subtitle="Какие push-уведомления приходят на ваши устройства" />
 
       <div className="max-w-3xl space-y-5">
         {/* Лестница состояний: при ошибке загрузки переключатели скрыты — иначе

@@ -11,10 +11,12 @@ import {
   Switch,
   Platform,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
+import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
@@ -36,11 +38,7 @@ import type {
   MotivationRule,
   MotivationRulesResponse,
 } from '../../../shared/types';
-import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView, ScreenSectionFlashList } from '../components/ScreenSectionScrollable';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
+import { TabBarScrollView as ScrollView, TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -131,14 +129,12 @@ function editorForPromo(promo: MotivationPromo): EditorTarget {
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function MotivationScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
 
   const [tab, setTab] = useState<Tab>('promos');
-
   const [refreshing, setRefreshing] = useState(false);
 
   const [bulkVisible, setBulkVisible] = useState(false);
@@ -374,89 +370,25 @@ export default function MotivationScreen() {
   const promoList = Array.isArray(promos) ? promos : [];
   const activeCount = promoList.filter((p) => p.active).length;
 
-  const sectionIntro = (
-    <View
-      style={[
-        styles.ruleBanner,
-        {
-          backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.emerald[50],
-          borderColor: palette.mode === 'dark' ? 'transparent' : colors.emerald[100],
-        },
-      ]}
-    >
-      <View
-        style={[
-          styles.ruleIcon,
-          { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[100] },
-        ]}
-      >
-        <Ionicons name="gift-outline" size={18} color={colors.green[600]} />
-      </View>
-      <Text style={[styles.ruleText, { color: palette.text.secondary }]}>
-        Исполнители получают{' '}
-        <Text style={{ color: palette.text.primary, fontWeight: fontWeight.bold }}>% от продажи</Text> выбранных товаров
-        — до или после скидки по настройке правила. Бонус делится поровну и попадает в зарплату. Старые правила от маржи
-        сохраняются.
-      </Text>
-    </View>
-  );
-
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody =
-    tab === 'promos' ? 'promos' : accruals === undefined || accrualRows.length === 0 ? 'accrual-state' : 'accrual-list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   const renderPromosTab = () => {
-    if (configuration === undefined && promosLoading)
-      return (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          {sectionIntro}
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
-      );
+    if (configuration === undefined && promosLoading) return <LoadingSpinner />;
     if (configuration === undefined && promosError) {
       return (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          {sectionIntro}
-          <QueryErrorState
-            description="Не удалось загрузить правила мотивации. Проверьте соединение."
-            onRetry={() => refetchPromos()}
-          />
-        </ScreenSectionScrollView>
+        <QueryErrorState
+          description="Не удалось загрузить правила мотивации. Проверьте соединение."
+          onRetry={() => refetchPromos()}
+        />
       );
     }
     return (
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        style={{ flex: 1 }}
-        reserveSafeAreaBottom
-        contentContainerStyle={[
-          [styles.tabScroll, { paddingBottom: tabBarHeight + spacing[8] }],
-          { paddingTop: section.contentTop + spacing[1] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.tabScroll, { paddingBottom: tabBarHeight + spacing[8] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
         showsVerticalScrollIndicator={false}
         contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
       >
-        {sectionIntro}
         {/* Add CTA */}
         <TouchableOpacity activeOpacity={0.85} onPress={openBulk} style={styles.addCta}>
           <LinearGradient
@@ -563,7 +495,7 @@ export default function MotivationScreen() {
             ))}
           </View>
         ) : null}
-      </ScreenSectionScrollView>
+      </ScrollView>
     );
   };
 
@@ -580,79 +512,91 @@ export default function MotivationScreen() {
     return (
       <View style={{ flex: 1 }}>
         {/* Month switcher */}
+        <View style={styles.filterBar}>
+          <View style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}>
+            <TouchableOpacity onPress={prevMonth} hitSlop={6} style={styles.monthChipBtn}>
+              <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <Text style={[styles.monthChipLabel, { color: palette.text.primary }]}>{monthLabel}</Text>
+            <TouchableOpacity onPress={nextMonth} hitSlop={6} style={styles.monthChipBtn}>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.secondary} />
+            </TouchableOpacity>
+          </View>
+          <View
+            style={[
+              styles.totalPill,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+            ]}
+          >
+            <Text style={[styles.totalPillText, { color: colors.green[600] }]}>{formatMoney(accrualsTotal)}</Text>
+          </View>
+        </View>
 
         {/* Employee filter chips */}
+        {employeeChips.length > 0 ? (
+          <ScrollView
+            horizontal
+            style={styles.chipScroll}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+            keyboardShouldPersistTaps="handled"
+          >
+            <FilterChip
+              label="Все"
+              active={employeeFilter === null}
+              onPress={() => {
+                haptic('select');
+                setEmployeeFilter(null);
+              }}
+              palette={palette}
+            />
+            {employeeChips.map((e) => (
+              <FilterChip
+                key={e.id}
+                label={e.name}
+                active={employeeFilter === e.id}
+                onPress={() => {
+                  haptic('select');
+                  setEmployeeFilter(e.id);
+                }}
+                palette={palette}
+              />
+            ))}
+          </ScrollView>
+        ) : null}
 
         {loadingFirst ? (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            {sectionIntro}
-            <LoadingSpinner />
-          </ScreenSectionScrollView>
+          <LoadingSpinner />
         ) : accruals === undefined && accrualsError ? (
-          <ScreenSectionScrollView
-            style={{ flex: 1 }}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            reserveSafeAreaBottom
-            contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-          >
-            {sectionIntro}
-            <QueryErrorState
-              description="Не удалось загрузить начисления. Проверьте соединение."
-              onRetry={() => refetchAccruals()}
-            />
-          </ScreenSectionScrollView>
+          <QueryErrorState
+            description="Не удалось загрузить начисления. Проверьте соединение."
+            onRetry={() => refetchAccruals()}
+          />
         ) : accrualRows.length === 0 ? (
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            style={{ flex: 1 }}
-            reserveSafeAreaBottom
-            contentContainerStyle={[
-              [styles.tabScroll, { flexGrow: 1, paddingBottom: tabBarHeight + spacing[8] }],
-              { paddingTop: section.contentTop + spacing[1] },
-            ]}
+          <ScrollView
+            contentContainerStyle={[styles.tabScroll, { flexGrow: 1, paddingBottom: tabBarHeight + spacing[8] }]}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
             }
             showsVerticalScrollIndicator={false}
           >
-            {sectionIntro}
             <EmptyState
               icon="receipt-outline"
               title="Нет начислений за этот месяц"
               subtitle="Бонусы появятся, когда сотрудники продадут акционные товары и чеки будут оплачены"
               palette={palette}
             />
-          </ScreenSectionScrollView>
+          </ScrollView>
         ) : (
-          <ScreenSectionFlashList
-            ListHeaderComponent={sectionIntro}
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            style={{ flex: 1 }}
-            reserveSafeAreaBottom
+          <FlashList
             data={accrualRows}
             renderItem={renderAccrualRow}
             keyExtractor={accrualKey}
-            contentContainerStyle={[
-              {
-                paddingHorizontal: spacing[4],
-                paddingTop: spacing[1],
-                paddingBottom: tabBarHeight + spacing[8],
-              },
-              { paddingTop: section.contentTop + spacing[1] },
-            ]}
+            contentContainerStyle={{
+              paddingHorizontal: spacing[4],
+              paddingTop: spacing[1],
+              paddingBottom: tabBarHeight + spacing[8],
+            }}
             ItemSeparatorComponent={AccrualSeparator}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -669,106 +613,55 @@ export default function MotivationScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        scroll={section}
-        title="Мотивация сотрудников"
-        context={
-          tab === 'accruals' ? (
-            <View
-              style={[
-                styles.totalPill,
-                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
-              ]}
-            >
-              <Text style={[styles.totalPillText, { color: colors.green[600] }]}>{formatMoney(accrualsTotal)}</Text>
-            </View>
-          ) : null
-        }
-      >
-        <HeaderIsland layout="column">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />
-            <View style={{ flex: 1, minWidth: 180 }}>
-              <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
-                <SegmentButton
-                  label="Правила"
-                  active={tab === 'promos'}
-                  onPress={() => {
-                    haptic('select');
-                    setTab('promos');
-                  }}
-                  palette={palette}
-                />
-                <SegmentButton
-                  label="Начисления"
-                  active={tab === 'accruals'}
-                  onPress={() => {
-                    haptic('select');
-                    setTab('accruals');
-                  }}
-                  palette={palette}
-                />
-              </View>
-            </View>
-          </View>
+      <IosScreenHeader title="Мотивация сотрудников" onBack={() => navigation.goBack()} />
 
-          {tab === 'accruals' ? (
-            <>
-              <View style={styles.filterBar}>
-                <View style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}>
-                  <TouchableOpacity
-                    accessibilityLabel="Предыдущий месяц"
-                    accessibilityRole="button"
-                    onPress={prevMonth}
-                    hitSlop={6}
-                    style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                  >
-                    <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                  <Text style={[styles.monthChipLabel, { color: palette.text.primary }]}>{monthLabel}</Text>
-                  <TouchableOpacity
-                    accessibilityLabel="Следующий месяц"
-                    accessibilityRole="button"
-                    onPress={nextMonth}
-                    hitSlop={6}
-                    style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-                  >
-                    <Ionicons name="chevron-forward" size={16} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-              {employeeChips.length > 0 && (
-                <ScreenHeaderMenu
-                  label="Сотрудник в начислениях"
-                  icon="person-outline"
-                  title={employeeChips.find((e) => e.id === employeeFilter)?.name || 'Все сотрудники'}
-                  items={[
-                    {
-                      id: 'all',
-                      label: 'Все',
-                      selected: employeeFilter === null,
-                      onSelect: () => {
-                        haptic('select');
-                        setEmployeeFilter(null);
-                      },
-                    },
-                    ...employeeChips.map((e) => ({
-                      id: e.id,
-                      label: e.name,
-                      selected: employeeFilter === e.id,
-                      onSelect: () => {
-                        haptic('select');
-                        setEmployeeFilter(e.id);
-                      },
-                    })),
-                  ]}
-                />
-              )}
-            </>
-          ) : null}
-        </HeaderIsland>
-      </ScreenSectionHeader>
+      {/* Rule explainer — always visible so the owner understands the mechanic. */}
+      <View
+        style={[
+          styles.ruleBanner,
+          {
+            backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.emerald[50],
+            borderColor: palette.mode === 'dark' ? 'transparent' : colors.emerald[100],
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.ruleIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[100] },
+          ]}
+        >
+          <Ionicons name="gift-outline" size={18} color={colors.green[600]} />
+        </View>
+        <Text style={[styles.ruleText, { color: palette.text.secondary }]}>
+          Исполнители получают{' '}
+          <Text style={{ color: palette.text.primary, fontWeight: fontWeight.bold }}>% от продажи</Text> выбранных
+          товаров — до или после скидки по настройке правила. Бонус делится поровну и попадает в зарплату. Старые
+          правила от маржи сохраняются.
+        </Text>
+      </View>
+
       {/* Segmented control */}
+      <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
+        <SegmentButton
+          label="Правила"
+          active={tab === 'promos'}
+          onPress={() => {
+            haptic('select');
+            setTab('promos');
+          }}
+          palette={palette}
+        />
+        <SegmentButton
+          label="Начисления"
+          active={tab === 'accruals'}
+          onPress={() => {
+            haptic('select');
+            setTab('accruals');
+          }}
+          palette={palette}
+        />
+      </View>
 
       {tab === 'promos' ? renderPromosTab() : renderAccrualsTab()}
 
@@ -946,11 +839,7 @@ interface SegmentButtonProps {
 function SegmentButton({ label, active, onPress, palette }: SegmentButtonProps) {
   return (
     <TouchableOpacity
-      accessibilityRole="button"
-      style={[
-        [styles.segmentBtn, active && { backgroundColor: palette.bg.card }],
-        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-      ]}
+      style={[styles.segmentBtn, active && { backgroundColor: palette.bg.card }]}
       onPress={onPress}
       activeOpacity={0.8}
     >
@@ -980,16 +869,12 @@ interface FilterChipProps {
 function FilterChip({ label, active, onPress, palette }: FilterChipProps) {
   return (
     <TouchableOpacity
-      accessibilityRole="button"
       style={[
-        [
-          styles.filterChip,
-          {
-            backgroundColor: active ? palette.accent.primary : palette.bg.muted,
-            borderColor: active ? palette.accent.primary : palette.border.subtle,
-          },
-        ],
-        { minWidth: headerTouchSize, minHeight: headerTouchSize },
+        styles.filterChip,
+        {
+          backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
       ]}
       onPress={onPress}
       activeOpacity={0.8}
@@ -1282,8 +1167,8 @@ const styles = StyleSheet.create({
   // Segmented control
   segment: {
     flexDirection: 'row',
-    marginHorizontal: 0,
-    marginBottom: 0,
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[3],
     padding: 3,
     borderRadius: borderRadius.xl,
     gap: 3,
@@ -1368,14 +1253,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 0,
+    paddingHorizontal: spacing[4],
     marginBottom: spacing[2],
-    paddingBottom: 0,
   },
   monthChip: {
-    flexWrap: 'wrap',
-    flexShrink: 1,
-    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: borderRadius.full,
@@ -1384,8 +1265,6 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
-    flexShrink: 1,
-    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 96,

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Coins, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { MotivationPromo, MotivationRule } from '../../../shared/types';
 import { motivationApi, usersApi } from '../api/services';
@@ -133,7 +133,7 @@ export default function MotivationPage() {
   if (!canView)
     return (
       <div className="space-y-4">
-        <PageHeader variant="static" title="Мотивация сотрудников" />
+        <PageHeader title="Мотивация сотрудников" icon={Coins} />
         <p className="text-sm text-ink-2">Нет доступа к мотивации сотрудников. Обратитесь к владельцу автосервиса.</p>
       </div>
     );
@@ -141,6 +141,8 @@ export default function MotivationPage() {
     <div className="space-y-5">
       <PageHeader
         title="Мотивация сотрудников"
+        icon={Coins}
+        subtitle="Процент с продажи товаров"
         actions={
           canManage && !composer ? (
             <Button
@@ -154,27 +156,22 @@ export default function MotivationPage() {
             </Button>
           ) : undefined
         }
-        toolbar={
-          <>
-            {canManage && (
-              <SegmentedControl
-                aria-label="Раздел мотивации"
-                value={tab}
-                onChange={setTab}
-                options={[
-                  { value: 'rules', label: 'Правила' },
-                  { value: 'accruals', label: 'Начисления' },
-                ]}
-              />
-            )}
-          </>
-        }
       />
       <p className="max-w-3xl text-sm leading-relaxed text-ink-2">
         Новые правила начисляют процент от продажи товаров — до или после скидки по настройке правила. Бонус делится
         поровну между подтверждёнными исполнителями. Изменения действуют только для новых продаж.
       </p>
-
+      {canManage && (
+        <SegmentedControl
+          aria-label="Раздел мотивации"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'rules', label: 'Правила' },
+            { value: 'accruals', label: 'Начисления' },
+          ]}
+        />
+      )}
       {composer && canManage && (
         <MotivationBulkComposer
           onClose={() => setComposer(false)}

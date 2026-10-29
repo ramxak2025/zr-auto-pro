@@ -1,6 +1,3 @@
-import { headerTouchSize, HeaderAction } from '../components/ScreenHeaderControls';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-
 /**
  * MailingsScreen — «Рассылки».
  *
@@ -29,17 +26,17 @@ import { useColors } from '../contexts/ThemeContext';
 import { marketingApi, clientsApi, clientSourcesApi, bookingsApi, installmentsApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-
+import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import {
-  type Client,
-  type MessagingIntegration,
-  type SegmentBroadcastCriteria,
-  type SegmentBroadcastResult,
-  type AutoMailingOverview,
+import type {
+  Client,
+  MessagingIntegration,
+  SegmentBroadcastCriteria,
+  SegmentBroadcastResult,
+  AutoMailingOverview,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
@@ -943,7 +940,6 @@ function AutoTab() {
 // ─────────────────────────────────────────────────────────────────────
 
 export default function MailingsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -975,65 +971,50 @@ export default function MailingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-        scroll={section}
-        title="Рассылки"
-      >
-        <View style={{ gap: 6 }}>
-          <View style={styles.tabBarWrap}>
-            <View style={[styles.tabBar, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-              {tabs.map((tab) => {
-                const active = activeTab === tab.key;
-                return (
-                  <TouchableOpacity
-                    key={tab.key}
-                    style={[
-                      [styles.tab, active && [styles.tabActive, { backgroundColor: palette.bg.card }]],
-                      { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                    ]}
-                    onPress={() => {
-                      haptic('select');
-                      setActiveTab(tab.key);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={active ? tab.iconSolid : tab.iconOutline}
-                      size={15}
-                      color={active ? palette.accent.primary : palette.text.tertiary}
-                    />
-                    <Text
-                      style={[
-                        styles.tabText,
-                        {
-                          color: active ? palette.text.primary : palette.text.tertiary,
-                          fontWeight: active ? fontWeight.bold : fontWeight.medium,
-                        },
-                      ]}
-                    >
-                      {tab.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
+      <IosScreenHeader title="Рассылки" onBack={() => navigation.goBack()} />
+
+      <View style={styles.tabBarWrap}>
+        <View style={[styles.tabBar, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          {tabs.map((tab) => {
+            const active = activeTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                style={[styles.tab, active && [styles.tabActive, { backgroundColor: palette.bg.card }]]}
+                onPress={() => {
+                  haptic('select');
+                  setActiveTab(tab.key);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={active ? tab.iconSolid : tab.iconOutline}
+                  size={15}
+                  color={active ? palette.accent.primary : palette.text.tertiary}
+                />
+                <Text
+                  style={[
+                    styles.tabText,
+                    {
+                      color: active ? palette.text.primary : palette.text.tertiary,
+                      fontWeight: active ? fontWeight.bold : fontWeight.medium,
+                    },
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      </ScreenSectionHeader>
+      </View>
 
       {/* KeyboardAwareScroll (Round 11 #1): поле сообщения (multiline) держится
           над клавиатурой на iOS И Android. paddingBottom >= tabBarHeight —
           правило плавающего tab bar не нарушено. */}
       <KeyboardAwareScroll
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
@@ -1054,7 +1035,7 @@ const styles = StyleSheet.create({
   scrollContent: { padding: spacing[4] },
 
   // Segmented tab control
-  tabBarWrap: { paddingHorizontal: 0, paddingBottom: 0 },
+  tabBarWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2.5] },
   tabBar: {
     flexDirection: 'row',
     borderRadius: borderRadius.full,

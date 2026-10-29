@@ -27,6 +27,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -42,8 +43,7 @@ import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { TrashedCheck } from '../../../shared/types';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionFlashList, ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { TabBarFlashList as FlashList } from '../components/TabBarScrollable';
 
 // Бэкенд хранит удалённые чеки 30 дней с момента deletedAt, потом вычищает
 // навсегда (см. shared/api/createServices.ts → checksApi.trash).
@@ -200,7 +200,6 @@ const TrashRow = React.memo(function TrashRow({ item, restoring, onRestore, pale
 });
 
 export default function CheckTrashScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -278,76 +277,32 @@ export default function CheckTrashScreen() {
     [restoringId, handleRestore, palette],
   );
 
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = trashed === undefined || (trashed.length === 0 && !isLoading) ? 'terminal' : 'list';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* IosScreenHeader сам учитывает insets.top — плюс тот же back-паттерн,
           что у Доски (goBack → Журнал). */}
-      <IosScreenHeader
-        scroll={section}
-        title="Корзина"
-        subtitle="Восстановление доступно 30 дней"
-        onBack={() => navigation.goBack()}
-      />
+      <IosScreenHeader title="Корзина" subtitle="Восстановление доступно 30 дней" onBack={() => navigation.goBack()} />
       {isError && trashed === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <QueryErrorState
-              title="Не удалось загрузить корзину"
-              description="Проверьте подключение к интернету и попробуйте ещё раз"
-              onRetry={() => refetch()}
-            />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.centerFill}>
+          <QueryErrorState
+            title="Не удалось загрузить корзину"
+            description="Проверьте подключение к интернету и попробуйте ещё раз"
+            onRetry={() => refetch()}
+          />
+        </View>
       ) : trashed === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <ListSkeleton count={6} />
-        </ScreenSectionScrollView>
+        <ListSkeleton count={6} />
       ) : trashed.length === 0 && !isLoading ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <EmptyState title="Корзина пуста" description="Удалённые заказ-наряды хранятся 30 дней" />
-        </ScreenSectionScrollView>
+        <EmptyState title="Корзина пуста" description="Удалённые заказ-наряды хранятся 30 дней" />
       ) : (
-        <ScreenSectionFlashList
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
+        <FlashList
           data={trashed}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           // iOS: нижний отступ через contentInset — контент скроллится под
           // плавающим Liquid Glass таб-баром. Android игнорирует contentInset,
           // поэтому явный paddingBottom (тот же паттерн, что в ChecksScreen).
-          contentContainerStyle={[
-            [styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null],
-            { paddingTop: section.contentTop + spacing[1] },
-          ]}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}

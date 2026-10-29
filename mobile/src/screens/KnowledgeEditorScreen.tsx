@@ -1,4 +1,3 @@
-import { HeaderAction } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeEditorScreen — create / edit a Knowledge Base article (manager only).
  *
@@ -37,21 +36,18 @@ import { parseVideoUrl, videoProviderLabel } from '../components/knowledge/video
 import BlockEditor, { sanitizeBlocks, hasInvalidVideoBlock } from '../components/knowledge/BlockEditor';
 import FolderManagerModal from '../components/knowledge/FolderManagerModal';
 import AudiencePicker, { type AudienceValue } from '../components/knowledge/AudiencePicker';
-import {
-  type KnowledgeArticle,
-  type KnowledgeArticleType,
-  type KnowledgeAttachment,
-  type KnowledgeBlock,
-  type KnowledgeCategory,
+import type {
+  KnowledgeArticle,
+  KnowledgeArticleType,
+  KnowledgeAttachment,
+  KnowledgeBlock,
+  KnowledgeCategory,
 } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type ParamList = { KnowledgeEditor: { id?: string; categoryId?: string; type?: KnowledgeArticleType } };
 
 export default function KnowledgeEditorScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeEditor'>>();
   const palette = useColors();
@@ -264,47 +260,37 @@ export default function KnowledgeEditorScreen() {
   if (isEdit && loadingExisting && !existing) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Редактирование" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Редактирование" onBack={() => navigation.goBack()} />
+        <LoadingSpinner />
       </View>
     );
   }
 
   const saveTrailing = (
-    <HeaderAction
-      label="Сохранить"
-      title="Сохранить"
-      tone="primary"
+    <Pressable
       onPress={onSave}
       disabled={saveMutation.isPending}
-      loading={saveMutation.isPending}
-    />
+      hitSlop={10}
+      style={[styles.saveBtn, { backgroundColor: palette.accent.primary, opacity: saveMutation.isPending ? 0.6 : 1 }]}
+      accessibilityRole="button"
+      accessibilityLabel="Сохранить"
+    >
+      <Text variant="footnote" color={colors.white} style={{ fontWeight: '700' }}>
+        {saveMutation.isPending ? '…' : 'Готово'}
+      </Text>
+    </Pressable>
   );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title={isEdit ? 'Редактирование' : 'Новая статья'}
         onBack={() => navigation.goBack()}
         trailing={saveTrailing}
       />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.content, { paddingBottom: tabBarHeight + spacing[8] }],
-          { paddingTop: section.contentTop + spacing[2] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[8] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -580,7 +566,7 @@ export default function KnowledgeEditorScreen() {
             palette={palette}
           />
         </View>
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       {/* Folder / subfolder creation (name + optional parent). Preset parent =
           the article's currently-selected category, so a tap builds a subfolder

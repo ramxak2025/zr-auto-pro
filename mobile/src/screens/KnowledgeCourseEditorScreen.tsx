@@ -1,4 +1,3 @@
-import { HeaderAction } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeCourseEditorScreen — create / edit a course AND its lessons
  * (manager only).
@@ -33,16 +32,13 @@ import { knowledgeApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
-import { type KnowledgeCourse, type KnowledgeLesson, type KnowledgeQuizQuestion } from '../../../shared/types';
+import type { KnowledgeCourse, KnowledgeLesson, KnowledgeQuizQuestion } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 type ParamList = { KnowledgeCourseEditor: { id?: string } };
 type Palette = ReturnType<typeof useColors>;
 
 export default function KnowledgeCourseEditorScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseEditor'>>();
   const palette = useColors();
@@ -177,47 +173,37 @@ export default function KnowledgeCourseEditorScreen() {
   if (isEdit && loadingExisting && !existing) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Редактирование" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <LoadingSpinner />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Редактирование" onBack={() => navigation.goBack()} />
+        <LoadingSpinner />
       </View>
     );
   }
 
   const saveTrailing = (
-    <HeaderAction
-      label="Сохранить"
-      title="Сохранить"
-      tone="primary"
+    <Pressable
       onPress={onSave}
       disabled={saveMutation.isPending}
-      loading={saveMutation.isPending}
-    />
+      hitSlop={10}
+      style={[styles.saveBtn, { backgroundColor: palette.accent.primary, opacity: saveMutation.isPending ? 0.6 : 1 }]}
+      accessibilityRole="button"
+      accessibilityLabel="Сохранить"
+    >
+      <Text variant="footnote" color={colors.white} style={{ fontWeight: '700' }}>
+        {saveMutation.isPending ? '…' : 'Готово'}
+      </Text>
+    </Pressable>
   );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        scroll={section}
         title={isEdit ? 'Редактирование курса' : 'Новый курс'}
         onBack={() => navigation.goBack()}
         trailing={saveTrailing}
       />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.content, { paddingBottom: tabBarHeight + spacing[8] }],
-          { paddingTop: section.contentTop + spacing[2] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[8] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -363,7 +349,7 @@ export default function KnowledgeCourseEditorScreen() {
             Сохраните курс, чтобы добавить уроки.
           </Text>
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       {/* Lesson editor sheet */}
       {lessonEditor && editId ? (

@@ -29,7 +29,6 @@ import type { CashShift, CashShiftReport, SafeTransaction } from '../../../share
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
-import HeaderActionMenu from '../components/HeaderActionMenu';
 import PointBadge from '../components/PointBadge';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -640,6 +639,7 @@ export default function CashShiftPage() {
     <div className="space-y-5">
       <PageHeader
         title="Кассовая смена"
+        icon={Wallet}
         subtitle={
           currentLoading
             ? 'Z-отчёт, инкассация и сейф'
@@ -652,29 +652,12 @@ export default function CashShiftPage() {
         actions={
           !currentLoading && !currentError && canActOnShift ? (
             <>
-              <Button
-                variant="secondary"
-                icon={ArrowDownToLine}
-                onClick={openCollectModal}
-                className="hidden md:inline-flex"
-              >
+              <Button variant="secondary" icon={ArrowDownToLine} onClick={openCollectModal}>
                 Инкассация
               </Button>
               <Button icon={Lock} onClick={openCloseModal}>
                 Закрыть смену
               </Button>
-              <HeaderActionMenu
-                items={[
-                  {
-                    key: 'collect',
-                    label: 'Инкассация',
-                    icon: ArrowDownToLine,
-                    onSelect: openCollectModal,
-                    selectTiming: 'after-close',
-                    narrowOnly: true,
-                  },
-                ]}
-              />
             </>
           ) : undefined
         }

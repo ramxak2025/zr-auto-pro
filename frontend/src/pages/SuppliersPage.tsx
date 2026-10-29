@@ -247,6 +247,7 @@ export default function SuppliersPage() {
     <div className="space-y-5">
       <PageHeader
         title="Поставщики"
+        icon={Truck}
         subtitle={data ? `${countLabel(total, ['поставщик', 'поставщика', 'поставщиков'])} в базе` : undefined}
         actions={
           canManage ? (
@@ -255,19 +256,16 @@ export default function SuppliersPage() {
             </Button>
           ) : undefined
         }
-        toolbar={
-          <>
-            <Toolbar>
-              <SearchInput
-                value={search}
-                onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
-                placeholder="Название или контакт…"
-                className="w-full sm:w-72"
-              />
-            </Toolbar>
-          </>
-        }
       />
+
+      <Toolbar>
+        <SearchInput
+          value={search}
+          onChange={(value) => setParam({ q: value, page: null }, { replace: true })}
+          placeholder="Название или контакт…"
+          className="w-full sm:w-72"
+        />
+      </Toolbar>
 
       <DataTable
         rows={suppliers}

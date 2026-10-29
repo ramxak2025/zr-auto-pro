@@ -38,6 +38,7 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  ScrollView,
   RefreshControl,
   Platform,
 } from 'react-native';
@@ -85,9 +86,6 @@ import type {
   SalaryPremium,
   SalaryPayment,
 } from '../../../../shared/types';
-import { useScreenSectionScroll } from '../ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../ScreenSectionScrollable';
-import { headerTouchSize } from '../ScreenHeaderControls';
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -194,7 +192,6 @@ export default function SalaryEmployeeCard({
   canManageRates = false,
   initialMonth,
 }: SalaryEmployeeCardProps) {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -512,38 +509,13 @@ export default function SalaryEmployeeCard({
   // ── Header ──────────────────────────────────────────────────────────────────────
   const monthChip = (
     <View style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}>
-      <TouchableOpacity
-        accessibilityLabel="Предыдущий месяц"
-        accessibilityRole="button"
-        onPress={goPrev}
-        hitSlop={6}
-        style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-      >
+      <TouchableOpacity onPress={goPrev} hitSlop={6} style={styles.monthChipBtn}>
         <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityRole="button"
-        style={[
-          {
-            minWidth: headerTouchSize,
-            minHeight: headerTouchSize,
-            alignItems: 'center',
-            justifyContent: 'center',
-          },
-          { flexShrink: 1, maxWidth: '100%' },
-        ]}
-        onPress={resetMonth}
-        activeOpacity={0.7}
-      >
+      <TouchableOpacity onPress={resetMonth} activeOpacity={0.7}>
         <Text style={[styles.monthChipLabel, { color: palette.text.primary }]}>{monthLabelShort(month)}</Text>
       </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityLabel="Следующий месяц"
-        accessibilityRole="button"
-        onPress={goNext}
-        hitSlop={6}
-        style={[styles.monthChipBtn, { minWidth: headerTouchSize, minHeight: headerTouchSize }]}
-      >
+      <TouchableOpacity onPress={goNext} hitSlop={6} style={styles.monthChipBtn}>
         <Ionicons name="chevron-forward" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
     </View>
@@ -557,56 +529,22 @@ export default function SalaryEmployeeCard({
   const debtRows = useMemo(() => carryOverRows(data?.carryOver), [data?.carryOver]);
 
   // ── Body ──────────────────────────────────────────────────────────────────────
-  // A replacement native scroller starts at zero; keep the heading on that same offset.
-  const sectionBody = data === undefined ? 'terminal' : 'detail';
-  React.useEffect(() => section.reset(), [sectionBody, section.reset]);
-
   let body: React.ReactNode;
   if (isError && data === undefined) {
-    body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetch()} />
-      </ScreenSectionScrollView>
-    );
+    body = <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetch()} />;
   } else if (data === undefined) {
-    body = (
-      <ScreenSectionScrollView
-        style={{ flex: 1 }}
-        onScroll={section.onScroll}
-        scrollEventThrottle={16}
-        contentInsetAdjustmentBehavior="never"
-        reserveSafeAreaBottom
-        contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-      >
-        <LoadingSpinner />
-      </ScreenSectionScrollView>
-    );
+    body = <LoadingSpinner />;
   } else {
     body = (
       <GestureHandlerRootView style={styles.flex}>
         <GestureDetector gesture={swipe}>
-          <ScreenSectionScrollView
-            onScroll={section.onScroll}
-            scrollEventThrottle={16}
-            contentInsetAdjustmentBehavior="never"
-            style={{ flex: 1 }}
-            reserveSafeAreaBottom
+          <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[
-              {
-                paddingHorizontal: spacing[4],
-                paddingTop: spacing[3],
-                paddingBottom: tabBarHeight + spacing[6],
-              },
-              { paddingTop: section.contentTop + spacing[3] },
-            ]}
+            contentContainerStyle={{
+              paddingHorizontal: spacing[4],
+              paddingTop: spacing[3],
+              paddingBottom: tabBarHeight + spacing[6],
+            }}
             contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
@@ -738,7 +676,7 @@ export default function SalaryEmployeeCard({
               canManage={canManagePayouts}
               onMenu={openPaymentMenu}
             />
-          </ScreenSectionScrollView>
+          </ScrollView>
         </GestureDetector>
       </GestureHandlerRootView>
     );
@@ -746,7 +684,7 @@ export default function SalaryEmployeeCard({
 
   return (
     <View style={[styles.flex, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title={title} onBack={onBack} trailing={monthChip} />
+      <IosScreenHeader title={title} onBack={onBack} trailing={monthChip} />
       {body}
 
       {/* Payout form */}
@@ -2210,9 +2148,6 @@ const styles = StyleSheet.create({
 
   // Header month chip
   monthChip: {
-    flexWrap: 'wrap',
-    flexShrink: 1,
-    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: borderRadius.full,
@@ -2221,8 +2156,6 @@ const styles = StyleSheet.create({
   },
   monthChipBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   monthChipLabel: {
-    flexShrink: 1,
-    maxWidth: '100%',
     fontSize: fontSize.sm,
     fontWeight: fontWeight.semibold,
     minWidth: 72,

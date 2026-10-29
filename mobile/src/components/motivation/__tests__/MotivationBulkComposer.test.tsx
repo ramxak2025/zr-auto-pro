@@ -5,7 +5,6 @@ import { Keyboard, Platform } from 'react-native';
 import type { MotivationBulkInput, MotivationBulkResult, Product } from '../../../../../shared/types';
 import { buildMotivationChoices } from '../selection';
 
-const mockSectionScroll = { contentTop: 144, onScroll: jest.fn(), reset: jest.fn() };
 const mockStates: unknown[] = [];
 const mockRefs: { current: unknown }[] = [];
 const mockEffects: (() => void)[] = [];
@@ -102,32 +101,13 @@ jest.mock('@tanstack/react-query', () => ({
     return { data: mockCatalog[options.queryKey[2]], isError: mockError, refetch: mockRetry };
   },
 }));
-jest.mock('../../ScreenSectionHeader', () => ({
-  __esModule: true,
-  default: 'Header',
-  useScreenSectionScroll: () => mockSectionScroll,
-}));
-jest.mock('../../ScreenSectionScrollable', () => ({
-  ScreenSectionFlashList: 'FlashList',
-  ScreenSectionScrollView: 'ScrollView',
-}));
-jest.mock('../../ScreenHeaderControls', () => ({
-  HeaderAction: 'HeaderAction',
-  HeaderIsland: 'HeaderIsland',
-  headerTouchSize: 44,
-}));
 const moduleUnderTest = jest.requireActual<typeof import('../MotivationBulkComposer')>('../MotivationBulkComposer');
 type Element = React.ReactElement<{ children?: React.ReactNode; [key: string]: unknown }>;
 const nodes = (node: React.ReactNode): Element[] =>
   Array.isArray(node)
     ? node.flatMap(nodes)
     : React.isValidElement(node)
-      ? [
-          node as Element,
-          ...['children', 'leading', 'actions'].flatMap((slot) =>
-            nodes((node as Element).props[slot] as React.ReactNode),
-          ),
-        ]
+      ? [node as Element, ...nodes((node as Element).props.children)]
       : [];
 const words = (node: React.ReactNode): string =>
   Array.isArray(node)
@@ -296,8 +276,8 @@ it('requires a fresh preview after changing rate or receiving the real HTTP 409 
   await submit();
   expect(mockBulk.mock.calls[2][0].dryRun).toBe(true);
   expect(mockBulk.mock.calls[2][0].requestId).not.toBe(mockBulk.mock.calls[1][0].requestId);
-  const back = find((node) => node.type === 'HeaderAction' && node.props.label === 'Назад');
-  (back.props.onPress as () => void)();
+  const header = find((node) => node.type === 'Header');
+  (header.props.onBack as () => void)();
   change('Общий процент от продажи', '12');
   await submit();
   expect(mockBulk.mock.calls[3][0]).toMatchObject({ dryRun: true, percent: 12 });
@@ -535,7 +515,7 @@ it('search focus frees result space and restores warehouse/segment/percent/selec
   change('Общий процент от продажи', '8');
   await submit();
   const original = mockBulk.mock.calls[0][0];
-  (find((node) => node.type === 'HeaderAction' && node.props.label === 'Назад').props.onPress as () => void)();
+  (find((node) => node.type === 'Header').props.onBack as () => void)();
   const searchInput = () =>
     find((node) => node.type === 'TextInput' && node.props.accessibilityLabel === 'Поиск товаров и папок');
   (searchInput().props.onFocus as () => void)();
@@ -614,7 +594,10 @@ for (const beforeDiscount of [false, true])
       await submit();
       expect(mockSaved).not.toHaveBeenCalled();
       expect(toggle().props.disabled).toBe(true);
-      const closeChoice = () => nodes(render()).find((node) => node.props.accessibilityLabel === 'Закрыть выбор')!;
+      const closeChoice = () =>
+        nodes(find((node) => node.type === 'Header').props.trailing as React.ReactNode).find(
+          (node) => node.props.accessibilityLabel === 'Закрыть выбор',
+        )!;
       expect(closeChoice().props.disabled).toBe(true);
       expect(words(render())).toContain('Повторить сохранение');
       (closeChoice().props.onPress as () => void)();

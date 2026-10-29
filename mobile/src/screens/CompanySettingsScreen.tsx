@@ -28,16 +28,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import Modal from '../components/Modal';
-import {
-  type Tenant,
-  type LoyaltySettings,
-  type PosSettings,
-  type PosSettingsConflict,
-  type PaymentAcceptorInfo,
-  type PointsListResponse,
-  type VinSettings,
-  type VinDecodeResult,
-  type UpdateVinSettingsRequest,
+import type {
+  Tenant,
+  LoyaltySettings,
+  PosSettings,
+  PosSettingsConflict,
+  PaymentAcceptorInfo,
+  PointsListResponse,
+  VinSettings,
+  VinDecodeResult,
+  UpdateVinSettingsRequest,
 } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { VIN_SETTINGS_KEY } from '../hooks/useVinEnabled';
@@ -48,8 +48,6 @@ import { formatPhone } from '../../../shared/validation/phone';
 import { RU_TIMEZONES, DEFAULT_TIMEZONE, timezoneOption, formatDateTime } from '../../../shared/utils/formatters';
 import { haptic } from '../platform/haptics';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
 
 interface CompanyForm {
   name: string;
@@ -70,7 +68,6 @@ interface CompanyForm {
 }
 
 export default function CompanySettingsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
@@ -183,15 +180,8 @@ export default function CompanySettingsScreen() {
   if (isLoading) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-        <IosScreenHeader scroll={section} title="Настройки компании" onBack={() => navigation.goBack()} />
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop }}
-        >
-          <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />
-        </ScreenSectionScrollView>
+        <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
+        <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />
       </View>
     );
   }
@@ -219,20 +209,14 @@ export default function CompanySettingsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Настройки компании" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
 
       {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
           вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
       <KeyboardAwareView style={{ flex: 1 }}>
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          contentInsetAdjustmentBehavior="never"
-          scrollEventThrottle={16}
+        <ScrollView
           ref={companyScrollRef}
-          contentContainerStyle={[
-            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-            { paddingTop: section.contentTop + spacing[4] },
-          ]}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         >
           {/* Basic info */}
           <StarterCatalogsSection onStepChange={scrollToStarterCatalogs} />
@@ -557,7 +541,7 @@ export default function CompanySettingsScreen() {
               </TouchableOpacity>
             </AnimatedCard>
           )}
-        </ScreenSectionScrollView>
+        </ScrollView>
       </KeyboardAwareView>
 
       {/* 157 — выбор часового пояса. Тот же общий Modal, что и у 409-конфликта

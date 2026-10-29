@@ -28,6 +28,7 @@ import { useNavigation } from '@react-navigation/native';
 import { checksApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
+import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import FreshnessBadge from '../components/FreshnessBadge';
@@ -37,9 +38,7 @@ import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { Check, ChecksBoard } from '../../../shared/types';
-import ScreenSectionHeader, { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import { headerTouchSize } from '../components/ScreenHeaderControls';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 
@@ -159,7 +158,6 @@ const QueueCard = React.memo(function QueueCard({ check, palette, columnLabel, o
 });
 
 export default function CashierPaymentScreen() {
-  const section = useScreenSectionScroll();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -246,13 +244,21 @@ export default function CashierPaymentScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        scroll={section}
+      <IosScreenHeader
         title="Оплата"
         subtitle={board ? `${ready.length} готов${ready.length === 1 ? '' : 'ы'} к оплате` : undefined}
-        context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
-      >
-        <View style={[styles.searchBox, { backgroundColor: palette.bg.muted }]}>
+        trailing={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
+      />
+
+      {/* ── КРУПНЫЙ поиск по госномеру ──────────────────────────────────── */}
+      <View style={styles.searchWrap}>
+        <View
+          style={[
+            styles.searchBox,
+            buildShadow(palette),
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ]}
+        >
           <Ionicons name="search" size={20} color={palette.text.tertiary} />
           <TextInput
             value={query}
@@ -266,64 +272,28 @@ export default function CashierPaymentScreen() {
             accessibilityLabel="Поиск заказа по госномеру"
           />
           {query.length > 0 && (
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={{
-                minWidth: headerTouchSize,
-                minHeight: headerTouchSize,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onPress={() => setQuery('')}
-              hitSlop={8}
-              accessibilityLabel="Очистить поиск"
-            >
+            <TouchableOpacity onPress={() => setQuery('')} hitSlop={8} accessibilityLabel="Очистить поиск">
               <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
             </TouchableOpacity>
           )}
         </View>
-      </ScreenSectionHeader>
+      </View>
 
       {board === undefined && isLoading ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <LoadingSpinner />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.centerFill}>
+          <LoadingSpinner />
+        </View>
       ) : isError && board === undefined ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.centerFill}>
-            <QueryErrorState
-              description="Не удалось загрузить очередь. Проверьте соединение."
-              onRetry={() => refetch()}
-            />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.centerFill}>
+          <QueryErrorState
+            description="Не удалось загрузить очередь. Проверьте соединение."
+            onRetry={() => refetch()}
+          />
+        </View>
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
+        <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[
-            [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-            { paddingTop: section.contentTop + spacing[2] },
-          ]}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -405,7 +375,7 @@ export default function CashierPaymentScreen() {
               )}
             </>
           )}
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
     </View>
   );
@@ -422,9 +392,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2.5],
-    borderRadius: 22,
-    borderWidth: 0,
-    paddingHorizontal: 12,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[4],
     minHeight: 56,
   },
   searchInput: {

@@ -16,3 +16,10 @@ it('reserves only the measured full-scale heading and no compact heading', () =>
     }
   }
 });
+it('uses the smaller Android line height while reserving every measured wrapped line at full font scale', () => {
+  for (const scale of [1, 1.353, 2, 3]) {
+    for (const row of [24, 24 * scale, 48 * scale + 4]) {
+      expect(journalHeaderGeometry(scale, row, 24).expandedHeight).toBe(24 + Math.max(row, Math.ceil(24 * scale)));
+    }
+  }
+});

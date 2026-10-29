@@ -42,6 +42,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import PointIndicator from '../components/PointIndicator';
 import Modal from '../components/Modal';
+import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
@@ -61,9 +62,7 @@ import type {
   SafeState,
   SafeTransaction,
 } from '../../../shared/types';
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
-import EmptyState from '../components/EmptyState';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Formatting helpers
@@ -164,7 +163,6 @@ const Tile = React.memo(function Tile({ label, value, icon, tint, tintBg, palett
 // ────────────────────────────────────────────────────────────────────────
 
 export default function CashShiftScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const route = useRoute();
   const queryClient = useQueryClient();
@@ -577,8 +575,6 @@ export default function CashShiftScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        context={<PointIndicator variant="chip" style={styles.pointChipRow} />}
-        scroll={section}
         title="Кассовая смена"
         subtitle="Z-отчёт и инкассация"
         onBack={isTabRoot ? undefined : () => navigation.goBack()}
@@ -590,30 +586,17 @@ export default function CashShiftScreen() {
           приложения не меняется. Отдельной строкой, а не в trailing шапки:
           длинное название обрезало бы заголовок. Скрывает себя сам, когда
           автосервис один. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {loadingFirst ? (
-        <ScreenSectionScrollView
-          style={{ flex: 1 }}
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          reserveSafeAreaBottom
-          contentContainerStyle={{ flexGrow: 1, paddingTop: section.contentTop + 12, paddingBottom: 24 }}
-        >
-          <View style={styles.loadingWrap}>
-            <ListSkeleton count={5} />
-          </View>
-        </ScreenSectionScrollView>
+        <View style={styles.loadingWrap}>
+          <ListSkeleton count={5} />
+        </View>
       ) : (
-        <ScreenSectionScrollView
-          onScroll={section.onScroll}
-          scrollEventThrottle={16}
-          contentInsetAdjustmentBehavior="never"
-          style={{ flex: 1 }}
-          reserveSafeAreaBottom
+        <ScrollView
           contentContainerStyle={[
-            [styles.scrollContent, { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] }],
-            { paddingTop: section.contentTop + spacing[2] },
+            styles.scrollContent,
+            { paddingBottom: Platform.OS === 'ios' ? spacing[6] : tabBarHeight + spacing[6] },
           ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -670,7 +653,7 @@ export default function CashShiftScreen() {
               ))}
             </View>
           )}
-        </ScreenSectionScrollView>
+        </ScrollView>
       )}
 
       {/* Ввод суммы (открыть / инкассация / закрыть) */}

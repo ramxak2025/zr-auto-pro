@@ -23,7 +23,6 @@ export default function LowStockPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        composition="navigation"
         title="Товары на исходе"
         subtitle="Остаток не выше минимального · все склады текущего филиала"
         actions={<Link to="/products">Открыть склад</Link>}

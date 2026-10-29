@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Scale } from 'lucide-react';
 
 import { managerApi } from '../../api/services';
 import PageHeader from '../../components/PageHeader';
@@ -33,11 +34,7 @@ export default function ManagerLedgerPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        variant="static"
-        title="Расчёты"
-        subtitle="Оплаты ваших клиентов, доля владельца и внесённые расчёты"
-      />
+      <PageHeader title="Расчёты" icon={Scale} subtitle="Оплаты ваших клиентов, доля владельца и внесённые расчёты" />
 
       {summaryError && !summary ? (
         <ErrorRow message="Не удалось загрузить баланс" onRetry={() => refetchSummary()} loading={summaryFetching} />

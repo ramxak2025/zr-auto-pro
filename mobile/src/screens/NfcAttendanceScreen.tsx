@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
-import { useAttendanceNfcSession, nfcStatusQueryKey } from '../hooks/useAttendanceNfcSession';
+import { useAttendanceNfcSession, NFC_STATUS_QUERY_KEY, nfcStatusQueryKey } from '../hooks/useAttendanceNfcSession';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { nativePendingNfc } from '../utils/nativePendingNfc';
 import {
@@ -20,16 +20,13 @@ import { parseAttendanceNfcUri } from '../../../shared/utils/attendanceNfcUri';
 import { ownsNfcOutcome } from '../../../shared/utils/pendingNfc';
 import { createNfcOperationLeaseController } from '../utils/nfcOperationLease';
 import { refreshNfcStatusForCurrentSession } from '../utils/nfcStatusRefresh';
-import { type AttendanceNfcScanResult } from '../../../shared/types';
+import type { AttendanceNfcScanResult } from '../../../shared/types';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 type ScreenState = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error';
 
 export default function NfcAttendanceScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const palette = useColors();
   const navigation = useNavigation();
   const tabBarHeight = useTabBarHeight();
@@ -313,16 +310,8 @@ export default function NfcAttendanceScreen() {
   const canScan = statusQuery.data?.shiftsEnabled === true && statusQuery.data?.canScan === true;
   return (
     <View style={[styles.screen, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Рабочая смена" onBack={() => navigation.goBack()} />
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.content, { paddingBottom: tabBarHeight + spacing[6] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
-      >
+      <IosScreenHeader title="Рабочая смена" onBack={() => navigation.goBack()} />
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[6] }]}>
         <View style={[styles.panel, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Text style={[styles.title, { color: palette.text.primary }]}>Отметка присутствия</Text>
           <Text style={[styles.body, { color: palette.text.secondary }]}>{message}</Text>
@@ -391,7 +380,7 @@ export default function NfcAttendanceScreen() {
             </Text>
           )}
         </View>
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

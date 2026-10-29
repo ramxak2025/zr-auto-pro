@@ -63,10 +63,8 @@ import Modal from '../components/Modal';
 import OneCIntegrationCard from '../components/OneCIntegrationCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { type MessagingIntegration, type TelephonySettings } from '../../../shared/types';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { MessagingIntegration, TelephonySettings } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Provider catalogue
@@ -896,7 +894,6 @@ function ProviderModal({
 // ─────────────────────────────────────────────────────────────────────
 
 export default function IntegrationsScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -921,17 +918,11 @@ export default function IntegrationsScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader scroll={section} title="Интеграции" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Интеграции" onBack={() => navigation.goBack()} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
+      <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[
-          [styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }],
-          { paddingTop: section.contentTop + spacing[4] },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       >
         <Text style={[styles.heroSub, { color: palette.text.secondary }]}>
           Подключайте сервисы — приём оплат, касса, звонки и каналы рассылок
@@ -1046,7 +1037,7 @@ export default function IntegrationsScreen() {
             </View>
           </>
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
 
       <ProviderModal
         provider={openProvider}

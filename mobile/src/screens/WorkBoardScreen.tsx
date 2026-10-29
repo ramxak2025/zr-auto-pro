@@ -37,6 +37,7 @@ import {
   Alert,
   useWindowDimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -46,6 +47,7 @@ import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import EmployeeAvatar from '../components/EmployeeAvatar';
 import type { SemanticPalette } from '../theme/palette';
+import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
@@ -65,9 +67,6 @@ import {
 } from '../utils/liveActivityStore';
 import type { Check, ChecksBoard } from '../../../shared/types';
 import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
-import { HeaderAction, HeaderIsland, headerTouchSize } from '../components/ScreenHeaderControls';
-import ScreenSectionHeader from '../components/ScreenSectionHeader';
-import ScreenHeaderMenu from '../components/ScreenHeaderMenu';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 
@@ -471,21 +470,17 @@ export default function WorkBoardScreen() {
   const totalActive = board ? columns.reduce((sum, col) => sum + (board.groups[col.key]?.length ?? 0), 0) : 0;
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <ScreenSectionHeader
-        composition="navigation"
-        variant="static"
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+      <IosScreenHeader
         title="Доска заказ-нарядов"
         subtitle={board ? `${totalActive} активных` : undefined}
-        context={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
-        leading={<HeaderAction label="Назад" icon="chevron-back" onPress={() => navigation.goBack()} />}
-        actions={
-          <>
-            {orderMode && (
-              <HeaderAction
-                label="Создать заказ-наряд"
-                icon="add"
-                tone="primary"
+        onBack={() => navigation.goBack()}
+        trailing={
+          <View style={styles.headerTrailing}>
+            <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+            {orderMode ? (
+              <TouchableOpacity
+                style={[styles.addBtn, { backgroundColor: colors.primary[600] }]}
                 onPress={() => {
                   haptic('select');
                   // Root-stack 'CheckCreate' (накрывает таб-бар, slide-up). Order-
@@ -493,85 +488,101 @@ export default function WorkBoardScreen() {
                   // не нужны. На сохранении заказ паркуется в первую колонку доски.
                   navigation.navigate('CheckCreate');
                 }}
-              />
-            )}
-            {canConfigure && (
-              <HeaderAction
-                label="Настройка колонок доски"
-                icon="settings-outline"
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Создать заказ-наряд"
+              >
+                <Ionicons name="add" size={22} color={colors.white} />
+              </TouchableOpacity>
+            ) : null}
+            {canConfigure ? (
+              <TouchableOpacity
+                style={[styles.gearBtn, { backgroundColor: palette.bg.muted }]}
                 onPress={() => {
                   haptic('select');
                   navigation.navigate('WorkBoardSettings');
                 }}
-              />
-            )}
-          </>
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Настройка колонок доски"
+              >
+                <Ionicons name="settings-outline" size={18} color={palette.text.primary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
         }
-      >
-        {canSeeAll &&
-          (isMasterRole ? (
-            <HeaderIsland>
-              {
-                <View style={styles.filterRowWrap}>
-                  {(
-                    [
-                      { key: user?.id ?? null, label: 'Мои' },
-                      { key: null, label: 'Все' },
-                    ] as Array<{ key: string | null; label: string }>
-                  ).map((opt) => {
-                    const active = assigneeFilter === opt.key;
-                    return (
-                      <TouchableOpacity
-                        key={opt.label}
-                        style={[
-                          [
-                            styles.filterChip,
-                            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                            active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
-                          ],
-                          { minWidth: headerTouchSize, minHeight: headerTouchSize },
-                        ]}
-                        onPress={() => {
-                          haptic('select');
-                          setAssigneeFilter(opt.key);
-                        }}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: active }}
-                      >
-                        <Text
-                          style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
-                        >
-                          {opt.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              }
-            </HeaderIsland>
-          ) : filterMasters.length > 0 ? (
-            <HeaderIsland>
-              <ScreenHeaderMenu
-                label="Исполнитель на доске"
-                icon="person-outline"
-                title={filterMasters.find((m) => m.id === assigneeFilter)?.fullName || 'Все исполнители'}
-                items={[{ id: null as string | null, fullName: 'Все' }, ...filterMasters].map((m) => ({
-                  id: m.id ?? 'all',
-                  label: m.fullName ?? '—',
-                  selected: assigneeFilter === m.id,
-                  onSelect: () => {
-                    haptic('select');
-                    setAssigneeFilter(m.id);
-                  },
-                }))}
-              />
-            </HeaderIsland>
-          ) : null)}
-      </ScreenSectionHeader>
+      />
 
       {/* ── Фильтр по исполнителю (Round 14) ────────────────────────────
           Владелец/админ: чипы «Все» + мастера (?assigneeId=). Мастер с
           видимостью «все»: переключатель «Мои / Все». Scope 'own' — без UI. */}
+      {canSeeAll &&
+        (isMasterRole ? (
+          <View style={styles.filterRowWrap}>
+            {(
+              [
+                { key: user?.id ?? null, label: 'Мои' },
+                { key: null, label: 'Все' },
+              ] as Array<{ key: string | null; label: string }>
+            ).map((opt) => {
+              const active = assigneeFilter === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+                  ]}
+                  onPress={() => {
+                    haptic('select');
+                    setAssigneeFilter(opt.key);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : filterMasters.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterScroll}
+            contentContainerStyle={styles.filterRowWrap}
+          >
+            {[{ id: null as string | null, fullName: 'Все' }, ...filterMasters].map((m) => {
+              const active = assigneeFilter === m.id;
+              return (
+                <TouchableOpacity
+                  key={m.id ?? 'all'}
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+                  ]}
+                  onPress={() => {
+                    haptic('select');
+                    setAssigneeFilter(m.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text
+                    style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
+                    numberOfLines={1}
+                  >
+                    {m.id ? (m.fullName ?? '').split(' ')[0] || '—' : 'Все'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : null)}
 
       {board === undefined && isLoading ? (
         <View style={styles.centerFill}>
@@ -786,7 +797,7 @@ export default function WorkBoardScreen() {
           </View>
         ) : null}
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -853,9 +864,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    paddingHorizontal: 0,
-    paddingBottom: 0,
-    flexWrap: 'wrap',
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2.5],
   },
   filterChip: {
     borderRadius: borderRadius.full,

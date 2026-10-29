@@ -1,4 +1,3 @@
-import { headerTouchSize } from '../components/ScreenHeaderControls';
 /**
  * KnowledgeCourseListScreen — «Учебный центр».
  *
@@ -27,13 +26,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius } from '../theme';
 import { haptic } from '../platform/haptics';
-import { type KnowledgeCourse } from '../../../shared/types';
-
-import { useScreenSectionScroll } from '../components/ScreenSectionHeader';
-import { ScreenSectionScrollView } from '../components/ScreenSectionScrollable';
+import type { KnowledgeCourse } from '../../../shared/types';
+import { TabBarScrollView as ScrollView } from '../components/TabBarScrollable';
 
 export default function KnowledgeCourseListScreen() {
-  const section = useScreenSectionScroll({ composition: 'navigation' });
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
@@ -75,10 +71,7 @@ export default function KnowledgeCourseListScreen() {
         navigation.navigate('KnowledgeCourseEditor', {});
       }}
       hitSlop={10}
-      style={[
-        [styles.headerBtn, { backgroundColor: palette.accent.primarySoft }],
-        { minWidth: headerTouchSize, minHeight: headerTouchSize },
-      ]}
+      style={[styles.headerBtn, { backgroundColor: palette.accent.primarySoft }]}
       accessibilityRole="button"
       accessibilityLabel="Создать курс"
     >
@@ -88,21 +81,10 @@ export default function KnowledgeCourseListScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        scroll={section}
-        title="Учебный центр"
-        onBack={() => navigation.goBack()}
-        trailing={headerTrailing}
-      />
+      <IosScreenHeader title="Учебный центр" onBack={() => navigation.goBack()} trailing={headerTrailing} />
 
-      <ScreenSectionScrollView
-        onScroll={section.onScroll}
-        contentInsetAdjustmentBehavior="never"
-        scrollEventThrottle={16}
-        contentContainerStyle={[
-          [styles.content, { paddingBottom: tabBarHeight + spacing[6] }],
-          { paddingTop: section.contentTop + spacing[2] },
-        ]}
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[6] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -168,7 +150,7 @@ export default function KnowledgeCourseListScreen() {
             }
           />
         )}
-      </ScreenSectionScrollView>
+      </ScrollView>
     </View>
   );
 }

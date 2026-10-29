@@ -19,6 +19,7 @@ import {
   Pencil,
   Percent,
   Plus,
+  SlidersHorizontal,
   Tag,
   Trash2,
   TrendingUp,
@@ -948,7 +949,11 @@ export default function PlanningPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader variant="static" title="Планирование" />
+      <PageHeader
+        title="Планирование"
+        icon={SlidersHorizontal}
+        subtitle="Постоянные расходы и мотивация — для реальной чистой прибыли по начислению"
+      />
 
       <div className="flex items-start gap-3 rounded-xl border border-info/20 bg-info-soft px-4 py-3 text-sm text-info-text">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />

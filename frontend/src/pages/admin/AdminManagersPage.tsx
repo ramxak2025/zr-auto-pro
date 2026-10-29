@@ -205,12 +205,16 @@ export default function AdminManagersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <PageHeader variant="static" title="Менеджеры" subtitle={`Всего: ${managers.length}`} />
-        <Button icon={Plus} onClick={openCreate}>
-          Новый менеджер
-        </Button>
-      </div>
+      <PageHeader
+        title="Менеджеры"
+        icon={UserCog}
+        subtitle={`Всего: ${managers.length}`}
+        actions={
+          <Button icon={Plus} onClick={openCreate}>
+            Новый менеджер
+          </Button>
+        }
+      />
 
       <DataTable
         caption="Менеджеры платформы"
