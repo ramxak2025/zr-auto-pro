@@ -11,6 +11,7 @@ const mockProfitApi = jest.fn();
 const mockVisitsApi = jest.fn();
 const mockInvalidate = jest.fn(() => Promise.resolve());
 const mockFocusEffect = jest.fn();
+let mockFocused = true;
 const mockConstants = { expoConfig: { extra: { ownerHomePilot: true as unknown } } };
 const mockAuth = {
   user: { id: 'user-A', tenantId: 'tenant-A', currentPointId: 'point-A', role: 'director', permissions: {} },
@@ -69,7 +70,7 @@ jest.mock('react-native-reanimated', () => ({
   Easing: { cubic: 'cubic', out: (value: unknown) => value },
 }));
 jest.mock('@react-navigation/native', () => ({
-  useIsFocused: () => true,
+  useIsFocused: () => mockFocused,
   useFocusEffect: (callback: unknown) => mockFocusEffect(callback),
 }));
 jest.mock('@tanstack/react-query', () => ({
@@ -113,6 +114,7 @@ jest.mock('../OwnerHomeOperational', () => ({
   OwnerHomeRetry: 'OwnerHomeRetry',
 }));
 jest.mock('../OwnerHomeDetails', () => 'OwnerHomeDetails');
+jest.mock('../OwnerHomeWidgetSync', () => 'OwnerHomeWidgetSync');
 import OwnerHomeScreen, { OwnerHomeContent } from '../OwnerHomeScreen';
 import { OwnerHomeAmount, OwnerHomeComparisonBars, OwnerHomeScopeControl } from '../OwnerHomeMotion';
 
@@ -190,6 +192,7 @@ beforeEach(() => {
   mockConstants.expoConfig.extra.ownerHomePilot = true;
   mockAuth.user.role = 'director';
   mockAuth.user.currentPointId = 'point-A';
+  mockFocused = true;
   profitState = { data: fixture, isPending: false, isError: false, isFetching: false };
   mockProfitApi.mockResolvedValue({ data: fixture });
   mockQuery.mockImplementation((options: { queryKey: unknown[] }) =>
@@ -211,6 +214,36 @@ test('first profit request omits asOf and has an isolated scope without previous
   expect(options.placeholderData).toBeUndefined();
   await options.queryFn();
   expect(mockProfitApi).toHaveBeenCalledWith(undefined);
+});
+
+test('native widget sync remains independent of history and remounts only for active focused visits', () => {
+  const first = render();
+  const widget = nodes(first).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  expect(widget).toBeDefined();
+  expect(widget.props.scope).toBe(scope);
+  expect(widget.props.enabled).toBe(true);
+  const back = nodes(first).find((node) => node.props.accessibilityLabel === 'Предыдущий день')!;
+  (back.props.onPress as () => void)();
+  const historicalWidget = nodes(render()).find((node) => node.type === 'OwnerHomeWidgetSync')!;
+  expect(
+    mockQuery.mock.calls
+      .filter(([options]) => options.queryKey.includes('profit'))
+      .at(-1)![0]
+      .queryKey.at(-1),
+  ).toBe('2026-10-28');
+  expect(historicalWidget.type).toBe(widget.type);
+  expect(historicalWidget.key).toBe(widget.key);
+  expect(historicalWidget.props).toEqual(widget.props);
+  mockFocused = false;
+  expect(nodes(render()).some((node) => node.type === 'OwnerHomeWidgetSync')).toBe(false);
+  mockFocused = true;
+  expect(nodes(render()).some((node) => node.type === 'OwnerHomeWidgetSync')).toBe(true);
+  const appState = jest.requireMock('react-native').AppState as { currentState: string; addEventListener: jest.Mock };
+  const cleanup = (React.useEffect as jest.Mock).mock.calls[0][0]();
+  appState.currentState = 'background';
+  appState.addEventListener.mock.calls.at(-1)![1]('background');
+  expect(nodes(render()).some((node) => node.type === 'OwnerHomeWidgetSync')).toBe(false);
+  cleanup();
 });
 
 test('changing day removes old profit rows and disables visits until the new server window arrives', () => {
