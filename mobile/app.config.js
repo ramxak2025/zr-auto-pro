@@ -93,15 +93,29 @@ function withNotificationsMode(plugins, apsEnvironment) {
 
 module.exports = ({ config }) => {
   const apsEnvironment = resolveApsEnvironment();
+  // Declared only in owner-home-internal.ios.env, which EAS also applies during
+  // local config evaluation. Built-in EAS selectors exist only on the worker;
+  // when available they prevent a conflicting profile/platform from opting in.
+  const ownerHomePilot =
+    process.env.AUTEXA_OWNER_HOME_INTERNAL === 'ios-v1' &&
+    (!process.env.EAS_BUILD_PROFILE || process.env.EAS_BUILD_PROFILE === 'owner-home-internal') &&
+    (!process.env.EAS_BUILD_PLATFORM || process.env.EAS_BUILD_PLATFORM === 'ios');
 
   return {
     ...config,
+    ...(ownerHomePilot
+      ? {
+          version: '3.19.0',
+          ios: { ...config.ios, runtimeVersion: '3.19.0-owner-home-internal' },
+        }
+      : {}),
     plugins: withNotificationsMode(config.plugins, apsEnvironment),
     extra: {
       ...(config.extra ?? {}),
       // Read at runtime by the «Уведомления» diagnostics block so the owner can
       // see, on the device, which APNs environment the installed build uses.
       apsEnvironment,
+      ...(ownerHomePilot ? { ownerHomePilot: true } : {}),
     },
   };
 };

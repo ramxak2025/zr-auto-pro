@@ -1,5 +1,10 @@
 // This harness tests screen handlers; native scrolling is checked separately.
 jest.mock('../../components/TabBarScrollable', () => ({ TabBarScrollView: 'ScrollView' }));
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { expoConfig: { extra: { ownerHomePilot: false } } },
+}));
+jest.mock('../dashboard/ownerHome/OwnerHomeScreen', () => 'OwnerHomeScreen');
 // Exercise the real Dashboard JSX and ShiftControl handlers, following the
 // ShiftAttendanceHistory test harness. No native renderer or live API is needed.
 const mockSetState = jest.fn();
@@ -122,6 +127,19 @@ type NodeProps = {
 };
 type Element = React.ReactElement<NodeProps>;
 
+/** Follow the real selector, then exercise its private legacy component and all original handlers. */
+function renderLegacyDashboard(): React.ReactNode {
+  const selected = DashboardScreen();
+  if (
+    !React.isValidElement(selected) ||
+    typeof selected.type !== 'function' ||
+    selected.type.name !== 'LegacyDashboardScreen'
+  ) {
+    throw new Error('The disabled pilot must select the actual LegacyDashboardScreen');
+  }
+  return (selected.type as () => React.ReactNode)();
+}
+
 function elements(node: React.ReactNode): Element[] {
   if (!React.isValidElement<NodeProps>(node)) return [];
   return [
@@ -168,7 +186,7 @@ it.each(['ios', 'android'] as const)(
   '%s: owner-enabled shifts show the master button below the greeting and open a work shift',
   async (platform) => {
     Platform.OS = platform;
-    const tree = DashboardScreen();
+    const tree = renderLegacyDashboard();
     const entries = elements(tree);
     const shift = shiftControl(tree);
     expect(shift).toBeDefined();
@@ -188,7 +206,7 @@ it.each(['ios', 'android'] as const)(
 
 it('an active work shift still closes through shiftsApi', async () => {
   mockShifts = [{ id: 'shift-a', openedAt: '2026-10-05T07:00:00Z', closedAt: null }];
-  const shift = shiftControl(DashboardScreen());
+  const shift = shiftControl(renderLegacyDashboard());
   expect(shift).toBeDefined();
   const tree = shift!();
   expect(button(tree, 'Открыть смену')).toBeUndefined();
@@ -202,14 +220,14 @@ it('an active work shift still closes through shiftsApi', async () => {
 
 it.each([false, undefined])('a disabled or legacy tenant (%s) has no work-shift control', (shiftsEnabled) => {
   mockUser.tenant = { id: 'tenant-b', shiftsEnabled };
-  expect(shiftControl(DashboardScreen())).toBeUndefined();
+  expect(shiftControl(renderLegacyDashboard())).toBeUndefined();
   expectNoCompanyRequests();
 });
 
 it.each(['ios', 'android'] as const)('%s manual mode renders self-service open shift control', (platform) => {
   Platform.OS = platform;
   mockUser.tenant = { id: 'tenant-a', attendanceMode: 'manual', shiftsEnabled: true };
-  const tree = DashboardScreen();
+  const tree = renderLegacyDashboard();
   expect(shiftControl(tree)).toBeDefined();
   expect(button(shiftControl(tree)!(), 'Открыть смену')).toBeDefined();
   expect(
@@ -224,21 +242,21 @@ it.each(['ios', 'android'] as const)('%s manual mode renders self-service open s
 it('NFC mode renders an explicit scan entry and does not render manual self-service controls', () => {
   Platform.OS = 'android';
   mockUser.tenant = { id: 'tenant-a', attendanceMode: 'nfc', shiftsEnabled: true };
-  const tree = DashboardScreen();
+  const tree = renderLegacyDashboard();
   expect(shiftControl(tree)).toBeUndefined();
   expect(button(tree, 'Сканировать рабочую NFC-метку')).toBeDefined();
 });
 
 it('admin mode keeps schedule-managed attendance and hides self-service controls', () => {
   mockUser.tenant = { id: 'tenant-a', attendanceMode: 'admin', shiftsEnabled: false };
-  const tree = DashboardScreen();
+  const tree = renderLegacyDashboard();
   expect(shiftControl(tree)).toBeUndefined();
   expect(button(tree, 'Сканировать рабочую NFC-метку')).toBeUndefined();
 });
 
 it('a profile without a tenant has no work-shift control', () => {
   delete mockUser.tenant;
-  expect(shiftControl(DashboardScreen())).toBeUndefined();
+  expect(shiftControl(renderLegacyDashboard())).toBeUndefined();
   expectNoCompanyRequests();
 });
 
@@ -246,7 +264,7 @@ it.each([UserRole.ADMIN, UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.MANAGE
   '%s does not get the master work-shift control',
   (role) => {
     mockUser.role = role;
-    expect(shiftControl(DashboardScreen())).toBeUndefined();
+    expect(shiftControl(renderLegacyDashboard())).toBeUndefined();
     expectNoCompanyRequests();
   },
 );
@@ -255,7 +273,7 @@ it.each([true, false])(
   'pull-to-refresh fetches the own profile and applies shiftsEnabled=%s without login',
   async (shiftsEnabled) => {
     mockUser.tenant = { id: 'tenant-a', shiftsEnabled: !shiftsEnabled };
-    const tree = DashboardScreen();
+    const tree = renderLegacyDashboard();
     expect(Boolean(shiftControl(tree))).toBe(!shiftsEnabled);
     mockRefreshUser.mockImplementationOnce(async () => {
       mockUser = { ...mockUser, tenant: { id: 'tenant-a', shiftsEnabled } };
@@ -264,7 +282,7 @@ it.each([true, false])(
     expect(refresh).toBeDefined();
     await refresh?.();
     expect(mockRefreshUser).toHaveBeenCalledTimes(1);
-    expect(Boolean(shiftControl(DashboardScreen()))).toBe(shiftsEnabled);
+    expect(Boolean(shiftControl(renderLegacyDashboard()))).toBe(shiftsEnabled);
     expect(mockSetState.mock.calls.slice(-2)).toEqual([[true], [false]]);
     const invalidated = mockInvalidateQueries.mock.calls.map(([filters]) => filters.queryKey);
     expect(invalidated).toContainEqual(['shifts']);
@@ -279,7 +297,7 @@ it.each([true, false])(
   'master salary_view_all=%s keeps own dashboard and only granted team scope can fetch',
   (allowed) => {
     mockUser.permissions.salary_view_all = allowed;
-    const tree = DashboardScreen();
+    const tree = renderLegacyDashboard();
     expect(elements(tree).some((e) => typeof e.type === 'function' && e.type.name === 'MasterDashboard')).toBe(true);
     const team = elements(tree).find((e) => typeof e.type === 'function' && e.type.name === 'TodayEarningsCard');
     expect(team).toBeDefined();
