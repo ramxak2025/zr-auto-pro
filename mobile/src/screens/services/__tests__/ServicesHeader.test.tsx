@@ -59,7 +59,11 @@ import type { ServicesMenuItem } from '../ServicesMenu';
 type Element = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;
 const nodes = (node: React.ReactNode): Element[] =>
   React.isValidElement(node)
-    ? [node as Element, ...React.Children.toArray((node as Element).props.children).flatMap(nodes)]
+    ? [
+        node as Element,
+        ...React.Children.toArray((node as Element).props.children).flatMap(nodes),
+        ...nodes((node as Element).props.triggerContent as React.ReactNode),
+      ]
     : [];
 let props: Parameters<typeof ServicesHeader>[0];
 const render = () => {
@@ -69,8 +73,8 @@ const render = () => {
 const press = (tree: React.ReactNode, label: string) =>
   (nodes(tree).find((node) => node.props.accessibilityLabel === label)!.props.onPress as () => void)();
 const menuItems = (tree: React.ReactNode, label: string) =>
-  nodes(tree).find((node) => node.type === 'ServicesMenu' && node.props.label === label)!.props
-    .items as ServicesMenuItem[];
+  (nodes(tree).find((node) => node.type === 'ServicesMenu' && String(node.props.label).startsWith(label))?.props
+    .items ?? []) as ServicesMenuItem[];
 beforeEach(() => {
   mockStates.length = 0;
   mockDimensions = { width: 402, fontScale: 1 };
@@ -134,4 +138,25 @@ it('passes only permitted service actions and keeps visibility disabled until it
   props = { ...props, onVisibility: undefined, onToggleShowAll: undefined };
   tree = render();
   expect(menuItems(tree, 'Действия с услугами')).toEqual([]);
+});
+
+it('uses the folder name as the action trigger and never adds a misleading dropdown when there are no actions', () => {
+  mockDimensions = { width: 320, fontScale: 1 };
+  let tree = render();
+  const folder = nodes(tree).find(
+    (node) => node.type === 'ServicesMenu' && String(node.props.label).startsWith('Действия с услугами:'),
+  )!;
+  expect(folder.props.label).toContain(props.folderName);
+  expect(
+    nodes(folder.props.triggerContent as React.ReactNode).some((node) => node.props.children === props.folderName),
+  ).toBe(true);
+  expect(nodes(tree).some((node) => node.props.children === props.countLabel)).toBe(false);
+  expect(nodes(tree).some((node) => node.props.name === 'ellipsis-horizontal')).toBe(false);
+  const scrim = nodes(tree).find((node) => node.props.testID === 'services-status-bar-scrim')!;
+  expect(scrim.props.pointerEvents).toBe('none');
+  expect(scrim.props.accessibilityElementsHidden).toBe(true);
+  props = { ...props, onVisibility: undefined, onToggleShowAll: undefined, onManageFolder: undefined };
+  tree = render();
+  expect(nodes(tree).some((node) => node.props.children === props.folderName)).toBe(true);
+  expect(nodes(tree).some((node) => node.props.name === 'chevron-down')).toBe(false);
 });

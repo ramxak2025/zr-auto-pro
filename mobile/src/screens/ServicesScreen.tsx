@@ -538,7 +538,7 @@ export default function ServicesScreen() {
                     {folderName}
                   </Text>
                   <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
-                    {count ? `${count} услуг` : 'Пустая папка'}
+                    {count ? `Услуг: ${count}` : 'Пустая папка'}
                   </Text>
                 </View>
                 {canManageServices && (

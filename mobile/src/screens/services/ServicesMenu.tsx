@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import {
+  Keyboard,
+  Platform,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../../platform/Typography';
 import { useColors } from '../../contexts/ThemeContext';
@@ -21,11 +29,17 @@ export default function ServicesMenu({
   icon,
   items,
   primary = false,
+  triggerContent,
+  triggerStyle,
+  containerStyle,
 }: {
   label: string;
   icon: React.ComponentProps<typeof Ionicons>['name'];
   items: ServicesMenuItem[];
   primary?: boolean;
+  triggerContent?: React.ReactNode;
+  triggerStyle?: StyleProp<ViewStyle>;
+  containerStyle?: StyleProp<ViewStyle>;
 }) {
   const p = useColors();
   const { fontScale } = useWindowDimensions();
@@ -53,9 +67,9 @@ export default function ServicesMenu({
   if (items.length === 0) return null;
   return (
     <>
-      <View ref={source} collapsable={false}>
+      <View ref={source} collapsable={false} style={containerStyle}>
         <JournalPressable
-          style={[s.trigger, primary && { backgroundColor: p.accent.primary }]}
+          style={[s.trigger, primary && { backgroundColor: p.accent.primary }, triggerStyle]}
           accessibilityRole="button"
           accessibilityLabel={label}
           accessibilityState={{ expanded: open }}
@@ -72,7 +86,7 @@ export default function ServicesMenu({
             else show();
           }}
         >
-          <Ionicons name={icon} size={20} color={primary ? p.text.inverse : p.text.primary} />
+          {triggerContent ?? <Ionicons name={icon} size={20} color={primary ? p.text.inverse : p.text.primary} />}
         </JournalPressable>
       </View>
       <JournalModal

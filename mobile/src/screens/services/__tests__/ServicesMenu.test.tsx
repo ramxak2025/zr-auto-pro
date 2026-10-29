@@ -102,3 +102,24 @@ it('cancel and disabled items never execute an action', () => {
   (modal(tree).props.onExited as () => void)();
   for (const item of props.items) expect(item.onSelect).not.toHaveBeenCalled();
 });
+
+it('custom folder trigger retains the same menu lifecycle and action callbacks', () => {
+  props = {
+    ...props,
+    label: 'Действия с услугами: Диагностика',
+    primary: false,
+    triggerContent: React.createElement('Text', null, 'Диагностика'),
+    triggerStyle: { width: '100%' },
+    containerStyle: { flex: 1 },
+  };
+  let tree = render();
+  const trigger = nodes(tree).find((node) => node.props.accessibilityLabel === props.label)!;
+  expect(nodes(trigger).some((node) => node.props.children === 'Диагностика')).toBe(true);
+  press(tree, props.label);
+  tree = render();
+  expect(modal(tree).props.visible).toBe(true);
+  press(tree, 'Новая услуга');
+  expect(props.items[0].onSelect).not.toHaveBeenCalled();
+  (modal(render()).props.onExited as () => void)();
+  expect(props.items[0].onSelect).toHaveBeenCalledTimes(1);
+});
